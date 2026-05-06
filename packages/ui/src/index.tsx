@@ -10,7 +10,8 @@ import { clsx } from "clsx";
 export function AppShell() {
   return (
     <div className="grid h-full grid-cols-[240px_1fr]">
-      <aside className="border-r border-[color:var(--border)] bg-[color:var(--panel)]/80 px-4 py-5 backdrop-blur">
+      <div className="app-titlebar" aria-hidden="true" />
+      <aside className="border-r border-[color:var(--border)] bg-[color:var(--panel)]/80 px-4 pb-5 pt-14 backdrop-blur">
         <div className="mb-8">
           <div className="text-xs font-medium uppercase tracking-[0.18em] text-[color:var(--muted)]">
             mspace
@@ -25,7 +26,7 @@ export function AppShell() {
           <SidebarLink to="/projects">Projects</SidebarLink>
         </nav>
       </aside>
-      <main className="overflow-auto">
+      <main className="overflow-auto pt-7">
         <Outlet />
       </main>
     </div>
