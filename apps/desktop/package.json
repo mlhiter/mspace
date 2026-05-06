@@ -1,0 +1,37 @@
+{
+  "name": "@mspace/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck:main": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:renderer": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "pnpm run typecheck:main && pnpm run typecheck:renderer",
+    "lint": "echo 'lint not configured yet'",
+    "test": "echo 'test not configured yet'"
+  },
+  "dependencies": {
+    "@mspace/core": "workspace:*",
+    "@mspace/ui": "workspace:*",
+    "@mspace/views": "workspace:*",
+    "@tanstack/react-query": "^5.96.2",
+    "clsx": "^2.1.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@types/node": "^24.6.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.0",
+    "electron": "^39.2.6",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.1.14",
+    "typescript": "^5.9.3"
+  }
+}
