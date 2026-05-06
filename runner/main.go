@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,16 +27,19 @@ import (
 var migrationFS embed.FS
 
 type project struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	RepoPath         string `json:"repoPath"`
-	DefaultBranch    string `json:"defaultBranch"`
-	DeployCommand    string `json:"deployCommand"`
-	ValidationCommand string `json:"validationCommand"`
-	KubeContext      string `json:"kubeContext"`
-	Namespace        string `json:"namespace"`
-	CreatedAt        string `json:"createdAt"`
-	UpdatedAt        string `json:"updatedAt"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	RepoPath             string `json:"repoPath"`
+	DefaultBranch        string `json:"defaultBranch"`
+	DeployCommand        string `json:"deployCommand"`
+	ValidationCommand    string `json:"validationCommand"`
+	KubeContext          string `json:"kubeContext"`
+	Namespace            string `json:"namespace"`
+	IssueCount           int    `json:"issueCount"`
+	SessionCount         int    `json:"sessionCount"`
+	LatestIssueUpdatedAt string `json:"latestIssueUpdatedAt"`
+	CreatedAt            string `json:"createdAt"`
+	UpdatedAt            string `json:"updatedAt"`
 }
 
 type issue struct {
@@ -69,16 +73,16 @@ type comment struct {
 }
 
 type agentSession struct {
-	ID         string `json:"id"`
-	IssueID    string `json:"issueId"`
-	Provider   string `json:"provider"`
+	ID          string `json:"id"`
+	IssueID     string `json:"issueId"`
+	Provider    string `json:"provider"`
 	RuntimeMode string `json:"runtimeMode"`
-	Command    string `json:"command"`
-	Status     string `json:"status"`
-	Branch     string `json:"branch"`
-	Workdir    string `json:"workdir"`
-	CreatedAt  string `json:"createdAt"`
-	UpdatedAt  string `json:"updatedAt"`
+	Command     string `json:"command"`
+	Status      string `json:"status"`
+	Branch      string `json:"branch"`
+	Workdir     string `json:"workdir"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 type sessionLog struct {
@@ -109,10 +113,48 @@ type issueDetail struct {
 }
 
 type sessionDetail struct {
-	Session agentSession `json:"session"`
-	Issue   issue        `json:"issue"`
-	Project project      `json:"project"`
-	Logs    []sessionLog `json:"logs"`
+	Session   agentSession      `json:"session"`
+	Issue     issue             `json:"issue"`
+	Project   project           `json:"project"`
+	Logs      []sessionLog      `json:"logs"`
+	Evidence  []deploymentEvidence `json:"evidence"`
+	Workspace workspaceSnapshot `json:"workspace"`
+}
+
+type workspaceSnapshot struct {
+	Exists          bool              `json:"exists"`
+	IsGitRepository bool              `json:"isGitRepository"`
+	HasChanges      bool              `json:"hasChanges"`
+	ChangedFiles    int               `json:"changedFiles"`
+	UntrackedFiles  int               `json:"untrackedFiles"`
+	Head            string            `json:"head"`
+	ShortHead       string            `json:"shortHead"`
+	Branch          string            `json:"branch"`
+	StatusLines     []string          `json:"statusLines"`
+	Changes         []workspaceChange `json:"changes"`
+	DiffPreview     string            `json:"diffPreview"`
+	DiffTruncated   bool              `json:"diffTruncated"`
+	Comparison      workspaceComparison `json:"comparison"`
+	Error           string            `json:"error"`
+}
+
+type workspaceChange struct {
+	StatusCode   string `json:"statusCode"`
+	Path         string `json:"path"`
+	PreviousPath string `json:"previousPath"`
+}
+
+type workspaceComparison struct {
+	BaseRef        string            `json:"baseRef"`
+	MergeBase      string            `json:"mergeBase"`
+	MergeBaseShort string            `json:"mergeBaseShort"`
+	AheadCount     int               `json:"aheadCount"`
+	BehindCount    int               `json:"behindCount"`
+	CommitLines    []string          `json:"commitLines"`
+	Changes        []workspaceChange `json:"changes"`
+	DiffPreview    string            `json:"diffPreview"`
+	DiffTruncated  bool              `json:"diffTruncated"`
+	Error          string            `json:"error"`
 }
 
 type eventBroker struct {
@@ -161,11 +203,11 @@ func (b *eventBroker) publish(sessionID string, payload any) {
 }
 
 type app struct {
-	db        *sql.DB
-	logger    *slog.Logger
-	workdir   string
-	broker    *eventBroker
-	mu        sync.Mutex
+	db         *sql.DB
+	logger     *slog.Logger
+	workdir    string
+	broker     *eventBroker
+	mu         sync.Mutex
 	cancellers map[string]context.CancelFunc
 }
 
@@ -188,6 +230,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		logger.Error("failed to enable foreign keys", "error", err)
+		os.Exit(1)
+	}
 
 	application := &app{
 		db:         db,
@@ -215,6 +261,8 @@ func main() {
 	router.Get("/api/inbox", application.handleListInbox)
 	router.Get("/api/projects", application.handleListProjects)
 	router.Post("/api/projects", application.handleCreateProject)
+	router.Put("/api/projects/{projectID}", application.handleUpdateProject)
+	router.Delete("/api/projects/{projectID}", application.handleDeleteProject)
 	router.Post("/api/issues", application.handleCreateIssue)
 	router.Get("/api/issues/{issueID}", application.handleGetIssue)
 	router.Post("/api/issues/{issueID}/comments", application.handleCreateComment)
@@ -279,9 +327,25 @@ func (a *app) handleListInbox(w http.ResponseWriter, _ *http.Request) {
 func (a *app) handleListProjects(w http.ResponseWriter, _ *http.Request) {
 	projects := make([]project, 0)
 	rows, err := a.db.Query(`
-		SELECT id, name, repo_path, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at
-		FROM projects
-		ORDER BY updated_at DESC
+		SELECT
+			p.id,
+			p.name,
+			p.repo_path,
+			p.default_branch,
+			p.deploy_command,
+			p.validation_command,
+			p.kube_context,
+			p.namespace,
+			COUNT(DISTINCT i.id) AS issue_count,
+			COUNT(DISTINCT s.id) AS session_count,
+			MAX(i.updated_at) AS latest_issue_updated_at,
+			p.created_at,
+			p.updated_at
+		FROM projects p
+		LEFT JOIN issues i ON i.project_id = p.id
+		LEFT JOIN agent_sessions s ON s.issue_id = i.id
+		GROUP BY p.id
+		ORDER BY p.updated_at DESC
 	`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -291,9 +355,13 @@ func (a *app) handleListProjects(w http.ResponseWriter, _ *http.Request) {
 
 	for rows.Next() {
 		var p project
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.DefaultBranch, &p.DeployCommand, &p.ValidationCommand, &p.KubeContext, &p.Namespace, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		var latestIssueUpdatedAt sql.NullString
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.DefaultBranch, &p.DeployCommand, &p.ValidationCommand, &p.KubeContext, &p.Namespace, &p.IssueCount, &p.SessionCount, &latestIssueUpdatedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
+		}
+		if latestIssueUpdatedAt.Valid {
+			p.LatestIssueUpdatedAt = latestIssueUpdatedAt.String
 		}
 		projects = append(projects, p)
 	}
@@ -301,27 +369,126 @@ func (a *app) handleListProjects(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *app) handleCreateProject(w http.ResponseWriter, r *http.Request) {
-	var input project
+	var input struct {
+		Name              string `json:"name"`
+		RepoPath          string `json:"repoPath"`
+		DefaultBranch     string `json:"defaultBranch"`
+		DeployCommand     string `json:"deployCommand"`
+		ValidationCommand string `json:"validationCommand"`
+		KubeContext       string `json:"kubeContext"`
+		Namespace         string `json:"namespace"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
-	now := nowString()
-	input.ID = uuid.NewString()
-	input.CreatedAt = now
-	input.UpdatedAt = now
+	normalizedProject, err := normalizeProjectInput(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 
-	_, err := a.db.Exec(`
+	now := nowString()
+	normalizedProject.ID = uuid.NewString()
+	normalizedProject.CreatedAt = now
+	normalizedProject.UpdatedAt = now
+
+	_, err = a.db.Exec(`
 		INSERT INTO projects (id, name, repo_path, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, input.ID, input.Name, input.RepoPath, input.DefaultBranch, input.DeployCommand, input.ValidationCommand, input.KubeContext, input.Namespace, input.CreatedAt, input.UpdatedAt)
+	`, normalizedProject.ID, normalizedProject.Name, normalizedProject.RepoPath, normalizedProject.DefaultBranch, normalizedProject.DeployCommand, normalizedProject.ValidationCommand, normalizedProject.KubeContext, normalizedProject.Namespace, normalizedProject.CreatedAt, normalizedProject.UpdatedAt)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	writeJSON(w, input)
+	writeJSON(w, normalizedProject)
+}
+
+func (a *app) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+
+	var input struct {
+		Name              string `json:"name"`
+		RepoPath          string `json:"repoPath"`
+		DefaultBranch     string `json:"defaultBranch"`
+		DeployCommand     string `json:"deployCommand"`
+		ValidationCommand string `json:"validationCommand"`
+		KubeContext       string `json:"kubeContext"`
+		Namespace         string `json:"namespace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	existingProject, err := a.loadProject(projectID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("project not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+
+	normalizedProject, err := normalizeProjectInput(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	normalizedProject.ID = existingProject.ID
+	normalizedProject.CreatedAt = existingProject.CreatedAt
+	normalizedProject.UpdatedAt = nowString()
+
+	_, err = a.db.Exec(`
+		UPDATE projects
+		SET name = ?, repo_path = ?, default_branch = ?, deploy_command = ?, validation_command = ?, kube_context = ?, namespace = ?, updated_at = ?
+		WHERE id = ?
+	`, normalizedProject.Name, normalizedProject.RepoPath, normalizedProject.DefaultBranch, normalizedProject.DeployCommand, normalizedProject.ValidationCommand, normalizedProject.KubeContext, normalizedProject.Namespace, normalizedProject.UpdatedAt, normalizedProject.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	updatedProject, err := a.loadProject(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeJSON(w, updatedProject)
+}
+
+func (a *app) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	projectID := chi.URLParam(r, "projectID")
+
+	existingProject, err := a.loadProject(projectID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("project not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+
+	if existingProject.IssueCount > 0 || existingProject.SessionCount > 0 {
+		writeError(w, http.StatusConflict, errors.New("project cannot be deleted after issues or sessions have been created"))
+		return
+	}
+
+	_, err = a.db.Exec(`DELETE FROM projects WHERE id = ?`, projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -333,6 +500,27 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	input.ProjectID = strings.TrimSpace(input.ProjectID)
+	input.Title = strings.TrimSpace(input.Title)
+	input.Body = strings.TrimSpace(input.Body)
+	input.Assignee = strings.TrimSpace(input.Assignee)
+	if input.ProjectID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("project is required"))
+		return
+	}
+	if input.Title == "" {
+		writeError(w, http.StatusBadRequest, errors.New("issue title cannot be empty"))
+		return
+	}
+	if _, err := a.loadProject(input.ProjectID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("project not found")
+		}
+		writeError(w, status, err)
 		return
 	}
 
@@ -436,6 +624,9 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	input.Provider = strings.TrimSpace(input.Provider)
+	input.Command = strings.TrimSpace(input.Command)
+	input.Branch = strings.TrimSpace(input.Branch)
 	if input.Provider == "" {
 		input.Provider = "codex"
 	}
@@ -446,27 +637,23 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	command := strings.TrimSpace(input.Command)
-	if command == "" {
-		command = strings.TrimSpace(detail.Project.ValidationCommand)
-	}
-	if command == "" {
-		command = fmt.Sprintf("printf 'Starting local session for issue %s\\n'; sleep 1; printf 'No validation command configured.\\n'", issueID)
-	}
+	command := buildSessionCommand(issueID, detail.Project, input.Command)
+	sessionID := uuid.NewString()
 	branch := input.Branch
 	if branch == "" {
-		branch = fmt.Sprintf("mspace/%s", shortID(issueID))
+		branch = fmt.Sprintf("mspace/%s/%s", shortID(issueID), shortID(sessionID))
 	}
+	workdir := plannedSessionWorkdir(a.workdir, detail.Project.ID, sessionID)
 
 	session := agentSession{
-		ID:          uuid.NewString(),
+		ID:          sessionID,
 		IssueID:     issueID,
 		Provider:    input.Provider,
 		RuntimeMode: "local",
 		Command:     command,
 		Status:      "queued",
 		Branch:      branch,
-		Workdir:     detail.Project.RepoPath,
+		Workdir:     workdir,
 		CreatedAt:   nowString(),
 		UpdatedAt:   nowString(),
 	}
@@ -478,6 +665,13 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	a.addSystemComment(issueID, fmt.Sprintf(
+		"Queued local session `%s` on branch `%s`.\n\nPlanned workspace: `%s`",
+		shortID(session.ID),
+		session.Branch,
+		session.Workdir,
+	))
 
 	go a.runSession(session, detail.Project)
 	writeJSON(w, map[string]string{"sessionId": session.ID})
@@ -550,28 +744,44 @@ func (a *app) runSession(session agentSession, project project) {
 		a.mu.Unlock()
 	}()
 
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Preparing workspace for branch %s", session.Branch))
+	preparedSession, err := a.prepareSessionWorkspace(session, project)
+	if err != nil {
+		a.failSession(session, &project, fmt.Errorf("prepare workspace: %w", err))
+		return
+	}
+	session = preparedSession
+
 	a.updateSessionStatus(session.ID, "running")
 	a.updateIssueStatus(session.IssueID, "running")
 	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Runner starting %s session in %s", session.Provider, session.Workdir))
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Source repository: %s", project.RepoPath))
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Session branch: %s", session.Branch))
+	a.addSystemComment(session.IssueID, fmt.Sprintf(
+		"Started local session `%s` on branch `%s`.\n\nWorkspace: `%s`",
+		shortID(session.ID),
+		session.Branch,
+		session.Workdir,
+	))
 	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Command: %s", session.Command))
 
 	command := exec.CommandContext(ctx, "/bin/zsh", "-lc", session.Command)
-	command.Dir = project.RepoPath
+	command.Dir = session.Workdir
 	command.Env = append(os.Environ(), buildKubeEnv(project)...)
 
 	stdout, err := command.StdoutPipe()
 	if err != nil {
-		a.failSession(session, fmt.Errorf("stdout pipe: %w", err))
+		a.failSession(session, &project, fmt.Errorf("stdout pipe: %w", err))
 		return
 	}
 	stderr, err := command.StderrPipe()
 	if err != nil {
-		a.failSession(session, fmt.Errorf("stderr pipe: %w", err))
+		a.failSession(session, &project, fmt.Errorf("stderr pipe: %w", err))
 		return
 	}
 
 	if err := command.Start(); err != nil {
-		a.failSession(session, fmt.Errorf("start command: %w", err))
+		a.failSession(session, &project, fmt.Errorf("start command: %w", err))
 		return
 	}
 
@@ -587,16 +797,18 @@ func (a *app) runSession(session agentSession, project project) {
 		a.updateSessionStatus(session.ID, "cancelled")
 		a.updateIssueStatus(session.IssueID, "cancelled")
 		a.appendSessionLog(session.ID, "system", "Session cancelled.")
+		a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` was cancelled.", shortID(session.ID)))
 		return
 	}
 	if err != nil {
-		a.failSession(session, fmt.Errorf("command failed: %w", err))
+		a.failSession(session, &project, fmt.Errorf("command failed: %w", err))
 		return
 	}
 
 	a.updateSessionStatus(session.ID, "completed")
 	a.updateIssueStatus(session.IssueID, "completed")
 	a.appendSessionLog(session.ID, "system", "Session completed. Collecting Kubernetes evidence.")
+	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` completed successfully.", shortID(session.ID)))
 	a.collectEvidence(session, project)
 }
 
@@ -608,10 +820,15 @@ func (a *app) captureStream(wg *sync.WaitGroup, sessionID, stream string, reader
 	}
 }
 
-func (a *app) failSession(session agentSession, err error) {
+func (a *app) failSession(session agentSession, project *project, err error) {
 	a.updateSessionStatus(session.ID, "failed")
 	a.updateIssueStatus(session.IssueID, "failed")
 	a.appendSessionLog(session.ID, "system", err.Error())
+	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` failed.\n\n%s", shortID(session.ID), err.Error()))
+	if project != nil && project.Namespace != "" {
+		a.appendSessionLog(session.ID, "system", "Collecting Kubernetes evidence after failure.")
+		a.collectEvidence(session, *project)
+	}
 }
 
 func (a *app) collectEvidence(session agentSession, project project) {
@@ -706,8 +923,110 @@ func (a *app) loadIssueDetail(issueID string) (issueDetail, error) {
 	return detail, nil
 }
 
+func (a *app) loadProject(projectID string) (project, error) {
+	var project project
+	row := a.db.QueryRow(`
+		SELECT
+			p.id,
+			p.name,
+			p.repo_path,
+			p.default_branch,
+			p.deploy_command,
+			p.validation_command,
+			p.kube_context,
+			p.namespace,
+			COUNT(DISTINCT i.id) AS issue_count,
+			COUNT(DISTINCT s.id) AS session_count,
+			MAX(i.updated_at) AS latest_issue_updated_at,
+			p.created_at,
+			p.updated_at
+		FROM projects p
+		LEFT JOIN issues i ON i.project_id = p.id
+		LEFT JOIN agent_sessions s ON s.issue_id = i.id
+		WHERE p.id = ?
+		GROUP BY p.id
+	`, projectID)
+	var latestIssueUpdatedAt sql.NullString
+	err := row.Scan(
+		&project.ID,
+		&project.Name,
+		&project.RepoPath,
+		&project.DefaultBranch,
+		&project.DeployCommand,
+		&project.ValidationCommand,
+		&project.KubeContext,
+		&project.Namespace,
+		&project.IssueCount,
+		&project.SessionCount,
+		&latestIssueUpdatedAt,
+		&project.CreatedAt,
+		&project.UpdatedAt,
+	)
+	if latestIssueUpdatedAt.Valid {
+		project.LatestIssueUpdatedAt = latestIssueUpdatedAt.String
+	}
+	return project, err
+}
+
+func (a *app) prepareSessionWorkspace(session agentSession, project project) (agentSession, error) {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		return session, errors.New("git is not available on PATH")
+	}
+	if err := ensureGitRepository(gitPath, project.RepoPath); err != nil {
+		return session, err
+	}
+
+	workdir := plannedSessionWorkdir(a.workdir, project.ID, session.ID)
+	if err := os.MkdirAll(filepath.Dir(workdir), 0o755); err != nil {
+		return session, fmt.Errorf("create workdir parent: %w", err)
+	}
+	if _, err := os.Stat(workdir); err == nil {
+		return session, fmt.Errorf("session workdir already exists: %s", workdir)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return session, fmt.Errorf("inspect session workdir: %w", err)
+	}
+
+	branchExists, err := gitRefExists(gitPath, project.RepoPath, "refs/heads/"+session.Branch)
+	if err != nil {
+		return session, err
+	}
+	if branchExists {
+		output, err := exec.Command(gitPath, "-C", project.RepoPath, "worktree", "add", workdir, session.Branch).CombinedOutput()
+		if err != nil {
+			return session, fmt.Errorf("attach existing branch %q: %s", session.Branch, formatCommandFailure(err, output))
+		}
+	} else {
+		baseRef, err := resolveBaseRef(gitPath, project.RepoPath, project.DefaultBranch)
+		if err != nil {
+			return session, err
+		}
+		output, err := exec.Command(gitPath, "-C", project.RepoPath, "worktree", "add", "--detach", workdir, baseRef).CombinedOutput()
+		if err != nil {
+			return session, fmt.Errorf("create worktree from %q: %s", baseRef, formatCommandFailure(err, output))
+		}
+		output, err = exec.Command(gitPath, "-C", workdir, "checkout", "-b", session.Branch).CombinedOutput()
+		if err != nil {
+			_ = removeWorktree(gitPath, project.RepoPath, workdir)
+			return session, fmt.Errorf("create branch %q: %s", session.Branch, formatCommandFailure(err, output))
+		}
+	}
+
+	session.Workdir = workdir
+	return session, nil
+}
+
 func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
-	var detail sessionDetail
+	detail := sessionDetail{
+		Workspace: workspaceSnapshot{
+			StatusLines: []string{},
+			Changes:     []workspaceChange{},
+			Comparison: workspaceComparison{
+				CommitLines: []string{},
+				Changes:     []workspaceChange{},
+			},
+		},
+	}
 	row := a.db.QueryRow(`
 		SELECT s.id, s.issue_id, s.provider, s.runtime_mode, s.command, s.status, s.branch, s.workdir, s.created_at, s.updated_at,
 		       i.id, i.project_id, i.title, i.body, i.status, i.assignee, i.environment_url, i.created_at, i.updated_at,
@@ -743,6 +1062,27 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 		}
 		detail.Logs = append(detail.Logs, log)
 	}
+
+	evidenceRows, err := a.db.Query(`
+		SELECT id, issue_id, session_id, cluster, namespace, summary, details, created_at
+		FROM deployment_evidence
+		WHERE session_id = ?
+		ORDER BY created_at DESC
+	`, sessionID)
+	if err != nil {
+		return detail, err
+	}
+	defer evidenceRows.Close()
+
+	for evidenceRows.Next() {
+		var evidence deploymentEvidence
+		if err := evidenceRows.Scan(&evidence.ID, &evidence.IssueID, &evidence.SessionID, &evidence.Cluster, &evidence.Namespace, &evidence.Summary, &evidence.Details, &evidence.CreatedAt); err != nil {
+			return detail, err
+		}
+		detail.Evidence = append(detail.Evidence, evidence)
+	}
+
+	detail.Workspace = inspectWorkspace(detail.Session.Workdir, detail.Project.DefaultBranch)
 
 	return detail, nil
 }
@@ -826,6 +1166,24 @@ func (a *app) appendSessionLog(sessionID, stream, message string) {
 	a.broker.publish(sessionID, sessionEvent{Type: "log", Payload: message})
 }
 
+func (a *app) addSystemComment(issueID, body string) {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return
+	}
+	createdAt := nowString()
+	_, _ = a.db.Exec(`
+		INSERT INTO comments (id, issue_id, author_type, body, created_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, uuid.NewString(), issueID, "system", body, createdAt)
+	_, _ = a.db.Exec(`
+		UPDATE issues SET updated_at = ? WHERE id = ?
+	`, createdAt, issueID)
+	_, _ = a.db.Exec(`
+		UPDATE inbox_items SET updated_at = ?, unread = 1 WHERE issue_id = ?
+	`, createdAt, issueID)
+}
+
 func (a *app) updateSessionStatus(sessionID, status string) {
 	_, _ = a.db.Exec(`
 		UPDATE agent_sessions SET status = ?, updated_at = ? WHERE id = ?
@@ -848,6 +1206,13 @@ func (a *app) storeEvidence(evidence deploymentEvidence) {
 		INSERT INTO deployment_evidence (id, issue_id, session_id, cluster, namespace, summary, details, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, evidence.ID, evidence.IssueID, evidence.SessionID, evidence.Cluster, evidence.Namespace, evidence.Summary, evidence.Details, evidence.CreatedAt)
+	a.addSystemComment(evidence.IssueID, fmt.Sprintf(
+		"Kubernetes evidence captured for session `%s` in `%s/%s`.\n\n%s",
+		shortID(evidence.SessionID),
+		clusterLabel(evidence.Cluster),
+		evidence.Namespace,
+		evidence.Summary,
+	))
 	a.broker.publish(evidence.SessionID, sessionEvent{Type: "status", Payload: "evidence"})
 }
 
@@ -875,6 +1240,7 @@ func writeJSON(w http.ResponseWriter, payload any) {
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
@@ -888,6 +1254,110 @@ func shortID(value string) string {
 		return value
 	}
 	return value[:8]
+}
+
+func plannedSessionWorkdir(root, projectID, sessionID string) string {
+	return filepath.Join(root, projectID, sessionID)
+}
+
+func normalizeProjectInput(input struct {
+	Name              string `json:"name"`
+	RepoPath          string `json:"repoPath"`
+	DefaultBranch     string `json:"defaultBranch"`
+	DeployCommand     string `json:"deployCommand"`
+	ValidationCommand string `json:"validationCommand"`
+	KubeContext       string `json:"kubeContext"`
+	Namespace         string `json:"namespace"`
+}) (project, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return project{}, errors.New("project name cannot be empty")
+	}
+
+	repoPath := strings.TrimSpace(input.RepoPath)
+	if repoPath == "" {
+		return project{}, errors.New("repo path cannot be empty")
+	}
+	if !filepath.IsAbs(repoPath) {
+		return project{}, errors.New("repo path must be an absolute path")
+	}
+	repoInfo, err := os.Stat(repoPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return project{}, errors.New("repo path does not exist")
+		}
+		return project{}, fmt.Errorf("repo path validation failed: %w", err)
+	}
+	if !repoInfo.IsDir() {
+		return project{}, errors.New("repo path must point to a directory")
+	}
+
+	defaultBranch := strings.TrimSpace(input.DefaultBranch)
+	if defaultBranch == "" {
+		defaultBranch = "main"
+	}
+
+	return project{
+		Name:              name,
+		RepoPath:          repoPath,
+		DefaultBranch:     defaultBranch,
+		DeployCommand:     strings.TrimSpace(input.DeployCommand),
+		ValidationCommand: strings.TrimSpace(input.ValidationCommand),
+		KubeContext:       strings.TrimSpace(input.KubeContext),
+		Namespace:         strings.TrimSpace(input.Namespace),
+	}, nil
+}
+
+func buildSessionCommand(issueID string, project project, override string) string {
+	override = strings.TrimSpace(override)
+	if override != "" {
+		return override
+	}
+
+	steps := []string{
+		"set -e",
+		"set -o pipefail",
+		fmt.Sprintf("printf '%%s\\n' %s", shellQuote(fmt.Sprintf("Issue: %s", issueID))),
+		fmt.Sprintf("printf '%%s\\n' %s", shellQuote(fmt.Sprintf("Project: %s", project.Name))),
+		fmt.Sprintf("printf '%%s\\n' %s", shellQuote(fmt.Sprintf("Repo: %s", project.RepoPath))),
+	}
+
+	hasWorkflowStep := false
+	if project.DeployCommand != "" {
+		hasWorkflowStep = true
+		steps = append(
+			steps,
+			"",
+			fmt.Sprintf("printf '%%s\\n' %s", shellQuote("==> Deploy")),
+			project.DeployCommand,
+		)
+	}
+	if project.ValidationCommand != "" {
+		hasWorkflowStep = true
+		steps = append(
+			steps,
+			"",
+			fmt.Sprintf("printf '%%s\\n' %s", shellQuote("==> Validate")),
+			project.ValidationCommand,
+		)
+	} else if project.Namespace != "" {
+		hasWorkflowStep = true
+		steps = append(
+			steps,
+			"",
+			fmt.Sprintf("printf '%%s\\n' %s", shellQuote("==> Cluster snapshot")),
+			buildKubectlCommand(project, "get", "pods,deploy,svc,ingress"),
+		)
+	}
+	if !hasWorkflowStep {
+		steps = append(
+			steps,
+			"",
+			fmt.Sprintf("printf '%%s\\n' %s", shellQuote("No deploy or validation command configured for this project.")),
+		)
+	}
+
+	return strings.Join(steps, "\n")
 }
 
 func buildKubeEnv(project project) []string {
@@ -913,6 +1383,286 @@ func buildKubectlArgs(project project, args ...string) []string {
 	return kubectlArgs
 }
 
+func buildKubectlCommand(project project, args ...string) string {
+	commandArgs := append([]string{"kubectl"}, buildKubectlArgs(project, args...)...)
+	return shellJoin(commandArgs)
+}
+
+func ensureGitRepository(gitPath, repoPath string) error {
+	output, err := exec.Command(gitPath, "-C", repoPath, "rev-parse", "--is-inside-work-tree").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("repo path is not a git work tree: %s", formatCommandFailure(err, output))
+	}
+	if strings.TrimSpace(string(output)) != "true" {
+		return errors.New("repo path is not a git work tree")
+	}
+	return nil
+}
+
+func gitRefExists(gitPath, repoPath, ref string) (bool, error) {
+	cmd := exec.Command(gitPath, "-C", repoPath, "rev-parse", "--verify", "--quiet", ref)
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("check git ref %q: %w", ref, err)
+	}
+	return true, nil
+}
+
+func resolveBaseRef(gitPath, repoPath, defaultBranch string) (string, error) {
+	defaultBranch = strings.TrimSpace(defaultBranch)
+	if defaultBranch != "" {
+		exists, err := gitRefExists(gitPath, repoPath, "refs/heads/"+defaultBranch)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return defaultBranch, nil
+		}
+
+		remoteRef := "refs/remotes/origin/" + defaultBranch
+		exists, err = gitRefExists(gitPath, repoPath, remoteRef)
+		if err != nil {
+			return "", err
+		}
+		if exists {
+			return "origin/" + defaultBranch, nil
+		}
+	}
+
+	output, err := exec.Command(gitPath, "-C", repoPath, "rev-parse", "--verify", "HEAD").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("resolve base ref: %s", formatCommandFailure(err, output))
+	}
+	return "HEAD", nil
+}
+
+func removeWorktree(gitPath, repoPath, workdir string) error {
+	output, err := exec.Command(gitPath, "-C", repoPath, "worktree", "remove", "--force", workdir).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("remove worktree %s: %s", workdir, formatCommandFailure(err, output))
+	}
+	return nil
+}
+
+func inspectWorkspace(workdir, defaultBranch string) workspaceSnapshot {
+	snapshot := workspaceSnapshot{
+		StatusLines: []string{},
+		Changes:     []workspaceChange{},
+		Comparison: workspaceComparison{
+			CommitLines: []string{},
+			Changes:     []workspaceChange{},
+		},
+	}
+
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		snapshot.Error = "Workspace path has not been recorded for this session yet."
+		return snapshot
+	}
+
+	info, err := os.Stat(workdir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			snapshot.Error = "Workspace has not been prepared yet."
+			return snapshot
+		}
+		snapshot.Error = fmt.Sprintf("Inspect workspace: %v", err)
+		return snapshot
+	}
+	if !info.IsDir() {
+		snapshot.Error = "Workspace path is not a directory."
+		return snapshot
+	}
+	snapshot.Exists = true
+
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		snapshot.Error = "git is not available on PATH."
+		return snapshot
+	}
+	if err := ensureGitRepository(gitPath, workdir); err != nil {
+		snapshot.Error = err.Error()
+		return snapshot
+	}
+	snapshot.IsGitRepository = true
+
+	if branch, err := runGitReadOnly(gitPath, workdir, "branch", "--show-current"); err == nil {
+		snapshot.Branch = branch
+	} else {
+		snapshot.Error = err.Error()
+	}
+
+	if head, err := runGitReadOnly(gitPath, workdir, "rev-parse", "HEAD"); err == nil {
+		snapshot.Head = head
+		snapshot.ShortHead = shortCommitSHA(head)
+	} else if snapshot.Error == "" {
+		snapshot.Error = err.Error()
+	}
+
+	statusOutput, err := runGitReadOnly(gitPath, workdir, "status", "--short")
+	if err != nil {
+		if snapshot.Error == "" {
+			snapshot.Error = err.Error()
+		}
+		return snapshot
+	}
+
+	for _, line := range strings.Split(statusOutput, "\n") {
+		line = strings.TrimRight(line, " ")
+		if line == "" {
+			continue
+		}
+		snapshot.StatusLines = append(snapshot.StatusLines, line)
+		snapshot.Changes = append(snapshot.Changes, parseWorkspaceChange(line))
+		if strings.HasPrefix(line, "??") {
+			snapshot.UntrackedFiles++
+			continue
+		}
+		snapshot.ChangedFiles++
+	}
+	snapshot.HasChanges = snapshot.ChangedFiles > 0 || snapshot.UntrackedFiles > 0
+
+	diffPreview, err := runGitReadOnly(gitPath, workdir, "diff", "--stat", "--patch", "--find-renames", "HEAD")
+	if err != nil {
+		if snapshot.Error == "" {
+			snapshot.Error = err.Error()
+		}
+		return snapshot
+	}
+	snapshot.DiffPreview, snapshot.DiffTruncated = truncateWithFlag(diffPreview, 20000)
+	inspectWorkspaceComparison(&snapshot, gitPath, workdir, defaultBranch)
+
+	return snapshot
+}
+
+func inspectWorkspaceComparison(snapshot *workspaceSnapshot, gitPath, workdir, defaultBranch string) {
+	baseRef, err := resolveBaseRef(gitPath, workdir, defaultBranch)
+	if err != nil {
+		snapshot.Comparison.Error = err.Error()
+		return
+	}
+	snapshot.Comparison.BaseRef = baseRef
+
+	mergeBase, err := runGitReadOnly(gitPath, workdir, "merge-base", "HEAD", baseRef)
+	if err != nil {
+		snapshot.Comparison.Error = err.Error()
+		return
+	}
+	snapshot.Comparison.MergeBase = strings.TrimSpace(mergeBase)
+	snapshot.Comparison.MergeBaseShort = shortCommitSHA(snapshot.Comparison.MergeBase)
+
+	aheadBehind, err := runGitReadOnly(gitPath, workdir, "rev-list", "--left-right", "--count", baseRef+"...HEAD")
+	if err != nil {
+		snapshot.Comparison.Error = err.Error()
+		return
+	}
+	fields := strings.Fields(aheadBehind)
+	if len(fields) == 2 {
+		snapshot.Comparison.BehindCount = parseIntOrZero(fields[0])
+		snapshot.Comparison.AheadCount = parseIntOrZero(fields[1])
+	}
+
+	commitLines, err := runGitReadOnly(gitPath, workdir, "log", "--oneline", "--decorate", "--no-color", snapshot.Comparison.MergeBase+"..HEAD")
+	if err != nil {
+		snapshot.Comparison.Error = err.Error()
+		return
+	}
+	snapshot.Comparison.CommitLines = splitNonEmptyLines(commitLines)
+
+	nameStatusOutput, err := runGitReadOnly(gitPath, workdir, "diff", "--name-status", "--find-renames", snapshot.Comparison.MergeBase)
+	if err != nil {
+		snapshot.Comparison.Error = err.Error()
+		return
+	}
+	for _, line := range splitNonEmptyLines(nameStatusOutput) {
+		snapshot.Comparison.Changes = append(snapshot.Comparison.Changes, parseNameStatusChange(line))
+	}
+
+	diffPreview, err := runGitReadOnly(gitPath, workdir, "diff", "--stat", "--patch", "--find-renames", snapshot.Comparison.MergeBase)
+	if err != nil {
+		snapshot.Comparison.Error = err.Error()
+		return
+	}
+	snapshot.Comparison.DiffPreview, snapshot.Comparison.DiffTruncated = truncateWithFlag(diffPreview, 20000)
+}
+
+func parseWorkspaceChange(line string) workspaceChange {
+	change := workspaceChange{}
+	if len(line) < 3 {
+		change.Path = strings.TrimSpace(line)
+		return change
+	}
+
+	change.StatusCode = line[:2]
+	pathPart := strings.TrimSpace(line[3:])
+	parts := strings.SplitN(pathPart, " -> ", 2)
+	if len(parts) == 2 {
+		change.PreviousPath = parts[0]
+		change.Path = parts[1]
+		return change
+	}
+	change.Path = pathPart
+	return change
+}
+
+func parseNameStatusChange(line string) workspaceChange {
+	change := workspaceChange{}
+	fields := strings.Split(line, "\t")
+	if len(fields) == 0 {
+		return change
+	}
+	change.StatusCode = strings.TrimSpace(fields[0])
+	if len(fields) >= 3 {
+		change.PreviousPath = strings.TrimSpace(fields[1])
+		change.Path = strings.TrimSpace(fields[2])
+		return change
+	}
+	if len(fields) >= 2 {
+		change.Path = strings.TrimSpace(fields[1])
+	}
+	return change
+}
+
+func runGitReadOnly(gitPath, repoPath string, args ...string) (string, error) {
+	commandArgs := append([]string{"-C", repoPath}, args...)
+	output, err := exec.Command(gitPath, commandArgs...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), formatCommandFailure(err, output))
+	}
+	return strings.TrimRight(string(output), "\r\n"), nil
+}
+
+func formatCommandFailure(err error, output []byte) string {
+	message := strings.TrimSpace(string(output))
+	if message == "" {
+		return err.Error()
+	}
+	return message
+}
+
+func shellJoin(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, shellQuote(value))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func clusterLabel(cluster string) string {
+	cluster = strings.TrimSpace(cluster)
+	if cluster == "" {
+		return "current-context"
+	}
+	return cluster
+}
+
 func userHomeDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -926,4 +1676,40 @@ func truncate(value string, max int) string {
 		return value
 	}
 	return value[:max] + "\n\n...truncated..."
+}
+
+func truncateWithFlag(value string, max int) (string, bool) {
+	if len(value) <= max {
+		return value, false
+	}
+	return value[:max] + "\n\n...truncated...", true
+}
+
+func splitNonEmptyLines(value string) []string {
+	lines := strings.Split(value, "\n")
+	result := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		result = append(result, line)
+	}
+	return result
+}
+
+func parseIntOrZero(value string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func shortCommitSHA(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
 }

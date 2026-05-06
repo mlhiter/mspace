@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, queryKeys } from "@mspace/core";
-import { Button, EmptyState, Field, Input, Panel, PageFrame, StatusBadge, Textarea } from "@mspace/ui";
+import { Button, EmptyState, Field, Input, Notice, Panel, PageFrame, StatusBadge, Textarea } from "@mspace/ui";
 
 export function InboxPage() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const inboxQuery = useQuery({
     queryKey: queryKeys.inbox,
@@ -21,10 +22,14 @@ export function InboxPage() {
 
   const createIssue = useMutation({
     mutationFn: api.createIssue,
-    onSuccess: async () => {
+    onSuccess: async ({ issueId }) => {
       setTitle("");
       setBody("");
-      await queryClient.invalidateQueries({ queryKey: queryKeys.inbox });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+      ]);
+      void navigate(`/issues/${issueId}`);
     },
   });
 
@@ -78,9 +83,11 @@ export function InboxPage() {
               createIssue.mutate({ projectId, title, body });
             }}
           >
-            <div className="rounded-xl bg-[color:var(--background)] px-4 py-3 text-sm text-[color:var(--muted)]">
-              {createSubtitle}
-            </div>
+            {createIssue.error ? (
+              <Notice tone="danger">{createIssue.error.message}</Notice>
+            ) : (
+              <Notice>{createSubtitle}</Notice>
+            )}
             <Field label="Project">
               <select
                 value={projectId}

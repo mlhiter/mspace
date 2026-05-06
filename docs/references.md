@@ -1,6 +1,6 @@
 # Reference Notes
 
-> Status: public reference scan, created 2026-05-06
+> Status: public reference scan and implementation notes, updated 2026-05-06
 
 ## Multica
 
@@ -27,6 +27,10 @@ mspace interpretation:
 
 Multica proves the interaction model. mspace should borrow the teammate/task/status feel, then anchor execution in Kubernetes namespaces.
 
+2026-05-06 implementation note:
+
+The current codebase is independent. It borrows the Inbox, Issue, comments, sessions, and agent-as-collaborator shape without forking Multica or depending on Multica runtime code.
+
 ## Optio
 
 Sources:
@@ -51,6 +55,10 @@ mspace interpretation:
 
 Optio proves the technical runtime shape. mspace should borrow the Kubernetes execution model, but focus first on project namespaces and realistic test-cluster operation.
 
+2026-05-06 implementation note:
+
+The current local MVP has implemented git worktree isolation for sessions. Kubernetes-hosted runtime, Helm install, ServiceAccount lifecycle, and namespace allocation remain product targets rather than current code.
+
 ## Core Differentiation
 
 mspace is not only a task board and not only a coding-agent runner.
@@ -62,4 +70,3 @@ coding agent + project repository + scoped Kubernetes namespace + real test depl
 ```
 
 The user should open mspace because they want an agent to work in the same kind of test environment a senior engineer would use manually.
-

@@ -7,6 +7,7 @@ import type {
   IssueDetail,
   Project,
   SessionDetail,
+  UpdateProjectInput,
 } from "./types";
 
 export const queryKeys = {
@@ -24,6 +25,19 @@ export function buildApiUrl(path: string): string {
   return `${getApiBaseUrl()}${path}`;
 }
 
+async function readErrorMessage(response: Response): Promise<string> {
+  const fallback = `Request failed with status ${response.status}`;
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    const payload = (await response.json()) as { error?: string };
+    return payload.error || fallback;
+  }
+
+  const message = await response.text();
+  return message || fallback;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(buildApiUrl(path), {
     headers: {
@@ -34,8 +48,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed with status ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
 
   return (await response.json()) as T;
@@ -49,6 +62,15 @@ export const api = {
     request<Project>("/api/projects", {
       method: "POST",
       body: JSON.stringify(input),
+    }),
+  updateProject: (input: UpdateProjectInput) =>
+    request<Project>(`/api/projects/${input.id}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deleteProject: (projectId: string) =>
+    request<{ ok: boolean }>(`/api/projects/${projectId}`, {
+      method: "DELETE",
     }),
   createIssue: (input: CreateIssueInput) =>
     request<{ issueId: string }>("/api/issues", {

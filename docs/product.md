@@ -1,10 +1,25 @@
 # mspace Product Brief
 
-> Status: initial product direction, created 2026-05-06
+> Status: local MVP implementation snapshot, updated 2026-05-06
 
 ## One-Line Definition
 
 mspace is an Inbox and Issue workspace for coding agents: a place where teams coordinate work in document-style issues, develop changes in a local-first agent session, and validate those changes in a real, namespace-scoped Kubernetes test environment.
+
+## Current MVP State
+
+The repository now has a runnable local desktop MVP:
+
+- create and manage projects with local repository paths;
+- create issues from Inbox;
+- open document-style issue detail pages with comments and linked sessions;
+- start local agent sessions from issues;
+- run sessions in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`;
+- store session metadata, logs, comments, issues, projects, and evidence in SQLite under `~/.mspace/mspace.db`;
+- inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
+- use project-level Kubernetes context and namespace as configurable validation inputs.
+
+Kubernetes is the deployment and test environment, not the required development runtime for the first version. The current development runtime is local. Running the agent runtime inside Kubernetes remains a later option once the local workflow is stable.
 
 ## Why This Exists
 
@@ -45,7 +60,6 @@ Inbox
   -> Issue
   -> Agent Session
   -> Local code change
-  -> Code change
   -> Deploy to test namespace
   -> Comments and progress updates
   -> Inspect logs/events/resources
@@ -56,12 +70,10 @@ Inbox
 
 A project records:
 
-- repository URL;
+- local repository path;
 - default branch;
-- default agent provider;
-- test cluster target;
-- namespace naming policy;
-- bootstrap command;
+- Kubernetes context;
+- namespace;
 - deploy command;
 - validation command;
 - allowed Kubernetes resource scope.
@@ -103,11 +115,13 @@ An Issue should hold:
 
 A user creates a session from an issue. In the MVP path, mspace starts a local-first session and then:
 
-- starts or reuses a local development runtime;
-- prepares a workspace with the repository checkout;
-- starts the selected coding agent;
+- uses the desktop-managed local runner;
+- prepares a git worktree for the repository;
+- starts the selected command or generated coding-agent command inside that worktree;
 - streams terminal output and agent status;
-- injects a scoped namespace, ServiceAccount, and kubeconfig for deployment and validation.
+- passes configured Kubernetes context and namespace into the session command.
+
+Scoped namespace, ServiceAccount, and kubeconfig generation are target behavior, not implemented behavior in the current local MVP.
 
 ### Runtime Operation
 
@@ -141,16 +155,25 @@ The first version should prove one thing:
 MVP features:
 
 - inbox list and issue detail;
-- project list and project detail;
-- issue comments, subscribers, and assignees;
+- project list with create, edit, and delete;
+- issue comments and assignee field;
 - create agent session from issue;
 - local development runtime;
-- namespace per project or per session;
-- scoped kubeconfig generation;
+- git worktree isolation per session;
+- project-level Kubernetes context and namespace configuration;
 - terminal/progress stream;
-- basic Kubernetes resource view for the attached namespace;
-- PR link and environment link capture;
-- manual cleanup button.
+- session workspace inspection;
+- branch comparison against project default branch;
+- issue-summary draft generation from session output.
+
+Still outside the current implemented MVP:
+
+- generated scoped kubeconfig;
+- ServiceAccount and RoleBinding lifecycle;
+- namespace per session;
+- full Kubernetes resource browser;
+- PR link capture;
+- manual session cleanup controls.
 
 ## Explicit Non-Goals
 
@@ -180,6 +203,8 @@ But the runtime should feel closer to Optio:
 - isolation is expressed through namespaces, ServiceAccounts, Roles, and quotas;
 - each issue/session can later gain its own long-lived or temporary Kubernetes-hosted runtime when the product grows into that model;
 - self-hosting on a team's own cluster is a first-class deployment model.
+
+The 2026-05-06 implementation borrows Optio's git worktree isolation locally and leaves Kubernetes-hosted runtime as future work.
 
 ## Key Product Bet
 

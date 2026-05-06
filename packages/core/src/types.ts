@@ -7,6 +7,9 @@ export interface Project {
   validationCommand: string;
   kubeContext: string;
   namespace: string;
+  issueCount: number;
+  sessionCount: number;
+  latestIssueUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -62,6 +65,42 @@ export interface SessionLog {
   createdAt: string;
 }
 
+export interface WorkspaceSnapshot {
+  exists: boolean;
+  isGitRepository: boolean;
+  hasChanges: boolean;
+  changedFiles: number;
+  untrackedFiles: number;
+  head: string;
+  shortHead: string;
+  branch: string;
+  statusLines: string[];
+  changes: WorkspaceChange[];
+  diffPreview: string;
+  diffTruncated: boolean;
+  comparison: WorkspaceComparison;
+  error: string;
+}
+
+export interface WorkspaceChange {
+  statusCode: string;
+  path: string;
+  previousPath: string;
+}
+
+export interface WorkspaceComparison {
+  baseRef: string;
+  mergeBase: string;
+  mergeBaseShort: string;
+  aheadCount: number;
+  behindCount: number;
+  commitLines: string[];
+  changes: WorkspaceChange[];
+  diffPreview: string;
+  diffTruncated: boolean;
+  error: string;
+}
+
 export interface DeploymentEvidence {
   id: string;
   issueId: string;
@@ -86,6 +125,8 @@ export interface SessionDetail {
   issue: Issue;
   project: Project;
   logs: SessionLog[];
+  evidence: DeploymentEvidence[];
+  workspace: WorkspaceSnapshot;
 }
 
 export interface CreateProjectInput {
@@ -96,6 +137,10 @@ export interface CreateProjectInput {
   validationCommand: string;
   kubeContext: string;
   namespace: string;
+}
+
+export interface UpdateProjectInput extends CreateProjectInput {
+  id: string;
 }
 
 export interface CreateIssueInput {

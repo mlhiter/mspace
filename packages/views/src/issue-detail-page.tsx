@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { api, buildApiUrl, queryKeys, type SessionStreamEvent } from "@mspace/core";
-import { Button, EmptyState, Field, Input, Panel, PageFrame, StatusBadge, Textarea } from "@mspace/ui";
+import { Button, EmptyState, Field, Input, Notice, Panel, PageFrame, StatusBadge, Textarea } from "@mspace/ui";
 
 function useSessionStream(sessionId: string | undefined, onEvent: (event: SessionStreamEvent) => void) {
   useEffect(() => {
@@ -35,6 +35,19 @@ export function IssueDetailPage() {
 
   const detail = issueQuery.data;
   const latestSession = detail?.sessions[0];
+  const defaultWorkflowDescription =
+    detail && (detail.project.deployCommand || detail.project.validationCommand || detail.project.namespace)
+      ? [
+          detail.project.deployCommand ? "deploy command" : null,
+          detail.project.validationCommand
+            ? "validation command"
+            : detail.project.namespace
+              ? "cluster snapshot"
+              : null,
+        ]
+          .filter(Boolean)
+          .join(" -> ")
+      : "session command override only";
 
   useEffect(() => {
     const latestSessionId = detail?.sessions[0]?.id;
@@ -171,11 +184,31 @@ export function IssueDetailPage() {
                 startSession.mutate();
               }}
             >
-              <div className="rounded-xl bg-[color:var(--background)] px-4 py-3 text-sm text-[color:var(--muted)]">
-                Sessions run locally in the MVP, then deploy and validate against the configured Kubernetes namespace.
+              {startSession.error ? (
+                <Notice tone="danger">{startSession.error.message}</Notice>
+              ) : (
+                <Notice>
+                  Sessions run locally in the MVP, then deploy and validate against the configured Kubernetes namespace.
+                </Notice>
+              )}
+              <div className="rounded-xl border border-[color:var(--border)] bg-white px-4 py-4 text-sm">
+                <div className="font-semibold text-[color:var(--text)]">Default workflow</div>
+                <div className="mt-2 text-[color:var(--muted)]">
+                  {defaultWorkflowDescription || "No default workflow configured yet."}
+                </div>
+                <div className="mt-3 grid gap-2 text-xs text-[color:var(--muted)]">
+                  <div>
+                    <span className="font-semibold text-[color:var(--text)]">Deploy:</span>{" "}
+                    {detail.project.deployCommand || "not configured"}
+                  </div>
+                  <div>
+                    <span className="font-semibold text-[color:var(--text)]">Validate:</span>{" "}
+                    {detail.project.validationCommand || "not configured"}
+                  </div>
+                </div>
               </div>
               <Field label="Command override" hint="Leave empty to run the project's validation command or the runner default.">
-                <Input value={sessionCommand} onChange={(event) => setSessionCommand(event.target.value)} placeholder="optional: make test, pnpm test, kubectl get pods ..." />
+                <Input value={sessionCommand} onChange={(event) => setSessionCommand(event.target.value)} placeholder="optional: override the full default workflow" />
               </Field>
               <Button type="submit" disabled={startSession.isPending}>
                 {startSession.isPending ? "Starting session..." : "Start local session"}

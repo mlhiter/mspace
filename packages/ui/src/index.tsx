@@ -180,3 +180,18 @@ export function EmptyState(props: { title: string; body: string }) {
     </div>
   );
 }
+
+export function Notice(props: { tone?: "info" | "danger"; children: ReactNode }) {
+  const tone = props.tone || "info";
+  return (
+    <div
+      className={clsx(
+        "rounded-xl px-4 py-3 text-sm",
+        tone === "info" && "bg-[color:var(--background)] text-[color:var(--muted)]",
+        tone === "danger" && "bg-rose-50 text-rose-700 ring-1 ring-rose-100",
+      )}
+    >
+      {props.children}
+    </div>
+  );
+}

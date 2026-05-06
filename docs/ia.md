@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: initial IA draft, created 2026-05-06
+> Status: local MVP implementation snapshot, updated 2026-05-06
 
 ## IA Goal
 
@@ -58,17 +58,24 @@ The ownership model should be clear:
 
 ## Screen Map
 
+Current implemented desktop routes:
+
 ```text
 /inbox
-/issues
 /issues/:issueId
 /projects
-/projects/:projectId
-/sessions
 /sessions/:sessionId
 ```
 
-The MVP does not need more top-level areas than this.
+Planned but not implemented yet:
+
+```text
+/issues
+/projects/:projectId
+/sessions
+```
+
+The MVP does not need more top-level areas than this. The current UI intentionally starts with Inbox and Projects only in the sidebar; issue and session detail screens are reached from created objects.
 
 ## Inbox
 
@@ -91,10 +98,6 @@ Each row should show:
 ### Primary actions
 
 - create issue;
-- assign to human;
-- assign to agent;
-- mark read or unread;
-- archive;
 - open issue detail.
 
 ### Layout
@@ -111,6 +114,13 @@ Each row should show:
 ```
 
 The preview can be dropped in the earliest implementation if it slows execution.
+
+Current implementation:
+
+- lists inbox items from the local runner;
+- creates an issue directly from Inbox;
+- navigates to the created issue detail;
+- keeps assignment simple with a text assignee field.
 
 ## Issue Detail
 
@@ -206,6 +216,14 @@ It should answer "did this actually run" without forcing the user into a separat
 
 In the default path, the answer should be grounded in Kubernetes deployment and test evidence rather than generic agent logs alone.
 
+Current implementation:
+
+- shows issue metadata, project, body, comments, linked sessions, logs, and evidence;
+- supports adding comments;
+- starts a local session from the issue;
+- streams session logs and status while a session is running;
+- links into full session detail.
+
 ### Layout
 
 ```text
@@ -239,10 +257,10 @@ Each row should show:
 
 - project name;
 - default branch;
-- default agent provider;
+- local repository path;
 - active issues;
 - active sessions;
-- namespace policy.
+- Kubernetes context and namespace.
 
 ### Project Detail
 
@@ -255,6 +273,13 @@ Project Detail should show:
 - recent environment failures.
 
 The Project view should help operators configure the system without turning it into the primary working surface.
+
+Current implementation:
+
+- lists projects;
+- creates, edits, and deletes projects;
+- validates local repository paths at the API layer;
+- stores deploy and validation commands plus Kubernetes context and namespace.
 
 ## Sessions
 
@@ -285,6 +310,14 @@ Session Detail should prioritize:
 - cleanup actions.
 
 This page is for deep execution inspection. It should not replace Issue Detail as the default place to work.
+
+Current implementation:
+
+- shows session metadata, command, branch, workdir, status, issue, and project;
+- shows session-scoped logs and evidence;
+- inspects the session worktree with `git status`, changed files, and diff preview;
+- compares the session branch against the project default branch through merge-base, ahead/behind count, commits, changed files, and diff preview;
+- generates an issue-summary draft from the session and can post it back to the issue.
 
 ## State Model
 
@@ -331,14 +364,15 @@ The first screen should not be a dashboard full of charts.
 
 Must-have for MVP:
 
-- Inbox list
+- Inbox list and issue creation flow
 - Issue detail as the main work surface
 - Comments and progress updates
 - Start session from issue
 - Session panel on issue page
 - Evidence panel on issue page
 - Project settings and runtime defaults
-- Session detail with logs and namespace evidence
+- Local session startup with git worktree isolation
+- Session detail with logs and workspace evidence
 - local session startup with cluster and namespace visibility
 
 Can wait until later:
@@ -349,6 +383,8 @@ Can wait until later:
 - multiple simultaneous session comparisons
 - custom dashboard analytics
 - cluster-wide observability
+- generated scoped kubeconfig and ServiceAccount lifecycle
+- full Kubernetes namespace resource browser
 
 ## Design Guidance
 
@@ -366,10 +402,20 @@ Avoiding Kubernetes as the first visual focus does not mean hiding it. Cluster, 
 
 ## Build Sequence
 
+Implemented as of 2026-05-06:
+
 1. Inbox list and issue creation flow.
 2. Issue detail shell with document body and activity thread.
-3. Session creation from issue.
-4. Session panel and session state updates.
-5. Evidence panel with placeholder data shape.
-6. Runtime provider wiring.
-7. Kubernetes-backed evidence and namespace inspection.
+3. Project create, edit, delete, and repository-path validation.
+4. Session creation from issue.
+5. Session panel and live session state updates.
+6. Session detail with logs, workspace snapshot, branch comparison, and issue summary draft.
+7. Local runner process, SQLite storage, and git worktree isolation.
+8. Tailwind CSS 4 monorepo source detection for desktop UI packages.
+
+Next build steps:
+
+1. Kubernetes-backed evidence and namespace inspection.
+2. Scoped kubeconfig or ServiceAccount generation.
+3. Session cleanup and retention controls.
+4. Top-level Issues and Sessions list views.

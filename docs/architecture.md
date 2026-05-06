@@ -1,6 +1,44 @@
 # mspace Architecture Notes
 
-> Status: initial technical shape, created 2026-05-06
+> Status: local MVP implementation snapshot, updated 2026-05-06
+
+## Current Implementation Snapshot
+
+The repository currently contains a runnable local-first desktop MVP:
+
+- Electron desktop shell built with electron-vite, React 19, React Router 7, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
+- Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless a healthy runner is already listening.
+- SQLite state lives at `~/.mspace/mspace.db`.
+- Session worktrees live under `~/.mspace/workdirs/<project-id>/<session-id>`.
+- The runner stores the session worktree path in `agent_sessions.workdir`.
+- Each session creates or attaches a git worktree before executing the session command.
+- Session branch defaults to `mspace/<issue-short-id>/<session-short-id>` when the user does not provide one.
+- Kubernetes is currently represented by project-level `kube_context` and `namespace`, passed into the session as `MSPACE_KUBE_CONTEXT` and `MSPACE_KUBE_NAMESPACE`. Scoped kubeconfig and ServiceAccount generation are still future work.
+
+Implemented desktop routes:
+
+- `/inbox`
+- `/projects`
+- `/issues/:issueId`
+- `/sessions/:sessionId`
+
+Implemented runner API:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Runner health and version. |
+| `GET` | `/api/inbox` | List inbox items. |
+| `GET` | `/api/projects` | List projects with issue/session counts. |
+| `POST` | `/api/projects` | Create a project. |
+| `PUT` | `/api/projects/{projectID}` | Update a project. |
+| `DELETE` | `/api/projects/{projectID}` | Delete a project and cascaded child data. |
+| `POST` | `/api/issues` | Create an issue and inbox item. |
+| `GET` | `/api/issues/{issueID}` | Load issue detail, comments, sessions, and evidence. |
+| `POST` | `/api/issues/{issueID}/comments` | Add a human comment. |
+| `POST` | `/api/issues/{issueID}/sessions` | Queue and start a local agent session. |
+| `GET` | `/api/sessions/{sessionID}` | Load session detail, logs, evidence, and workspace snapshot. |
+| `POST` | `/api/sessions/{sessionID}/cancel` | Cancel a running session. |
+| `GET` | `/api/sessions/{sessionID}/stream` | Server-sent events for session logs and status changes. |
 
 ## Architecture Summary
 
@@ -39,6 +77,8 @@ Required fields:
 - runtime policy;
 - project list.
 
+The local MVP has not implemented a `workspaces` table yet. It behaves as a single local workspace.
+
 ### Inbox Item
 
 An Inbox Item is the triage unit for incoming work.
@@ -57,15 +97,13 @@ Required fields:
 
 A Project is a repository plus runtime policy.
 
-Required fields:
+Current implemented fields:
 
 - name;
-- repository URL;
+- local repository path;
 - default branch;
-- agent provider;
-- target cluster;
-- namespace policy;
-- bootstrap command;
+- Kubernetes context;
+- Kubernetes namespace;
 - deploy command;
 - validation command.
 
@@ -73,37 +111,31 @@ Required fields:
 
 An Issue is the durable collaboration document for one unit of work.
 
-Required fields:
+Current implemented fields:
 
-- workspace;
 - project;
 - title;
-- description;
+- body;
 - status;
 - assignee;
-- subscribers;
 - comments and progress updates;
 - linked sessions;
-- PR or branch output;
 - environment evidence.
 
 ### Agent Session
 
 An Agent Session is one agent run attached to one issue.
 
-Required fields:
+Current implemented fields:
 
 - issue;
-- branch or worktree;
-- assigned agent provider;
-- runtime provider;
+- provider;
 - runtime mode;
-- deployment target cluster when enabled;
-- namespace when Kubernetes deployment is enabled;
-- ServiceAccount when Kubernetes deployment is enabled;
+- command;
+- branch;
+- worktree path;
 - status;
 - terminal stream;
-- PR or branch output;
 - evidence summary.
 
 ### Namespace Policy
@@ -119,7 +151,7 @@ The recommended default is session namespace once concurrency matters. The proje
 
 A Runtime Provider starts the actual agent environment.
 
-Initial provider options:
+Provider options in the product model:
 
 - local runtime for development and bring-your-own CLI operation;
 - remote runtime for hosted or cluster-adjacent execution only when it preserves the same operational contract;
@@ -128,6 +160,8 @@ Initial provider options:
 - local daemon bridge only as an adapter, not as the primary product model.
 
 The first production-grade MVP path should be local runtime because it keeps iteration simple and matches the current intended workflow.
+
+The implemented MVP uses a desktop-managed local runner process, not a long-running daemon. The runner owns SQLite, HTTP APIs, session process execution, log capture, and git worktree preparation.
 
 ### Validation Environment
 
@@ -194,6 +228,25 @@ app.mspace.dev/managed-by: "mspace"
 
 ## Execution Flow
 
+### Implemented Local Session Flow
+
+```text
+User creates or selects issue
+  -> desktop calls POST /api/issues/{issueID}/sessions
+  -> runner stores queued session in SQLite
+  -> runner plans workdir under ~/.mspace/workdirs/<project-id>/<session-id>
+  -> runner creates a git worktree from the project's default branch
+  -> runner checks out the session branch
+  -> runner starts the configured command inside the session worktree
+  -> runner writes stdout/stderr to session_logs
+  -> desktop watches GET /api/sessions/{sessionID}/stream
+  -> session detail reads git status, commits, diff, and base comparison from workdir
+```
+
+The default command is generated from the issue and project configuration. If deploy or validation commands are configured, the generated command runs them before taking a Kubernetes resource snapshot through `kubectl`.
+
+### Target Product Flow
+
 ```text
 User creates issue
   -> API stores issue context and collaborators
@@ -211,6 +264,83 @@ User creates issue
 ```
 
 ## Data Model Sketch
+
+### Current SQLite Schema
+
+The local MVP uses these SQLite tables from `runner/migrations/001_init.sql`:
+
+```text
+projects
+  id
+  name
+  repo_path
+  default_branch
+  deploy_command
+  validation_command
+  kube_context
+  namespace
+  created_at
+  updated_at
+
+issues
+  id
+  project_id
+  title
+  body
+  status
+  assignee
+  environment_url
+  created_at
+  updated_at
+
+inbox_items
+  id
+  issue_id
+  project_id
+  title
+  status
+  unread
+  created_at
+  updated_at
+
+comments
+  id
+  issue_id
+  author_type
+  body
+  created_at
+
+agent_sessions
+  id
+  issue_id
+  provider
+  runtime_mode
+  command
+  status
+  branch
+  workdir
+  created_at
+  updated_at
+
+session_logs
+  id
+  session_id
+  stream
+  message
+  created_at
+
+deployment_evidence
+  id
+  issue_id
+  session_id
+  cluster
+  namespace
+  summary
+  details
+  created_at
+```
+
+### Target Product Schema
 
 ```text
 workspaces

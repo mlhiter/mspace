@@ -1,6 +1,6 @@
 # AGENT.md
 
-This project is the product planning and future implementation workspace for mspace.
+This project is the runnable local MVP workspace for mspace.
 
 ## Product Direction
 
@@ -9,8 +9,21 @@ mspace is an Inbox and Issue workspace for coding agents. It lets a team manage 
 The product should stay narrow:
 
 - interaction inspiration: Multica-style inbox, issue, and teammate workflow;
-- technical inspiration: Optio-style Kubernetes-hosted agent runtime;
+- technical inspiration: Optio-style Kubernetes runtime and git worktree isolation;
 - core difference: document-first issue collaboration with attachable real test environments for coding agents.
+
+## Current Implementation
+
+- Desktop app: Electron, electron-vite, React 19, React Router 7, React Query 5, Tailwind CSS 4, TypeScript.
+- Workspace tooling: pnpm workspaces and Turbo.
+- Runner: Go, chi, SQLite through `modernc.org/sqlite`.
+- The Electron main process auto-starts the local runner with `go run .` unless `GET /health` is already healthy.
+- SQLite database path: `~/.mspace/mspace.db`.
+- Session worktree root: `~/.mspace/workdirs/<project-id>/<session-id>`.
+- The runner stores the real worktree path in `agent_sessions.workdir`.
+- Session branches default to `mspace/<issue-short-id>/<session-short-id>`.
+- Project Kubernetes context and namespace are passed into sessions as `MSPACE_KUBE_CONTEXT` and `MSPACE_KUBE_NAMESPACE`.
+- Tailwind CSS 4 must scan monorepo UI packages through `@source` entries in `apps/desktop/src/renderer/src/globals.css`.
 
 ## Working Rules
 
@@ -25,6 +38,33 @@ The product should stay narrow:
 - Every write-capable session must have an audit trail and a cleanup path.
 - Do not fork Multica; use it as a structural reference only.
 - Keep docs current when product decisions change.
+- Never execute database write operations unless the user explicitly asks for database modification.
+- Do not delete session workdirs or git worktrees unless the user explicitly asks for cleanup.
+
+## Local Commands
+
+```bash
+pnpm install
+pnpm dev:desktop
+```
+
+The desktop app normally starts the runner automatically on `127.0.0.1:7788`.
+
+Debug the runner separately:
+
+```bash
+pnpm runner
+pnpm dev:desktop
+```
+
+Validation:
+
+```bash
+pnpm typecheck
+pnpm --filter @mspace/desktop build
+(cd runner && go test ./...)
+(cd runner && go build ./...)
+```
 
 ## Documentation Map
 
@@ -32,6 +72,7 @@ The product should stay narrow:
 - `docs/architecture.md`: collaboration layer, runtime layer, permission model, data sketch, risks.
 - `docs/ia.md`: MVP navigation, screen map, page regions, state model, build sequence.
 - `docs/references.md`: notes from Multica and Optio references.
+- `docs/runbook.md`: local run, data paths, smoke checks, and troubleshooting.
 
 ## Current Non-Goals
 
@@ -42,6 +83,8 @@ The product should stay narrow:
 - Cluster-wide Kubernetes assistant.
 - Sealos API wrapper.
 - Direct Multica code inheritance as the product baseline.
+- Generated scoped kubeconfig and ServiceAccount lifecycle in the current local MVP.
+- Kubernetes-hosted agent runtime in the current local MVP.
 
 ## Preferred Vocabulary
 
