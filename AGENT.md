@@ -76,6 +76,7 @@ pnpm --filter @mspace/desktop build
 ## Documentation Map
 
 - `DESIGN.md`: design system reference for visual thesis, tokens, typography, components, layout, and UI guardrails.
+- `ROADMAP.md`: milestone priority and acceptance criteria for the next product work.
 - `docs/product.md`: inbox and issue product positioning, users, workflows, MVP, non-goals.
 - `docs/architecture.md`: collaboration layer, runtime layer, permission model, data sketch, risks.
 - `docs/ia.md`: MVP navigation, screen map, page regions, state model, build sequence.

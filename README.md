@@ -103,6 +103,7 @@ For each project, mspace gives a team a document-style issue workflow where a co
 ## Documentation
 
 - [Design System](DESIGN.md)
+- [Roadmap](ROADMAP.md)
 - [Product Brief](docs/product.md)
 - [Architecture Notes](docs/architecture.md)
 - [MVP Information Architecture](docs/ia.md)
