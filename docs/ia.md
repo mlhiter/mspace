@@ -26,14 +26,14 @@ The first MVP should keep the navigation narrow:
 - Inbox
 - Issues
 - Projects
-- Sessions
 
 Navigation rules:
 
 - Inbox is the default entry screen.
-- Issues is the durable knowledge surface.
+- Inbox is the unread review surface for issue and session updates.
+- Issues is the durable knowledge surface and issue creation home.
 - Projects is configuration and project-level history.
-- Sessions is an operational fallback view, not the primary home.
+- Session detail is deep-linked from issues and remains an operational fallback view, not a primary home.
 
 The fact that Inbox is first does not mean Kubernetes is secondary. It means the product starts from work intake, then routes that work into a local development flow plus a Kubernetes-backed validation flow.
 
@@ -62,6 +62,7 @@ Current implemented desktop routes:
 
 ```text
 /inbox
+/issues
 /issues/:issueId
 /projects
 /sessions/:sessionId
@@ -70,18 +71,17 @@ Current implemented desktop routes:
 Planned but not implemented yet:
 
 ```text
-/issues
 /projects/:projectId
 /sessions
 ```
 
-The MVP does not need more top-level areas than this. The current UI intentionally starts with Inbox and Projects only in the sidebar; issue and session detail screens are reached from created objects.
+The MVP does not need more top-level areas than this. The current sidebar exposes Inbox, Issues, and Projects, with a quick issue creation link under the search affordance. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
 Current implementation principles:
 
-- left sidebar contains the workspace identity, search affordance, primary navigation, namespace hints, and local runner state;
+- left sidebar contains the workspace identity, search affordance, quick issue creation, primary navigation, namespace hints, and local runner state;
 - Inbox and Project lists use row-level cards and compact metadata rather than dashboard tiles;
 - Issue Detail should read as a live document with session and evidence context attached around it;
 - Session Detail can be more operational, but should still preserve the same paper workspace tone;
@@ -94,7 +94,7 @@ Avoid hero sections, marketing copy, decorative dashboards, and high-saturation 
 
 ### Purpose
 
-Inbox is where new work arrives and gets shaped into issues.
+Inbox is where unread issue updates appear for review.
 
 ### List structure
 
@@ -106,7 +106,47 @@ Each row should show:
 - assignee;
 - unread state;
 - current status;
-- whether an agent session exists.
+- enough context to jump back into the linked issue.
+
+### Primary actions
+
+- open issue detail.
+
+### Layout
+
+```text
++--------------------------------------------------+
+| Inbox list                                        |
+| - unread update                                  |
+| - project + assignee + timestamp                 |
+| - linked issue status                            |
++--------------------------------------------------+
+```
+
+Current implementation:
+
+- lists inbox items from the local runner;
+- refreshes through `/api/inbox/stream`;
+- navigates to issue detail for review and action;
+- keeps assignee state visible so agent and human ownership changes are obvious.
+
+## Issues
+
+### Purpose
+
+Issues is the durable list and creation surface for real work.
+
+### List structure
+
+Each row should show:
+
+- title;
+- body preview;
+- project;
+- owner;
+- current status;
+- unread marker;
+- attached session count.
 
 ### Primary actions
 
@@ -117,23 +157,22 @@ Each row should show:
 
 ```text
 +--------------------------------------------------------------+
-| Filters / Search / Quick Create                             |
-+----------------------+---------------------------------------+
-| Inbox list           | Optional preview of selected item     |
-| - status             | - summary                             |
-| - unread             | - recent comments                     |
-| - assigned           | - linked issue                        |
-+----------------------+---------------------------------------+
+| Header / New issue                                           |
++--------------------------------------------------------------+
+| Issue list                                                   |
+| - title + preview                                            |
+| - project                                                    |
+| - owner                                                      |
+| - state                                                      |
++--------------------------------------------------------------+
 ```
-
-The preview can be dropped in the earliest implementation if it slows execution.
 
 Current implementation:
 
-- lists inbox items from the local runner;
-- creates an issue directly from Inbox;
-- navigates to the created issue detail;
-- keeps assignment simple with a text assignee field.
+- lists issues across the workspace;
+- opens create issue in a modal from the page header or the sidebar quick action;
+- allows the user to leave project empty and let the runner resolve it when possible;
+- shows unread state, owner type, and linked session count inline.
 
 ## Issue Detail
 
@@ -233,7 +272,7 @@ Current implementation:
 
 - shows issue metadata, project, body, comments, linked sessions, logs, and evidence;
 - supports adding comments;
-- starts a local session from the issue;
+- assigns Codex and starts a local session from the issue;
 - streams session logs and status while a session is running;
 - links into full session detail.
 
@@ -290,27 +329,21 @@ The Project view should help operators configure the system without turning it i
 Current implementation:
 
 - lists projects;
-- creates, edits, and deletes projects;
-- validates local repository paths at the API layer;
+- creates projects in a modal from either a local folder picker or a GitHub repository URL;
+- auto-detects GitHub metadata for local repositories when a remote exists;
+- edits runtime settings in a separate settings modal;
+- only allows deletion before issues or sessions exist;
 - stores deploy and validation commands plus Kubernetes context and namespace.
 
 ## Sessions
 
 ### Purpose
 
-Sessions is the operational list view for people who need to monitor running work across many issues.
+Session Detail is the operational drill-down for people who need to inspect one running or completed session.
 
 ### Session List
 
-Each row should show:
-
-- linked issue;
-- project;
-- agent provider;
-- runtime type;
-- status;
-- branch;
-- latest activity time.
+Not implemented yet as a standalone top-level page.
 
 ### Session Detail
 
@@ -318,9 +351,9 @@ Session Detail should prioritize:
 
 - live terminal stream;
 - runtime metadata;
-- branch and PR output;
-- namespace resources;
-- cleanup actions.
+- branch and worktree state;
+- evidence and environment output;
+- summary and review handoff.
 
 This page is for deep execution inspection. It should not replace Issue Detail as the default place to work.
 
@@ -338,27 +371,24 @@ The MVP should keep states simple.
 
 Inbox item states:
 
-- new
-- triaged
-- archived
+- unread
+- read
 
 Issue states:
 
 - open
-- in_progress
-- blocked
-- in_review
-- done
+- running
+- completed
+- failed
+- cancelled
 
 Session states:
 
 - queued
-- starting
 - running
-- blocked
 - failed
 - completed
-- canceled
+- cancelled
 
 Avoid a large workflow matrix in v1.
 
@@ -369,7 +399,7 @@ The first screen after sign-in should be Inbox, with enough density to triage fa
 - active items near the top;
 - unread visible at a glance;
 - direct path into the underlying issue;
-- direct path to start an agent session.
+- direct path to review and resume agent work.
 
 The first screen should not be a dashboard full of charts.
 
@@ -377,7 +407,8 @@ The first screen should not be a dashboard full of charts.
 
 Must-have for MVP:
 
-- Inbox list and issue creation flow
+- Inbox review list
+- Issues list and issue creation flow
 - Issue detail as the main work surface
 - Comments and progress updates
 - Start session from issue
@@ -415,11 +446,11 @@ Avoiding Kubernetes as the first visual focus does not mean hiding it. Cluster, 
 
 ## Build Sequence
 
-Implemented as of 2026-05-06:
+Implemented as of 2026-05-07:
 
-1. Inbox list and issue creation flow.
+1. Inbox review list, Issues list, and issue creation flow.
 2. Issue detail shell with document body and activity thread.
-3. Project create, edit, delete, and repository-path validation.
+3. Project create, settings, guarded delete, and repository validation.
 4. Session creation from issue.
 5. Session panel and live session state updates.
 6. Session detail with logs, workspace snapshot, branch comparison, and issue summary draft.
@@ -431,4 +462,4 @@ Next build steps:
 1. Kubernetes-backed evidence and namespace inspection.
 2. Scoped kubeconfig or ServiceAccount generation.
 3. Session cleanup and retention controls.
-4. Top-level Issues and Sessions list views.
+4. Standalone Sessions list view.

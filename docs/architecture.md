@@ -10,11 +10,17 @@ The repository currently contains a runnable local-first desktop MVP:
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless a healthy runner is already listening.
 - SQLite state lives at `~/.mspace/mspace.db`.
+- Imported GitHub repositories are cached under `~/.mspace/repos/<owner>/<repo>`.
 - Session worktrees live under `~/.mspace/workdirs/<project-id>/<session-id>`.
+- Session context markdown lives under `~/.mspace/workdirs/_contexts/<session-id>.md`.
 - The runner stores the session worktree path in `agent_sessions.workdir`.
 - Each session creates or attaches a git worktree before executing the session command.
 - Session branch defaults to `mspace/<issue-short-id>/<session-short-id>` when the user does not provide one.
+- Project import supports existing local folders and GitHub repository URLs. Local repositories auto-detect git remote metadata when available.
+- Inbox is an unread review feed powered by server-sent events from `/api/inbox/stream`.
+- Issue assignment to an agent currently goes through `POST /api/issues/{issueID}/assign-agent`, which also queues the local session.
 - Kubernetes is currently represented by project-level `kube_context` and `namespace`, passed into the session as `MSPACE_KUBE_CONTEXT` and `MSPACE_KUBE_NAMESPACE`. Scoped kubeconfig and ServiceAccount generation are still future work.
+- Session commands also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, and `MSPACE_SESSION_CONTEXT`.
 - Current desktop visual language is a Notion-like paper workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, and restrained icon actions.
 
 Current shadcn/ui component source:
@@ -32,8 +38,9 @@ Current shadcn/ui component source:
 Implemented desktop routes:
 
 - `/inbox`
-- `/projects`
+- `/issues`
 - `/issues/:issueId`
+- `/projects`
 - `/sessions/:sessionId`
 
 Implemented runner API:
@@ -42,13 +49,16 @@ Implemented runner API:
 | --- | --- | --- |
 | `GET` | `/health` | Runner health and version. |
 | `GET` | `/api/inbox` | List inbox items. |
+| `GET` | `/api/inbox/stream` | Stream inbox update events over server-sent events. |
 | `GET` | `/api/projects` | List projects with issue/session counts. |
 | `POST` | `/api/projects` | Create a project. |
 | `PUT` | `/api/projects/{projectID}` | Update a project. |
 | `DELETE` | `/api/projects/{projectID}` | Delete a project and cascaded child data. |
+| `GET` | `/api/issues` | List issues across the local workspace. |
 | `POST` | `/api/issues` | Create an issue and inbox item. |
 | `GET` | `/api/issues/{issueID}` | Load issue detail, comments, sessions, and evidence. |
 | `POST` | `/api/issues/{issueID}/comments` | Add a human comment. |
+| `POST` | `/api/issues/{issueID}/assign-agent` | Assign Codex and queue a local session. |
 | `POST` | `/api/issues/{issueID}/sessions` | Queue and start a local agent session. |
 | `GET` | `/api/sessions/{sessionID}` | Load session detail, logs, evidence, and workspace snapshot. |
 | `POST` | `/api/sessions/{sessionID}/cancel` | Cancel a running session. |
@@ -63,7 +73,7 @@ The collaboration layer is the product entry point: Inbox, Issue, comments, subs
 ```text
 Web UI
   -> mspace API
-      -> Inbox / Issue Service
+      -> Inbox Review / Issue Service
       -> Session Service
       -> Runtime Manager
           -> Local Runtime Provider
@@ -95,17 +105,17 @@ The local MVP has not implemented a `workspaces` table yet. It behaves as a sing
 
 ### Inbox Item
 
-An Inbox Item is the triage unit for incoming work.
+An Inbox Item is the unread review unit for issue activity.
 
 Required fields:
 
-- workspace;
-- source type;
+- linked issue;
+- linked project;
 - title;
-- summary or details;
-- recipient;
+- status snapshot;
+- assignee snapshot;
 - read state;
-- linked issue when promoted.
+- last update time.
 
 ### Project
 
@@ -114,7 +124,12 @@ A Project is a repository plus runtime policy.
 Current implemented fields:
 
 - name;
+- source type;
 - local repository path;
+- remote URL;
+- git provider;
+- git owner;
+- git repo;
 - default branch;
 - Kubernetes context;
 - Kubernetes namespace;
@@ -132,6 +147,7 @@ Current implemented fields:
 - body;
 - status;
 - assignee;
+- assignee type;
 - comments and progress updates;
 - linked sessions;
 - environment evidence.
@@ -245,15 +261,19 @@ app.mspace.dev/managed-by: "mspace"
 ### Implemented Local Session Flow
 
 ```text
-User creates or selects issue
-  -> desktop calls POST /api/issues/{issueID}/sessions
+User creates an issue in /issues or opens an existing one
+  -> desktop calls POST /api/issues/{issueID}/assign-agent
+  -> runner marks the issue assigned to an agent and creates a queued session
   -> runner stores queued session in SQLite
   -> runner plans workdir under ~/.mspace/workdirs/<project-id>/<session-id>
   -> runner creates a git worktree from the project's default branch
   -> runner checks out the session branch
+  -> runner writes ~/.mspace/workdirs/_contexts/<session-id>.md
+  -> runner injects MSPACE_SESSION_CONTEXT and session metadata env vars
   -> runner starts the configured command inside the session worktree
   -> runner writes stdout/stderr to session_logs
   -> desktop watches GET /api/sessions/{sessionID}/stream
+  -> desktop refreshes Inbox, Issues, and Issue Detail through GET /api/inbox/stream
   -> session detail reads git status, commits, diff, and base comparison from workdir
 ```
 
@@ -288,6 +308,11 @@ projects
   id
   name
   repo_path
+  source_type
+  remote_url
+  git_provider
+  git_owner
+  git_repo
   default_branch
   deploy_command
   validation_command
@@ -303,6 +328,7 @@ issues
   body
   status
   assignee
+  assignee_type
   environment_url
   created_at
   updated_at

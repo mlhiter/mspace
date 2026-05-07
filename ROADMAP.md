@@ -14,8 +14,9 @@ Build the first usable product loop:
 
 ```text
 Project
-  -> Inbox / Issue
+  -> Issue
   -> Local Agent Session
+  -> Inbox review updates
   -> Worktree and evidence review
   -> Kubernetes validation evidence
   -> Branch / PR and cleanup
@@ -38,8 +39,9 @@ Goal:
 Build in order:
 
 - Project import: support existing local folders, auto-detect GitHub remote metadata, and support direct GitHub repository URLs cloned into the mspace data directory.
+- Issue creation: keep creation in the Issues surface, allow lightweight prompts, and allow project inference when the user leaves project empty.
 - Agent assignment: make an issue assignable to a human or agent and create the local session from that assignment.
-- Inbox realtime updates: move issue/session status changes into the Inbox without relying on slow manual refreshes.
+- Inbox realtime updates: move issue/session status changes into the Inbox review feed without relying on slow manual refreshes.
 - Local agent context: inject issue body, comments, project metadata, branch, kube context, and namespace into the session command.
 - Progress comments: turn meaningful session lifecycle and status updates into issue activity, not just terminal logs.
 - Kubernetes validation evidence: capture Pods, Deployments, Services, Ingress, Events, logs, rollout state, and environment URLs after deploy or validation commands run.
@@ -78,7 +80,7 @@ Goal:
 Acceptance:
 
 - Electron desktop shell exists.
-- Inbox, Projects, Issue Detail, and Session Detail routes exist.
+- Inbox, Issues, Projects, Issue Detail, and Session Detail routes exist.
 - shadcn/ui primitives are installed under `packages/ui/src/components/ui`.
 - `DESIGN.md` defines the Notion-style black-and-white product surface.
 - Local Go runner, SQLite, session logs, and git worktree execution exist.
@@ -93,8 +95,9 @@ Goal:
 
 Build:
 
-- Polish Inbox issue creation and triage.
-- Polish Project creation and edit flow.
+- Keep Inbox focused on review updates and unread agent activity.
+- Polish Issue creation, project inference, and list flow.
+- Polish Project creation and settings flow.
 - Polish Issue Detail as the durable working document.
 - Make starting a local agent session from an issue feel obvious.
 - Make session logs and status updates easy to follow from Issue Detail.
@@ -102,10 +105,11 @@ Build:
 
 Acceptance:
 
-- A user can create a project with repo path, default branch, commands, kube context, and namespace.
-- A user can create an issue from Inbox and return to it later.
-- A user can start a local session from the issue.
+- A user can create a project from a local folder or GitHub repository URL and adjust runtime settings later.
+- A user can create an issue from the Issues surface or sidebar quick action and return to it later.
+- A user can assign Codex to the issue and start a local session from that assignment.
 - The session runs in its own worktree.
+- Inbox reflects issue and session updates without a manual refresh loop.
 - Logs stream while the session runs.
 - The issue clearly shows linked sessions, status, comments, and summary output.
 
@@ -194,6 +198,7 @@ When choosing between two next tasks, prefer the one that makes the issue-to-evi
 If a task does not improve one of these paths, defer it:
 
 - create issue;
+- review Inbox updates;
 - start session;
 - understand current agent work;
 - review code changes;

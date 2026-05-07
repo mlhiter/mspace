@@ -4,17 +4,19 @@
 
 ## One-Line Definition
 
-mspace is an Inbox and Issue workspace for coding agents: a place where teams coordinate work in document-style issues, develop changes in a local-first agent session, and validate those changes in a real, namespace-scoped Kubernetes test environment.
+mspace is a review Inbox and Issue workspace for coding agents: a place where teams coordinate work in document-style issues, develop changes in a local-first agent session, and validate those changes in a real, namespace-scoped Kubernetes test environment.
 
 ## Current MVP State
 
 The repository now has a runnable local desktop MVP:
 
-- create and manage projects with local repository paths;
-- create issues from Inbox;
+- create projects from a local folder picker or GitHub repository URL and manage settings later;
+- create and manage issues in the Issues tab;
+- use Inbox as a review feed for unread issue and session updates;
 - open document-style issue detail pages with comments and linked sessions;
-- start local agent sessions from issues;
+- assign Codex from issue detail and start local agent sessions from issues;
 - run sessions in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`;
+- cache imported GitHub repositories under `~/.mspace/repos/<owner>/<repo>`;
 - store session metadata, logs, comments, issues, projects, and evidence in SQLite under `~/.mspace/mspace.db`;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - use project-level Kubernetes context and namespace as configurable validation inputs.
@@ -57,10 +59,11 @@ mspace is not a general agent platform. It is a collaborative issue workspace fo
 ## Core Workflow
 
 ```text
-Inbox
+Project
   -> Issue
   -> Agent Session
   -> Local code change
+  -> Inbox review updates
   -> Deploy to test namespace
   -> Comments and progress updates
   -> Inspect logs/events/resources
@@ -71,7 +74,9 @@ Inbox
 
 A project records:
 
+- source type;
 - local repository path;
+- remote URL and detected Git provider metadata;
 - default branch;
 - Kubernetes context;
 - namespace;
@@ -93,15 +98,21 @@ The product wedge is not "agent runs in Kubernetes" on day one. The wedge is "ag
 
 ### Inbox and Issue Flow
 
-Work should start as Inbox items and Issues, not as raw runtime jobs.
+Work should start as Issues, with Inbox reflecting unread updates from those issues rather than acting as the issue database itself.
 
 The Inbox should support:
 
+- unread state;
+- status and assignee changes;
+- quick jump back into the linked issue;
+- progress updates from attached agent sessions.
+
+The Issues surface should support:
+
 - human-created issues;
-- agent-created follow-ups when explicitly allowed;
+- optional project selection, with project inference when the user leaves it blank;
 - assignments to people or agents;
-- unread state, subscribers, and status;
-- quick triage into issue, project, or archive state.
+- durable list browsing and reopening later.
 
 An Issue should hold:
 
@@ -155,8 +166,8 @@ The first version should prove one thing:
 
 MVP features:
 
-- inbox list and issue detail;
-- project list with create, edit, and delete;
+- Inbox review list, Issues list, and issue detail;
+- project list with create, settings, and guarded delete;
 - issue comments and assignee field;
 - create agent session from issue;
 - local development runtime;
@@ -220,7 +231,7 @@ Use one internal project and one test cluster.
 The test is successful if a developer can:
 
 1. create a project in mspace;
-2. create an issue in the inbox flow;
+2. create an issue from the Issues flow or sidebar quick action;
 3. start a local-first session with Codex from that issue;
 4. let Codex operate only the assigned repository and scoped test namespace;
 5. deploy or inspect the project through `kubectl`;

@@ -7,7 +7,9 @@
 | Path | Purpose |
 | --- | --- |
 | `~/.mspace/mspace.db` | SQLite database used by the Go runner. |
+| `~/.mspace/repos/<owner>/<repo>` | Cached clone path for GitHub-imported repositories. |
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree created for one local agent session. |
+| `~/.mspace/workdirs/_contexts/<session-id>.md` | Markdown session context written before the agent command starts. |
 
 The session worktree path is also stored in `agent_sessions.workdir`.
 
@@ -40,6 +42,7 @@ pnpm dev:desktop
 | --- | --- | --- | --- |
 | `MSPACE_RUNNER_PORT` | Electron main process | `7788` | Port used when desktop starts the local runner. |
 | `MSPACE_RUNNER_URL` | Electron preload/renderer | `http://127.0.0.1:7788` | API base URL exposed to the renderer. |
+| `MSPACE_RUNNER_START_TIMEOUT_MS` | Electron main process | `60000` | How long the desktop waits for the runner health check before startup fails. |
 | `MSPACE_PORT` | Go runner | `7788` | Port used by a standalone runner. |
 
 Project Kubernetes fields are passed into session commands as:
@@ -48,6 +51,16 @@ Project Kubernetes fields are passed into session commands as:
 | --- | --- |
 | `MSPACE_KUBE_CONTEXT` | Project `kube_context`. |
 | `MSPACE_KUBE_NAMESPACE` | Project `namespace`. |
+
+Session metadata is also passed into the agent command as:
+
+| Variable | Source |
+| --- | --- |
+| `MSPACE_ISSUE_ID` | Current issue id. |
+| `MSPACE_SESSION_ID` | Current session id. |
+| `MSPACE_SESSION_BRANCH` | Planned session branch. |
+| `MSPACE_SESSION_WORKDIR` | Prepared git worktree path. |
+| `MSPACE_SESSION_CONTEXT` | Markdown context file written under `~/.mspace/workdirs/_contexts/`. |
 
 ## Smoke Checks
 
@@ -163,10 +176,28 @@ cd runner && MSPACE_PORT=7790 go run .
 
 ### Project Creation Fails
 
-Project repository paths must be local absolute paths and must point to a git repository. Check:
+Local-folder projects must point to an absolute git repository path. Check:
 
 ```bash
 test -d /absolute/path/to/repo/.git && git -C /absolute/path/to/repo status --short
+```
+
+If the project is created from the desktop app, prefer the folder picker instead of typing the path manually.
+
+GitHub imports must use a GitHub repository URL. The runner clones them into `~/.mspace/repos/<owner>/<repo>`. Check:
+
+```bash
+test -d ~/.mspace/repos/<owner>/<repo>/.git && git -C ~/.mspace/repos/<owner>/<repo> remote -v
+```
+
+If issue creation fails immediately after project setup, the usual cause is that no project exists yet or the runner could not resolve the project from the issue prompt. Create the project first or select it explicitly in the issue modal.
+
+### Project Delete Fails
+
+Projects can only be deleted before any issues or sessions are attached. Check:
+
+```bash
+sqlite3 ~/.mspace/mspace.db "select id,name,issue_count,session_count from (select p.id,p.name,count(distinct i.id) as issue_count,count(distinct s.id) as session_count from projects p left join issues i on i.project_id = p.id left join agent_sessions s on s.issue_id = i.id group by p.id) order by name;"
 ```
 
 ### Session Fails Before Running Command
