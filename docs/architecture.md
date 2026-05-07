@@ -1,12 +1,13 @@
 # mspace Architecture Notes
 
-> Status: local MVP implementation snapshot, updated 2026-05-06
+> Status: local MVP implementation snapshot, updated 2026-05-07
 
 ## Current Implementation Snapshot
 
 The repository currently contains a runnable local-first desktop MVP:
 
 - Electron desktop shell built with electron-vite, React 19, React Router 7, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
+- Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless a healthy runner is already listening.
 - SQLite state lives at `~/.mspace/mspace.db`.
 - Session worktrees live under `~/.mspace/workdirs/<project-id>/<session-id>`.
@@ -14,6 +15,19 @@ The repository currently contains a runnable local-first desktop MVP:
 - Each session creates or attaches a git worktree before executing the session command.
 - Session branch defaults to `mspace/<issue-short-id>/<session-short-id>` when the user does not provide one.
 - Kubernetes is currently represented by project-level `kube_context` and `namespace`, passed into the session as `MSPACE_KUBE_CONTEXT` and `MSPACE_KUBE_NAMESPACE`. Scoped kubeconfig and ServiceAccount generation are still future work.
+- Current desktop visual language is a Notion-like paper workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, and restrained icon actions.
+
+Current shadcn/ui component source:
+
+- `packages/ui/src/components/ui/alert.tsx`
+- `packages/ui/src/components/ui/badge.tsx`
+- `packages/ui/src/components/ui/button.tsx`
+- `packages/ui/src/components/ui/card.tsx`
+- `packages/ui/src/components/ui/field.tsx`
+- `packages/ui/src/components/ui/input.tsx`
+- `packages/ui/src/components/ui/label.tsx`
+- `packages/ui/src/components/ui/separator.tsx`
+- `packages/ui/src/components/ui/textarea.tsx`
 
 Implemented desktop routes:
 
@@ -472,6 +486,21 @@ Shows:
 - Kubernetes namespace resources when applicable;
 - PR/branch output;
 - cleanup controls.
+
+## UI Component System
+
+The canonical shadcn/ui source lives in `packages/ui/src/components/ui`. Generated components should stay close to the shadcn source shape, while product-facing wrappers and app shell components are exported from `packages/ui/src/index.tsx` through `@mspace/ui`.
+
+The shadcn config is present at both repository root and `packages/ui/components.json`. The package-local config points generated components at:
+
+- components: `@mspace/ui/components`
+- UI components: `@mspace/ui/components/ui`
+- utilities: `@mspace/ui/lib/utils`
+- icons: lucide
+
+The desktop renderer resolves those aliases in `apps/desktop/electron.vite.config.ts`. If the aliases are removed, imports from generated shadcn components will fail during desktop builds.
+
+Tailwind CSS 4 semantic tokens are mapped in `apps/desktop/src/renderer/src/globals.css` through `@theme inline`. The same file owns the Notion-like mspace palette (`--paper`, `--sidebar`, `--block`, `--line`, `--ink`, and related tokens) and keeps Tailwind scanning the monorepo UI packages through `@source`.
 
 ### Namespace View
 

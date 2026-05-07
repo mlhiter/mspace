@@ -1,6 +1,6 @@
 # Reference Notes
 
-> Status: public reference scan and implementation notes, updated 2026-05-06
+> Status: public reference scan and implementation notes, updated 2026-05-07
 
 ## Multica
 
@@ -27,7 +27,7 @@ mspace interpretation:
 
 Multica proves the interaction model. mspace should borrow the teammate/task/status feel, then anchor execution in Kubernetes namespaces.
 
-2026-05-06 implementation note:
+Current implementation note:
 
 The current codebase is independent. It borrows the Inbox, Issue, comments, sessions, and agent-as-collaborator shape without forking Multica or depending on Multica runtime code.
 
@@ -55,9 +55,30 @@ mspace interpretation:
 
 Optio proves the technical runtime shape. mspace should borrow the Kubernetes execution model, but focus first on project namespaces and realistic test-cluster operation.
 
-2026-05-06 implementation note:
+Current implementation note:
 
 The current local MVP has implemented git worktree isolation for sessions. Kubernetes-hosted runtime, Helm install, ServiceAccount lifecycle, and namespace allocation remain product targets rather than current code.
+
+## Notion
+
+What to borrow:
+
+- document-first workspace feel;
+- quiet left sidebar;
+- paper-like content surfaces;
+- compact rows with inline metadata;
+- low-contrast blocks that support reading and scanning.
+
+What not to copy directly:
+
+- Notion branding;
+- generic document database positioning;
+- marketing-site layout;
+- treating the product as a notes app instead of an agent issue workspace.
+
+mspace interpretation:
+
+Notion is the visual and interaction reference for calm document work. mspace should use that tone to make Inbox, Issues, Sessions, and Kubernetes evidence feel readable and steady, while keeping the product centered on coding-agent work and namespace-scoped validation.
 
 ## Core Differentiation
 

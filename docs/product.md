@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-06
+> Status: local MVP implementation snapshot, updated 2026-05-07
 
 ## One-Line Definition
 
@@ -18,6 +18,7 @@ The repository now has a runnable local desktop MVP:
 - store session metadata, logs, comments, issues, projects, and evidence in SQLite under `~/.mspace/mspace.db`;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - use project-level Kubernetes context and namespace as configurable validation inputs.
+- use a Notion-like desktop workspace shell with real shadcn/ui primitives, Radix base components, lucide-react icons, and low-contrast document surfaces.
 
 Kubernetes is the deployment and test environment, not the required development runtime for the first version. The current development runtime is local. Running the agent runtime inside Kubernetes remains a later option once the local workflow is stable.
 
@@ -204,7 +205,9 @@ But the runtime should feel closer to Optio:
 - each issue/session can later gain its own long-lived or temporary Kubernetes-hosted runtime when the product grows into that model;
 - self-hosting on a team's own cluster is a first-class deployment model.
 
-The 2026-05-06 implementation borrows Optio's git worktree isolation locally and leaves Kubernetes-hosted runtime as future work.
+The current implementation borrows Optio's git worktree isolation locally and leaves Kubernetes-hosted runtime as future work.
+
+The 2026-05-07 desktop UI direction borrows Notion's quiet document workspace feel: a left sidebar, paper-like pages, compact rows, inline metadata, and subdued panels. This is a product style reference, not a dependency on Notion behavior or branding.
 
 ## Key Product Bet
 

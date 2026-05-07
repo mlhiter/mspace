@@ -1,10 +1,10 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-05-06
+> Status: local MVP implementation snapshot, updated 2026-05-07
 
 ## IA Goal
 
-The first version of mspace should feel like a document-first issue workspace with attached agent execution, not like a Kubernetes console with some comments around it.
+The first version of mspace should feel like a document-first issue workspace with attached agent execution, not like a Kubernetes console with some comments around it. The current visual reference is Notion: quiet navigation, paper-like pages, compact rows, subdued metadata, and focused document surfaces.
 
 The user should be able to answer four questions quickly:
 
@@ -76,6 +76,19 @@ Planned but not implemented yet:
 ```
 
 The MVP does not need more top-level areas than this. The current UI intentionally starts with Inbox and Projects only in the sidebar; issue and session detail screens are reached from created objects.
+
+## Visual Language
+
+Current implementation principles:
+
+- left sidebar contains the workspace identity, search affordance, primary navigation, namespace hints, and local runner state;
+- Inbox and Project lists use row-level cards and compact metadata rather than dashboard tiles;
+- Issue Detail should read as a live document with session and evidence context attached around it;
+- Session Detail can be more operational, but should still preserve the same paper workspace tone;
+- shadcn/ui primitives are the base for buttons, cards, inputs, fields, badges, alerts, separators, and textareas;
+- lucide-react icons should carry common actions where a familiar symbol is clearer than text.
+
+Avoid hero sections, marketing copy, decorative dashboards, and high-saturation visual effects in the product shell. mspace should feel like a calm operations workspace that happens to run serious Kubernetes-backed agent sessions.
 
 ## Inbox
 

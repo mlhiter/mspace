@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-06
+> Status: local MVP operations guide, updated 2026-05-07
 
 ## Local Data
 
@@ -74,20 +74,71 @@ Run validation commands:
 ```bash
 pnpm typecheck
 pnpm --filter @mspace/desktop build
+(cd packages/ui && pnpm dlx shadcn@latest info --json)
 (cd runner && go test ./...)
 (cd runner && go build ./...)
 ```
+
+UI component check:
+
+```bash
+cd packages/ui && pnpm dlx shadcn@latest info --json
+```
+
+Expected shadcn/ui source components currently include:
+
+- alert
+- badge
+- button
+- card
+- field
+- input
+- label
+- separator
+- textarea
 
 ## Common Troubleshooting
 
 ### Desktop Shows Unstyled HTML
 
-Tailwind CSS 4 must scan the monorepo package sources. Check that `apps/desktop/src/renderer/src/globals.css` contains:
+Tailwind CSS 4 must scan the monorepo package sources and map shadcn semantic tokens. Check that `apps/desktop/src/renderer/src/globals.css` contains:
 
 ```css
 @import "tailwindcss";
 @source "../../../../../packages/ui/src";
 @source "../../../../../packages/views/src";
+
+@theme inline {
+  --color-background: var(--paper);
+  --color-foreground: var(--text);
+  --color-card: var(--surface);
+  --color-primary: var(--ink);
+  --color-border: var(--line);
+}
+```
+
+The exact token list may grow, but `@theme inline` should keep shadcn color tokens mapped to the mspace palette.
+
+### shadcn Imports Fail During Desktop Build
+
+Check the desktop Vite aliases:
+
+```bash
+sed -n '/alias:/,/},/p' apps/desktop/electron.vite.config.ts
+```
+
+Required aliases:
+
+- `@mspace/ui/components`
+- `@mspace/ui/lib`
+- `@mspace/ui`
+
+Then verify both shadcn config files exist:
+
+```bash
+test -f components.json
+test -f packages/ui/components.json
+cd packages/ui && pnpm dlx shadcn@latest info --json
 ```
 
 ### Runner Port Is Already In Use

@@ -17,6 +17,7 @@ The Kubernetes environment is the deployment and test target that makes mspace w
 The repository currently contains a runnable local desktop MVP:
 
 - Electron desktop app with Inbox, Projects, Issue Detail, and Session Detail screens.
+- Notion-like desktop workspace shell built on real shadcn/ui source components, Radix UI primitives, and lucide-react icons in `@mspace/ui`.
 - Go local runner with HTTP APIs, SQLite storage, session logs, and server-sent events.
 - Local session execution in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`.
 - Session workspace inspection for git status, changed files, diff previews, commits, and comparison against the project default branch.
@@ -74,6 +75,7 @@ Local data paths:
 ```bash
 pnpm typecheck
 pnpm --filter @mspace/desktop build
+(cd packages/ui && pnpm dlx shadcn@latest info --json)
 (cd runner && go test ./...)
 (cd runner && go build ./...)
 ```
