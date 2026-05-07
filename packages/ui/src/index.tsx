@@ -1,72 +1,212 @@
-import type {
-  InputHTMLAttributes,
-  PropsWithChildren,
-  ReactNode,
-  TextareaHTMLAttributes,
-} from "react";
+import {
+  Archive,
+  Boxes,
+  CheckCircle2,
+  ChevronRight,
+  Circle,
+  CircleAlert,
+  Clock3,
+  Files,
+  FolderKanban,
+  Inbox,
+  Layers3,
+  LoaderCircle,
+  type LucideIcon,
+  MessageSquareText,
+  Search,
+  Settings2,
+  Sparkles,
+  SquareTerminal,
+} from "lucide-react";
+import type { ComponentProps, PropsWithChildren, ReactNode, SelectHTMLAttributes } from "react";
 import { NavLink, Outlet } from "react-router-dom";
-import { clsx } from "clsx";
+import { Alert, AlertDescription } from "./components/ui/alert";
+import { Badge } from "./components/ui/badge";
+import {
+  Button as ShadcnButton,
+  type buttonVariants as shadcnButtonVariants,
+} from "./components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import {
+  Field as ShadcnField,
+  FieldDescription,
+  FieldLabel,
+} from "./components/ui/field";
+import { Input as ShadcnInput } from "./components/ui/input";
+import { Textarea as ShadcnTextarea } from "./components/ui/textarea";
+import { cn } from "./lib/utils";
+
+export { cn } from "./lib/utils";
+export {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "./components/ui/alert";
+export { Badge, badgeVariants } from "./components/ui/badge";
+export { Button as ShadcnButton, buttonVariants } from "./components/ui/button";
+export {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "./components/ui/card";
+export {
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSeparator,
+  FieldSet,
+  FieldTitle,
+} from "./components/ui/field";
+export { Input as ShadcnInput } from "./components/ui/input";
+export { Label } from "./components/ui/label";
+export { Separator } from "./components/ui/separator";
+export { Textarea as ShadcnTextarea } from "./components/ui/textarea";
+
+const sidebarItems = [
+  { to: "/inbox", label: "Inbox", icon: Inbox },
+  { to: "/projects", label: "Projects", icon: FolderKanban },
+];
+
+const sidebarProjects = [
+  { name: "mspace", namespace: "mspace-dev", state: "active" },
+  { name: "kite", namespace: "kite-system", state: "watch" },
+  { name: "devbox", namespace: "devbox-70", state: "idle" },
+];
 
 export function AppShell() {
   return (
-    <div className="grid h-full grid-cols-[240px_1fr]">
+    <div className="grid h-full min-h-0 grid-cols-[252px_minmax(0,1fr)] bg-[color:var(--canvas)] text-[color:var(--text)]">
       <div className="app-titlebar" aria-hidden="true" />
-      <aside className="border-r border-[color:var(--border)] bg-[color:var(--panel)]/80 px-4 pb-5 pt-14 backdrop-blur">
-        <div className="mb-8">
-          <div className="text-xs font-medium uppercase tracking-[0.18em] text-[color:var(--muted)]">
-            mspace
+      <aside className="flex min-h-0 flex-col border-r border-[color:var(--line)] bg-[color:var(--sidebar)] px-3 pb-4 pt-12">
+        <div className="mb-4 flex items-center justify-between px-2">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="grid size-7 shrink-0 place-items-center rounded-[8px] bg-[color:var(--ink)] text-[13px] font-semibold text-[color:var(--paper)]">
+              m
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-[13px] font-semibold leading-5">mspace</div>
+              <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">K8s agent workspace</div>
+            </div>
           </div>
-          <h1 className="mt-2 text-2xl font-semibold">Local-first agent workspace</h1>
-          <p className="mt-2 text-sm leading-6 text-[color:var(--muted)]">
-            Develop locally, validate in Kubernetes, keep the whole story on the issue.
+          <button
+            type="button"
+            aria-label="Workspace settings"
+            className="grid size-8 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
+          >
+            <Settings2 data-icon />
+          </button>
+        </div>
+
+        <div className="mb-3 rounded-[10px] bg-[color:var(--paper)] px-2.5 py-2 shadow-[0_1px_2px_rgba(24,22,18,0.06)]">
+          <div className="flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
+            <Search data-icon />
+            <span>Search projects, sessions, evidence</span>
+          </div>
+        </div>
+
+        <nav className="flex flex-col gap-1">
+          {sidebarItems.map((item) => (
+            <SidebarLink key={item.to} to={item.to} icon={item.icon}>
+              {item.label}
+            </SidebarLink>
+          ))}
+        </nav>
+
+        <div className="mt-5 flex items-center justify-between px-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[color:var(--faint)]">
+          <span>Namespaces</span>
+          <Boxes data-icon />
+        </div>
+        <div className="mt-2 flex flex-col gap-1">
+          {sidebarProjects.map((project) => (
+            <button
+              key={project.namespace}
+              type="button"
+              className="group flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] transition-[background-color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-[0.98]"
+            >
+              <span
+                className={cn(
+                  "size-2 rounded-full",
+                  project.state === "active" && "bg-[color:var(--success)]",
+                  project.state === "watch" && "bg-[color:var(--accent-blue)]",
+                  project.state === "idle" && "bg-[color:var(--faint)]",
+                )}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{project.name}</span>
+                <span className="block truncate text-[11px] text-[color:var(--muted)]">{project.namespace}</span>
+              </span>
+              <ChevronRight
+                data-icon
+                className="opacity-0 transition-[opacity,transform] duration-150 ease-out group-hover:opacity-100"
+              />
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-auto rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[0_1px_2px_rgba(24,22,18,0.06)]">
+          <div className="flex items-center gap-2 text-[12px] font-medium">
+            <Sparkles data-icon className="text-[color:var(--accent)]" />
+            Local runner
+          </div>
+          <p className="mt-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
+            Edits stay local. Kubernetes evidence stays attached to the issue.
           </p>
         </div>
-        <nav className="space-y-2">
-          <SidebarLink to="/inbox">Inbox</SidebarLink>
-          <SidebarLink to="/projects">Projects</SidebarLink>
-        </nav>
       </aside>
-      <main className="overflow-auto pt-7">
+      <main className="min-w-0 overflow-auto bg-[color:var(--paper)] pt-7">
         <Outlet />
       </main>
     </div>
   );
 }
 
-export function SidebarLink(props: PropsWithChildren<{ to: string }>) {
+export function SidebarLink(props: PropsWithChildren<{ to: string; icon: LucideIcon }>) {
+  const Icon = props.icon;
   return (
     <NavLink
       to={props.to}
       className={({ isActive }) =>
-        clsx(
-          "flex rounded-lg px-3 py-2 text-sm transition-colors",
+        cn(
+          "group flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-[13px] font-medium transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.98]",
           isActive
-            ? "bg-[color:var(--accent-soft)] text-[color:var(--accent)]"
-            : "text-[color:var(--muted)] hover:bg-white/60 hover:text-[color:var(--text)]",
+            ? "bg-[color:var(--selection)] text-[color:var(--text)]"
+            : "text-[color:var(--muted)] hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
         )
       }
     >
-      {props.children}
+      <Icon data-icon />
+      <span>{props.children}</span>
     </NavLink>
   );
 }
 
 export function PageFrame(props: PropsWithChildren<{ title: string; subtitle?: string; actions?: ReactNode }>) {
   return (
-    <div className="min-h-full px-8 py-8">
-      <div className="mb-8 flex items-start justify-between gap-6">
-        <div>
-          <div className="text-xs font-medium uppercase tracking-[0.18em] text-[color:var(--muted)]">
-            mspace
+    <div className="mx-auto min-h-full w-full max-w-[1280px] px-10 pb-12 pt-8">
+      <div className="mb-8 flex items-start justify-between gap-6 border-b border-[color:var(--line)] pb-6">
+        <div className="min-w-0">
+          <div className="mb-3 flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
+            <Layers3 data-icon />
+            <span>mspace</span>
           </div>
-          <h2 className="mt-2 text-3xl font-semibold">{props.title}</h2>
+          <h1 className="page-title text-[32px] font-semibold leading-[1.1] tracking-[-0.018em] text-[color:var(--text)]">
+            {props.title}
+          </h1>
           {props.subtitle ? (
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-[color:var(--muted)]">
+            <p className="mt-3 max-w-[72ch] text-[14px] leading-6 text-[color:var(--muted)] text-pretty">
               {props.subtitle}
             </p>
           ) : null}
         </div>
-        {props.actions ? <div className="flex gap-3">{props.actions}</div> : null}
+        {props.actions ? <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{props.actions}</div> : null}
       </div>
       {props.children}
     </div>
@@ -75,69 +215,102 @@ export function PageFrame(props: PropsWithChildren<{ title: string; subtitle?: s
 
 export function Panel(props: PropsWithChildren<{ title?: string; aside?: ReactNode; className?: string }>) {
   return (
-    <section
-      className={clsx(
-        "rounded-xl border border-[color:var(--border)] bg-[color:var(--panel-strong)] p-5 shadow-[0_20px_60px_rgba(28,38,56,0.06)]",
+    <Card
+      size="sm"
+      className={cn(
+        "gap-0 rounded-[10px] bg-[color:var(--surface)] py-4 text-[color:var(--text)] shadow-[0_0_0_1px_var(--line),0_1px_2px_rgba(24,22,18,0.05)] ring-0",
         props.className,
       )}
     >
       {props.title || props.aside ? (
-        <div className="mb-4 flex items-start justify-between gap-4">
-          {props.title ? <h3 className="text-sm font-semibold uppercase tracking-[0.12em] text-[color:var(--muted)]">{props.title}</h3> : <span />}
-          {props.aside}
-        </div>
+        <CardHeader className="mb-3 flex min-h-7 grid-cols-[1fr_auto] items-center gap-4 px-4">
+          {props.title ? (
+            <CardTitle className="text-[13px] font-semibold leading-5 text-[color:var(--muted-strong)]">
+              {props.title}
+            </CardTitle>
+          ) : (
+            <span />
+          )}
+          {props.aside ? <CardAction>{props.aside}</CardAction> : null}
+        </CardHeader>
       ) : null}
-      {props.children}
-    </section>
+      <CardContent className="px-4">{props.children}</CardContent>
+    </Card>
   );
 }
 
-export function Button(
-  props: PropsWithChildren<{
-    onClick?: () => void;
-    type?: "button" | "submit";
-    variant?: "primary" | "secondary" | "danger";
-    disabled?: boolean;
-    className?: string;
-  }>,
-) {
-  const variant = props.variant || "primary";
+type ShadcnButtonProps = ComponentProps<typeof ShadcnButton>;
+type ShadcnButtonVariant = NonNullable<Parameters<typeof shadcnButtonVariants>[0]>["variant"];
+type ShadcnButtonSize = NonNullable<Parameters<typeof shadcnButtonVariants>[0]>["size"];
+
+export interface ButtonProps extends Omit<ShadcnButtonProps, "variant" | "size"> {
+  variant?: "primary" | "secondary" | "ghost" | "danger";
+  size?: "sm" | "md" | "lg" | "icon";
+  asChild?: boolean;
+}
+
+export function Button({ className, variant, size, asChild = false, ...props }: ButtonProps) {
+  const shadcnVariant: ShadcnButtonVariant =
+    variant === "danger"
+      ? "destructive"
+      : variant === "secondary"
+        ? "outline"
+        : variant === "ghost"
+          ? "ghost"
+          : "default";
+  const shadcnSize: ShadcnButtonSize = size === "md" ? "lg" : size || "lg";
+
   return (
-    <button
-      type={props.type || "button"}
-      disabled={props.disabled}
-      onClick={props.onClick}
-      className={clsx(
-        "rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50",
-        variant === "primary" && "bg-[color:var(--accent)] text-white hover:brightness-110",
-        variant === "secondary" && "bg-white text-[color:var(--text)] ring-1 ring-[color:var(--border)] hover:bg-[color:var(--background)]",
-        variant === "danger" && "bg-[color:var(--danger)] text-white hover:brightness-110",
-        props.className,
+    <ShadcnButton
+      asChild={asChild}
+      variant={shadcnVariant}
+      size={shadcnSize}
+      className={cn(
+        "min-h-9 rounded-[7px] text-[13px] transition-[background-color,color,box-shadow,transform,opacity] duration-150 ease-out active:scale-95 [&_[data-icon]]:size-4",
+        variant === "primary" || !variant
+          ? "bg-[color:var(--ink)] text-[color:var(--paper)] shadow-[0_1px_1px_rgba(24,22,18,0.18)] hover:bg-[color:var(--ink-soft)]"
+          : null,
+        variant === "secondary"
+          ? "bg-[color:var(--surface)] text-[color:var(--text)] shadow-[0_0_0_1px_var(--line)] hover:bg-[color:var(--hover)]"
+          : null,
+        variant === "danger" ? "bg-[color:var(--danger)] text-white hover:bg-[color:var(--danger-strong)]" : null,
+        className,
       )}
-    >
-      {props.children}
-    </button>
-  );
-}
-
-export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
       {...props}
-      className={clsx(
-        "w-full rounded-lg border border-[color:var(--border)] bg-white px-3 py-2 text-sm text-[color:var(--text)] shadow-sm outline-none focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-soft)]",
-        props.className,
-      )}
     />
   );
 }
 
-export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Input({ className, ...props }: ComponentProps<typeof ShadcnInput>) {
   return (
-    <textarea
+    <ShadcnInput
+      className={cn(
+        "min-h-9 rounded-[7px] border-0 bg-[color:var(--surface)] px-3 text-[13px] text-[color:var(--text)] shadow-[0_0_0_1px_var(--line)] transition-[background-color,box-shadow] duration-150 ease-out placeholder:text-[color:var(--faint)] focus-visible:bg-[color:var(--paper)] focus-visible:ring-0 focus-visible:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)]",
+        className,
+      )}
       {...props}
-      className={clsx(
-        "min-h-28 w-full rounded-lg border border-[color:var(--border)] bg-white px-3 py-2 text-sm text-[color:var(--text)] shadow-sm outline-none focus:border-[color:var(--accent)] focus:ring-2 focus:ring-[color:var(--accent-soft)]",
+    />
+  );
+}
+
+export function Textarea({ className, ...props }: ComponentProps<typeof ShadcnTextarea>) {
+  return (
+    <ShadcnTextarea
+      className={cn(
+        "min-h-28 resize-y rounded-[7px] border-0 bg-[color:var(--surface)] px-3 py-2 text-[13px] leading-6 text-[color:var(--text)] shadow-[0_0_0_1px_var(--line)] transition-[background-color,box-shadow] duration-150 ease-out placeholder:text-[color:var(--faint)] focus-visible:bg-[color:var(--paper)] focus-visible:ring-0 focus-visible:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)]",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      {...props}
+      className={cn(
+        "min-h-9 w-full rounded-[7px] bg-[color:var(--surface)] px-3 text-[13px] text-[color:var(--text)] shadow-[0_0_0_1px_var(--line)] outline-none transition-[background-color,box-shadow] duration-150 ease-out focus:bg-[color:var(--paper)] focus:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)]",
         props.className,
       )}
     />
@@ -146,38 +319,49 @@ export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
 
 export function Field(props: PropsWithChildren<{ label: string; hint?: string }>) {
   return (
-    <label className="block space-y-2">
-      <div className="text-sm font-medium">{props.label}</div>
+    <ShadcnField className="flex flex-col gap-1.5">
+      <FieldLabel className="text-[13px] font-medium leading-5 text-[color:var(--muted-strong)]">
+        {props.label}
+      </FieldLabel>
       {props.children}
-      {props.hint ? <div className="text-xs text-[color:var(--muted)]">{props.hint}</div> : null}
-    </label>
+      {props.hint ? (
+        <FieldDescription className="text-[12px] leading-5 text-[color:var(--muted)]">
+          {props.hint}
+        </FieldDescription>
+      ) : null}
+    </ShadcnField>
   );
 }
 
 export function StatusBadge(props: { value: string }) {
   const tone =
     props.value === "completed"
-      ? "bg-emerald-100 text-emerald-800"
+      ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
       : props.value === "failed"
-        ? "bg-rose-100 text-rose-700"
+        ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
         : props.value === "running"
-          ? "bg-sky-100 text-sky-700"
+          ? "bg-[color:var(--blue-soft)] text-[color:var(--accent-blue)]"
           : props.value === "blocked"
-            ? "bg-amber-100 text-amber-700"
-            : "bg-stone-200 text-stone-700";
+            ? "bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
+            : "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
 
   return (
-    <span className={clsx("inline-flex rounded-full px-2.5 py-1 text-xs font-medium", tone)}>
+    <Badge variant="outline" className={cn("h-auto gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium", tone)}>
+      {props.value === "running" ? <LoaderCircle data-icon className="animate-spin" /> : <Circle data-icon />}
       {props.value}
-    </span>
+    </Badge>
   );
 }
 
-export function EmptyState(props: { title: string; body: string }) {
+export function EmptyState(props: { title: string; body: string; icon?: LucideIcon }) {
+  const Icon = props.icon || Archive;
   return (
-    <div className="rounded-xl border border-dashed border-[color:var(--border)] bg-white/70 px-6 py-8 text-center">
-      <h3 className="text-base font-semibold">{props.title}</h3>
-      <p className="mt-2 text-sm text-[color:var(--muted)]">{props.body}</p>
+    <div className="rounded-[10px] bg-[color:var(--block)] px-6 py-8 text-center shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="mx-auto grid size-9 place-items-center rounded-[9px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[0_1px_2px_rgba(24,22,18,0.05)]">
+        <Icon data-icon />
+      </div>
+      <h3 className="mt-3 text-[15px] font-semibold">{props.title}</h3>
+      <p className="mx-auto mt-1.5 max-w-[52ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">{props.body}</p>
     </div>
   );
 }
@@ -185,14 +369,56 @@ export function EmptyState(props: { title: string; body: string }) {
 export function Notice(props: { tone?: "info" | "danger"; children: ReactNode }) {
   const tone = props.tone || "info";
   return (
-    <div
-      className={clsx(
-        "rounded-xl px-4 py-3 text-sm",
-        tone === "info" && "bg-[color:var(--background)] text-[color:var(--muted)]",
-        tone === "danger" && "bg-rose-50 text-rose-700 ring-1 ring-rose-100",
+    <Alert
+      variant={tone === "danger" ? "destructive" : "default"}
+      className={cn(
+        "rounded-[8px] border-0 px-3 py-2.5 text-[13px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]",
+        tone === "info" && "bg-[color:var(--block)] text-[color:var(--muted-strong)]",
+        tone === "danger" && "bg-[color:var(--danger-soft)] text-[color:var(--danger)]",
       )}
     >
-      {props.children}
+      {tone === "danger" ? <CircleAlert data-icon className="mt-0.5 shrink-0" /> : <MessageSquareText data-icon className="mt-0.5 shrink-0" />}
+      <AlertDescription className="text-[13px] leading-5 text-inherit">
+        {props.children}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+export function DataBlock(props: PropsWithChildren<{ label: string; icon?: LucideIcon; className?: string }>) {
+  const Icon = props.icon || Files;
+  return (
+    <div className={cn("rounded-[7px] bg-[color:var(--block-subtle)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]", props.className)}>
+      <div className="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--muted-strong)]">
+        <Icon data-icon />
+        {props.label}
+      </div>
+      <div className="text-[13px] leading-6 text-[color:var(--muted)]">{props.children}</div>
     </div>
   );
 }
+
+export function CodeBlock(props: PropsWithChildren<{ empty?: string; className?: string }>) {
+  return (
+    <div
+      className={cn(
+        "overflow-auto rounded-[9px] bg-[color:var(--code-bg)] px-4 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]",
+        props.className,
+      )}
+    >
+      {props.children || <div className="text-[color:var(--code-muted)]">{props.empty}</div>}
+    </div>
+  );
+}
+
+export function InlineMeta(props: PropsWithChildren<{ icon?: LucideIcon }>) {
+  const Icon = props.icon || Clock3;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
+      <Icon data-icon />
+      {props.children}
+    </span>
+  );
+}
+
+export { CheckCircle2, SquareTerminal };

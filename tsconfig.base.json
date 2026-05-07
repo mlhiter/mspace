@@ -21,6 +21,8 @@
       "@mspace/core/*": ["packages/core/src/*"],
       "@mspace/ui": ["packages/ui/src/index.tsx"],
       "@mspace/ui/*": ["packages/ui/src/*"],
+      "@mspace/ui/components/*": ["packages/ui/src/components/*"],
+      "@mspace/ui/lib/*": ["packages/ui/src/lib/*"],
       "@mspace/views": ["packages/views/src/index.ts"],
       "@mspace/views/*": ["packages/views/src/*"]
     }

@@ -1,7 +1,20 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Boxes, Clock3, GitBranch, Pencil, Route, SquareTerminal } from "lucide-react";
 import { api, queryKeys, type Project } from "@mspace/core";
-import { Button, EmptyState, Field, Input, Notice, Panel, PageFrame, Textarea } from "@mspace/ui";
+import {
+  Button,
+  DataBlock,
+  EmptyState,
+  Field,
+  InlineMeta,
+  Input,
+  Notice,
+  Panel,
+  PageFrame,
+  StatusBadge,
+  Textarea,
+} from "@mspace/ui";
 
 const emptyProject = {
   name: "",
@@ -80,69 +93,65 @@ export function ProjectsPage() {
       title="Projects"
       subtitle="Projects define the local repository path plus the Kubernetes deployment and validation contract."
     >
-      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-        <Panel title="Configured Projects">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <Panel title="Configured projects">
           {projects.length === 0 ? (
             <EmptyState
+              icon={Boxes}
               title="No projects configured"
               body="Add a local repository path and the commands mspace should use for deployment and validation."
             />
           ) : (
-            <div className="space-y-4">
+            <div className="flex flex-col gap-2">
               {projects.map((project) => (
-                <div key={project.id} className="rounded-xl border border-[color:var(--border)] bg-white px-4 py-4">
+                <article
+                  key={project.id}
+                  className="group rounded-[9px] px-3 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]"
+                >
                   <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold">{project.name}</div>
-                      <div className="mt-1 text-xs text-[color:var(--muted)]">
-                        {project.repoPath} · branch {project.defaultBranch}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h3 className="truncate text-[15px] font-semibold">{project.name}</h3>
+                        <StatusBadge value={project.namespace || "namespace unset"} />
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-3">
+                        <InlineMeta icon={GitBranch}>{project.defaultBranch}</InlineMeta>
+                        <InlineMeta icon={Route}>{project.repoPath}</InlineMeta>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <div className="rounded-full bg-[color:var(--accent-soft)] px-3 py-1 text-xs font-medium text-[color:var(--accent)]">
-                        {project.namespace || "namespace unset"}
-                      </div>
-                      <Button
-                        variant="secondary"
-                        className="px-3 py-1.5 text-xs"
-                        onClick={() => loadProjectIntoForm(project)}
-                      >
-                        Edit
-                      </Button>
-                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="opacity-0 group-hover:opacity-100"
+                      onClick={() => loadProjectIntoForm(project)}
+                    >
+                      <Pencil data-icon />
+                      Edit
+                    </Button>
                   </div>
-                  <div className="mt-4 grid gap-3 text-xs text-[color:var(--muted)]">
-                    <div>
-                      <span className="font-semibold text-[color:var(--text)]">Deploy:</span> {project.deployCommand || "not set"}
-                    </div>
-                    <div>
-                      <span className="font-semibold text-[color:var(--text)]">Validate:</span> {project.validationCommand || "not set"}
-                    </div>
-                    <div>
-                      <span className="font-semibold text-[color:var(--text)]">Kube context:</span> {project.kubeContext || "current context"}
-                    </div>
-                    <div className="flex flex-wrap gap-4">
-                      <span>
-                        <span className="font-semibold text-[color:var(--text)]">Issues:</span> {project.issueCount}
-                      </span>
-                      <span>
-                        <span className="font-semibold text-[color:var(--text)]">Sessions:</span> {project.sessionCount}
-                      </span>
-                      <span>
-                        <span className="font-semibold text-[color:var(--text)]">Last activity:</span>{" "}
-                        {project.latestIssueUpdatedAt ? new Date(project.latestIssueUpdatedAt).toLocaleString() : "none yet"}
-                      </span>
-                    </div>
+
+                  <div className="mt-3 grid gap-2 text-[13px] md:grid-cols-3">
+                    <DataBlock label="Deploy" icon={SquareTerminal}>
+                      {project.deployCommand || "not set"}
+                    </DataBlock>
+                    <DataBlock label="Validate" icon={SquareTerminal}>
+                      {project.validationCommand || "not set"}
+                    </DataBlock>
+                    <DataBlock label="Activity" icon={Clock3}>
+                      {project.issueCount} issues · {project.sessionCount} sessions
+                      <br />
+                      {project.latestIssueUpdatedAt ? new Date(project.latestIssueUpdatedAt).toLocaleString() : "none yet"}
+                    </DataBlock>
                   </div>
-                </div>
+                </article>
               ))}
             </div>
           )}
         </Panel>
 
-        <Panel title={editingProjectId ? "Edit Project" : "Add Project"}>
+        <Panel title={editingProjectId ? "Edit project" : "Add project"}>
           <form
-            className="space-y-4"
+            className="flex flex-col gap-4"
             onSubmit={(event) => {
               event.preventDefault();
               if (!canCreate) return;
@@ -171,7 +180,7 @@ export function ProjectsPage() {
             <Field label="Repo path" hint="Absolute path on the current machine.">
               <Input value={form.repoPath} onChange={(event) => setForm({ ...form, repoPath: event.target.value })} placeholder="/Users/you/code/project" />
             </Field>
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-2">
               <Field label="Default branch">
                 <Input value={form.defaultBranch} onChange={(event) => setForm({ ...form, defaultBranch: event.target.value })} />
               </Field>
@@ -188,7 +197,7 @@ export function ProjectsPage() {
             <Field label="Validation command" hint="Optional. If left empty, mspace will still collect a Kubernetes snapshot for the configured namespace.">
               <Textarea value={form.validationCommand} onChange={(event) => setForm({ ...form, validationCommand: event.target.value })} placeholder="kubectl get pods -n team-a-dev && kubectl get ingress -n team-a-dev" />
             </Field>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap gap-2">
               <Button type="submit" disabled={!canCreate || activeMutation.isPending}>
                 {activeMutation.isPending
                   ? editingProjectId

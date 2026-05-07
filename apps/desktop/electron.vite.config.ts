@@ -16,6 +16,8 @@ export default defineConfig({
       alias: {
         "@": resolve("src/renderer/src"),
         "@mspace/core": resolve("../../packages/core/src/index.ts"),
+        "@mspace/ui/components": resolve("../../packages/ui/src/components"),
+        "@mspace/ui/lib": resolve("../../packages/ui/src/lib"),
         "@mspace/ui": resolve("../../packages/ui/src/index.tsx"),
         "@mspace/views": resolve("../../packages/views/src/index.ts"),
       },

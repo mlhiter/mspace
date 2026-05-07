@@ -2,17 +2,64 @@
 @source "../../../../../packages/ui/src";
 @source "../../../../../packages/views/src";
 
+@theme inline {
+  --color-background: var(--paper);
+  --color-foreground: var(--text);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--paper);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--ink);
+  --color-primary-foreground: var(--paper);
+  --color-secondary: var(--block);
+  --color-secondary-foreground: var(--text);
+  --color-muted: var(--block);
+  --color-muted-foreground: var(--muted);
+  --color-accent: var(--selection);
+  --color-accent-foreground: var(--text);
+  --color-destructive: var(--danger);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--focus);
+  --radius-sm: 4px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+}
+
 :root {
   color-scheme: light;
-  --background: #f6f4ed;
-  --panel: rgba(255, 255, 255, 0.88);
-  --panel-strong: #fffdf8;
-  --border: rgba(22, 30, 42, 0.08);
-  --text: #18212b;
-  --muted: #617081;
-  --accent: #1a7f5a;
-  --accent-soft: rgba(26, 127, 90, 0.12);
-  --danger: #ad3d2c;
+  --radius: 7px;
+  --canvas: oklch(94.8% 0.009 78);
+  --sidebar: oklch(93.2% 0.012 78);
+  --paper: oklch(99.2% 0.004 82);
+  --surface: oklch(98.4% 0.006 82);
+  --block: oklch(96.1% 0.008 82);
+  --block-subtle: oklch(96.8% 0.007 82 / 0.72);
+  --hover: oklch(92.5% 0.01 82);
+  --selection: oklch(90.6% 0.018 150);
+  --line: oklch(72% 0.016 82 / 0.33);
+  --ink: oklch(25.8% 0.018 78);
+  --ink-soft: oklch(30.8% 0.02 78);
+  --text: oklch(23.5% 0.017 78);
+  --muted-strong: oklch(40.5% 0.015 78);
+  --muted: oklch(54.5% 0.014 78);
+  --faint: oklch(68.5% 0.012 78);
+  --accent: oklch(48% 0.095 154);
+  --accent-soft: oklch(88% 0.045 154 / 0.65);
+  --accent-blue: oklch(48% 0.095 240);
+  --blue-soft: oklch(90% 0.042 240 / 0.72);
+  --success: oklch(44% 0.098 151);
+  --success-soft: oklch(89% 0.043 151 / 0.78);
+  --warning: oklch(49% 0.09 70);
+  --warning-soft: oklch(91% 0.055 78 / 0.8);
+  --danger: oklch(48% 0.105 34);
+  --danger-strong: oklch(42% 0.115 34);
+  --danger-soft: oklch(91% 0.04 34 / 0.82);
+  --focus: oklch(62% 0.1 154 / 0.34);
+  --code-bg: oklch(20.5% 0.018 76);
+  --code-text: oklch(91% 0.015 82);
+  --code-muted: oklch(71% 0.018 82);
 }
 
 html,
@@ -24,13 +71,14 @@ body,
 body {
   margin: 0;
   font-family:
+    "Avenir Next",
     "SF Pro Text",
-    "Inter Variable",
+    "Helvetica Neue",
     sans-serif;
-  background:
-    radial-gradient(circle at top left, rgba(26, 127, 90, 0.15), transparent 35%),
-    linear-gradient(180deg, #faf8f1 0%, var(--background) 100%);
+  background: var(--paper);
   color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .app-titlebar {
@@ -49,8 +97,30 @@ input,
 textarea,
 select {
   font: inherit;
+  touch-action: manipulation;
+}
+
+svg {
+  width: 1em;
+  height: 1em;
+  stroke-width: 1.9;
 }
 
 * {
   box-sizing: border-box;
+}
+
+::selection {
+  background: var(--selection);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
