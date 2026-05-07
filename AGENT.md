@@ -43,6 +43,7 @@ The product should stay narrow:
 - Keep docs current when product decisions change.
 - Use the shadcn CLI for new shared UI primitives when an equivalent shadcn component exists, then wrap or re-export from `@mspace/ui` as needed.
 - Preserve the quiet Notion-like workspace style: document-first, low-contrast paper surfaces, compact rows, restrained icon buttons, and no decorative dashboard or marketing layout.
+- Treat `DESIGN.md` as the first reference for UI style, tokens, component rules, and visual guardrails.
 - Never execute database write operations unless the user explicitly asks for database modification.
 - Do not delete session workdirs or git worktrees unless the user explicitly asks for cleanup.
 
@@ -74,6 +75,7 @@ pnpm --filter @mspace/desktop build
 
 ## Documentation Map
 
+- `DESIGN.md`: design system reference for visual thesis, tokens, typography, components, layout, and UI guardrails.
 - `docs/product.md`: inbox and issue product positioning, users, workflows, MVP, non-goals.
 - `docs/architecture.md`: collaboration layer, runtime layer, permission model, data sketch, risks.
 - `docs/ia.md`: MVP navigation, screen map, page regions, state model, build sequence.

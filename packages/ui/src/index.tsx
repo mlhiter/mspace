@@ -105,7 +105,7 @@ export function AppShell() {
           </button>
         </div>
 
-        <div className="mb-3 rounded-[10px] bg-[color:var(--paper)] px-2.5 py-2 shadow-[0_1px_2px_rgba(24,22,18,0.06)]">
+        <div className="mb-3 rounded-[10px] bg-[color:var(--paper)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
             <Search data-icon />
             <span>Search projects, sessions, evidence</span>
@@ -120,7 +120,7 @@ export function AppShell() {
           ))}
         </nav>
 
-        <div className="mt-5 flex items-center justify-between px-2 text-[11px] font-medium uppercase tracking-[0.12em] text-[color:var(--faint)]">
+        <div className="mt-5 flex items-center justify-between px-2 text-[12px] font-medium text-[color:var(--faint)]">
           <span>Namespaces</span>
           <Boxes data-icon />
         </div>
@@ -134,8 +134,8 @@ export function AppShell() {
               <span
                 className={cn(
                   "size-2 rounded-full",
-                  project.state === "active" && "bg-[color:var(--success)]",
-                  project.state === "watch" && "bg-[color:var(--accent-blue)]",
+                  project.state === "active" && "bg-[color:var(--muted-strong)]",
+                  project.state === "watch" && "bg-[color:var(--muted)]",
                   project.state === "idle" && "bg-[color:var(--faint)]",
                 )}
               />
@@ -151,9 +151,9 @@ export function AppShell() {
           ))}
         </div>
 
-        <div className="mt-auto rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[0_1px_2px_rgba(24,22,18,0.06)]">
+        <div className="mt-auto rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="flex items-center gap-2 text-[12px] font-medium">
-            <Sparkles data-icon className="text-[color:var(--accent)]" />
+            <SquareTerminal data-icon className="text-[color:var(--muted)]" />
             Local runner
           </div>
           <p className="mt-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
@@ -197,7 +197,7 @@ export function PageFrame(props: PropsWithChildren<{ title: string; subtitle?: s
             <Layers3 data-icon />
             <span>mspace</span>
           </div>
-          <h1 className="page-title text-[32px] font-semibold leading-[1.1] tracking-[-0.018em] text-[color:var(--text)]">
+          <h1 className="page-title text-[32px] font-semibold leading-[1.1] text-[color:var(--text)]">
             {props.title}
           </h1>
           {props.subtitle ? (
@@ -218,7 +218,7 @@ export function Panel(props: PropsWithChildren<{ title?: string; aside?: ReactNo
     <Card
       size="sm"
       className={cn(
-        "gap-0 rounded-[10px] bg-[color:var(--surface)] py-4 text-[color:var(--text)] shadow-[0_0_0_1px_var(--line),0_1px_2px_rgba(24,22,18,0.05)] ring-0",
+        "gap-0 rounded-[10px] bg-[color:var(--surface)] py-4 text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--line)] ring-0",
         props.className,
       )}
     >
@@ -268,7 +268,7 @@ export function Button({ className, variant, size, asChild = false, ...props }: 
       className={cn(
         "min-h-9 rounded-[7px] text-[13px] transition-[background-color,color,box-shadow,transform,opacity] duration-150 ease-out active:scale-95 [&_[data-icon]]:size-4",
         variant === "primary" || !variant
-          ? "bg-[color:var(--ink)] text-[color:var(--paper)] shadow-[0_1px_1px_rgba(24,22,18,0.18)] hover:bg-[color:var(--ink-soft)]"
+          ? "bg-[color:var(--ink)] text-[color:var(--paper)] hover:bg-[color:var(--ink-soft)]"
           : null,
         variant === "secondary"
           ? "bg-[color:var(--surface)] text-[color:var(--text)] shadow-[0_0_0_1px_var(--line)] hover:bg-[color:var(--hover)]"
@@ -357,7 +357,7 @@ export function EmptyState(props: { title: string; body: string; icon?: LucideIc
   const Icon = props.icon || Archive;
   return (
     <div className="rounded-[10px] bg-[color:var(--block)] px-6 py-8 text-center shadow-[inset_0_0_0_1px_var(--line)]">
-      <div className="mx-auto grid size-9 place-items-center rounded-[9px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[0_1px_2px_rgba(24,22,18,0.05)]">
+      <div className="mx-auto grid size-9 place-items-center rounded-[9px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
         <Icon data-icon />
       </div>
       <h3 className="mt-3 text-[15px] font-semibold">{props.title}</h3>
