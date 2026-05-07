@@ -5,6 +5,7 @@ import { createHashRouter, Navigate, RouterProvider } from "react-router-dom";
 import {
   InboxPage,
   IssueDetailPage,
+  IssuesPage,
   ProjectsPage,
   SessionDetailPage,
 } from "@mspace/views";
@@ -20,6 +21,7 @@ const router = createHashRouter([
     children: [
       { index: true, element: <Navigate to="/inbox" replace /> },
       { path: "/inbox", element: <InboxPage /> },
+      { path: "/issues", element: <IssuesPage /> },
       { path: "/issues/:issueId", element: <IssueDetailPage /> },
       { path: "/projects", element: <ProjectsPage /> },
       { path: "/sessions/:sessionId", element: <SessionDetailPage /> },

@@ -12,14 +12,15 @@ import {
   Layers3,
   LoaderCircle,
   type LucideIcon,
+  MessageSquarePlus,
   MessageSquareText,
+  Plus,
   Search,
-  Settings2,
   Sparkles,
   SquareTerminal,
 } from "lucide-react";
 import type { ComponentProps, PropsWithChildren, ReactNode, SelectHTMLAttributes } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import { Alert, AlertDescription } from "./components/ui/alert";
 import { Badge } from "./components/ui/badge";
 import {
@@ -72,6 +73,7 @@ export { Textarea as ShadcnTextarea } from "./components/ui/textarea";
 
 const sidebarItems = [
   { to: "/inbox", label: "Inbox", icon: Inbox },
+  { to: "/issues", label: "Issues", icon: MessageSquareText },
   { to: "/projects", label: "Projects", icon: FolderKanban },
 ];
 
@@ -86,7 +88,7 @@ export function AppShell() {
     <div className="grid h-full min-h-0 grid-cols-[252px_minmax(0,1fr)] bg-[color:var(--canvas)] text-[color:var(--text)]">
       <div className="app-titlebar" aria-hidden="true" />
       <aside className="flex min-h-0 flex-col border-r border-[color:var(--line)] bg-[color:var(--sidebar)] px-3 pb-4 pt-12">
-        <div className="mb-4 flex items-center justify-between px-2">
+        <div className="mb-4 flex items-center px-2">
           <div className="flex min-w-0 items-center gap-2.5">
             <div className="grid size-7 shrink-0 place-items-center rounded-[8px] bg-[color:var(--ink)] text-[13px] font-semibold text-[color:var(--paper)]">
               m
@@ -96,21 +98,17 @@ export function AppShell() {
               <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">K8s agent workspace</div>
             </div>
           </div>
-          <button
-            type="button"
-            aria-label="Workspace settings"
-            className="grid size-8 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
-          >
-            <Settings2 data-icon />
-          </button>
         </div>
 
-        <div className="mb-3 rounded-[10px] bg-[color:var(--paper)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div className="mb-2 rounded-[10px] bg-[color:var(--paper)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
             <Search data-icon />
             <span>Search projects, sessions, evidence</span>
           </div>
         </div>
+        <SidebarActionLink to="/issues?new=1" icon={MessageSquarePlus}>
+          New issue
+        </SidebarActionLink>
 
         <nav className="flex flex-col gap-1">
           {sidebarItems.map((item) => (
@@ -185,6 +183,19 @@ export function SidebarLink(props: PropsWithChildren<{ to: string; icon: LucideI
       <Icon data-icon />
       <span>{props.children}</span>
     </NavLink>
+  );
+}
+
+export function SidebarActionLink(props: PropsWithChildren<{ to: string; icon: LucideIcon }>) {
+  const Icon = props.icon;
+  return (
+    <Link
+      to={props.to}
+      className="mb-3 group flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-[13px] font-medium text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-[0.98]"
+    >
+      <Icon data-icon />
+      <span>{props.children}</span>
+    </Link>
   );
 }
 
@@ -362,6 +373,31 @@ export function EmptyState(props: { title: string; body: string; icon?: LucideIc
       </div>
       <h3 className="mt-3 text-[15px] font-semibold">{props.title}</h3>
       <p className="mx-auto mt-1.5 max-w-[52ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">{props.body}</p>
+    </div>
+  );
+}
+
+export function CollectionEmptyState(props: {
+  title: string;
+  body: string;
+  icon?: LucideIcon;
+  action?: ReactNode;
+}) {
+  const Icon = props.icon || Archive;
+  return (
+    <div className="rounded-[10px] bg-[color:var(--surface)] px-6 py-10 shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="mx-auto flex max-w-[460px] flex-col items-center text-center">
+        <div className="grid size-9 place-items-center rounded-[9px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+          <Icon data-icon />
+        </div>
+        <h2 className="mt-4 text-[22px] font-semibold leading-tight text-[color:var(--text)]">
+          {props.title}
+        </h2>
+        <p className="mt-2 max-w-[34ch] text-[14px] leading-6 text-[color:var(--muted)] text-pretty">
+          {props.body}
+        </p>
+        {props.action ? <div className="mt-5 flex justify-center">{props.action}</div> : null}
+      </div>
     </div>
   );
 }

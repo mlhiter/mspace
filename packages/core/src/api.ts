@@ -5,6 +5,7 @@ import type {
   CreateSessionInput,
   InboxItem,
   IssueDetail,
+  IssueListItem,
   Project,
   SessionDetail,
   UpdateProjectInput,
@@ -12,6 +13,7 @@ import type {
 
 export const queryKeys = {
   inbox: ["inbox"] as const,
+  issues: ["issues"] as const,
   projects: ["projects"] as const,
   issue: (issueId: string) => ["issue", issueId] as const,
   session: (sessionId: string) => ["session", sessionId] as const,
@@ -72,6 +74,7 @@ export const api = {
     request<{ ok: boolean }>(`/api/projects/${projectId}`, {
       method: "DELETE",
     }),
+  listIssues: () => request<IssueListItem[]>("/api/issues"),
   createIssue: (input: CreateIssueInput) =>
     request<{ issueId: string }>("/api/issues", {
       method: "POST",
@@ -81,6 +84,11 @@ export const api = {
     request<IssueDetail>(`/api/issues/${issueId}`),
   addComment: (issueId: string, input: CreateCommentInput) =>
     request<{ ok: boolean }>(`/api/issues/${issueId}/comments`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  assignAgent: (issueId: string, input: CreateSessionInput) =>
+    request<{ sessionId: string }>(`/api/issues/${issueId}/assign-agent`, {
       method: "POST",
       body: JSON.stringify(input),
     }),

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { Clock3, Files, MessageSquareText, Play, SquareTerminal } from "lucide-react";
+import { Bot, Clock3, Files, MessageSquareText, Play, SquareTerminal } from "lucide-react";
 import { api, buildApiUrl, queryKeys, type SessionStreamEvent } from "@mspace/core";
 import {
   Button,
@@ -49,6 +49,7 @@ export function IssueDetailPage() {
 
   const detail = issueQuery.data;
   const latestSession = detail?.sessions[0];
+  const hasActiveSession = latestSession ? ["queued", "running"].includes(latestSession.status) : false;
   const defaultWorkflowDescription =
     detail && (detail.project.deployCommand || detail.project.validationCommand || detail.project.namespace)
       ? [
@@ -81,6 +82,7 @@ export function IssueDetailPage() {
         return;
       }
       void queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.inbox });
       if (latestSession?.id) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.session(latestSession.id) });
       }
@@ -98,15 +100,18 @@ export function IssueDetailPage() {
     },
   });
 
-  const startSession = useMutation({
+  const assignAgent = useMutation({
     mutationFn: () =>
-      api.createSession(issueId, {
+      api.assignAgent(issueId, {
         provider: "codex",
         command: sessionCommand.trim() || undefined,
       }),
     onSuccess: async () => {
       setSessionCommand("");
-      await queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+      ]);
     },
   });
 
@@ -143,6 +148,9 @@ export function IssueDetailPage() {
                 </DataBlock>
                 <DataBlock label="Namespace" icon={SquareTerminal}>
                   {detail.project.namespace || "not configured"}
+                </DataBlock>
+                <DataBlock label="Assignee" icon={Bot}>
+                  {detail.issue.assigneeType === "agent" ? "agent" : "human"} · {detail.issue.assignee || "unassigned"}
                 </DataBlock>
               </div>
             </div>
@@ -191,14 +199,14 @@ export function IssueDetailPage() {
               className="flex flex-col gap-4"
               onSubmit={(event) => {
                 event.preventDefault();
-                startSession.mutate();
+                assignAgent.mutate();
               }}
             >
-              {startSession.error ? (
-                <Notice tone="danger">{startSession.error.message}</Notice>
+              {assignAgent.error ? (
+                <Notice tone="danger">{assignAgent.error.message}</Notice>
               ) : (
                 <Notice>
-                  Sessions run locally in the MVP, then deploy and validate against the configured Kubernetes namespace.
+                  Assigning the issue to Codex queues a local agent session, updates Inbox status, and keeps evidence attached here.
                 </Notice>
               )}
               <DataBlock label="Default workflow" icon={Play}>
@@ -214,11 +222,15 @@ export function IssueDetailPage() {
                   </div>
                 </div>
               </DataBlock>
-              <Field label="Command override" hint="Leave empty to run the project's validation command or the runner default.">
+              <Field label="Command override" hint="Leave empty to run the project's deploy and validation workflow.">
                 <Input value={sessionCommand} onChange={(event) => setSessionCommand(event.target.value)} placeholder="optional: override the full default workflow" />
               </Field>
-              <Button type="submit" disabled={startSession.isPending}>
-                {startSession.isPending ? "Starting session..." : "Start local session"}
+              <Button type="submit" disabled={assignAgent.isPending || hasActiveSession}>
+                {assignAgent.isPending
+                  ? "Assigning agent..."
+                  : hasActiveSession
+                    ? "Agent session active"
+                    : "Assign to Codex"}
               </Button>
             </form>
 

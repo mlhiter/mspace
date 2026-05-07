@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,6 +70,198 @@ func TestParseWorkspaceChangePreservesShortStatusSpacing(t *testing.T) {
 	if change.Path != "packages/core/src/api.ts" {
 		t.Fatalf("expected path packages/core/src/api.ts, got %q", change.Path)
 	}
+}
+
+func TestParseGitRemoteInfo(t *testing.T) {
+	cases := []struct {
+		name   string
+		remote string
+	}{
+		{name: "https", remote: "https://github.com/mlhiter/mspace.git"},
+		{name: "ssh shorthand", remote: "git@github.com:mlhiter/mspace.git"},
+		{name: "ssh url", remote: "ssh://git@github.com/mlhiter/mspace.git"},
+		{name: "host path", remote: "github.com/mlhiter/mspace"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			info, ok := parseGitRemoteInfo(tc.remote)
+			if !ok {
+				t.Fatalf("expected %q to parse", tc.remote)
+			}
+			if info.Provider != "github" || info.Owner != "mlhiter" || info.Repo != "mspace" {
+				t.Fatalf("unexpected remote info: %+v", info)
+			}
+		})
+	}
+}
+
+func TestNormalizeProjectInputDetectsLocalGitHubMetadata(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for project normalization test")
+	}
+
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init", "-b", "main")
+	runGit(t, repoDir, "remote", "add", "origin", "git@github.com:mlhiter/mspace.git")
+
+	application := &app{repoRoot: t.TempDir()}
+	project, err := application.normalizeProjectInput(projectInput{
+		RepoPath: repoDir,
+	})
+	if err != nil {
+		t.Fatalf("normalize project input failed: %v", err)
+	}
+	if project.SourceType != "local" {
+		t.Fatalf("expected local source, got %q", project.SourceType)
+	}
+	if project.RemoteURL != "git@github.com:mlhiter/mspace.git" {
+		t.Fatalf("expected remote url to be detected, got %q", project.RemoteURL)
+	}
+	if project.GitProvider != "github" || project.GitOwner != "mlhiter" || project.GitRepo != "mspace" {
+		t.Fatalf("unexpected git metadata: %+v", project)
+	}
+	if project.DefaultBranch != "main" {
+		t.Fatalf("expected default branch main, got %q", project.DefaultBranch)
+	}
+}
+
+func TestNormalizeProjectInputUsesExistingGitHubClone(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for project normalization test")
+	}
+
+	repoRoot := t.TempDir()
+	clonePath := filepath.Join(repoRoot, "mlhiter", "mspace")
+	if err := os.MkdirAll(clonePath, 0o755); err != nil {
+		t.Fatalf("create clone path: %v", err)
+	}
+	runGit(t, clonePath, "init", "-b", "main")
+
+	application := &app{repoRoot: repoRoot}
+	project, err := application.normalizeProjectInput(projectInput{
+		SourceType: "github",
+		RepoURL:    "https://github.com/mlhiter/mspace.git",
+	})
+	if err != nil {
+		t.Fatalf("normalize github project input failed: %v", err)
+	}
+	if project.Name != "mspace" {
+		t.Fatalf("expected name mspace, got %q", project.Name)
+	}
+	if project.RepoPath != clonePath {
+		t.Fatalf("expected repo path %q, got %q", clonePath, project.RepoPath)
+	}
+	if project.SourceType != "github" || project.GitOwner != "mlhiter" || project.GitRepo != "mspace" {
+		t.Fatalf("unexpected project metadata: %+v", project)
+	}
+}
+
+func TestEnsureProjectColumnsAddsMetadataFields(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TABLE projects (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			repo_path TEXT NOT NULL,
+			default_branch TEXT NOT NULL,
+			deploy_command TEXT NOT NULL,
+			validation_command TEXT NOT NULL,
+			kube_context TEXT NOT NULL,
+			namespace TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create old projects table: %v", err)
+	}
+
+	application := &app{db: db}
+	if err := application.ensureProjectColumns(); err != nil {
+		t.Fatalf("ensure project columns failed: %v", err)
+	}
+	if err := application.ensureProjectColumns(); err != nil {
+		t.Fatalf("ensure project columns should be idempotent: %v", err)
+	}
+
+	for _, column := range []string{"source_type", "remote_url", "git_provider", "git_owner", "git_repo"} {
+		if !projectColumnExists(t, db, column) {
+			t.Fatalf("expected projects.%s to exist", column)
+		}
+	}
+}
+
+func TestEnsureIssueColumnsAddsAssigneeType(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TABLE issues (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			title TEXT NOT NULL,
+			body TEXT NOT NULL,
+			status TEXT NOT NULL,
+			assignee TEXT NOT NULL,
+			environment_url TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create old issues table: %v", err)
+	}
+
+	application := &app{db: db}
+	if err := application.ensureIssueColumns(); err != nil {
+		t.Fatalf("ensure issue columns failed: %v", err)
+	}
+	if err := application.ensureIssueColumns(); err != nil {
+		t.Fatalf("ensure issue columns should be idempotent: %v", err)
+	}
+	if !tableColumnExists(t, db, "issues", "assignee_type") {
+		t.Fatal("expected issues.assignee_type to exist")
+	}
+}
+
+func projectColumnExists(t *testing.T, db *sql.DB, column string) bool {
+	t.Helper()
+	return tableColumnExists(t, db, "projects", column)
+}
+
+func tableColumnExists(t *testing.T, db *sql.DB, tableName, column string) bool {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + tableName + `)`)
+	if err != nil {
+		t.Fatalf("query table info: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatalf("scan table info: %v", err)
+		}
+		if name == column {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate table info: %v", err)
+	}
+	return false
 }
 
 func runGit(t *testing.T, repoDir string, args ...string) {

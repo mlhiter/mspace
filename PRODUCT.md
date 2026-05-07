@@ -1,0 +1,40 @@
+# Product
+
+## Register
+
+product
+
+## Users
+
+mspace is for engineering and platform teams that already use coding agents and shared Kubernetes test clusters. Users are developers, tech leads, and platform engineers who need a durable place to create issues, assign agent work, watch progress, review comments, and validate changes against namespace-scoped runtime evidence.
+
+## Product Purpose
+
+mspace is an Inbox and Issue workspace for coding agents. It turns a fragmented workflow of local agent edits, chat notes, issue trackers, and test-cluster validation into one document-style workspace where an issue can hold the problem statement, discussion, agent session, branch state, Kubernetes evidence, and final review trail.
+
+The product succeeds when a team can create or route an issue, assign a local-first agent session, let that agent modify code, deploy or inspect the project in a scoped Kubernetes namespace, and review the result with enough evidence to decide what happens next.
+
+## Brand Personality
+
+Calm, operational, and exact. The interface should feel like a serious document workspace for real engineering work: quiet enough for daily use, explicit about runtime and namespace scope, and direct about what agents are doing.
+
+## Anti-references
+
+- No marketing shell, AI hero page, decorative dashboard, or generic automation pitch.
+- No terminal-only experience that hides issues, comments, owners, or review state.
+- No Sealos API dependency as the primary control path.
+- No cluster-wide agent permission model.
+- No vague AI vocabulary such as magic, seamless, next-gen, unlock, or elevate.
+- No visual treatment that competes with the issue document or runtime evidence.
+
+## Design Principles
+
+- Issues are durable working documents, not transient job cards.
+- Inbox is for messages and state changes that need human review, not the full issue database.
+- Agents should appear as collaborators with assignees, sessions, blockers, and progress updates.
+- Runtime evidence belongs next to the issue story: branch, logs, status, namespace, and environment links should support review.
+- Local-first development and Kubernetes validation are separate concepts, and the UI should make that boundary visible when it matters.
+
+## Accessibility & Inclusion
+
+Use a conservative product UI baseline: strong text contrast, keyboard-accessible navigation and dialogs, visible focus states, at least 40px interactive targets where practical, semantic buttons and links, reduced-motion-safe transitions, and status communication that does not rely on color alone.

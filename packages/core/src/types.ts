@@ -2,6 +2,11 @@ export interface Project {
   id: string;
   name: string;
   repoPath: string;
+  sourceType: string;
+  remoteUrl: string;
+  gitProvider: string;
+  gitOwner: string;
+  gitRepo: string;
   defaultBranch: string;
   deployCommand: string;
   validationCommand: string;
@@ -18,10 +23,28 @@ export interface InboxItem {
   id: string;
   issueId: string;
   projectId: string;
+  projectName: string;
   title: string;
   status: string;
+  assignee: string;
+  assigneeType: string;
   unread: boolean;
   updatedAt: string;
+}
+
+export interface IssueListItem {
+  id: string;
+  projectId: string;
+  projectName: string;
+  title: string;
+  body: string;
+  status: string;
+  assignee: string;
+  assigneeType: string;
+  unread: boolean;
+  sessionCount: number;
+  updatedAt: string;
+  createdAt: string;
 }
 
 export interface Issue {
@@ -31,6 +54,7 @@ export interface Issue {
   body: string;
   status: string;
   assignee: string;
+  assigneeType: string;
   environmentUrl: string;
   createdAt: string;
   updatedAt: string;
@@ -131,7 +155,9 @@ export interface SessionDetail {
 
 export interface CreateProjectInput {
   name: string;
+  sourceType: string;
   repoPath: string;
+  repoUrl: string;
   defaultBranch: string;
   deployCommand: string;
   validationCommand: string;
@@ -144,10 +170,12 @@ export interface UpdateProjectInput extends CreateProjectInput {
 }
 
 export interface CreateIssueInput {
-  projectId: string;
-  title: string;
-  body: string;
+  projectId?: string;
+  title?: string;
+  body?: string;
+  prompt?: string;
   assignee?: string;
+  assigneeType?: string;
 }
 
 export interface CreateCommentInput {
@@ -168,6 +196,7 @@ export interface SessionStreamEvent {
 export interface MspaceDesktopAPI {
   apiBaseUrl: string;
   appVersion: string;
+  selectProjectFolder?: () => Promise<string | null>;
 }
 
 declare global {

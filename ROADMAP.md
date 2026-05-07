@@ -23,6 +23,50 @@ Project
 
 The roadmap intentionally keeps local workflow first. Kubernetes is the validation target for the MVP, not the first development runtime.
 
+## Approved Execution Plan
+
+The product should reach the Multica-like workflow in two stages.
+
+### Stage 1: Usable Local Agent Loop
+
+Target: 5-8 focused development days.
+
+Goal:
+
+- Create or import a project, create an issue, assign it to an agent, watch status updates, and finish with branch/PR output plus Kubernetes validation evidence.
+
+Build in order:
+
+- Project import: support existing local folders, auto-detect GitHub remote metadata, and support direct GitHub repository URLs cloned into the mspace data directory.
+- Agent assignment: make an issue assignable to a human or agent and create the local session from that assignment.
+- Inbox realtime updates: move issue/session status changes into the Inbox without relying on slow manual refreshes.
+- Local agent context: inject issue body, comments, project metadata, branch, kube context, and namespace into the session command.
+- Progress comments: turn meaningful session lifecycle and status updates into issue activity, not just terminal logs.
+- Kubernetes validation evidence: capture Pods, Deployments, Services, Ingress, Events, logs, rollout state, and environment URLs after deploy or validation commands run.
+- Branch and PR output: detect the session branch, capture PR URLs when `gh` or provider credentials are available, and keep fallback commands when PR creation is not configured.
+- Cleanup controls: let the user retain or delete session worktrees and later session namespaces.
+
+### Stage 2: Kubernetes-Hosted Agent Runtime
+
+Target: 1-2 additional weeks after Stage 1 is usable.
+
+Goal:
+
+- Allocate cluster resources for an agent session, deploy the agent/runtime into the assigned namespace, and return runtime and environment access URLs.
+
+Build in order:
+
+- Namespace allocator with labels, TTL, ResourceQuota, LimitRange, and project/session ownership metadata.
+- Scoped ServiceAccount, Role, RoleBinding, and kubeconfig generation for each session.
+- Kubernetes Job runtime for one-shot agent sessions.
+- Optional Deployment, Service, and Ingress runtime mode when an interactive runtime URL is required.
+- Runtime URL and project environment URL extraction back into Issue Detail.
+- Namespace and runtime cleanup lifecycle.
+
+Decision:
+
+- Stage 1 remains first. Kubernetes-hosted agent runtime starts only after the local issue-to-evidence loop can complete one real internal project without manual reconstruction.
+
 ## Milestone 0: Product Surface Baseline
 
 Status: mostly complete.

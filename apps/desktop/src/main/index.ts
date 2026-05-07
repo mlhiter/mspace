@@ -1,8 +1,27 @@
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from "electron";
 import { join } from "node:path";
-import { ensureRunnerStarted, stopRunner } from "./runner-manager";
+import { ensureRunnerStarted, getRunnerBaseUrl, stopRunner } from "./runner-manager";
 
 let mainWindow: BrowserWindow | null = null;
+let projectFolderPickerRegistered = false;
+
+function registerProjectFolderPicker(): void {
+  if (projectFolderPickerRegistered) return;
+  projectFolderPickerRegistered = true;
+
+  ipcMain.handle("mspace:select-project-folder", async () => {
+    const options: OpenDialogOptions = {
+      title: "Choose project folder",
+      properties: ["openDirectory"],
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+
+    if (result.canceled) return null;
+    return result.filePaths[0] || null;
+  });
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -13,7 +32,8 @@ function createWindow(): void {
     titleBarStyle: "hiddenInset",
     autoHideMenuBar: true,
     webPreferences: {
-      preload: join(__dirname, "../preload/index.js"),
+      preload: join(__dirname, "../preload/index.mjs"),
+      additionalArguments: [`--mspace-runner-url=${getRunnerBaseUrl()}`],
       sandbox: false,
     },
   });
@@ -31,6 +51,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  registerProjectFolderPicker();
   await ensureRunnerStarted();
   createWindow();
 
