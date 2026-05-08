@@ -1,4 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  shell,
+  type BrowserWindowConstructorOptions,
+  type OpenDialogOptions,
+} from "electron";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ensureRunnerStarted, getRunnerBaseUrl, stopRunner } from "./runner-manager";
@@ -6,6 +14,16 @@ import { ensureRunnerStarted, getRunnerBaseUrl, stopRunner } from "./runner-mana
 let mainWindow: BrowserWindow | null = null;
 let projectFolderPickerRegistered = false;
 let openHandlersRegistered = false;
+const BRAND_ICON_PATH = join("assets", "brand", "mspace-icon.png");
+
+function resolveBrandIconPath(): string | undefined {
+  const candidates = [
+    join(process.cwd(), BRAND_ICON_PATH),
+    join(app.getAppPath(), BRAND_ICON_PATH),
+    join(__dirname, "..", "..", BRAND_ICON_PATH),
+  ];
+  return candidates.find((candidate) => existsSync(candidate));
+}
 
 function registerProjectFolderPicker(): void {
   if (projectFolderPickerRegistered) return;
@@ -47,20 +65,23 @@ function registerOpenHandlers(): void {
   });
 }
 
-function createWindow(): void {
-  mainWindow = new BrowserWindow({
+function createWindow(iconPath = resolveBrandIconPath()): void {
+  const options: BrowserWindowConstructorOptions = {
     width: 1380,
     height: 900,
     minWidth: 1024,
     minHeight: 720,
     titleBarStyle: "hiddenInset",
     autoHideMenuBar: true,
+    ...(iconPath ? { icon: iconPath } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
       additionalArguments: [`--mspace-runner-url=${getRunnerBaseUrl()}`],
       sandbox: false,
     },
-  });
+  };
+
+  mainWindow = new BrowserWindow(options);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -78,10 +99,12 @@ app.whenReady().then(async () => {
   registerProjectFolderPicker();
   registerOpenHandlers();
   await ensureRunnerStarted();
-  createWindow();
+  const brandIconPath = resolveBrandIconPath();
+  if (brandIconPath) app.dock?.setIcon(brandIconPath);
+  createWindow(brandIconPath);
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(resolveBrandIconPath());
   });
 });
 

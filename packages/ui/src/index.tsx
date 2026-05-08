@@ -99,15 +99,19 @@ const sidebarProjects = [
   { name: "devbox", namespace: "devbox-70", state: "idle" },
 ];
 
-export function AppShell() {
+export function AppShell(props: { brandLogoSrc?: string } = {}) {
   return (
     <div className="grid h-full min-h-0 grid-cols-[252px_minmax(0,1fr)] bg-[color:var(--canvas)] text-[color:var(--text)]">
       <div className="app-titlebar" aria-hidden="true" />
       <aside className="flex min-h-0 flex-col border-r border-[color:var(--line)] bg-[color:var(--sidebar)] px-3 pb-4 pt-12">
         <div className="mb-4 flex items-center px-2">
           <div className="flex min-w-0 items-center gap-2.5">
-            <div className="grid size-7 shrink-0 place-items-center rounded-[8px] bg-[color:var(--ink)] text-[13px] font-semibold text-[color:var(--paper)]">
-              m
+            <div className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[color:var(--paper)] text-[color:var(--ink)] shadow-[inset_0_0_0_1px_var(--line)]">
+              {props.brandLogoSrc ? (
+                <img src={props.brandLogoSrc} alt="" className="h-5 w-7 object-contain" />
+              ) : (
+                <span className="text-[13px] font-semibold">m</span>
+              )}
             </div>
             <div className="min-w-0">
               <div className="truncate text-[13px] font-semibold leading-5">mspace</div>

@@ -11,6 +11,7 @@ import {
   SessionDetailPage,
 } from "@mspace/views";
 import { AppShell } from "@mspace/ui";
+import mspaceLogoUrl from "../../../assets/brand/mspace-logo.svg";
 import "./globals.css";
 
 const queryClient = new QueryClient();
@@ -18,7 +19,7 @@ const queryClient = new QueryClient();
 const router = createHashRouter([
   {
     path: "/",
-    element: <AppShell />,
+    element: <AppShell brandLogoSrc={mspaceLogoUrl} />,
     children: [
       { index: true, element: <Navigate to="/inbox" replace /> },
       { path: "/inbox", element: <InboxPage /> },
