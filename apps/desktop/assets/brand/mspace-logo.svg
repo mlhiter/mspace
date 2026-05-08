@@ -3,11 +3,11 @@
   <desc id="desc">A clean custom lowercase m monogram for mspace.</desc>
   <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
     <path
-      d="M21 72V47c0-10.5 8.5-19 19-19 9.8 0 18 7.5 18 17v27"
+      d="M13 72V47c0-10.5 8.5-19 19-19 9.8 0 18 7.5 18 17v27"
       stroke-width="8"
     />
     <path
-      d="M58 72V47c0-10.5 8.5-19 19-19 10.5 0 19 8.5 19 19v25"
+      d="M50 72V47c0-10.5 8.5-19 19-19 10.5 0 19 8.5 19 19v25"
       stroke-width="8"
     />
   </g>
