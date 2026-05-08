@@ -176,10 +176,8 @@ function stripLineSuffix(path: string) {
   return path.replace(/:\d+(?::\d+)?$/, "");
 }
 
-function statusTone(status: string) {
-  if (status === "completed") return "text-[color:var(--success)]";
+function missingSummaryTone(status: string) {
   if (status === "failed") return "text-[color:var(--danger)]";
-  if (status === "running") return "text-[color:var(--accent-blue)]";
   return "text-[color:var(--muted)]";
 }
 
@@ -359,6 +357,15 @@ function SessionFileChanges(props: { changes: WorkspaceChange[]; workdir: string
   );
 }
 
+function SessionSummarySkeleton() {
+  return (
+    <div className="mt-2 grid gap-2" aria-hidden="true">
+      <div className="h-3 w-5/6 rounded-full bg-[color:var(--line)] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.02)] motion-safe:animate-pulse" />
+      <div className="h-3 w-2/3 rounded-full bg-[color:var(--line)] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.02)] motion-safe:animate-pulse" />
+    </div>
+  );
+}
+
 function ActorMark(props: { kind: "human" | "codex" | "system" | "evidence" }) {
   const Icon =
     props.kind === "codex"
@@ -418,6 +425,7 @@ function SessionTimelineItem(props: {
   logs: LogLine[];
   changes: WorkspaceChange[];
   agents: AgentProfile[];
+  isSnapshotPending?: boolean;
   isStopping?: boolean;
   stopError?: Error | null;
   onStop?: () => void;
@@ -457,8 +465,10 @@ function SessionTimelineItem(props: {
             <RichText basePath={session.workdir} className="mt-2">
               {agentMessage}
             </RichText>
+          ) : props.isSnapshotPending ? (
+            <SessionSummarySkeleton />
           ) : (
-            <div className={cn("mt-2 text-[14px] leading-6", statusTone(session.status))}>
+            <div className={cn("mt-2 text-[14px] leading-6", missingSummaryTone(session.status))}>
               No final agent summary was captured for this session.
             </div>
           )}
@@ -826,13 +836,15 @@ export function IssueDetailPage() {
                   return <CommentTimelineItem key={`comment-${item.comment.id}`} comment={item.comment} />;
                 }
                 if (item.kind === "session") {
+                  const sessionSnapshot = sessionSnapshotsById[item.session.id];
                   return (
                     <SessionTimelineItem
                       key={`session-${item.session.id}`}
                       session={item.session}
-                      logs={sessionSnapshotsById[item.session.id]?.logs || []}
-                      changes={sessionSnapshotsById[item.session.id]?.changes || []}
+                      logs={sessionSnapshot?.logs || []}
+                      changes={sessionSnapshot?.changes || []}
                       agents={agents}
+                      isSnapshotPending={!sessionSnapshot}
                       isStopping={stopSession.isPending && stopSession.variables === item.session.id}
                       stopError={stopSession.error && stopSession.variables === item.session.id ? stopSession.error : null}
                       onStop={["queued", "running"].includes(item.session.status) ? () => stopSession.mutate(item.session.id) : undefined}
