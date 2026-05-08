@@ -1,63 +1,92 @@
+<!-- prettier-ignore -->
+<div align="center">
+
+<img src="./apps/desktop/assets/brand/mspace-icon.png" alt="mspace logo" width="96" />
+
 # mspace
 
-mspace is a review Inbox and Issue workspace for software teams that want coding agents to develop locally and validate changes in real Kubernetes test environments instead of abstract sandboxes.
+**A local-first desktop workspace for coding agents, issue review, and Kubernetes validation evidence.**
 
-It takes the interaction shape of Multica, where humans and agents collaborate around shared issues and progress updates, and combines it with the deployment and validation shape of Optio, where projects can be exercised against controlled cluster resources. The product direction is narrower than both: each issue can attach an agent session, the current development path is local-first, and the deployed test target is a namespace-scoped Kubernetes environment in a shared cluster.
+![Status](https://img.shields.io/badge/status-local%20MVP-2d2926?style=flat-square)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white)
+![React](https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white)
+![Electron](https://img.shields.io/badge/Electron-39-47848f?style=flat-square&logo=electron&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.24+-00add8?style=flat-square&logo=go&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-validation%20target-326ce5?style=flat-square&logo=kubernetes&logoColor=white)
 
-## Core Idea
+[Overview](#overview) • [Screenshots](#screenshots) • [Features](#features) • [Architecture](#architecture) • [Quick Start](#quick-start) • [Verification](#verification) • [Docs](#docs)
 
-AI coding work should live in a shared team workspace, not only in a repository checkout or a terminal transcript. The issue itself should be the durable document: context, discussion, agent progress, runtime evidence, PR output, and environment links all belong in one place.
+</div>
 
-## Why K8s
+## Overview
 
-The Kubernetes environment is the deployment and test target that makes mspace worth building. Agents should be able to take locally developed changes, deploy them into a scoped namespace, and validate them with real cluster resources, real logs, real events, and real rollout state.
+mspace is a review Inbox and Issue workspace for software teams that want coding agents to work in real repositories and validate changes in namespace-scoped Kubernetes test environments.
 
-## Current Status
+The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, comments, agent session, branch state, logs, deployment evidence, preview URL, and cleanup decision in one place.
 
-The repository currently contains a runnable local desktop MVP:
+> [!NOTE]
+> mspace is currently a runnable local desktop MVP. Agent execution is local-first through Codex app-server, while Kubernetes is a manually triggered issue test target.
+
+## Screenshots
+
+![mspace issues list](./docs/images/mspace-issues-list.png)
+
+![mspace issue detail](./docs/images/mspace-issue-detail.png)
+
+## Why mspace
+
+- **Issues are the durable workspace.** Agent turns, progress, blockers, session evidence, and review comments stay attached to the issue.
+- **Local development stays fast.** Sessions run in prepared git worktrees under `~/.mspace/workdirs`.
+- **Validation is real.** Test deployments use a project kubeconfig and image registry prefix to create issue-scoped Kubernetes environments.
+- **Evidence is reviewable.** Branch status, diffs, logs, namespace state, preview URLs, and deployment output are visible without reconstructing context from a terminal.
+
+## Features
 
 - Electron desktop app with Inbox, Issues, Agents, Projects, Issue Detail, and Session Detail screens.
-- Notion-like desktop workspace shell built on real shadcn/ui source components, Radix UI primitives, and lucide-react icons in `@mspace/ui`.
-- Go local runner with HTTP APIs, SQLite storage, session logs, inbox server-sent events, and git-aware project import.
-- Project import from either a local folder or a GitHub repository URL, with GitHub remote metadata detection when available.
-- Issue creation and management in the Issues tab, while Inbox stays focused on unread review updates.
-- Issue-local labels shown on issue lists and edited inline from Issue Detail.
-- Agents module backed by SQLite-managed agent profiles, seeded with `@codex`, `@bugfix`, and `@design`.
-- Dynamic agent mentions from an issue comment, with local Codex app-server session queueing, profile instructions, status updates, and issue timeline updates.
-- Running sessions can be stopped from Issue Detail or Session Detail.
-- Local session execution in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`.
-- Completed or cancelled session worktrees can be manually cleaned from Session Detail while keeping logs, comments, evidence, and metadata.
-- Imported GitHub repositories cached under `~/.mspace/repos/<owner>/<repo>`.
-- Session context markdown written under `~/.mspace/workdirs/_contexts/<session-id>.md` and included in the Codex prompt and session environment.
-- Codex runtime state stored on sessions: agent profile, thread id, turn id, agent status, and artifact directory.
-- Session workspace inspection for git status, changed files, diff previews, commits, and comparison against the project default branch.
-- Project-level Kubernetes context and namespace fields that are passed into the app-server session and used for post-run evidence collection.
+- Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, and real shadcn/ui source components in `@mspace/ui`.
+- Go local runner with HTTP APIs, SQLite storage, server-sent events, session logs, git-aware project import, and Codex app-server integration.
+- Project import from a local folder or GitHub repository URL, including GitHub remote metadata detection when available.
+- Managed agent profiles stored in SQLite, seeded with `@codex`, `@bugfix`, and `@design`.
+- Agent mentions from issue comments, with turn queueing, profile instructions, status updates, and issue timeline updates.
+- Per-session git worktrees, workspace inspection, changed file lists, diff previews, commits, and comparison against the project default branch.
+- Issue-local labels, unread Inbox updates, running-session stop controls, and manual worktree cleanup after completion or cancellation.
+- Project-level kubeconfig path, image registry prefix, preview routing defaults, and fallback Kubernetes context or namespace hints.
+- Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and record evidence.
 
-Kubernetes is currently the configurable validation target. Generated scoped kubeconfigs, ServiceAccounts, namespace allocation, PR capture, and namespace cleanup controls are not implemented in the local MVP yet.
+> [!IMPORTANT]
+> Generated scoped kubeconfigs, ServiceAccounts, automatic PR capture, and Kubernetes-hosted agent runtime are future work. The MVP trusts the kubeconfig path configured on the project or deployment action.
 
-## Requirements
+## Architecture
+
+mspace separates collaboration, execution, and validation:
+
+![mspace overview](./docs/images/mspace-overview.svg)
+
+| Layer | What it owns | Current implementation |
+| --- | --- | --- |
+| Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review | Electron, React, React Router, React Query, shared `@mspace/ui` |
+| Local runner | API, SQLite state, SSE streams, worktree preparation, Codex session lifecycle | Go, chi, SQLite, `codex app-server --listen stdio://` |
+| Agent runtime | One issue-bound turn in an isolated working directory | Local git worktree under `~/.mspace/workdirs/<project-id>/<session-id>` |
+| Validation target | Build, deploy, inspect, preview, and cleanup issue test environments | Namespace-scoped Kubernetes workflow triggered from Issue Detail |
+
+The desktop process starts the Go runner automatically on `127.0.0.1:7788` when no healthy runner is already available.
+
+## Quick Start
+
+### Requirements
 
 - Node.js and pnpm.
 - Go 1.24 or newer.
 - Git on `PATH`.
 - Codex CLI on `PATH` for `codex app-server --listen stdio://`.
-- `kubectl` only when running project deploy or validation commands that inspect Kubernetes.
+- `kubectl` only when running deployment or validation flows that inspect Kubernetes.
 
-## Run Locally
-
-Install dependencies:
+### Run the desktop app
 
 ```bash
 pnpm install
-```
-
-Start the desktop app:
-
-```bash
 pnpm dev:desktop
 ```
-
-The Electron main process starts the Go runner automatically on `127.0.0.1:7788` if no healthy runner is already listening.
 
 Run the runner separately when debugging API behavior:
 
@@ -66,14 +95,25 @@ pnpm runner
 pnpm dev:desktop
 ```
 
-Useful environment variables:
+### First workflow
 
-| Variable | Used by | Default | Purpose |
-| --- | --- | --- | --- |
-| `MSPACE_RUNNER_PORT` | Electron main process | `7788` | Port used when desktop starts the local runner. |
-| `MSPACE_RUNNER_URL` | Electron preload/renderer | `http://127.0.0.1:7788` | API base URL exposed to the renderer. |
-| `MSPACE_RUNNER_START_TIMEOUT_MS` | Electron main process | `60000` | How long the desktop waits for the local runner to become healthy before failing startup. |
-| `MSPACE_PORT` | Go runner | `7788` | Port used by a standalone runner. |
+1. Add a project from a local folder or GitHub repository URL.
+2. Create an issue in the Issues tab.
+3. Mention an enabled agent profile, such as `@codex`, in an issue comment.
+4. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
+5. Configure kubeconfig and image registry values on the project when you want a test deployment.
+6. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
+
+## Configuration
+
+Runtime variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MSPACE_RUNNER_PORT` | `7788` | Port used when the desktop starts the local runner. |
+| `MSPACE_RUNNER_URL` | `http://127.0.0.1:7788` | API base URL exposed to the renderer. |
+| `MSPACE_RUNNER_START_TIMEOUT_MS` | `60000` | Startup health-check timeout for the runner. |
+| `MSPACE_PORT` | `7788` | Port used by a standalone runner. |
 
 Local data paths:
 
@@ -82,45 +122,46 @@ Local data paths:
 | `~/.mspace/mspace.db` | SQLite database. |
 | `~/.mspace/repos/<owner>/<repo>` | Cached clone path for GitHub-imported projects. |
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree for one agent session. |
-| `~/.mspace/workdirs/_contexts/<session-id>.md` | Generated session context markdown included in the app-server turn prompt. |
-| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory recorded on Codex-backed sessions. |
+| `~/.mspace/workdirs/_contexts/<session-id>.md` | Session context markdown included in Codex prompts. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional agent-written deployment result; `previewUrl` is copied back to the issue test environment. |
 
-## Verify
+## Verification
 
 ```bash
 pnpm typecheck
-pnpm --filter @mspace/desktop build
+pnpm build:desktop
 (cd packages/ui && pnpm dlx shadcn@latest info --json)
 (cd runner && go test ./...)
 (cd runner && go build ./...)
 ```
 
-For local runner checks:
+Runner health check:
 
 ```bash
 curl http://127.0.0.1:7788/health
 ```
 
-## First Product Promise
+> [!TIP]
+> The shadcn/ui source files live under `packages/ui/src/components/ui`. If UI imports fail, check the root `components.json`, `packages/ui/components.json`, and the desktop Vite aliases for `@mspace/ui/components` and `@mspace/ui/lib`.
 
-For each project, mspace gives a team a document-style issue workflow where a coding agent can:
+## Project Layout
 
-- receive review updates through Inbox while Issues remains the durable list and creation surface;
-- collaborate through comments, agent-profile mentions, status updates, and blockers;
-- run in a local development runtime by default;
-- configure a Kubernetes context and namespace for validation;
-- deploy or update the project in a test cluster;
-- inspect pods, services, ingress, events, and logs;
-- keep open the future option of generated scoped kubeconfigs and ServiceAccounts;
-- keep open the future option of running the agent runtime inside Kubernetes;
-- produce a PR, branch link, and environment evidence.
+```text
+apps/desktop/        Electron desktop shell and renderer entrypoint
+packages/core/       Shared API client and TypeScript types
+packages/ui/         Shared UI primitives and shadcn/ui source components
+packages/views/      Product routes for Inbox, Issues, Agents, Projects, Sessions
+runner/              Go local runner, SQLite migrations, Codex app-server bridge
+docs/                Product, architecture, IA, references, runbook, and images
+```
 
-## Documentation
+## Docs
 
-- [Design System](DESIGN.md)
-- [Roadmap](ROADMAP.md)
-- [Product Brief](docs/product.md)
-- [Architecture Notes](docs/architecture.md)
-- [MVP Information Architecture](docs/ia.md)
-- [Reference Notes](docs/references.md)
-- [Local Runbook](docs/runbook.md)
+- [Product Brief](./docs/product.md)
+- [Architecture Notes](./docs/architecture.md)
+- [MVP Information Architecture](./docs/ia.md)
+- [Local Runbook](./docs/runbook.md)
+- [Reference Notes](./docs/references.md)
+- [Design System](./DESIGN.md)
+- [Roadmap](./ROADMAP.md)
