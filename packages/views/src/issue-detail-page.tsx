@@ -1,22 +1,61 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
-import { Bot, Clock3, Files, MessageSquareText, Play, SquareTerminal } from "lucide-react";
-import { api, buildApiUrl, queryKeys, type SessionStreamEvent } from "@mspace/core";
+import { useParams } from "react-router-dom";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  Bold,
+  Bot,
+  CheckCircle2,
+  CircleDot,
+  CircleStop,
+  Clock3,
+  Code2,
+  ExternalLink,
+  FileText,
+  Italic,
+  Link as LinkIcon,
+  Send,
+  Tag,
+  UserRound,
+  X,
+} from "lucide-react";
+import {
+  api,
+  buildApiUrl,
+  queryKeys,
+  type AgentProfile,
+  type AgentSession,
+  type Comment,
+  type DeploymentEvidence,
+  type IssueLabel,
+  type SessionLog,
+  type SessionStreamEvent,
+  type WorkspaceChange,
+} from "@mspace/core";
 import {
   Button,
   CodeBlock,
-  DataBlock,
-  EmptyState,
-  Field,
   InlineMeta,
-  Input,
   Notice,
-  Panel,
   PageFrame,
   StatusBadge,
   Textarea,
+  cn,
 } from "@mspace/ui";
+import { formatAbsoluteTime, formatRelativeTime } from "./time";
+
+type TimelineItem =
+  | { kind: "opened"; createdAt: string }
+  | { kind: "comment"; createdAt: string; comment: Comment }
+  | { kind: "session"; createdAt: string; session: AgentSession }
+  | { kind: "evidence"; createdAt: string; evidence: DeploymentEvidence };
+
+type LogLine = Pick<SessionLog, "stream" | "message">;
+type SessionSnapshot = {
+  logs: LogLine[];
+  changes: WorkspaceChange[];
+};
 
 function useSessionStream(sessionId: string | undefined, onEvent: (event: SessionStreamEvent) => void) {
   useEffect(() => {
@@ -33,12 +72,562 @@ function useSessionStream(sessionId: string | undefined, onEvent: (event: Sessio
   }, [sessionId, onEvent]);
 }
 
+function listOrEmpty<T>(items: T[] | null | undefined): T[] {
+  return Array.isArray(items) ? items : [];
+}
+
+function mentionKey(value: string) {
+  return value.trim().replace(/^@/, "").toLowerCase();
+}
+
+function findAgent(agents: AgentProfile[], agentId: string) {
+  const key = mentionKey(agentId);
+  return agents.find((agent) => agent.id.toLowerCase() === key || mentionKey(agent.mention) === key);
+}
+
+function extractAgentMention(value: string) {
+  return value.match(/(?:^|[^\w])@([a-z][\w-]*)/i)?.[1].toLowerCase() || "";
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripAgentMention(value: string, agent: string) {
+  const mentionPattern = new RegExp(`(^|[^\\w])@${escapeRegExp(agent)}\\b`, "gi");
+  return value
+    .replace(mentionPattern, "$1")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+([,.;:!?，。！？；、])/g, "$1")
+    .trim();
+}
+
+function trailingMentionQuery(value: string) {
+  return value.match(/(?:^|[^\w])@([a-z0-9_-]*)$/i)?.[1].toLowerCase() ?? null;
+}
+
+function insertAgentMention(value: string, agent: AgentProfile) {
+  const mention = agent.mention.startsWith("@") ? agent.mention : `@${agent.mention}`;
+  if (trailingMentionQuery(value) !== null) {
+    return value.replace(/@([a-z0-9_-]*)$/i, `${mention} `);
+  }
+  const separator = value === "" || value.endsWith(" ") || value.endsWith("\n") ? "" : " ";
+  return `${value}${separator}${mention} `;
+}
+
+function fallbackAgent(agentId: string): AgentProfile {
+  const id = mentionKey(agentId) || "codex";
+  return {
+    id,
+    name: id.charAt(0).toUpperCase() + id.slice(1),
+    mention: `@${id}`,
+    provider: "codex",
+    description: "Agent profile",
+    instructions: "",
+    enabled: true,
+    builtIn: false,
+    sortOrder: 999,
+    createdAt: "",
+    updatedAt: "",
+  };
+}
+
+function sessionAgent(session: AgentSession, agents: AgentProfile[]) {
+  return findAgent(agents, session.agentProfile || session.provider) || fallbackAgent(session.agentProfile || session.provider);
+}
+
+function formatMentionPlaceholder(agents: AgentProfile[]) {
+  if (agents.length === 0) return "Write a reply.";
+  const mentions = agents.slice(0, 3).map((agent) => agent.mention).join(", ");
+  return `Write a reply. Mention ${mentions}.`;
+}
+
+function parseLabelInput(value: string) {
+  return value
+    .split(/[,\n]/)
+    .map((item) => item.trim().replace(/^#/, "").trim())
+    .filter(Boolean);
+}
+
+function labelNames(labels: IssueLabel[]) {
+  return listOrEmpty(labels).map((label) => label.name);
+}
+
+function isNoisySystemComment(comment: Comment) {
+  if (comment.authorType !== "system") return false;
+  return [
+    "Issue created and ready",
+    "Assigned to agent",
+    "Queued local session",
+    "Started local session",
+    "Session `",
+  ].some((prefix) => comment.body.startsWith(prefix));
+}
+
+function latestAgentMessage(logs: LogLine[]) {
+  return [...logs].reverse().find((log) => log.stream === "agent")?.message || "";
+}
+
+function isHttpUrl(value: string) {
+  return /^https?:\/\//i.test(value);
+}
+
+function stripLineSuffix(path: string) {
+  return path.replace(/:\d+(?::\d+)?$/, "");
+}
+
+function statusTone(status: string) {
+  if (status === "completed") return "text-[color:var(--success)]";
+  if (status === "failed") return "text-[color:var(--danger)]";
+  if (status === "running") return "text-[color:var(--accent-blue)]";
+  return "text-[color:var(--muted)]";
+}
+
+function resolveLocalLink(href: string, basePath?: string) {
+  const value = href.trim();
+  if (!value || value.startsWith("#") || isHttpUrl(value) || /^[a-z][a-z0-9+.-]*:/i.test(value) && !value.startsWith("file://")) {
+    return "";
+  }
+  const withoutFileScheme = value.startsWith("file://") ? value.replace(/^file:\/\//, "") : value;
+  const decoded = decodeURIComponent(withoutFileScheme);
+  if (decoded.startsWith("/")) return stripLineSuffix(decoded);
+  if (!basePath) return "";
+  return stripLineSuffix(`${basePath.replace(/\/$/, "")}/${decoded.replace(/^\.\//, "")}`);
+}
+
+function joinLocalPath(basePath: string, filePath: string) {
+  if (!filePath) return "";
+  if (filePath.startsWith("/")) return stripLineSuffix(filePath);
+  return stripLineSuffix(`${basePath.replace(/\/$/, "")}/${filePath}`);
+}
+
+async function openRichLink(href: string, basePath?: string) {
+  const localPath = resolveLocalLink(href, basePath);
+  if (localPath && window.mspaceDesktop?.openPath) {
+    const error = await window.mspaceDesktop.openPath(localPath);
+    if (error) console.warn(error);
+    return;
+  }
+  if (isHttpUrl(href) && window.mspaceDesktop?.openExternal) {
+    await window.mspaceDesktop.openExternal(href);
+    return;
+  }
+  window.open(href, "_blank", "noopener,noreferrer");
+}
+
+function TimeMeta(props: { value: string }) {
+  return (
+    <InlineMeta icon={Clock3}>
+      <span title={formatAbsoluteTime(props.value)}>{formatRelativeTime(props.value)}</span>
+    </InlineMeta>
+  );
+}
+
+function RichText(props: { children: string; basePath?: string; className?: string }) {
+  const text = stringsOrEmpty(props.children);
+  if (!text) return null;
+
+  return (
+    <div className={cn("rich-text text-[14px] leading-7 text-[color:var(--text)] text-pretty", props.className)}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href = "", children }) => (
+            <a
+              href={href}
+              className="font-medium text-[color:var(--accent-blue)] underline underline-offset-2 transition-colors hover:text-[color:var(--text)]"
+              onClick={(event) => {
+                event.preventDefault();
+                void openRichLink(href, props.basePath);
+              }}
+            >
+              {children}
+              {isHttpUrl(href) ? <ExternalLink data-icon className="ml-1 inline-block align-[-2px]" /> : null}
+            </a>
+          ),
+          p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
+          ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+          ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
+          li: ({ children }) => <li className="pl-1">{children}</li>,
+          blockquote: ({ children }) => (
+            <blockquote className="my-2 rounded-[7px] bg-[color:var(--block)] px-3 py-2 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+              {children}
+            </blockquote>
+          ),
+          code: ({ className, children }) => {
+            const isBlock = /language-/.test(className || "");
+            if (isBlock) {
+              return <code className={className}>{children}</code>;
+            }
+            return (
+              <code className="rounded-[5px] bg-[color:var(--block)] px-1.5 py-0.5 font-mono text-[12px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+                {children}
+              </code>
+            );
+          },
+          pre: ({ children }) => (
+            <pre className="my-3 overflow-auto rounded-[9px] bg-[color:var(--code-bg)] px-4 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)]">
+              {children}
+            </pre>
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function stringsOrEmpty(value: string) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function SessionStatusMark(props: { status: string }) {
+  if (props.status === "completed") {
+    return (
+      <span
+        aria-label="completed"
+        title="completed"
+        className="grid size-7 shrink-0 place-items-center rounded-full bg-[color:var(--success-soft)] text-[color:var(--success)]"
+      >
+        <CheckCircle2 data-icon />
+      </span>
+    );
+  }
+  return <StatusBadge value={props.status} />;
+}
+
+function WorkingSessionLine(props: { status: string; agentName: string }) {
+  const label = props.status === "queued" ? "Waiting to start." : "Working...";
+  return (
+    <div className="inline-flex min-w-0 items-center gap-2 text-[13px] leading-6 text-[color:var(--muted)]">
+      <span className="relative flex size-2 shrink-0">
+        <span className="absolute inline-flex size-full rounded-full bg-[color:var(--accent-blue)] opacity-25 motion-safe:animate-ping" />
+        <span className="relative inline-flex size-2 rounded-full bg-[color:var(--accent-blue)]" />
+      </span>
+      <span className="truncate">
+        <span className="font-medium text-[color:var(--muted-strong)]">{props.agentName}</span> {label}
+      </span>
+    </div>
+  );
+}
+
+function StopSessionButton(props: { isStopping?: boolean; onStop: () => void }) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-7 min-h-0 shrink-0 px-1.5 text-[12px] text-[color:var(--danger)] hover:bg-[color:var(--danger-soft)] hover:text-[color:var(--danger)]"
+      disabled={props.isStopping}
+      onClick={props.onStop}
+    >
+      <CircleStop data-icon />
+      {props.isStopping ? "Stopping" : "Stop"}
+    </Button>
+  );
+}
+
+function SessionFileChanges(props: { changes: WorkspaceChange[]; workdir: string }) {
+  const changes = props.changes.slice(0, 6);
+  if (changes.length === 0 || !props.workdir) return null;
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+      {changes.map((change) => {
+        const targetPath = joinLocalPath(props.workdir, change.path);
+        return (
+          <button
+            key={`${change.statusCode}-${change.path}-${change.previousPath}`}
+            type="button"
+            className="inline-flex max-w-full items-center gap-1.5 rounded-[7px] bg-[color:var(--paper)] px-2 py-1 text-[12px] leading-5 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)] transition-[background-color,color] hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
+            onClick={() => {
+              void window.mspaceDesktop?.openPath?.(targetPath);
+            }}
+            title={targetPath}
+          >
+            <FileText data-icon className="shrink-0 text-[color:var(--faint)]" />
+            <span className="shrink-0 font-mono text-[11px] text-[color:var(--faint)]">{change.statusCode || "M"}</span>
+            <span className="min-w-0 truncate">{change.path}</span>
+          </button>
+        );
+      })}
+      {props.changes.length > changes.length ? (
+        <span className="text-[12px] leading-5 text-[color:var(--muted)]">+{props.changes.length - changes.length} more</span>
+      ) : null}
+    </div>
+  );
+}
+
+function ActorMark(props: { kind: "human" | "codex" | "system" | "evidence" }) {
+  const Icon =
+    props.kind === "codex"
+      ? Bot
+      : props.kind === "human"
+        ? UserRound
+        : props.kind === "evidence"
+          ? CheckCircle2
+          : CircleDot;
+  return (
+    <div
+      className={cn(
+        "relative z-10 grid size-8 shrink-0 place-items-center rounded-full bg-[color:var(--paper)] shadow-[0_0_0_1px_var(--line)]",
+        props.kind === "codex" && "text-[color:var(--accent-blue)]",
+        props.kind === "human" && "text-[color:var(--text)]",
+        props.kind === "system" && "text-[color:var(--muted)]",
+        props.kind === "evidence" && "text-[color:var(--success)]",
+      )}
+    >
+      <Icon data-icon />
+    </div>
+  );
+}
+
+function TimelineShell(props: {
+  actor: "human" | "codex" | "system" | "evidence";
+  title: string;
+  time: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <article className="grid grid-cols-[32px_minmax(0,1fr)] gap-3">
+      <ActorMark kind={props.actor} />
+      <div className="min-w-0 pb-8">
+        <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <div className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">{props.title}</div>
+          <TimeMeta value={props.time} />
+        </div>
+        {props.children}
+      </div>
+    </article>
+  );
+}
+
+function CommentTimelineItem(props: { comment: Comment }) {
+  const actor = props.comment.authorType === "human" ? "human" : "system";
+  const title = props.comment.authorType === "human" ? "mlhiter commented" : "mspace updated the issue";
+  return (
+    <TimelineShell actor={actor} title={title} time={props.comment.createdAt}>
+      <RichText>{props.comment.body}</RichText>
+    </TimelineShell>
+  );
+}
+
+function SessionTimelineItem(props: {
+  session: AgentSession;
+  logs: LogLine[];
+  changes: WorkspaceChange[];
+  agents: AgentProfile[];
+  isStopping?: boolean;
+  stopError?: Error | null;
+  onStop?: () => void;
+}) {
+  const { session, logs } = props;
+  const agent = sessionAgent(session, props.agents);
+  const agentMessage = latestAgentMessage(logs);
+  const isActive = ["queued", "running"].includes(session.status);
+
+  return (
+    <TimelineShell
+      actor="codex"
+      title={isActive ? `${agent.name} is working` : agent.name}
+      time={session.updatedAt || session.createdAt}
+    >
+      {isActive ? (
+        <div>
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <WorkingSessionLine status={session.status} agentName={agent.name} />
+            {props.onStop ? <StopSessionButton isStopping={props.isStopping} onStop={props.onStop} /> : null}
+          </div>
+          {props.stopError ? <div className="mt-1 text-[12px] leading-5 text-[color:var(--danger)]">{props.stopError.message}</div> : null}
+          {agentMessage ? (
+            <RichText basePath={session.workdir} className="mt-3 rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+              {agentMessage}
+            </RichText>
+          ) : null}
+          <SessionFileChanges changes={props.changes} workdir={session.workdir} />
+        </div>
+      ) : (
+        <div className="rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="flex items-start justify-end gap-2">
+            <SessionStatusMark status={session.status} />
+          </div>
+
+          {agentMessage ? (
+            <RichText basePath={session.workdir} className="mt-2">
+              {agentMessage}
+            </RichText>
+          ) : (
+            <div className={cn("mt-2 text-[14px] leading-6", statusTone(session.status))}>
+              No final agent summary was captured for this session.
+            </div>
+          )}
+
+          <SessionFileChanges changes={props.changes} workdir={session.workdir} />
+        </div>
+      )}
+    </TimelineShell>
+  );
+}
+
+function EvidenceTimelineItem(props: { evidence: DeploymentEvidence }) {
+  return (
+    <TimelineShell actor="evidence" title="Validation evidence attached" time={props.evidence.createdAt}>
+      <RichText>{props.evidence.summary}</RichText>
+      <details className="mt-2">
+        <summary className="cursor-pointer select-none text-[12px] font-medium text-[color:var(--muted)] hover:text-[color:var(--text)]">
+          Evidence details
+        </summary>
+        <CodeBlock className="mt-3">{props.evidence.details}</CodeBlock>
+      </details>
+    </TimelineShell>
+  );
+}
+
+function MetaLine(props: { label: string; value: string; wide?: boolean }) {
+  return (
+    <div className={cn("min-w-0", props.wide && "md:col-span-2")}>
+      <div className="text-[11px] font-medium uppercase tracking-[0.04em] text-[color:var(--faint)]">{props.label}</div>
+      <div className="mt-0.5 break-words text-[12px] leading-5 text-[color:var(--muted-strong)]">{props.value}</div>
+    </div>
+  );
+}
+
+function SidebarSection(props: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="border-b border-[color:var(--line)] py-4 last:border-b-0">
+      <h2 className="mb-3 text-[12px] font-semibold leading-5 text-[color:var(--muted-strong)]">{props.title}</h2>
+      {props.children}
+    </section>
+  );
+}
+
+function ComposerToolbar(props: { onInsert: (prefix: string, suffix: string, placeholder: string) => void }) {
+  return (
+    <div className="flex items-center gap-1 border-b border-[color:var(--line)] px-2 py-1.5">
+      <ComposerTool
+        label="Bold"
+        icon={<Bold data-icon />}
+        onClick={() => props.onInsert("**", "**", "bold text")}
+      />
+      <ComposerTool
+        label="Italic"
+        icon={<Italic data-icon />}
+        onClick={() => props.onInsert("_", "_", "italic text")}
+      />
+      <ComposerTool
+        label="Inline code"
+        icon={<Code2 data-icon />}
+        onClick={() => props.onInsert("`", "`", "code")}
+      />
+      <ComposerTool
+        label="Link"
+        icon={<LinkIcon data-icon />}
+        onClick={() => props.onInsert("[", "](https://)", "link text")}
+      />
+    </div>
+  );
+}
+
+function ComposerTool(props: { label: string; icon: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={props.label}
+      title={props.label}
+      className="grid size-8 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
+      onClick={props.onClick}
+    >
+      {props.icon}
+    </button>
+  );
+}
+
+function LabelEditor(props: {
+  labels: IssueLabel[];
+  isPending: boolean;
+  error?: Error | null;
+  onChange: (labels: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const names = labelNames(props.labels);
+
+  function submitDraft() {
+    const additions = parseLabelInput(draft);
+    if (additions.length === 0) return;
+    const next = [...names];
+    for (const label of additions) {
+      if (!next.some((item) => item.toLowerCase() === label.toLowerCase())) {
+        next.push(label);
+      }
+    }
+    props.onChange(next);
+    setDraft("");
+  }
+
+  function removeLabel(name: string) {
+    props.onChange(names.filter((label) => label !== name));
+  }
+
+  return (
+    <div className="grid gap-2">
+      <div className="flex min-h-7 flex-wrap items-center gap-1.5">
+        {names.length > 0 ? (
+          names.map((name) => (
+            <span
+              key={name}
+              className="inline-flex max-w-full items-center gap-1 rounded-[6px] bg-[color:var(--block)] px-2 py-1 text-[12px] leading-4 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]"
+            >
+              <Tag data-icon className="shrink-0 text-[color:var(--faint)]" />
+              <span className="truncate">{name}</span>
+              <button
+                type="button"
+                className="grid size-5 shrink-0 place-items-center rounded-[5px] text-[color:var(--faint)] transition-colors hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
+                aria-label={`Remove ${name} label`}
+                disabled={props.isPending}
+                onClick={() => removeLabel(name)}
+              >
+                <X data-icon />
+              </button>
+            </span>
+          ))
+        ) : (
+          <div className="text-[12px] leading-5 text-[color:var(--muted)]">No labels.</div>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== ",") return;
+            event.preventDefault();
+            submitDraft();
+          }}
+          placeholder="Add label"
+          className="min-h-9 min-w-0 flex-1 rounded-[7px] bg-transparent px-2 text-[13px] text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--line)] outline-none transition-[box-shadow] duration-150 ease-out placeholder:text-[color:var(--faint)] focus:shadow-[inset_0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)]"
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={props.isPending || parseLabelInput(draft).length === 0}
+          onClick={submitDraft}
+        >
+          Add
+        </Button>
+      </div>
+      {props.error ? <div className="text-[12px] leading-5 text-[color:var(--danger)]">{props.error.message}</div> : null}
+    </div>
+  );
+}
+
 export function IssueDetailPage() {
   const { issueId = "" } = useParams();
   const queryClient = useQueryClient();
-  const [commentBody, setCommentBody] = useState("");
-  const [sessionCommand, setSessionCommand] = useState("");
-  const [sessionLogs, setSessionLogs] = useState<string[]>([]);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const [composerBody, setComposerBody] = useState("");
+  const [sessionSnapshotsById, setSessionSnapshotsById] = useState<Record<string, SessionSnapshot>>({});
 
   const issueQuery = useQuery({
     queryKey: queryKeys.issue(issueId),
@@ -46,39 +635,64 @@ export function IssueDetailPage() {
     enabled: issueId.length > 0,
     refetchInterval: 4_000,
   });
+  const agentsQuery = useQuery({
+    queryKey: queryKeys.agents,
+    queryFn: api.listAgents,
+  });
 
   const detail = issueQuery.data;
+  const agents = listOrEmpty(agentsQuery.data);
+  const enabledAgents = agents.filter((agent) => agent.enabled);
   const latestSession = detail?.sessions[0];
   const hasActiveSession = latestSession ? ["queued", "running"].includes(latestSession.status) : false;
-  const defaultWorkflowDescription =
-    detail && (detail.project.deployCommand || detail.project.validationCommand || detail.project.namespace)
-      ? [
-          detail.project.deployCommand ? "deploy command" : null,
-          detail.project.validationCommand
-            ? "validation command"
-            : detail.project.namespace
-              ? "cluster snapshot"
-              : null,
-        ]
-          .filter(Boolean)
-          .join(" -> ")
-      : "session command override only";
+  const mentionedAgent = extractAgentMention(composerBody);
+  const mentionedAgentConfig = mentionedAgent ? findAgent(enabledAgents, mentionedAgent) : undefined;
+  const isSupportedAgentMention = Boolean(mentionedAgentConfig);
+  const isUnsupportedAgentMention = Boolean(mentionedAgent && !mentionedAgentConfig);
+  const mentionQuery = trailingMentionQuery(composerBody);
+  const agentSuggestions =
+    mentionQuery === null
+      ? []
+      : enabledAgents.filter((agent) => mentionKey(agent.mention).startsWith(mentionQuery) || agent.name.toLowerCase().startsWith(mentionQuery));
 
   useEffect(() => {
-    const latestSessionId = detail?.sessions[0]?.id;
-    if (!latestSessionId) {
-      setSessionLogs([]);
+    const sessions = detail?.sessions || [];
+    if (sessions.length === 0) {
+      setSessionSnapshotsById({});
       return;
     }
-    void api.getSession(latestSessionId).then((sessionDetail) => {
-      setSessionLogs(sessionDetail.logs.map((log) => log.message));
+    let cancelled = false;
+    void Promise.all(
+      sessions.map(async (session) => {
+        const sessionDetail = await api.getSession(session.id);
+        return [
+          session.id,
+          {
+            logs: listOrEmpty(sessionDetail.logs).map((log) => ({ stream: log.stream, message: log.message })),
+            changes: listOrEmpty(sessionDetail.workspace?.changes),
+          },
+        ] as const;
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      setSessionSnapshotsById(Object.fromEntries(entries));
     });
+    return () => {
+      cancelled = true;
+    };
   }, [detail?.sessions]);
 
   const handleSessionEvent = useCallback(
     (event: SessionStreamEvent) => {
       if (event.type === "log") {
-        setSessionLogs((current) => [...current, event.payload]);
+        if (!latestSession?.id) return;
+        setSessionSnapshotsById((current) => ({
+          ...current,
+          [latestSession.id]: {
+            logs: [...(current[latestSession.id]?.logs || []), { stream: "live", message: event.payload }],
+            changes: current[latestSession.id]?.changes || [],
+          },
+        }));
         return;
       }
       void queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) });
@@ -92,33 +706,90 @@ export function IssueDetailPage() {
 
   useSessionStream(latestSession?.id, handleSessionEvent);
 
-  const addComment = useMutation({
-    mutationFn: (body: string) => api.addComment(issueId, { body }),
-    onSuccess: async () => {
-      setCommentBody("");
-      await queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) });
+  const sendComposer = useMutation({
+    mutationFn: async (body: string) => {
+      const trimmedBody = body.trim();
+      if (!trimmedBody) return;
+      const agent = extractAgentMention(trimmedBody);
+      const agentConfig = agent ? findAgent(enabledAgents, agent) : undefined;
+      if (agent && !agentConfig) {
+        throw new Error(`@${agent} is not available.`);
+      }
+      await api.addComment(issueId, { body: trimmedBody });
+      if (agentConfig) {
+        const command = stripAgentMention(trimmedBody, mentionKey(agentConfig.mention));
+        await api.assignAgent(issueId, {
+          provider: agentConfig.provider,
+          agentProfile: agentConfig.id,
+          command: command || trimmedBody,
+        });
+      }
     },
-  });
-
-  const assignAgent = useMutation({
-    mutationFn: () =>
-      api.assignAgent(issueId, {
-        provider: "codex",
-        command: sessionCommand.trim() || undefined,
-      }),
     onSuccess: async () => {
-      setSessionCommand("");
+      setComposerBody("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
       ]);
     },
   });
+  const canSendComposer =
+    Boolean(composerBody.trim()) &&
+    !sendComposer.isPending &&
+    !isUnsupportedAgentMention &&
+    !(isSupportedAgentMention && hasActiveSession);
+
+  function insertComposerMarkup(prefix: string, suffix: string, placeholder: string) {
+    const textarea = composerRef.current;
+    const start = textarea?.selectionStart ?? composerBody.length;
+    const end = textarea?.selectionEnd ?? composerBody.length;
+    const selected = composerBody.slice(start, end) || placeholder;
+    const next = `${composerBody.slice(0, start)}${prefix}${selected}${suffix}${composerBody.slice(end)}`;
+    setComposerBody(next);
+    window.requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(start + prefix.length, start + prefix.length + selected.length);
+    });
+  }
+
+  const updateLabels = useMutation({
+    mutationFn: (labels: string[]) => api.updateIssueLabels(issueId, { labels }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+      ]);
+    },
+  });
+
+  const stopSession = useMutation({
+    mutationFn: (sessionId: string) => api.cancelSession(sessionId),
+    onSuccess: async (_data, sessionId) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+      ]);
+    },
+  });
+
+  const timelineItems = useMemo<TimelineItem[]>(() => {
+    if (!detail) return [];
+    return [
+      { kind: "opened" as const, createdAt: detail.issue.createdAt },
+      ...listOrEmpty(detail.comments)
+        .filter((comment) => !isNoisySystemComment(comment))
+        .map((comment) => ({ kind: "comment" as const, createdAt: comment.createdAt, comment })),
+      ...listOrEmpty(detail.sessions).map((session) => ({ kind: "session" as const, createdAt: session.createdAt, session })),
+      ...listOrEmpty(detail.evidence).map((evidence) => ({ kind: "evidence" as const, createdAt: evidence.createdAt, evidence })),
+    ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [detail]);
 
   if (!detail) {
     return (
       <PageFrame title="Issue" subtitle="Load the durable issue page, local session history, and Kubernetes evidence.">
-        <Panel>{issueQuery.isPending ? "Loading issue..." : "Issue not found."}</Panel>
+        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? "Loading issue..." : "Issue not found."}</div>
       </PageFrame>
     );
   }
@@ -126,157 +797,174 @@ export function IssueDetailPage() {
   return (
     <PageFrame
       title={detail.issue.title}
-      subtitle={`${detail.project.name} · local development with Kubernetes validation in ${detail.project.namespace || "the configured namespace"}`}
-      actions={
-        latestSession ? (
-          <Button asChild variant="secondary">
-            <Link to={`/sessions/${latestSession.id}`}>Open session detail</Link>
-          </Button>
-        ) : undefined
-      }
+      subtitle={`${detail.project.name} · ${detail.issue.status}`}
     >
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.04fr)_400px]">
-        <div className="flex flex-col gap-6">
-          <Panel title="Issue document" aside={<StatusBadge value={detail.issue.status} />}>
-            <div className="flex flex-col gap-4">
-              <p className="whitespace-pre-wrap text-[15px] leading-7 text-[color:var(--text)] text-pretty">
-                {detail.issue.body || "No issue body yet."}
-              </p>
-              <div className="grid gap-3 md:grid-cols-2">
-                <DataBlock label="Repo path" icon={Files}>
-                  {detail.project.repoPath || "not configured"}
-                </DataBlock>
-                <DataBlock label="Namespace" icon={SquareTerminal}>
-                  {detail.project.namespace || "not configured"}
-                </DataBlock>
-                <DataBlock label="Assignee" icon={Bot}>
-                  {detail.issue.assigneeType === "agent" ? "agent" : "human"} · {detail.issue.assignee || "unassigned"}
-                </DataBlock>
-              </div>
-            </div>
-          </Panel>
+      <div className="grid gap-10 xl:grid-cols-[minmax(0,780px)_280px] xl:items-start">
+        <main className="min-w-0">
+          <section className="border-b border-[color:var(--line)] pb-8">
+            {detail.issue.body ? (
+              <RichText className="text-[15px] leading-8">{detail.issue.body}</RichText>
+            ) : (
+              <div className="text-[15px] leading-8 text-[color:var(--muted)]">No issue body yet.</div>
+            )}
+          </section>
 
-          <Panel title="Activity">
-            <div className="flex flex-col gap-3">
-              {detail.comments.length === 0 ? (
-                <EmptyState
-                  icon={MessageSquareText}
-                  title="No comments yet"
-                  body="Add progress notes, blockers, or validation findings directly on the issue."
-                />
-              ) : (
-                detail.comments.map((comment) => (
-                  <article key={comment.id} className="rounded-[9px] bg-[color:var(--block)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
-                    <InlineMeta icon={Clock3}>
-                      {comment.authorType} · {new Date(comment.createdAt).toLocaleString()}
-                    </InlineMeta>
-                    <div className="mt-2 whitespace-pre-wrap text-[14px] leading-7 text-[color:var(--text)] text-pretty">{comment.body}</div>
-                  </article>
-                ))
-              )}
+          <section className="relative mt-8">
+            <div className="absolute bottom-0 left-4 top-0 w-px bg-[color:var(--line)]" aria-hidden="true" />
+            <div className="relative">
+              {timelineItems.map((item) => {
+                if (item.kind === "opened") {
+                  return (
+                    <TimelineShell key="opened" actor="system" title="Issue opened" time={item.createdAt}>
+                      <div className="text-[13px] leading-6 text-[color:var(--muted)]">
+                        {`mspace created this issue in ${detail.project.name}.`}
+                      </div>
+                    </TimelineShell>
+                  );
+                }
+                if (item.kind === "comment") {
+                  return <CommentTimelineItem key={`comment-${item.comment.id}`} comment={item.comment} />;
+                }
+                if (item.kind === "session") {
+                  return (
+                    <SessionTimelineItem
+                      key={`session-${item.session.id}`}
+                      session={item.session}
+                      logs={sessionSnapshotsById[item.session.id]?.logs || []}
+                      changes={sessionSnapshotsById[item.session.id]?.changes || []}
+                      agents={agents}
+                      isStopping={stopSession.isPending && stopSession.variables === item.session.id}
+                      stopError={stopSession.error && stopSession.variables === item.session.id ? stopSession.error : null}
+                      onStop={["queued", "running"].includes(item.session.status) ? () => stopSession.mutate(item.session.id) : undefined}
+                    />
+                  );
+                }
+                return <EvidenceTimelineItem key={`evidence-${item.evidence.id}`} evidence={item.evidence} />;
+              })}
             </div>
+          </section>
+
+          <section className="mt-2 grid grid-cols-[32px_minmax(0,1fr)] gap-3">
+            <ActorMark kind="human" />
             <form
-              className="mt-5 flex flex-col gap-3"
+              className="min-w-0 rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (!commentBody.trim()) return;
-                addComment.mutate(commentBody);
+                if (!canSendComposer) return;
+                sendComposer.mutate(composerBody);
               }}
             >
-              <Field label="Add comment">
-                <Textarea value={commentBody} onChange={(event) => setCommentBody(event.target.value)} placeholder="What changed, what blocked, or what did Kubernetes prove?" />
-              </Field>
-              <Button type="submit" disabled={addComment.isPending}>
-                {addComment.isPending ? "Posting..." : "Post comment"}
-              </Button>
-            </form>
-          </Panel>
-        </div>
-
-        <div className="flex flex-col gap-6">
-          <Panel title="Session panel">
-            <form
-              className="flex flex-col gap-4"
-              onSubmit={(event) => {
-                event.preventDefault();
-                assignAgent.mutate();
-              }}
-            >
-              {assignAgent.error ? (
-                <Notice tone="danger">{assignAgent.error.message}</Notice>
-              ) : (
-                <Notice>
-                  Assigning the issue to Codex queues a local agent session, updates Inbox status, and keeps evidence attached here.
-                </Notice>
-              )}
-              <DataBlock label="Default workflow" icon={Play}>
-                {defaultWorkflowDescription || "No default workflow configured yet."}
-                <div className="mt-2 grid gap-1">
-                  <div>
-                    <span className="font-medium text-[color:var(--text)]">Deploy:</span>{" "}
-                    {detail.project.deployCommand || "not configured"}
-                  </div>
-                  <div>
-                    <span className="font-medium text-[color:var(--text)]">Validate:</span>{" "}
-                    {detail.project.validationCommand || "not configured"}
-                  </div>
+              {sendComposer.error ? <Notice tone="danger">{sendComposer.error.message}</Notice> : null}
+              <ComposerToolbar onInsert={insertComposerMarkup} />
+              <Textarea
+                ref={composerRef}
+                value={composerBody}
+                onChange={(event) => setComposerBody(event.target.value)}
+                onKeyDown={(event) => {
+                  const isComposing = event.nativeEvent.isComposing || event.keyCode === 229;
+                  if (isComposing || event.key !== "Enter" || event.shiftKey || event.altKey) return;
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }}
+                placeholder={formatMentionPlaceholder(enabledAgents)}
+                className="min-h-28 rounded-none bg-transparent shadow-none focus-visible:bg-transparent focus-visible:shadow-none"
+              />
+              {agentSuggestions.length > 0 ? (
+                <div className="border-t border-[color:var(--line)] px-2 py-2">
+                  {agentSuggestions.map((agent) => (
+                    <button
+                      key={agent.id}
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => setComposerBody((value) => insertAgentMention(value, agent))}
+                    >
+                      <Bot data-icon className="text-[color:var(--accent-blue)]" />
+                      <span className="font-medium text-[color:var(--text)]">{agent.mention}</span>
+                      <span className="min-w-0 truncate text-[12px] text-[color:var(--muted)]">{agent.description}</span>
+                    </button>
+                  ))}
                 </div>
-              </DataBlock>
-              <Field label="Command override" hint="Leave empty to run the project's deploy and validation workflow.">
-                <Input value={sessionCommand} onChange={(event) => setSessionCommand(event.target.value)} placeholder="optional: override the full default workflow" />
-              </Field>
-              <Button type="submit" disabled={assignAgent.isPending || hasActiveSession}>
-                {assignAgent.isPending
-                  ? "Assigning agent..."
-                  : hasActiveSession
-                    ? "Agent session active"
-                    : "Assign to Codex"}
-              </Button>
+              ) : null}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[color:var(--line)] px-3 py-2">
+                <div className="text-[12px] leading-5 text-[color:var(--muted)]">
+                  {isSupportedAgentMention
+                    ? `This comment will be saved and sent to ${mentionedAgentConfig?.name}.`
+                    : isUnsupportedAgentMention
+                      ? `@${mentionedAgent} is not available yet.`
+                      : "Comments stay on the issue. Mention an agent when you want a turn."}
+                </div>
+                <Button
+                  type="submit"
+                  variant="secondary"
+                  size="sm"
+                  disabled={!canSendComposer}
+                >
+                  <Send data-icon />
+                  {sendComposer.isPending
+                    ? "Sending..."
+                    : isSupportedAgentMention
+                      ? hasActiveSession
+                        ? "Agent is working"
+                        : `Send to ${mentionedAgentConfig?.name}`
+                      : "Comment"}
+                </Button>
+              </div>
             </form>
+          </section>
+        </main>
+
+        <aside className="xl:sticky xl:top-8">
+          <div className="rounded-[10px] bg-[color:var(--paper)] px-4 shadow-[inset_0_0_0_1px_var(--line)]">
+            <SidebarSection title="Issue">
+              <div className="grid gap-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[13px] text-[color:var(--muted)]">Status</span>
+                  <StatusBadge value={detail.issue.status} />
+                </div>
+                <MetaLine label="Assignee" value={`${detail.issue.assigneeType === "agent" ? "agent" : "human"} · ${detail.issue.assignee || "unassigned"}`} />
+                <MetaLine label="Updated" value={formatRelativeTime(detail.issue.updatedAt)} />
+                <div>
+                  <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-[color:var(--faint)]">Labels</div>
+                  <LabelEditor
+                    labels={listOrEmpty(detail.labels)}
+                    isPending={updateLabels.isPending}
+                    error={updateLabels.error}
+                    onChange={(labels) => updateLabels.mutate(labels)}
+                  />
+                </div>
+              </div>
+            </SidebarSection>
+
+            <SidebarSection title="Project">
+              <div className="grid gap-3">
+                <MetaLine label="Name" value={detail.project.name} />
+                <MetaLine label="Repo" value={detail.project.repoPath || "not configured"} />
+                <MetaLine label="Namespace" value={detail.project.namespace || "not configured"} />
+              </div>
+            </SidebarSection>
 
             {latestSession ? (
-              <div className="mt-5 flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-3 rounded-[9px] bg-[color:var(--block)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
-                  <div>
-                    <div className="text-[13px] font-semibold">{latestSession.provider}</div>
-                    <InlineMeta icon={Clock3}>
-                      {latestSession.runtimeMode} · started {new Date(latestSession.createdAt).toLocaleString()}
-                    </InlineMeta>
-                  </div>
-                  <StatusBadge value={latestSession.status} />
+              <SidebarSection title="Branch">
+                <div className="break-words font-mono text-[12px] leading-5 text-[color:var(--muted-strong)]">
+                  {latestSession.branch || "not reported"}
                 </div>
-                <CodeBlock className="max-h-72" empty="No session logs yet.">
-                  {sessionLogs.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)}
-                </CodeBlock>
-              </div>
+              </SidebarSection>
             ) : null}
-          </Panel>
 
-          <Panel title="Evidence panel">
-            {detail.evidence.length === 0 ? (
-              <EmptyState
-                icon={SquareTerminal}
-                title="No Kubernetes evidence yet"
-                body="Once the local session deploys or inspects the configured namespace, pods, events, and rollout summaries will appear here."
-              />
-            ) : (
-              <div className="flex flex-col gap-3">
-                {detail.evidence.map((evidence) => (
-                  <article key={evidence.id} className="rounded-[9px] bg-[color:var(--block)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-[13px] font-semibold">
-                        {evidence.cluster || "current context"} / {evidence.namespace || "namespace unset"}
-                      </div>
-                      <InlineMeta icon={Clock3}>{new Date(evidence.createdAt).toLocaleString()}</InlineMeta>
-                    </div>
-                    <div className="mt-2 text-[13px] text-[color:var(--text)]">{evidence.summary}</div>
-                    <CodeBlock className="mt-3">{evidence.details}</CodeBlock>
-                  </article>
-                ))}
-              </div>
-            )}
-          </Panel>
-        </div>
+            <SidebarSection title="Workflow">
+              <details>
+                <summary className="cursor-pointer select-none text-[13px] font-medium text-[color:var(--muted-strong)]">
+                  Project commands
+                </summary>
+                <div className="mt-3 grid gap-3">
+                  <MetaLine label="Deploy" value={detail.project.deployCommand || "not configured"} />
+                  <MetaLine label="Validate" value={detail.project.validationCommand || "not configured"} />
+                </div>
+              </details>
+            </SidebarSection>
+          </div>
+        </aside>
       </div>
     </PageFrame>
   );

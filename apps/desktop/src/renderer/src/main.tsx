@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createHashRouter, Navigate, RouterProvider } from "react-router-dom";
 import {
+  AgentsPage,
   InboxPage,
   IssueDetailPage,
   IssuesPage,
@@ -23,6 +24,7 @@ const router = createHashRouter([
       { path: "/inbox", element: <InboxPage /> },
       { path: "/issues", element: <IssuesPage /> },
       { path: "/issues/:issueId", element: <IssueDetailPage /> },
+      { path: "/agents", element: <AgentsPage /> },
       { path: "/projects", element: <ProjectsPage /> },
       { path: "/sessions/:sessionId", element: <SessionDetailPage /> },
     ],

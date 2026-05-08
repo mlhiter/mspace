@@ -3,7 +3,18 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { GitBranch, MessageSquarePlus, X } from "lucide-react";
 import { api, queryKeys, type Project } from "@mspace/core";
-import { Button, Field, Notice, Select, Textarea, cn } from "@mspace/ui";
+import {
+  Button,
+  Field,
+  Notice,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Textarea,
+  cn,
+} from "@mspace/ui";
 
 export function CreateIssueModal(props: {
   projects: Project[];
@@ -101,14 +112,19 @@ export function CreateIssueModal(props: {
 
           <Field label="Project" hint="Optional. Leave this on auto when the issue text names a project or repository.">
             <div className="relative">
-              <GitBranch data-icon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--muted)]" />
-              <Select className="pl-9" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-                <option value="">Let agent infer</option>
+              <GitBranch data-icon className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[color:var(--muted)]" />
+              <Select value={projectId || "auto"} onValueChange={(value) => setProjectId(value === "auto" ? "" : value)}>
+                <SelectTrigger className="pl-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Let agent infer</SelectItem>
                 {props.projects.map((project) => (
-                  <option key={project.id} value={project.id}>
+                  <SelectItem key={project.id} value={project.id}>
                     {project.name}
-                  </option>
+                  </SelectItem>
                 ))}
+                </SelectContent>
               </Select>
             </div>
           </Field>

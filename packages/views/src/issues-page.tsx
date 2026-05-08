@@ -5,6 +5,7 @@ import { ArrowRight, Bot, Clock3, Inbox, Layers3, MessageSquarePlus, Plus } from
 import { api, queryKeys, type IssueListItem } from "@mspace/core";
 import { Button, CollectionEmptyState, InlineMeta, PageFrame, StatusBadge } from "@mspace/ui";
 import { CreateIssueModal } from "./create-issue-modal";
+import { RelativeTime } from "./time";
 
 export function IssuesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -90,8 +91,23 @@ function IssueRow(props: { issue: IssueListItem }) {
           {issue.unread ? <span className="size-1.5 shrink-0 rounded-full bg-[color:var(--accent)]" /> : null}
         </div>
         <div className="mt-1 line-clamp-1 text-[12px] leading-5 text-[color:var(--muted)]">{issue.body}</div>
+        {issue.labels?.length > 0 ? (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {issue.labels.slice(0, 4).map((label) => (
+              <span
+                key={label.id}
+                className="rounded-[6px] bg-[color:var(--block)] px-1.5 py-0.5 text-[11px] leading-4 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]"
+              >
+                {label.name}
+              </span>
+            ))}
+            {issue.labels.length > 4 ? (
+              <span className="text-[11px] leading-4 text-[color:var(--muted)]">+{issue.labels.length - 4}</span>
+            ) : null}
+          </div>
+        ) : null}
         <div className="mt-1 flex flex-wrap items-center gap-3">
-          <InlineMeta icon={Clock3}>Updated {new Date(issue.updatedAt).toLocaleString()}</InlineMeta>
+          <InlineMeta icon={Clock3}><RelativeTime prefix="Updated" value={issue.updatedAt} /></InlineMeta>
           <InlineMeta icon={MessageSquarePlus}>{issue.sessionCount} sessions</InlineMeta>
         </div>
       </div>

@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-05-07
+> Status: milestone roadmap, updated 2026-05-08
 
 ## Purpose
 
@@ -40,13 +40,14 @@ Build in order:
 
 - Project import: support existing local folders, auto-detect GitHub remote metadata, and support direct GitHub repository URLs cloned into the mspace data directory.
 - Issue creation: keep creation in the Issues surface, allow lightweight prompts, and allow project inference when the user leaves project empty.
-- Agent assignment: make an issue assignable to a human or agent and create the local session from that assignment.
+- Agent mention flow: let a user manage agent profiles, write an issue comment with an enabled agent mention, save that comment, and create the local session from the current turn request and selected profile.
 - Inbox realtime updates: move issue/session status changes into the Inbox review feed without relying on slow manual refreshes.
-- Local agent context: inject issue body, comments, project metadata, branch, kube context, and namespace into the session command.
+- Local agent context: send issue body, comments, project metadata, branch, kube context, and namespace into the Codex app-server turn prompt.
 - Progress comments: turn meaningful session lifecycle and status updates into issue activity, not just terminal logs.
+- Issue labels and session stop controls: keep issue triage lightweight and allow a human to interrupt queued or running work.
 - Kubernetes validation evidence: capture Pods, Deployments, Services, Ingress, Events, logs, rollout state, and environment URLs after deploy or validation commands run.
 - Branch and PR output: detect the session branch, capture PR URLs when `gh` or provider credentials are available, and keep fallback commands when PR creation is not configured.
-- Cleanup controls: let the user retain or delete session worktrees and later session namespaces.
+- Cleanup controls: let the user retain or clean session worktrees now, and later clean session namespaces.
 
 ### Stage 2: Kubernetes-Hosted Agent Runtime
 
@@ -99,7 +100,9 @@ Build:
 - Polish Issue creation, project inference, and list flow.
 - Polish Project creation and settings flow.
 - Polish Issue Detail as the durable working document.
-- Make starting a local agent session from an issue feel obvious.
+- Make starting a local agent session through an agent mention in the issue composer feel obvious.
+- Support lightweight labels for issue triage.
+- Let users stop queued or running sessions without opening a debug surface.
 - Make session logs and status updates easy to follow from Issue Detail.
 - Make session summary draft generation easy to review and post back.
 
@@ -107,11 +110,12 @@ Acceptance:
 
 - A user can create a project from a local folder or GitHub repository URL and adjust runtime settings later.
 - A user can create an issue from the Issues surface or sidebar quick action and return to it later.
-- A user can assign Codex to the issue and start a local session from that assignment.
+- A user can manage agent profiles, mention an enabled agent in an issue comment, and start a local session from that current turn request.
+- A user can label an issue and stop an active session from Issue Detail.
 - The session runs in its own worktree.
 - Inbox reflects issue and session updates without a manual refresh loop.
 - Logs stream while the session runs.
-- The issue clearly shows linked sessions, status, comments, and summary output.
+- The issue clearly shows linked sessions, status, comments, current-turn agent output, and summary output.
 
 ## Milestone 2: Evidence-Centered Session Review
 
@@ -124,7 +128,7 @@ Build:
 - Improve branch state display.
 - Improve changed files and diff previews.
 - Improve commit and base-branch comparison display.
-- Preserve command history and runtime metadata.
+- Preserve command/tool history and runtime metadata, including Codex thread and turn ids.
 - Attach generated session evidence back to the issue.
 - Make evidence panels readable without opening a separate operations console.
 
@@ -168,7 +172,7 @@ Build:
 - Capture branch output clearly.
 - Capture PR URL when available.
 - Attach branch or PR output back to Issue Detail.
-- Add session retain and cleanup controls.
+- Add session retain and cleanup controls for local worktrees.
 - Add project-level expectations for retained workdirs and evidence.
 - Run one real internal project through the full flow.
 

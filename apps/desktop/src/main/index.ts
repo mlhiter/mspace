@@ -1,9 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from "electron";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ensureRunnerStarted, getRunnerBaseUrl, stopRunner } from "./runner-manager";
 
 let mainWindow: BrowserWindow | null = null;
 let projectFolderPickerRegistered = false;
+let openHandlersRegistered = false;
 
 function registerProjectFolderPicker(): void {
   if (projectFolderPickerRegistered) return;
@@ -20,6 +22,28 @@ function registerProjectFolderPicker(): void {
 
     if (result.canceled) return null;
     return result.filePaths[0] || null;
+  });
+}
+
+function stripLineSuffix(path: string): string {
+  return path.replace(/:\d+(?::\d+)?$/, "");
+}
+
+function registerOpenHandlers(): void {
+  if (openHandlersRegistered) return;
+  openHandlersRegistered = true;
+
+  ipcMain.handle("mspace:open-external", async (_event, url: string) => {
+    if (!/^https?:\/\//i.test(url)) return;
+    await shell.openExternal(url);
+  });
+
+  ipcMain.handle("mspace:open-path", async (_event, filePath: string) => {
+    const trimmed = String(filePath || "").trim();
+    if (!trimmed) return "No path provided.";
+    const candidate = stripLineSuffix(trimmed);
+    const target = existsSync(trimmed) ? trimmed : candidate;
+    return shell.openPath(target);
   });
 }
 
@@ -52,6 +76,7 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   registerProjectFolderPicker();
+  registerOpenHandlers();
   await ensureRunnerStarted();
   createWindow();
 

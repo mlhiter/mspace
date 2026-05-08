@@ -1,5 +1,6 @@
 import {
   Archive,
+  Bot,
   Boxes,
   CheckCircle2,
   ChevronRight,
@@ -19,7 +20,7 @@ import {
   Sparkles,
   SquareTerminal,
 } from "lucide-react";
-import type { ComponentProps, PropsWithChildren, ReactNode, SelectHTMLAttributes } from "react";
+import type { ComponentProps, PropsWithChildren, ReactNode } from "react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { Alert, AlertDescription } from "./components/ui/alert";
 import { Badge } from "./components/ui/badge";
@@ -34,6 +35,7 @@ import {
   FieldLabel,
 } from "./components/ui/field";
 import { Input as ShadcnInput } from "./components/ui/input";
+import { ScrollArea } from "./components/ui/scroll-area";
 import { Textarea as ShadcnTextarea } from "./components/ui/textarea";
 import { cn } from "./lib/utils";
 
@@ -68,12 +70,26 @@ export {
 } from "./components/ui/field";
 export { Input as ShadcnInput } from "./components/ui/input";
 export { Label } from "./components/ui/label";
+export {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectScrollDownButton,
+  SelectScrollUpButton,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "./components/ui/select";
+export { ScrollArea, ScrollBar } from "./components/ui/scroll-area";
 export { Separator } from "./components/ui/separator";
 export { Textarea as ShadcnTextarea } from "./components/ui/textarea";
 
 const sidebarItems = [
   { to: "/inbox", label: "Inbox", icon: Inbox },
   { to: "/issues", label: "Issues", icon: MessageSquareText },
+  { to: "/agents", label: "Agents", icon: Bot },
   { to: "/projects", label: "Projects", icon: FolderKanban },
 ];
 
@@ -159,8 +175,12 @@ export function AppShell() {
           </p>
         </div>
       </aside>
-      <main className="min-w-0 overflow-auto bg-[color:var(--paper)] pt-7">
-        <Outlet />
+      <main className="min-h-0 min-w-0 bg-[color:var(--paper)]">
+        <ScrollArea className="h-full">
+          <div className="min-h-full pt-7">
+            <Outlet />
+          </div>
+        </ScrollArea>
       </main>
     </div>
   );
@@ -312,18 +332,6 @@ export function Textarea({ className, ...props }: ComponentProps<typeof ShadcnTe
         className,
       )}
       {...props}
-    />
-  );
-}
-
-export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <select
-      {...props}
-      className={cn(
-        "min-h-9 w-full rounded-[7px] bg-[color:var(--surface)] px-3 text-[13px] text-[color:var(--text)] shadow-[0_0_0_1px_var(--line)] outline-none transition-[background-color,box-shadow] duration-150 ease-out focus:bg-[color:var(--paper)] focus:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)]",
-        props.className,
-      )}
     />
   );
 }

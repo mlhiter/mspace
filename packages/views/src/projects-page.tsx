@@ -25,6 +25,7 @@ import {
   Textarea,
   cn,
 } from "@mspace/ui";
+import { RelativeTime } from "./time";
 
 const emptyProjectForm: CreateProjectInput = {
   name: "",
@@ -361,7 +362,7 @@ function ProjectRow(props: { project: Project; onSettings: () => void }) {
           <StatusBadge value={project.namespace || "local"} />
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2">
-          <InlineMeta icon={Clock3}>{new Date(updatedAt).toLocaleString()}</InlineMeta>
+          <InlineMeta icon={Clock3}><RelativeTime value={updatedAt} /></InlineMeta>
         </div>
       </div>
 

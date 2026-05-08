@@ -1,17 +1,22 @@
 import type {
+  AgentProfile,
+  AgentProfileInput,
   CreateCommentInput,
   CreateIssueInput,
   CreateProjectInput,
   CreateSessionInput,
   InboxItem,
   IssueDetail,
+  IssueLabel,
   IssueListItem,
   Project,
   SessionDetail,
+  UpdateIssueLabelsInput,
   UpdateProjectInput,
 } from "./types";
 
 export const queryKeys = {
+  agents: ["agents"] as const,
   inbox: ["inbox"] as const,
   issues: ["issues"] as const,
   projects: ["projects"] as const,
@@ -58,6 +63,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ ok: boolean; version: string }>("/health"),
+  listAgents: () => request<AgentProfile[]>("/api/agents"),
+  createAgent: (input: AgentProfileInput) =>
+    request<AgentProfile>("/api/agents", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  updateAgent: (agentId: string, input: AgentProfileInput) =>
+    request<AgentProfile>(`/api/agents/${agentId}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
   listInbox: () => request<InboxItem[]>("/api/inbox"),
   listProjects: () => request<Project[]>("/api/projects"),
   createProject: (input: CreateProjectInput) =>
@@ -82,6 +98,11 @@ export const api = {
     }),
   getIssue: (issueId: string) =>
     request<IssueDetail>(`/api/issues/${issueId}`),
+  updateIssueLabels: (issueId: string, input: UpdateIssueLabelsInput) =>
+    request<IssueLabel[]>(`/api/issues/${issueId}/labels`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
   addComment: (issueId: string, input: CreateCommentInput) =>
     request<{ ok: boolean }>(`/api/issues/${issueId}/comments`, {
       method: "POST",
@@ -101,6 +122,10 @@ export const api = {
     request<SessionDetail>(`/api/sessions/${sessionId}`),
   cancelSession: (sessionId: string) =>
     request<{ ok: boolean }>(`/api/sessions/${sessionId}/cancel`, {
+      method: "POST",
+    }),
+  cleanupSession: (sessionId: string) =>
+    request<{ ok: boolean }>(`/api/sessions/${sessionId}/cleanup`, {
       method: "POST",
     }),
 };

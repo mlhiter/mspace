@@ -10,6 +10,7 @@ import {
   PageFrame,
   StatusBadge,
 } from "@mspace/ui";
+import { RelativeTime } from "./time";
 
 export function InboxPage() {
   const queryClient = useQueryClient();
@@ -61,7 +62,7 @@ export function InboxPage() {
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-3">
                     <InlineMeta icon={MessageSquareText}>Review update</InlineMeta>
-                    <InlineMeta icon={Clock3}>{new Date(item.updatedAt).toLocaleString()}</InlineMeta>
+                    <InlineMeta icon={Clock3}><RelativeTime value={item.updatedAt} /></InlineMeta>
                     <InlineMeta icon={Layers3}>{item.projectName || item.projectId.slice(0, 8)}</InlineMeta>
                     <InlineMeta icon={item.assigneeType === "agent" ? Bot : Layers3}>
                       {item.assigneeType === "agent" ? "agent" : "human"} · {item.assignee || "unassigned"}

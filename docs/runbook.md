@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-07
+> Status: local MVP operations guide, updated 2026-05-08
 
 ## Local Data
 
@@ -9,9 +9,10 @@
 | `~/.mspace/mspace.db` | SQLite database used by the Go runner. |
 | `~/.mspace/repos/<owner>/<repo>` | Cached clone path for GitHub-imported repositories. |
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree created for one local agent session. |
-| `~/.mspace/workdirs/_contexts/<session-id>.md` | Markdown session context written before the agent command starts. |
+| `~/.mspace/workdirs/_contexts/<session-id>.md` | Markdown session context included in the Codex app-server prompt. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory recorded in `agent_sessions.artifact_dir`. |
 
-The session worktree path is also stored in `agent_sessions.workdir`.
+Issue labels are stored in `issue_labels` as issue-local records. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
 
 ## Start The App
 
@@ -45,22 +46,48 @@ pnpm dev:desktop
 | `MSPACE_RUNNER_START_TIMEOUT_MS` | Electron main process | `60000` | How long the desktop waits for the runner health check before startup fails. |
 | `MSPACE_PORT` | Go runner | `7788` | Port used by a standalone runner. |
 
-Project Kubernetes fields are passed into session commands as:
+Project Kubernetes fields are passed into sessions as:
 
 | Variable | Source |
 | --- | --- |
 | `MSPACE_KUBE_CONTEXT` | Project `kube_context`. |
 | `MSPACE_KUBE_NAMESPACE` | Project `namespace`. |
 
-Session metadata is also passed into the agent command as:
+Session metadata is also passed into the Codex app-server process environment as:
 
 | Variable | Source |
 | --- | --- |
 | `MSPACE_ISSUE_ID` | Current issue id. |
 | `MSPACE_SESSION_ID` | Current session id. |
+| `MSPACE_AGENT_PROFILE` | Selected managed agent profile id. |
 | `MSPACE_SESSION_BRANCH` | Planned session branch. |
 | `MSPACE_SESSION_WORKDIR` | Prepared git worktree path. |
 | `MSPACE_SESSION_CONTEXT` | Markdown context file written under `~/.mspace/workdirs/_contexts/`. |
+| `MSPACE_SESSION_ARTIFACT_DIR` | Session artifact directory under the prepared worktree. |
+
+## Codex App-Server Runtime
+
+Codex-backed sessions start:
+
+```bash
+codex app-server --listen stdio://
+```
+
+The runner launches the process inside the prepared worktree, sends `initialize`, `thread/start`, and `turn/start` over newline-delimited JSON-RPC, then records app-server notifications into `session_logs`.
+
+Current local-session defaults:
+
+| Setting | Value | Reason |
+| --- | --- | --- |
+| `approvalPolicy` | `never` | mspace does not yet have an approval UI, so unattended sessions must not hang on approval prompts. |
+| `sandbox` | `danger-full-access` | Local macOS worktrees and Codex desktop behavior match this mode most reliably for now. |
+| Transport | `stdio://` | Matches the Multica-style provider shape and preserves thread, turn, status, and notification state better than `codex exec`. |
+
+Check that the CLI is available:
+
+```bash
+codex app-server --help
+```
 
 ## Smoke Checks
 
@@ -73,7 +100,20 @@ curl http://127.0.0.1:7788/health
 Recent sessions:
 
 ```bash
-sqlite3 ~/.mspace/mspace.db "select id,status,branch,workdir,updated_at from agent_sessions order by updated_at desc limit 5;"
+sqlite3 ~/.mspace/mspace.db "select id,provider,agent_profile,status,agent_status,cleanup_status,cleaned_at,codex_thread_id,codex_turn_id,branch,workdir,updated_at from agent_sessions order by updated_at desc limit 5;"
+```
+
+Issue labels:
+
+```bash
+sqlite3 ~/.mspace/mspace.db "select issue_id,name,created_at from issue_labels order by created_at desc limit 20;"
+```
+
+Managed agents:
+
+```bash
+curl http://127.0.0.1:7788/api/agents
+sqlite3 ~/.mspace/mspace.db "select id,name,mention,provider,enabled,built_in,updated_at from agent_profiles order by sort_order,created_at;"
 ```
 
 Inspect a session worktree:
@@ -81,6 +121,15 @@ Inspect a session worktree:
 ```bash
 git -C ~/.mspace/workdirs/<project-id>/<session-id> status --short
 ```
+
+Clean a retained, non-active session worktree:
+
+```bash
+curl -X POST http://127.0.0.1:7788/api/sessions/<session-id>/cleanup
+sqlite3 ~/.mspace/mspace.db "select id,status,cleanup_status,cleaned_at,workdir from agent_sessions where id = '<session-id>';"
+```
+
+Cleanup removes the git worktree only. Logs, comments, evidence, and session metadata stay in SQLite. Queued or running sessions return `409 Conflict`; a missing worktree is marked cleaned idempotently after the path safety check passes.
 
 Run validation commands:
 
@@ -107,7 +156,9 @@ Expected shadcn/ui source components currently include:
 - field
 - input
 - label
+- scroll-area
 - separator
+- select
 - textarea
 
 ## Common Troubleshooting
@@ -200,19 +251,22 @@ Projects can only be deleted before any issues or sessions are attached. Check:
 sqlite3 ~/.mspace/mspace.db "select id,name,issue_count,session_count from (select p.id,p.name,count(distinct i.id) as issue_count,count(distinct s.id) as session_count from projects p left join issues i on i.project_id = p.id left join agent_sessions s on s.issue_id = i.id group by p.id) order by name;"
 ```
 
-### Session Fails Before Running Command
+### Session Fails Before Starting Runtime
 
-The runner creates a git worktree before starting the command. Check:
+The runner creates a git worktree before starting Codex app-server or the fallback shell runtime. Check:
 
 ```bash
 git --version
 git -C /absolute/path/to/repo worktree list
-sqlite3 ~/.mspace/mspace.db "select id,status,branch,workdir from agent_sessions order by updated_at desc limit 5;"
+sqlite3 ~/.mspace/mspace.db "select id,status,agent_status,cleanup_status,cleaned_at,codex_thread_id,codex_turn_id,branch,workdir from agent_sessions order by updated_at desc limit 5;"
+codex app-server --help
 ```
 
 Common causes:
 
 - `git` is not on `PATH`;
+- `codex` is not on `PATH`;
+- the runner was launched with an isolated `HOME` and Codex cannot find an authenticated `CODEX_HOME`, which can surface as `401 Unauthorized: Missing bearer or basic authentication`;
 - the project repo path is not a git repository;
 - the session branch already exists in an unexpected state;
 - the planned worktree directory already exists.
@@ -237,3 +291,5 @@ sqlite3 ~/.mspace/mspace.db "select id,workdir from agent_sessions order by upda
 git -C <workdir> status --short
 git -C <workdir> diff --stat --patch --find-renames HEAD
 ```
+
+If `cleanup_status` is `cleaned`, a missing worktree is expected. Session Detail should still show retained logs and metadata, but workspace inspection will report that the workspace is not available.

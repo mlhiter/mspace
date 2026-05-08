@@ -16,25 +16,31 @@ The Kubernetes environment is the deployment and test target that makes mspace w
 
 The repository currently contains a runnable local desktop MVP:
 
-- Electron desktop app with Inbox, Issues, Projects, Issue Detail, and Session Detail screens.
+- Electron desktop app with Inbox, Issues, Agents, Projects, Issue Detail, and Session Detail screens.
 - Notion-like desktop workspace shell built on real shadcn/ui source components, Radix UI primitives, and lucide-react icons in `@mspace/ui`.
 - Go local runner with HTTP APIs, SQLite storage, session logs, inbox server-sent events, and git-aware project import.
 - Project import from either a local folder or a GitHub repository URL, with GitHub remote metadata detection when available.
 - Issue creation and management in the Issues tab, while Inbox stays focused on unread review updates.
-- Agent assignment from an issue, with local session queueing, status updates, and issue activity comments.
+- Issue-local labels shown on issue lists and edited inline from Issue Detail.
+- Agents module backed by SQLite-managed agent profiles, seeded with `@codex`, `@bugfix`, and `@design`.
+- Dynamic agent mentions from an issue comment, with local Codex app-server session queueing, profile instructions, status updates, and issue timeline updates.
+- Running sessions can be stopped from Issue Detail or Session Detail.
 - Local session execution in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`.
+- Completed or cancelled session worktrees can be manually cleaned from Session Detail while keeping logs, comments, evidence, and metadata.
 - Imported GitHub repositories cached under `~/.mspace/repos/<owner>/<repo>`.
-- Session context markdown written under `~/.mspace/workdirs/_contexts/<session-id>.md` and injected into the session environment.
+- Session context markdown written under `~/.mspace/workdirs/_contexts/<session-id>.md` and included in the Codex prompt and session environment.
+- Codex runtime state stored on sessions: agent profile, thread id, turn id, agent status, and artifact directory.
 - Session workspace inspection for git status, changed files, diff previews, commits, and comparison against the project default branch.
-- Project-level Kubernetes context and namespace fields that are passed into session commands.
+- Project-level Kubernetes context and namespace fields that are passed into the app-server session and used for post-run evidence collection.
 
-Kubernetes is currently the configurable validation target. Generated scoped kubeconfigs, ServiceAccounts, namespace allocation, PR capture, and cleanup controls are not implemented in the local MVP yet.
+Kubernetes is currently the configurable validation target. Generated scoped kubeconfigs, ServiceAccounts, namespace allocation, PR capture, and namespace cleanup controls are not implemented in the local MVP yet.
 
 ## Requirements
 
 - Node.js and pnpm.
 - Go 1.24 or newer.
 - Git on `PATH`.
+- Codex CLI on `PATH` for `codex app-server --listen stdio://`.
 - `kubectl` only when running project deploy or validation commands that inspect Kubernetes.
 
 ## Run Locally
@@ -76,7 +82,8 @@ Local data paths:
 | `~/.mspace/mspace.db` | SQLite database. |
 | `~/.mspace/repos/<owner>/<repo>` | Cached clone path for GitHub-imported projects. |
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree for one agent session. |
-| `~/.mspace/workdirs/_contexts/<session-id>.md` | Generated session context markdown injected into the agent command. |
+| `~/.mspace/workdirs/_contexts/<session-id>.md` | Generated session context markdown included in the app-server turn prompt. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory recorded on Codex-backed sessions. |
 
 ## Verify
 
@@ -99,7 +106,7 @@ curl http://127.0.0.1:7788/health
 For each project, mspace gives a team a document-style issue workflow where a coding agent can:
 
 - receive review updates through Inbox while Issues remains the durable list and creation surface;
-- collaborate through comments, status updates, and blockers;
+- collaborate through comments, agent-profile mentions, status updates, and blockers;
 - run in a local development runtime by default;
 - configure a Kubernetes context and namespace for validation;
 - deploy or update the project in a test cluster;

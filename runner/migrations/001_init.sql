@@ -48,15 +48,49 @@ CREATE TABLE IF NOT EXISTS comments (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS issue_labels (
+  id TEXT PRIMARY KEY,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  UNIQUE(issue_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_issue_labels_issue_id ON issue_labels(issue_id);
+
+CREATE TABLE IF NOT EXISTS agent_profiles (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  mention TEXT NOT NULL UNIQUE,
+  provider TEXT NOT NULL DEFAULT 'codex',
+  description TEXT NOT NULL DEFAULT '',
+  instructions TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  built_in INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_profiles_enabled ON agent_profiles(enabled);
+
 CREATE TABLE IF NOT EXISTS agent_sessions (
   id TEXT PRIMARY KEY,
   issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
   provider TEXT NOT NULL,
+  agent_profile TEXT NOT NULL DEFAULT '',
   runtime_mode TEXT NOT NULL,
   command TEXT NOT NULL,
   status TEXT NOT NULL,
   branch TEXT NOT NULL,
   workdir TEXT NOT NULL,
+  codex_thread_id TEXT NOT NULL DEFAULT '',
+  codex_turn_id TEXT NOT NULL DEFAULT '',
+  agent_status TEXT NOT NULL DEFAULT '',
+  artifact_dir TEXT NOT NULL DEFAULT '',
+  cleanup_status TEXT NOT NULL DEFAULT 'retained',
+  cleaned_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

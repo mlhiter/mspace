@@ -41,6 +41,7 @@ export interface IssueListItem {
   status: string;
   assignee: string;
   assigneeType: string;
+  labels: IssueLabel[];
   unread: boolean;
   sessionCount: number;
   updatedAt: string;
@@ -68,15 +69,44 @@ export interface Comment {
   createdAt: string;
 }
 
+export interface IssueLabel {
+  id: string;
+  issueId: string;
+  name: string;
+  color: string;
+  createdAt: string;
+}
+
+export interface AgentProfile {
+  id: string;
+  name: string;
+  mention: string;
+  provider: string;
+  description: string;
+  instructions: string;
+  enabled: boolean;
+  builtIn: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AgentSession {
   id: string;
   issueId: string;
   provider: string;
+  agentProfile: string;
   runtimeMode: string;
   command: string;
   status: string;
   branch: string;
   workdir: string;
+  codexThreadId: string;
+  codexTurnId: string;
+  agentStatus: string;
+  artifactDir: string;
+  cleanupStatus: string;
+  cleanedAt: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -139,6 +169,7 @@ export interface DeploymentEvidence {
 export interface IssueDetail {
   issue: Issue;
   project: Project;
+  labels: IssueLabel[];
   comments: Comment[];
   sessions: AgentSession[];
   evidence: DeploymentEvidence[];
@@ -184,8 +215,22 @@ export interface CreateCommentInput {
 
 export interface CreateSessionInput {
   provider: string;
+  agentProfile?: string;
   command?: string;
   branch?: string;
+}
+
+export interface UpdateIssueLabelsInput {
+  labels: string[];
+}
+
+export interface AgentProfileInput {
+  name: string;
+  mention: string;
+  provider: string;
+  description: string;
+  instructions: string;
+  enabled: boolean;
 }
 
 export interface SessionStreamEvent {
@@ -197,6 +242,8 @@ export interface MspaceDesktopAPI {
   apiBaseUrl: string;
   appVersion: string;
   selectProjectFolder?: () => Promise<string | null>;
+  openExternal?: (url: string) => Promise<void>;
+  openPath?: (path: string) => Promise<string>;
 }
 
 declare global {

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { Clipboard, Files, GitBranch, GitCommit, GitCompareArrows, HardDrive, SquareTerminal } from "lucide-react";
-import { api, buildApiUrl, queryKeys, type SessionStreamEvent, type WorkspaceChange } from "@mspace/core";
+import { Clipboard, Files, GitBranch, GitCommit, GitCompareArrows, HardDrive, SquareTerminal, Trash2 } from "lucide-react";
+import { api, buildApiUrl, queryKeys, type SessionStreamEvent, type WorkspaceChange, type WorkspaceSnapshot } from "@mspace/core";
 import {
   Button,
   CodeBlock,
@@ -14,6 +14,7 @@ import {
   StatusBadge,
   Textarea,
 } from "@mspace/ui";
+import { RelativeTime } from "./time";
 
 function ChangeRow({ change }: { change: WorkspaceChange }) {
   return (
@@ -33,6 +34,23 @@ function ChangeRow({ change }: { change: WorkspaceChange }) {
   );
 }
 
+function listOrEmpty<T>(items: T[] | null | undefined): T[] {
+  return Array.isArray(items) ? items : [];
+}
+
+function normalizeWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
+  return {
+    ...workspace,
+    statusLines: listOrEmpty(workspace.statusLines),
+    changes: listOrEmpty(workspace.changes),
+    comparison: {
+      ...workspace.comparison,
+      commitLines: listOrEmpty(workspace.comparison?.commitLines),
+      changes: listOrEmpty(workspace.comparison?.changes),
+    },
+  };
+}
+
 export function SessionDetailPage() {
   const { sessionId = "" } = useParams();
   const queryClient = useQueryClient();
@@ -48,12 +66,20 @@ export function SessionDetailPage() {
   const generatedSummary = useMemo(() => {
     if (!sessionQuery.data) return "";
 
-    const { session, workspace, evidence } = sessionQuery.data;
+    const { session } = sessionQuery.data;
+    const workspace = normalizeWorkspace(sessionQuery.data.workspace);
+    const evidence = listOrEmpty(sessionQuery.data.evidence);
     const lines = [
       `Session ${session.id.slice(0, 8)} summary`,
       "",
       `- Status: ${session.status}`,
       `- Provider: ${session.provider}`,
+      `- Agent profile: ${session.agentProfile || "codex"}`,
+      `- Agent status: ${session.agentStatus || "unknown"}`,
+      `- Cleanup status: ${session.cleanupStatus || "retained"}`,
+      `- Cleaned at: ${session.cleanedAt || "not cleaned"}`,
+      `- Codex thread: ${session.codexThreadId || "not started"}`,
+      `- Codex turn: ${session.codexTurnId || "not started"}`,
       `- Branch: ${workspace.branch || session.branch || "unknown"}`,
       `- Workspace: ${session.workdir || "not reported"}`,
       `- Base ref: ${workspace.comparison.baseRef || "unknown"}`,
@@ -94,7 +120,7 @@ export function SessionDetailPage() {
 
   useEffect(() => {
     if (!sessionQuery.data) return;
-    setLogs(sessionQuery.data.logs.map((log) => log.message));
+    setLogs(listOrEmpty(sessionQuery.data.logs).map((log) => log.message));
     setSummaryDraft((current) => (current.trim() ? current : generatedSummary));
   }, [generatedSummary, sessionQuery.data]);
 
@@ -123,6 +149,19 @@ export function SessionDetailPage() {
     },
   });
 
+  const cleanupMutation = useMutation({
+    mutationFn: () => api.cleanupSession(sessionId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) }),
+        sessionQuery.data?.issue.id
+          ? queryClient.invalidateQueries({ queryKey: queryKeys.issue(sessionQuery.data.issue.id) })
+          : Promise.resolve(),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+      ]);
+    },
+  });
+
   const postSummaryMutation = useMutation({
     mutationFn: () => api.addComment(sessionId ? sessionQuery.data!.issue.id : "", { body: summaryDraft }),
     onSuccess: async () => {
@@ -141,7 +180,12 @@ export function SessionDetailPage() {
     );
   }
 
-  const { session, issue, project, workspace } = sessionQuery.data;
+  const { session, issue, project } = sessionQuery.data;
+  const workspace = normalizeWorkspace(sessionQuery.data.workspace);
+  const sessionActive = ["queued", "running"].includes(session.status);
+  const cleanupStatus = session.cleanupStatus || "retained";
+  const canCleanWorktree = !sessionActive && cleanupStatus !== "cleaned" && Boolean(session.workdir);
+  const missingWorkspaceText = cleanupStatus === "cleaned" ? "Session worktree has been cleaned up." : "Workspace has not been created yet.";
 
   async function handleCopySummary() {
     try {
@@ -149,6 +193,15 @@ export function SessionDetailPage() {
       setCopyState("copied");
     } catch {
       setCopyState("failed");
+    }
+  }
+
+  function handleCleanWorktree() {
+    const confirmed = window.confirm(
+      `Clean the session worktree?\n\n${session.workdir}\n\nThis removes the local worktree for this session. Logs, comments, evidence, and session metadata stay in mspace.`,
+    );
+    if (confirmed) {
+      cleanupMutation.mutate();
     }
   }
 
@@ -163,10 +216,18 @@ export function SessionDetailPage() {
           </Button>
           <Button
             variant="danger"
-            disabled={cancelMutation.isPending || !["queued", "running"].includes(session.status)}
+            disabled={cancelMutation.isPending || !sessionActive}
             onClick={() => cancelMutation.mutate()}
           >
             Cancel session
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={cleanupMutation.isPending || !canCleanWorktree}
+            onClick={handleCleanWorktree}
+          >
+            <Trash2 data-icon />
+            {cleanupMutation.isPending ? "Cleaning..." : cleanupStatus === "cleaned" ? "Worktree cleaned" : "Clean worktree"}
           </Button>
         </>
       }
@@ -174,12 +235,23 @@ export function SessionDetailPage() {
       <div className="grid gap-6 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
         <div className="flex flex-col gap-6">
           <Panel title="Session metadata" aside={<StatusBadge value={session.status} />}>
+            {cleanupMutation.error ? <Notice tone="danger">{cleanupMutation.error.message}</Notice> : null}
             <div className="grid gap-3">
               <DataBlock label="Provider" icon={SquareTerminal}>{session.provider}</DataBlock>
+              <DataBlock label="Agent profile" icon={SquareTerminal}>{session.agentProfile || "codex"}</DataBlock>
               <DataBlock label="Runtime mode" icon={HardDrive}>{session.runtimeMode}</DataBlock>
+              <DataBlock label="Agent status" icon={SquareTerminal}>{session.agentStatus || "not reported yet"}</DataBlock>
+              <DataBlock label="Cleanup status" icon={Trash2}>
+                {cleanupStatus === "cleaned" ? (
+                  session.cleanedAt ? <RelativeTime prefix="cleaned" value={session.cleanedAt} /> : "cleaned"
+                ) : "retained"}
+              </DataBlock>
               <DataBlock label="Session branch" icon={GitBranch}>{session.branch}</DataBlock>
-              <DataBlock label="Command" icon={SquareTerminal}>{session.command || "runner default"}</DataBlock>
+              <DataBlock label="Agent instructions" icon={SquareTerminal}>{session.command || "issue and project context only"}</DataBlock>
+              <DataBlock label="Codex thread" icon={SquareTerminal}>{session.codexThreadId || "not started yet"}</DataBlock>
+              <DataBlock label="Codex turn" icon={SquareTerminal}>{session.codexTurnId || "not started yet"}</DataBlock>
               <DataBlock label="Session workspace" icon={Files}>{session.workdir || "not reported yet"}</DataBlock>
+              <DataBlock label="Artifact directory" icon={Files}>{session.artifactDir || "not reported yet"}</DataBlock>
               <DataBlock label="Source repository" icon={Files}>{project.repoPath}</DataBlock>
             </div>
           </Panel>
@@ -226,7 +298,7 @@ export function SessionDetailPage() {
               <CodeBlock
                 empty={
                   !workspace.exists
-                    ? "Workspace has not been created yet."
+                    ? missingWorkspaceText
                     : !workspace.isGitRepository
                       ? "Workspace exists, but it is not a git worktree."
                       : "Working tree clean."
@@ -241,7 +313,7 @@ export function SessionDetailPage() {
             <div className="mt-4 flex flex-col gap-2">
               <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">Changed files</div>
               {workspace.changes.length === 0 ? (
-                <DataBlock label="No file changes">No file changes in this workspace.</DataBlock>
+                <DataBlock label="No file changes">{workspace.exists ? "No file changes in this workspace." : missingWorkspaceText}</DataBlock>
               ) : (
                 <div className="flex flex-col gap-2">
                   {workspace.changes.map((change) => (
@@ -259,7 +331,7 @@ export function SessionDetailPage() {
               <CodeBlock
                 empty={
                   !workspace.exists
-                    ? "Workspace has not been created yet."
+                    ? missingWorkspaceText
                     : !workspace.isGitRepository
                       ? "Workspace exists, but it is not a git worktree."
                       : "No diff against HEAD."

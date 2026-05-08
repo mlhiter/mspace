@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: local MVP implementation snapshot, updated 2026-05-07
+> Status: local MVP implementation snapshot, updated 2026-05-08
 
 ## Current Implementation Snapshot
 
@@ -14,13 +14,18 @@ The repository currently contains a runnable local-first desktop MVP:
 - Session worktrees live under `~/.mspace/workdirs/<project-id>/<session-id>`.
 - Session context markdown lives under `~/.mspace/workdirs/_contexts/<session-id>.md`.
 - The runner stores the session worktree path in `agent_sessions.workdir`.
-- Each session creates or attaches a git worktree before executing the session command.
+- Each session creates or attaches a git worktree before starting the runtime provider.
+- The Codex provider starts `codex app-server --listen stdio://` in the session worktree and talks to it over newline-delimited JSON-RPC.
+- The runner persists Codex agent profile, thread id, turn id, agent status, artifact directory, cleanup status, and cleaned timestamp on `agent_sessions`.
+- Agent profiles live in `agent_profiles` and are exposed through the Agents module. Default Codex-backed agents are seeded, but new sessions resolve profile instructions from SQLite rather than hardcoded profile switches.
+- Finished local session worktrees can be cleaned through `POST /api/sessions/{sessionID}/cleanup`; active sessions are rejected, the stored workdir must stay under the mspace workdir root, and session records remain for review.
 - Session branch defaults to `mspace/<issue-short-id>/<session-short-id>` when the user does not provide one.
 - Project import supports existing local folders and GitHub repository URLs. Local repositories auto-detect git remote metadata when available.
 - Inbox is an unread review feed powered by server-sent events from `/api/inbox/stream`.
-- Issue assignment to an agent currently goes through `POST /api/issues/{issueID}/assign-agent`, which also queues the local session.
+- Issue comments that mention an enabled agent are saved first, then the desktop calls `POST /api/issues/{issueID}/assign-agent` with the mention-stripped comment as the current turn request and the selected Codex profile.
+- Issue labels are issue-local records in `issue_labels`, exposed on issue lists and editable inline from Issue Detail.
 - Kubernetes is currently represented by project-level `kube_context` and `namespace`, passed into the session as `MSPACE_KUBE_CONTEXT` and `MSPACE_KUBE_NAMESPACE`. Scoped kubeconfig and ServiceAccount generation are still future work.
-- Session commands also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, and `MSPACE_SESSION_CONTEXT`.
+- Sessions also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, and `MSPACE_SESSION_CONTEXT`.
 - Current desktop visual language is a Notion-like paper workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, and restrained icon actions.
 
 Current shadcn/ui component source:
@@ -32,7 +37,9 @@ Current shadcn/ui component source:
 - `packages/ui/src/components/ui/field.tsx`
 - `packages/ui/src/components/ui/input.tsx`
 - `packages/ui/src/components/ui/label.tsx`
+- `packages/ui/src/components/ui/scroll-area.tsx`
 - `packages/ui/src/components/ui/separator.tsx`
+- `packages/ui/src/components/ui/select.tsx`
 - `packages/ui/src/components/ui/textarea.tsx`
 
 Implemented desktop routes:
@@ -40,6 +47,7 @@ Implemented desktop routes:
 - `/inbox`
 - `/issues`
 - `/issues/:issueId`
+- `/agents`
 - `/projects`
 - `/sessions/:sessionId`
 
@@ -50,6 +58,9 @@ Implemented runner API:
 | `GET` | `/health` | Runner health and version. |
 | `GET` | `/api/inbox` | List inbox items. |
 | `GET` | `/api/inbox/stream` | Stream inbox update events over server-sent events. |
+| `GET` | `/api/agents` | List managed agent profiles. |
+| `POST` | `/api/agents` | Create a new Codex-backed agent profile. |
+| `PUT` | `/api/agents/{agentID}` | Update a managed agent profile. |
 | `GET` | `/api/projects` | List projects with issue/session counts. |
 | `POST` | `/api/projects` | Create a project. |
 | `PUT` | `/api/projects/{projectID}` | Update a project. |
@@ -57,11 +68,13 @@ Implemented runner API:
 | `GET` | `/api/issues` | List issues across the local workspace. |
 | `POST` | `/api/issues` | Create an issue and inbox item. |
 | `GET` | `/api/issues/{issueID}` | Load issue detail, comments, sessions, and evidence. |
+| `PUT` | `/api/issues/{issueID}/labels` | Replace issue-local labels. |
 | `POST` | `/api/issues/{issueID}/comments` | Add a human comment. |
-| `POST` | `/api/issues/{issueID}/assign-agent` | Assign Codex and queue a local session. |
+| `POST` | `/api/issues/{issueID}/assign-agent` | Queue a Codex turn from an issue comment. |
 | `POST` | `/api/issues/{issueID}/sessions` | Queue and start a local agent session. |
 | `GET` | `/api/sessions/{sessionID}` | Load session detail, logs, evidence, and workspace snapshot. |
 | `POST` | `/api/sessions/{sessionID}/cancel` | Cancel a running session. |
+| `POST` | `/api/sessions/{sessionID}/cleanup` | Remove a retained, non-active local session worktree. |
 | `GET` | `/api/sessions/{sessionID}/stream` | Server-sent events for session logs and status changes. |
 
 ## Architecture Summary
@@ -146,6 +159,7 @@ Current implemented fields:
 - title;
 - body;
 - status;
+- labels;
 - assignee;
 - assignee type;
 - comments and progress updates;
@@ -160,11 +174,13 @@ Current implemented fields:
 
 - issue;
 - provider;
+- agent profile;
 - runtime mode;
 - command;
 - branch;
 - worktree path;
 - status;
+- cleanup status and cleaned timestamp;
 - terminal stream;
 - evidence summary.
 
@@ -262,22 +278,28 @@ app.mspace.dev/managed-by: "mspace"
 
 ```text
 User creates an issue in /issues or opens an existing one
-  -> desktop calls POST /api/issues/{issueID}/assign-agent
+  -> user writes an issue comment with an enabled @agent mention
+  -> desktop saves the comment through POST /api/issues/{issueID}/comments
+  -> desktop calls POST /api/issues/{issueID}/assign-agent with the comment text as command
   -> runner marks the issue assigned to an agent and creates a queued session
+  -> runner loads the agent profile and instructions from agent_profiles
   -> runner stores queued session in SQLite
   -> runner plans workdir under ~/.mspace/workdirs/<project-id>/<session-id>
   -> runner creates a git worktree from the project's default branch
   -> runner checks out the session branch
   -> runner writes ~/.mspace/workdirs/_contexts/<session-id>.md
-  -> runner injects MSPACE_SESSION_CONTEXT and session metadata env vars
-  -> runner starts the configured command inside the session worktree
-  -> runner writes stdout/stderr to session_logs
+  -> runner starts codex app-server --listen stdio:// inside the session worktree
+  -> runner sends initialize, thread/start, and turn/start
+  -> runner stores codex_thread_id and codex_turn_id
+  -> runner maps app-server notifications into session_logs and agent_status
   -> desktop watches GET /api/sessions/{sessionID}/stream
   -> desktop refreshes Inbox, Issues, and Issue Detail through GET /api/inbox/stream
   -> session detail reads git status, commits, diff, and base comparison from workdir
 ```
 
-The default command is generated from the issue and project configuration. If deploy or validation commands are configured, the generated command runs them before taking a Kubernetes resource snapshot through `kubectl`.
+Codex sessions receive the selected managed agent profile first, then the current turn request, followed by the issue, comments, prior sessions, project metadata, branch, worktree, Kubernetes context, namespace, deploy command, validation command, and the generated context markdown path in the turn prompt. The current turn request is treated like a Multica-style triggering comment so Codex does not confuse a follow-up question with the original issue body. Non-Codex providers can still use the older shell-command path as a compatibility adapter.
+
+The local Codex thread currently uses `approvalPolicy: never` and `sandbox: danger-full-access`. This matches the unattended local-session shape and avoids hidden approval hangs while mspace lacks an approval UI. The tradeoff is that sessions should only be launched for trusted local repositories and reviewed through the retained worktree and logs.
 
 ### Target Product Flow
 
@@ -294,7 +316,8 @@ User creates issue
   -> Agent works and streams progress
   -> Deployment and validation produce namespace evidence
   -> Evidence is attached back to the issue
-  -> Runtime is retained or cleaned up
+  -> Local worktree is retained or explicitly cleaned up
+  -> Future session namespace is retained or cleaned up by policy
 ```
 
 ## Data Model Sketch
@@ -359,6 +382,12 @@ agent_sessions
   status
   branch
   workdir
+  codex_thread_id
+  codex_turn_id
+  agent_status
+  artifact_dir
+  cleanup_status
+  cleaned_at
   created_at
   updated_at
 
@@ -431,6 +460,19 @@ issue_subscribers
   issue_id
   user_type
   user_id
+
+agent_profiles
+  id
+  name
+  mention
+  provider
+  description
+  instructions
+  enabled
+  built_in
+  sort_order
+  created_at
+  updated_at
 
 comments
   id
@@ -600,10 +642,10 @@ Git providers, package registries, image registries, and model providers can all
 ## Minimal Build Order
 
 1. Workspace, inbox, and issue data model.
-2. Issue detail page with comments and session list.
-3. Session creation from issue with one agent provider.
+2. Issue detail page with comments, managed agent turns, and session list.
+3. Session creation from an enabled agent mention with one runtime provider.
 4. Local runtime implementation for the first agent provider.
 5. Kubernetes validation environment with scoped kubeconfig and ServiceAccount generation.
 6. Terminal/progress stream.
 7. Namespace resource viewer and environment evidence capture.
-8. Session cleanup and retention rules.
+8. Session cleanup and retention rules for local worktrees first, then namespaces.

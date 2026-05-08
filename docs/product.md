@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-07
+> Status: local MVP implementation snapshot, updated 2026-05-08
 
 ## One-Line Definition
 
@@ -12,10 +12,14 @@ The repository now has a runnable local desktop MVP:
 
 - create projects from a local folder picker or GitHub repository URL and manage settings later;
 - create and manage issues in the Issues tab;
+- label issues from Issue Detail and scan labels from the Issues list;
+- manage Codex-backed agents from the Agents route, including mention, description, enabled state, and role instructions;
 - use Inbox as a review feed for unread issue and session updates;
 - open document-style issue detail pages with comments and linked sessions;
-- assign Codex from issue detail and start local agent sessions from issues;
+- mention an enabled agent from issue detail and start local app-server agent sessions with the matching managed profile;
+- stop a queued or running session from Issue Detail or Session Detail;
 - run sessions in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`;
+- clean a completed or cancelled session worktree from Session Detail while preserving the issue timeline, logs, evidence, and session metadata;
 - cache imported GitHub repositories under `~/.mspace/repos/<owner>/<repo>`;
 - store session metadata, logs, comments, issues, projects, and evidence in SQLite under `~/.mspace/mspace.db`;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
@@ -125,13 +129,14 @@ An Issue should hold:
 
 ### Session Creation
 
-A user creates a session from an issue. In the MVP path, mspace starts a local-first session and then:
+A user creates a session by writing an issue comment that mentions an enabled agent profile. In the MVP path, mspace saves the comment first, starts a local-first session, and then:
 
 - uses the desktop-managed local runner;
 - prepares a git worktree for the repository;
-- starts the selected command or generated coding-agent command inside that worktree;
-- streams terminal output and agent status;
-- passes configured Kubernetes context and namespace into the session command.
+- starts `codex app-server --listen stdio://` inside that worktree for Codex-backed sessions;
+- stores the selected profile in `agent_sessions.agent_profile` and injects the profile instructions from `agent_profiles` into the Codex prompt;
+- streams agent messages, command execution items, status changes, and diagnostics;
+- passes configured Kubernetes context and namespace into the app-server process and turn prompt.
 
 Scoped namespace, ServiceAccount, and kubeconfig generation are target behavior, not implemented behavior in the current local MVP.
 
@@ -140,6 +145,7 @@ Scoped namespace, ServiceAccount, and kubeconfig generation are target behavior,
 Inside the session, the agent can:
 
 - read the issue context and comment history;
+- treat the triggering agent mention comment as the highest-priority current turn request;
 - run tests and local commands;
 - modify code in the local runtime;
 - deploy the project into the namespace;
@@ -154,9 +160,9 @@ A completed session should leave:
 - issue comments or progress updates;
 - PR or branch link;
 - environment URL when available;
-- command history;
+- command and tool history;
 - runtime evidence such as pod status and logs;
-- cleanup state: retained, expired, or deleted.
+- cleanup state: retained or cleaned for local worktrees, with namespace cleanup as a later lifecycle.
 
 ## MVP Scope
 
@@ -169,9 +175,12 @@ MVP features:
 - Inbox review list, Issues list, and issue detail;
 - project list with create, settings, and guarded delete;
 - issue comments and assignee field;
-- create agent session from issue;
+- issue labels;
+- manage agent profiles and create a Codex session from an enabled agent mention in an issue comment;
+- cancel queued or running sessions;
 - local development runtime;
 - git worktree isolation per session;
+- manual session worktree cleanup controls;
 - project-level Kubernetes context and namespace configuration;
 - terminal/progress stream;
 - session workspace inspection;
@@ -185,7 +194,7 @@ Still outside the current implemented MVP:
 - namespace per session;
 - full Kubernetes resource browser;
 - PR link capture;
-- manual session cleanup controls.
+- namespace cleanup controls.
 
 ## Explicit Non-Goals
 
@@ -236,4 +245,4 @@ The test is successful if a developer can:
 4. let Codex operate only the assigned repository and scoped test namespace;
 5. deploy or inspect the project through `kubectl`;
 6. open a PR or leave a branch with runtime evidence attached to the issue;
-7. clean up the session namespace without manual cluster surgery.
+7. retain or clean up the local session worktree from mspace, with namespace cleanup becoming the next lifecycle step.

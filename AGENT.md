@@ -19,19 +19,26 @@ The product should stay narrow:
 - Workspace tooling: pnpm workspaces and Turbo.
 - Runner: Go, chi, SQLite through `modernc.org/sqlite`.
 - The Electron main process auto-starts the local runner with `go run .` unless `GET /health` is already healthy.
-- Sidebar navigation currently exposes Inbox, Issues, and Projects, plus a quick link that opens issue creation from the left rail.
+- Sidebar navigation currently exposes Inbox, Issues, Agents, and Projects, plus a quick link that opens issue creation from the left rail.
 - Inbox is a review-only unread feed; issue creation and management live in the Issues route.
 - SQLite database path: `~/.mspace/mspace.db`.
 - Imported GitHub repositories are cloned or reused under `~/.mspace/repos/<owner>/<repo>`.
 - Session worktree root: `~/.mspace/workdirs/<project-id>/<session-id>`.
 - Session context markdown is written to `~/.mspace/workdirs/_contexts/<session-id>.md`.
 - The runner stores the real worktree path in `agent_sessions.workdir`.
+- Codex sessions start `codex app-server --listen stdio://` in the prepared worktree instead of shelling out through `codex exec`.
+- The runner sends `initialize`, `thread/start`, and `turn/start` over newline-delimited JSON-RPC on stdio, then maps app-server notifications into `session_logs`.
+- The runner persists `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at` on `agent_sessions`.
+- Agent definitions live in `agent_profiles`; defaults are seeded for `@codex`, `@bugfix`, and `@design`, but the Issue composer and runner resolve profiles from SQLite instead of hardcoded frontend constants.
+- `POST /api/sessions/{sessionID}/cleanup` removes retained, non-active local session worktrees after validating the path stays under `~/.mspace/workdirs`; session logs, comments, evidence, and metadata remain in SQLite.
 - Session branches default to `mspace/<issue-short-id>/<session-short-id>`.
 - Project creation supports either a desktop folder picker for local repositories or a GitHub repository URL that is cloned into the local cache.
 - Local project imports auto-detect remote metadata when a git remote exists and persist `source_type`, `remote_url`, `git_provider`, `git_owner`, and `git_repo`.
-- Inbox invalidation is driven by `GET /api/inbox/stream`, and the issue detail screen assigns Codex through `POST /api/issues/{issueID}/assign-agent`.
+- Inbox invalidation is driven by `GET /api/inbox/stream`, and the issue detail screen starts Codex by saving an agent-mention comment before calling `POST /api/issues/{issueID}/assign-agent`.
+- Supported Codex-backed agents are managed from the Agents route. They share the app-server runtime and differ by stored `agent_profile` prompt instructions.
+- Issue labels are issue-local records in `issue_labels` and should stay lightweight until a global label taxonomy is truly needed.
 - Project Kubernetes context and namespace are passed into sessions as `MSPACE_KUBE_CONTEXT` and `MSPACE_KUBE_NAMESPACE`.
-- Session commands also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, and `MSPACE_SESSION_CONTEXT`.
+- Sessions also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, and `MSPACE_SESSION_CONTEXT`.
 - Tailwind CSS 4 scans monorepo UI packages through `@source` entries in `apps/desktop/src/renderer/src/globals.css`.
 - shadcn/ui semantic tokens are mapped to the Notion-like mspace palette through `@theme inline` in `apps/desktop/src/renderer/src/globals.css`.
 - Vite resolves shadcn aliases through `apps/desktop/electron.vite.config.ts`: `@mspace/ui/components`, `@mspace/ui/lib`, and `@mspace/ui`.
@@ -41,6 +48,8 @@ The product should stay narrow:
 - Keep Inbox and Issue objects as first-class product objects.
 - Keep Inbox review-only. New issue creation belongs in the Issues flow, not in Inbox.
 - Keep local development runtime as the MVP default.
+- For Codex-backed local sessions, prefer `codex app-server --listen stdio://` over `codex exec` so mspace can retain thread, turn, status, and notification state.
+- Keep agent specialization as SQLite-managed profile instructions on top of the Codex app-server provider unless a genuinely separate runtime is introduced.
 - Keep Kubernetes as the default deployment and test environment.
 - Do not rely on Sealos UI APIs as the primary control path.
 - Prefer namespace-scoped operations and explicit RBAC.
@@ -54,7 +63,7 @@ The product should stay narrow:
 - Preserve the quiet Notion-like workspace style: document-first, low-contrast paper surfaces, compact rows, restrained icon buttons, and no decorative dashboard or marketing layout.
 - Treat `DESIGN.md` as the first reference for UI style, tokens, component rules, and visual guardrails.
 - Never execute database write operations unless the user explicitly asks for database modification.
-- Do not delete session workdirs or git worktrees unless the user explicitly asks for cleanup.
+- Do not delete session workdirs or git worktrees unless the user explicitly asks for cleanup through the product or the current conversation.
 
 ## Local Commands
 

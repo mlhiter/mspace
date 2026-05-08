@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-05-07
+> Status: local MVP implementation snapshot, updated 2026-05-08
 
 ## IA Goal
 
@@ -25,6 +25,7 @@ The first MVP should keep the navigation narrow:
 
 - Inbox
 - Issues
+- Agents
 - Projects
 
 Navigation rules:
@@ -32,6 +33,7 @@ Navigation rules:
 - Inbox is the default entry screen.
 - Inbox is the unread review surface for issue and session updates.
 - Issues is the durable knowledge surface and issue creation home.
+- Agents is the managed profile surface for Codex-backed collaborators and mentions.
 - Projects is configuration and project-level history.
 - Session detail is deep-linked from issues and remains an operational fallback view, not a primary home.
 
@@ -64,6 +66,7 @@ Current implemented desktop routes:
 /inbox
 /issues
 /issues/:issueId
+/agents
 /projects
 /sessions/:sessionId
 ```
@@ -75,7 +78,7 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The MVP does not need more top-level areas than this. The current sidebar exposes Inbox, Issues, and Projects, with a quick issue creation link under the search affordance. Session detail remains deep-linked from issue work.
+The MVP does not need more top-level areas than this. The current sidebar exposes Inbox, Issues, Agents, and Projects, with a quick issue creation link under the search affordance. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
@@ -85,7 +88,7 @@ Current implementation principles:
 - Inbox and Project lists use row-level cards and compact metadata rather than dashboard tiles;
 - Issue Detail should read as a live document with session and evidence context attached around it;
 - Session Detail can be more operational, but should still preserve the same paper workspace tone;
-- shadcn/ui primitives are the base for buttons, cards, inputs, fields, badges, alerts, separators, and textareas;
+- shadcn/ui primitives are the base for buttons, cards, inputs, fields, badges, alerts, separators, selects, scroll areas, and textareas;
 - lucide-react icons should carry common actions where a familiar symbol is clearer than text.
 
 Avoid hero sections, marketing copy, decorative dashboards, and high-saturation visual effects in the product shell. mspace should feel like a calm operations workspace that happens to run serious Kubernetes-backed agent sessions.
@@ -147,6 +150,7 @@ Each row should show:
 - current status;
 - unread marker;
 - attached session count.
+- issue labels.
 
 ### Primary actions
 
@@ -173,6 +177,7 @@ Current implementation:
 - opens create issue in a modal from the page header or the sidebar quick action;
 - allows the user to leave project empty and let the runner resolve it when possible;
 - shows unread state, owner type, and linked session count inline.
+- shows issue labels inline when present.
 
 ## Issue Detail
 
@@ -185,8 +190,9 @@ Issue Detail is the main working screen. It should read like a live document wit
 - Header
 - Document body
 - Activity thread
-- Session panel
-- Evidence panel
+- Reply composer
+- Quiet metadata sidebar
+- Collapsed execution details
 
 ### Header
 
@@ -196,18 +202,9 @@ The header should show:
 - project;
 - status;
 - assignee;
-- subscribers;
-- runtime mode summary;
-- quick actions.
+- latest activity summary.
 
-Primary header actions:
-
-- edit issue;
-- add comment;
-- start session;
-- pause or resume session;
-- copy branch or PR link;
-- open environment.
+Primary action should stay in the reply composer, not in a large runner control panel. To ask an agent, the user writes a normal issue comment and mentions an enabled agent from the Agents module.
 
 ### Document body
 
@@ -225,31 +222,40 @@ This area should feel like a durable page, not a tiny description field.
 The activity thread should mix:
 
 - human comments;
-- agent progress updates;
+- agent turns;
 - status changes;
 - blocker notices;
 - session lifecycle events.
 
-System events should be visually quieter than human and agent messages.
+System events should be visually quieter than human and agent messages. Raw thread ids, turn ids, worktree paths, logs, and artifact paths should stay collapsed behind execution details unless the user is debugging.
 
-### Session panel
+### Reply composer
 
-The session panel should show the currently attached session first:
+The composer is the main interaction control:
+
+- plain text comments stay on the issue;
+- supported agent mentions save the comment and start a Codex app-server turn with the selected managed profile;
+- unsupported agent mentions should be visible but not queued;
+- when an agent is already working, a second agent turn should be disabled until the current turn finishes or is stopped.
+
+The UI can provide lightweight mention assistance, but it should not feel like a separate command console.
+
+### Agent turn summary
+
+Agent turns should appear inline in the timeline and show the currently attached session first:
 
 - provider and model;
 - runtime type, with local called out explicitly in the MVP;
 - deployment target cluster and namespace when attached;
 - current state;
 - branch;
-- latest log line;
+- latest agent summary;
 - last updated time.
 
 Secondary actions:
 
 - open full session;
-- restart;
-- cancel;
-- attach a new session.
+- expand execution details.
 
 ### Evidence panel
 
@@ -270,29 +276,34 @@ In the default path, the answer should be grounded in Kubernetes deployment and 
 
 Current implementation:
 
-- shows issue metadata, project, body, comments, linked sessions, logs, and evidence;
-- supports adding comments;
-- assigns Codex and starts a local session from the issue;
-- streams session logs and status while a session is running;
-- links into full session detail.
+- shows issue body first, then a timeline of human comments, Codex turns, and evidence;
+- supports plain comments and managed agent mentions from the same reply box;
+- reads enabled mention suggestions from the Agents module instead of a frontend constant;
+- saves the comment before queuing the Codex app-server session, so the current turn is visible in the issue history;
+- sends the mention-stripped comment as the current turn request, ahead of the original issue context;
+- shows issue labels in the quiet metadata sidebar and lets users edit them inline;
+- exposes a Stop action for queued or running sessions;
+- streams session logs and status while a session is running, but keeps debug output collapsed by default;
+- links into full session detail for deep inspection.
 
 ### Layout
 
 ```text
 +-------------------------------------------------------------------+
-| Header: title / status / assignee / start session / env / PR      |
+| Header: title / project / status                                  |
 +------------------------------------------+------------------------+
-| Document body                            | Session panel          |
-| - context                                | - current session      |
-| - acceptance criteria                    | - runtime summary      |
-| - implementation notes                   | - key actions          |
+| Document body                            | Quiet metadata         |
+| - context                                | - status / owner       |
+| - acceptance criteria                    | - project / namespace  |
+| - implementation notes                   | - latest session       |
 +------------------------------------------+------------------------+
-| Activity thread                          | Evidence panel         |
-| - comments                               | - PR                   |
-| - progress updates                       | - env                  |
-| - blockers                               | - pod status           |
-| - system events                          | - logs/events          |
+| Timeline                                 | Collapsed details      |
+| - human comments                         | - commands             |
+| - agent turns                            | - thread / turn ids    |
+| - evidence                               | - logs / artifacts     |
 +------------------------------------------+------------------------+
+| Reply composer: comment or agent current turn                     |
++-------------------------------------------------------------------+
 ```
 
 The document body and activity thread are the center of gravity. Session and evidence should support them, not compete with them.
@@ -359,7 +370,9 @@ This page is for deep execution inspection. It should not replace Issue Detail a
 
 Current implementation:
 
-- shows session metadata, command, branch, workdir, status, issue, and project;
+- shows session metadata, agent instructions, Codex thread/turn state, branch, workdir, status, issue, and project;
+- exposes the stored agent profile in metadata and generated summaries;
+- exposes manual worktree cleanup for retained, non-active sessions;
 - shows session-scoped logs and evidence;
 - inspects the session worktree with `git status`, changed files, and diff preview;
 - compares the session branch against the project default branch through merge-base, ahead/behind count, commits, changed files, and diff preview;
@@ -411,11 +424,14 @@ Must-have for MVP:
 - Issues list and issue creation flow
 - Issue detail as the main work surface
 - Comments and progress updates
-- Start session from issue
-- Session panel on issue page
-- Evidence panel on issue page
+- Manage Agents and start Codex from an enabled agent-profile issue comment
+- Issue labels
+- Stop queued or running sessions
+- Agent turns inline on the issue timeline
+- Evidence attached to the issue timeline
 - Project settings and runtime defaults
 - Local session startup with git worktree isolation
+- Manual cleanup for retained local session worktrees
 - Session detail with logs and workspace evidence
 - local session startup with cluster and namespace visibility
 
@@ -438,7 +454,7 @@ Design rules:
 
 - prefer readable document layouts over card-heavy marketing composition;
 - treat the issue body as a real page with generous writing space;
-- keep session and evidence side panels compact and inspectable;
+- keep session and evidence details compact and inspectable;
 - avoid making Kubernetes details the first visual focus;
 - make agent activity legible without turning the screen into a terminal wall.
 
@@ -446,20 +462,21 @@ Avoiding Kubernetes as the first visual focus does not mean hiding it. Cluster, 
 
 ## Build Sequence
 
-Implemented as of 2026-05-07:
+Implemented as of 2026-05-08:
 
 1. Inbox review list, Issues list, and issue creation flow.
 2. Issue detail shell with document body and activity thread.
 3. Project create, settings, guarded delete, and repository validation.
-4. Session creation from issue.
-5. Session panel and live session state updates.
+4. Managed Agents route plus dynamic mention flow from issue comments.
+5. Inline agent turn summaries and live session state updates.
 6. Session detail with logs, workspace snapshot, branch comparison, and issue summary draft.
 7. Local runner process, SQLite storage, and git worktree isolation.
 8. Tailwind CSS 4 monorepo source detection for desktop UI packages.
+9. Issue labels, stop controls for active sessions, and manual worktree cleanup.
 
 Next build steps:
 
 1. Kubernetes-backed evidence and namespace inspection.
 2. Scoped kubeconfig or ServiceAccount generation.
-3. Session cleanup and retention controls.
+3. Namespace cleanup lifecycle.
 4. Standalone Sessions list view.

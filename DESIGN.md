@@ -40,7 +40,9 @@ Current installed shadcn/ui primitives:
 - `field`
 - `input`
 - `label`
+- `scroll-area`
 - `separator`
+- `select`
 - `textarea`
 
 Project-facing wrappers, app shell components, and compatibility exports live in `packages/ui/src/index.tsx` and are consumed through `@mspace/ui`.
@@ -144,13 +146,14 @@ The default desktop shape is a sidebar plus document workspace.
 - Sidebar width: about `252px`.
 - Main content: centered page frame with a max width near `1280px`.
 - Page padding: generous enough for reading, tight enough for operations.
-- Default routes in the app shell: Inbox and Projects. Issue and Session details are reached from objects.
+- Default routes in the app shell: Inbox, Issues, Agents, and Projects. Issue and Session details are reached from objects.
 
 Screen priorities:
 
 - Inbox: row-level triage, unread state, assignment, linked session.
 - Issue Detail: document body first, then activity, session, and evidence.
 - Session Detail: logs, worktree state, branch comparison, evidence.
+- Agents: managed Codex-backed profiles, mentions, enabled state, and instructions.
 - Projects: repository and runtime policy, not a daily conversation feed.
 
 ## Components
