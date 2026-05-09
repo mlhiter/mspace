@@ -180,12 +180,13 @@ packages/ui/         Shared UI primitives and shadcn/ui source components
 packages/views/      Product routes for Inbox, Issues, Agents, Projects, Sessions
 server/              Go control plane for identity, workspaces, auth sessions
 runner/              Go local runner, SQLite migrations, Codex app-server bridge
-docs/                Product, architecture, IA, references, runbook, and images
+docs/                Product, value thesis, architecture, IA, references, runbook, and images
 ```
 
 ## Docs
 
 - [Product Brief](./docs/product.md)
+- [Product Value Thesis](./docs/product-value.md)
 - [Control Plane Direction](./docs/control-plane.md)
 - [Architecture Notes](./docs/architecture.md)
 - [Local API Integration Guide](./docs/integration-guide.md)

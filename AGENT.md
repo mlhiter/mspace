@@ -121,6 +121,7 @@ pnpm test:server
 
 - `DESIGN.md`: design system reference for visual thesis, tokens, typography, components, layout, and UI guardrails.
 - `ROADMAP.md`: milestone priority and acceptance criteria for the next product work.
+- `docs/product-value.md`: product value thesis, proof standard, and boundary between Codex wrapper risk and mspace's Kubernetes-backed issue workflow.
 - `docs/product.md`: inbox and issue product positioning, users, workflows, MVP, non-goals.
 - `docs/control-plane.md`: server/control-plane direction for multiplayer identity, GitHub auth, and runtime-client boundaries.
 - `docs/architecture.md`: collaboration layer, runtime layer, permission model, data sketch, risks.

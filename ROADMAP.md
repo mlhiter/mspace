@@ -6,7 +6,7 @@
 
 This roadmap defines priority and sequence. It is not a task dump, issue tracker, or product spec.
 
-Product truth lives in `docs/product.md`, architecture truth lives in `docs/architecture.md`, interface structure lives in `docs/ia.md`, and visual rules live in `DESIGN.md`. This file answers one question: what should mspace do next?
+Product truth lives in `docs/product.md`, product value thesis lives in `docs/product-value.md`, architecture truth lives in `docs/architecture.md`, interface structure lives in `docs/ia.md`, and visual rules live in `DESIGN.md`. This file answers one question: what should mspace do next?
 
 ## Current Focus
 
