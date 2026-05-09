@@ -39,6 +39,10 @@ const emptyProjectForm: CreateProjectInput = {
   namespace: "",
 };
 
+function projectNameFromPath(path: string): string {
+  return path.trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
+}
+
 function projectToForm(project: Project): CreateProjectInput {
   return {
     name: project.name,
@@ -106,12 +110,13 @@ export function ProjectsPage() {
     const selectedPath = await window.mspaceDesktop.selectProjectFolder();
     if (!selectedPath) return;
 
-    setCreateForm({
-      ...createForm,
+    setCreateForm((currentForm) => ({
+      ...currentForm,
+      name: currentForm.name.trim() ? currentForm.name : projectNameFromPath(selectedPath),
       sourceType: "local",
       repoPath: selectedPath,
       repoUrl: "",
-    });
+    }));
   }
 
   function openCreateModal() {
