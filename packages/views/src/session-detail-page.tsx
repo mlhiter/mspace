@@ -13,16 +13,25 @@ import {
   PageFrame,
   StatusBadge,
   Textarea,
+  cn,
 } from "@mspace/ui";
+import { FileTypeIcon } from "./file-type-icon";
 import { RelativeTime } from "./time";
+import { workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
 function ChangeRow({ change }: { change: WorkspaceChange }) {
   return (
     <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 text-[12px] font-medium text-[color:var(--accent)]">
-          {change.statusCode || "--"}
+        <span
+          className={cn(
+            "rounded-full bg-[color:var(--accent-soft)] px-2 py-0.5 font-mono text-[12px] font-semibold",
+            workspaceChangeStatusTone(change.statusCode),
+          )}
+        >
+          {workspaceChangeStatusLabel(change.statusCode)}
         </span>
+        <FileTypeIcon path={change.path} />
         <span className="break-all text-[13px] font-medium text-[color:var(--text)]">{change.path || "(unknown path)"}</span>
       </div>
       {change.previousPath ? (
@@ -98,13 +107,13 @@ export function SessionDetailPage() {
       lines.push("", "Files changed since merge base:");
       for (const change of workspace.comparison.changes.slice(0, 12)) {
         const renameSuffix = change.previousPath ? ` (from ${change.previousPath})` : "";
-        lines.push(`- [${change.statusCode || "--"}] ${change.path}${renameSuffix}`);
+        lines.push(`- [${workspaceChangeStatusLabel(change.statusCode)}] ${change.path}${renameSuffix}`);
       }
     } else if (workspace.changes.length > 0) {
       lines.push("", "Uncommitted workspace changes:");
       for (const change of workspace.changes.slice(0, 12)) {
         const renameSuffix = change.previousPath ? ` (from ${change.previousPath})` : "";
-        lines.push(`- [${change.statusCode || "--"}] ${change.path}${renameSuffix}`);
+        lines.push(`- [${workspaceChangeStatusLabel(change.statusCode)}] ${change.path}${renameSuffix}`);
       }
     }
 

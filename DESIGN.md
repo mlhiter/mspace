@@ -193,11 +193,12 @@ Screen priorities:
 
 ## Icons
 
-Use `lucide-react` only.
+Use `lucide-react` for normal product UI. File-type chips and file-change rows may use a small, direct-imported `@mui/icons-material` mapping when the icon represents the file type itself.
 
 - Keep icon stroke consistent with the global `svg` rule.
 - Do not add manual `size-*` classes inside shadcn buttons unless the component requires it.
 - Prefer concrete icons: Inbox, Folder, Terminal, Git branch, Logs, Check, Alert, Clock.
+- Keep Material file icons scoped to file surfaces and a short extension map. Do not import the full barrel or recreate a full IDE icon theme.
 - Avoid abstract sparkle or AI icons except where the local runner or agent identity needs a quiet hint.
 
 ## Motion

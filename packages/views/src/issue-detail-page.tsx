@@ -13,7 +13,6 @@ import {
   Clock3,
   Code2,
   ExternalLink,
-  FileText,
   Globe2,
   Italic,
   Link as LinkIcon,
@@ -56,7 +55,9 @@ import {
   Textarea,
   cn,
 } from "@mspace/ui";
+import { FileTypeIcon } from "./file-type-icon";
 import { formatAbsoluteTime, formatRelativeTime } from "./time";
+import { workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
 type TimelineItem =
   | { kind: "opened"; createdAt: string }
@@ -651,8 +652,15 @@ function SessionFileChanges(props: { changes: WorkspaceChange[]; workdir: string
             }}
             title={targetPath}
           >
-            <FileText data-icon className="shrink-0 text-[color:var(--faint)]" />
-            <span className="shrink-0 font-mono text-[11px] text-[color:var(--faint)]">{change.statusCode || "M"}</span>
+            <span
+              className={cn(
+                "shrink-0 font-mono text-[11px] font-semibold leading-5",
+                workspaceChangeStatusTone(change.statusCode),
+              )}
+            >
+              {workspaceChangeStatusLabel(change.statusCode)}
+            </span>
+            <FileTypeIcon path={change.path} />
             <span className="min-w-0 truncate">{change.path}</span>
           </button>
         );
