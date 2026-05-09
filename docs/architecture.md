@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: local MVP implementation snapshot, updated 2026-05-09
+> Status: local MVP implementation snapshot, updated 2026-05-10
 
 ## Current Implementation Snapshot
 
@@ -27,6 +27,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Inbox is an unread review feed powered by server-sent events from `/api/inbox/stream`.
 - Issue comments that mention an enabled agent are saved first, then the desktop calls `POST /api/issues/{issueID}/assign-agent` with the mention-stripped comment as the current turn request and the selected Codex profile.
 - Local runner issues and comments keep denormalized display identity snapshots: issue creator name/avatar and comment author name/avatar. Existing anonymous local human rows are backfilled to `mlhiter`; system comments display as `mspace`.
+- The desktop shell exposes a global search / Command+K palette backed by the existing issues and projects queries. Active work remains a separate sidebar block because it is an issue subset, not an additional global search source.
 - Issue task lists are child issues stored on `issues.parent_issue_id`. Checklist lines submitted during issue creation are extracted into child rows, and Issue Detail renders those children inline with checkbox-style status controls.
 - Issue labels use a built-in taxonomy in `issue_label_definitions` and issue links in `issue_labels`. The current dimensions are `type` and `priority`; type is classified asynchronously by the internal `@triage` Codex profile, while priority remains human-selected from Issue Detail.
 - Kubernetes is currently represented by reusable cluster configs plus issue-level test environment records. Clusters can be imported from selected kubeconfig files or discovered from regular files under `~/.kube`; each imported context stores `kubeconfig_path`, optional `kube_context`, `image_registry_prefix`, default `exposure_mode`, optional `preview_domain`, optional `ingress_class`, optional `node_host`, and a readiness status from a read-only API check.

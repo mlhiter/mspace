@@ -46,6 +46,7 @@ The interaction model is closer to a shared engineering document than a terminal
 - Go server control plane with GitHub OAuth entrypoints, state-bound desktop login polling, Postgres migrations, mspace session tokens, users, workspaces, and workspace membership.
 - GitHub-authenticated sidebar account/workspace state, plus local issue creator and comment actor display snapshots with human and Codex avatars.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, and real shadcn/ui source components in `@mspace/ui`.
+- Sidebar global search with a `Command+K` palette for jumping to issues and projects.
 - Go local runner with HTTP APIs, SQLite storage, server-sent events, session logs, git-aware project import, and Codex app-server integration.
 - Project import from a local folder or GitHub repository URL, including GitHub remote metadata detection when available.
 - Managed agent profiles stored in SQLite, seeded with internal `@triage` plus user-facing `@codex`, `@bugfix`, and `@design`.

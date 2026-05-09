@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-05-09
+> Status: local MVP implementation snapshot, updated 2026-05-10
 
 ## IA Goal
 
@@ -81,13 +81,13 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a quick issue creation link under the search affordance. Session detail remains deep-linked from issue work.
+The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
 Current implementation principles:
 
-- left sidebar contains the workspace identity/account menu, search affordance, quick issue creation, primary navigation, active issue work, and local runner state;
+- left sidebar contains the workspace identity/account menu, global search / Command+K palette for issues and projects, quick issue creation, primary navigation, active issue work, and local runner state;
 - Inbox and Project lists use row-level cards and compact metadata rather than dashboard tiles;
 - Issue Detail should read as a live document with session and evidence context attached around it;
 - Session Detail can be more operational, but should still preserve the same paper workspace tone;
@@ -485,6 +485,7 @@ Implemented as of 2026-05-09:
 10. Clusters route with desktop file picker import, first-run `~/.kube` discovery, context listing, reachability status, registry, and preview exposure defaults.
 11. Issue test environment records plus manual deploy/cleanup/retain actions.
 12. Server-backed GitHub sign-in with sidebar account/workspace state and local issue/comment actor display snapshots.
+13. Sidebar global search and Command+K palette for issues and projects.
 
 Next build steps:
 

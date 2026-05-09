@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   createHashHistory,
@@ -21,12 +21,19 @@ import {
   SessionDetailPage,
 } from "@mspace/views";
 import { api, controlPlaneApi, queryKeys, setStoredAuthIdentity } from "@mspace/core";
-import { AppShell } from "@mspace/ui";
+import { AppShell, type ShellSearchItem } from "@mspace/ui";
 import mspaceLogoUrl from "../../../assets/brand/mspace-logo.svg";
 import "./globals.css";
 
 const queryClient = new QueryClient();
 const AUTH_TOKEN_STORAGE_KEY = "mspace.authToken";
+
+function joinSearchSubtitle(values: Array<string | number | null | undefined>): string {
+  return values
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(" - ");
+}
 
 function RootShell() {
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "");
@@ -36,6 +43,14 @@ function RootShell() {
     queryKey: queryKeys.activeWork,
     queryFn: api.listActiveWork,
     refetchInterval: 15_000,
+  });
+  const issuesQuery = useQuery({
+    queryKey: queryKeys.issues,
+    queryFn: api.listIssues,
+  });
+  const projectsQuery = useQuery({
+    queryKey: queryKeys.projects,
+    queryFn: api.listProjects,
   });
   const meQuery = useQuery({
     queryKey: queryKeys.authMe(authToken),
@@ -93,11 +108,54 @@ function RootShell() {
           ? "error"
           : "signed-out";
   const currentWorkspace = meQuery.data?.workspaces[0];
+  const searchItems = useMemo<ShellSearchItem[]>(() => {
+    const issueItems: ShellSearchItem[] = (issuesQuery.data || []).map((issue) => ({
+      id: `issue:${issue.id}`,
+      kind: "Issue",
+      title: issue.title,
+      subtitle: joinSearchSubtitle([issue.projectName, issue.status, issue.labels.map((label) => label.name).join(", ")]),
+      keywords: [
+        issue.body,
+        issue.projectName,
+        issue.status,
+        issue.triageStatus,
+        issue.assignee,
+        issue.assigneeType,
+        issue.labels.map((label) => `${label.name} ${label.key} ${label.dimension}`).join(" "),
+      ],
+      to: "/issues/$issueId",
+      params: { issueId: issue.id },
+    }));
+    const projectItems: ShellSearchItem[] = (projectsQuery.data || []).map((project) => ({
+      id: `project:${project.id}`,
+      kind: "Project",
+      title: project.name,
+      subtitle: joinSearchSubtitle([
+        project.gitOwner && project.gitRepo ? `${project.gitOwner}/${project.gitRepo}` : project.repoPath,
+        `${project.issueCount} issues`,
+      ]),
+      keywords: [
+        project.repoPath,
+        project.remoteUrl,
+        project.gitProvider,
+        project.gitOwner,
+        project.gitRepo,
+        project.defaultBranch,
+        project.namespace,
+        project.kubeContext,
+      ],
+      to: "/projects",
+    }));
+
+    return [...issueItems, ...projectItems];
+  }, [issuesQuery.data, projectsQuery.data]);
 
   return (
     <AppShell
       brandLogoSrc={mspaceLogoUrl}
       activeWorkItems={activeWorkQuery.data || []}
+      searchItems={searchItems}
+      searchLoading={issuesQuery.isLoading || projectsQuery.isLoading}
       account={{
         status: accountStatus,
         name: meQuery.data?.user.name,

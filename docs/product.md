@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-09
+> Status: local MVP implementation snapshot, updated 2026-05-10
 
 ## One-Line Definition
 
@@ -12,6 +12,7 @@ The repository now has a runnable local desktop MVP:
 
 - create projects from a local folder picker or GitHub repository URL and manage settings later;
 - create and manage issues in the Issues tab;
+- jump to issues and projects from the sidebar global search or `Command+K` palette;
 - sign in with GitHub through the local server control plane and show the current user/workspace state in the sidebar;
 - write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page, where they can be toggled or deleted;
 - classify new issues asynchronously with a background triage agent that assigns one Conventional Commit type label;

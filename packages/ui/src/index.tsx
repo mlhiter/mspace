@@ -26,7 +26,16 @@ import {
   Sparkles,
   SquareTerminal,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ComponentProps, type PropsWithChildren, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PropsWithChildren,
+  type ReactNode,
+} from "react";
 import {
   Link,
   Outlet,
@@ -141,16 +150,42 @@ export type ShellAccount = {
   actionLabel?: string;
 };
 
+export type ShellSearchItem = {
+  id: string;
+  kind: "Issue" | "Project";
+  title: string;
+  subtitle?: string;
+  keywords?: string[];
+  to: string;
+  params?: Record<string, string>;
+  search?: Record<string, unknown>;
+};
+
 export function AppShell(
   props: {
     brandLogoSrc?: string;
     activeWorkItems?: ShellActiveWorkItem[];
+    searchItems?: ShellSearchItem[];
+    searchLoading?: boolean;
     account?: ShellAccount;
     onSignIn?: () => void;
     onSignOut?: () => void;
   } = {},
 ) {
   const activeWorkItems = props.activeWorkItems || [];
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  useEffect(() => {
+    function openFromShortcut(event: globalThis.KeyboardEvent) {
+      if (event.defaultPrevented || event.key.toLowerCase() !== "k") return;
+      if (!event.metaKey && !event.ctrlKey) return;
+      event.preventDefault();
+      setSearchOpen(true);
+    }
+
+    document.addEventListener("keydown", openFromShortcut);
+    return () => document.removeEventListener("keydown", openFromShortcut);
+  }, []);
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[252px_minmax(0,1fr)] bg-[color:var(--canvas)] text-[color:var(--text)]">
@@ -163,12 +198,19 @@ export function AppShell(
           onSignOut={props.onSignOut}
         />
 
-        <div className="mb-2 rounded-[10px] bg-[color:var(--paper)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
-          <div className="flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
-            <Search data-icon />
-            <span>Search projects, sessions, evidence</span>
-          </div>
-        </div>
+        <button
+          type="button"
+          className="mb-2 w-full rounded-[10px] bg-[color:var(--paper)] px-2.5 py-2 text-left shadow-[inset_0_0_0_1px_var(--line)] transition-[background-color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-[0.99]"
+          onClick={() => setSearchOpen(true)}
+        >
+          <span className="flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
+            <Search data-icon className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate">Search issues and projects</span>
+            <kbd className="shrink-0 rounded-[5px] bg-[color:var(--block)] px-1.5 py-0.5 text-[10px] font-medium leading-4 text-[color:var(--faint)] shadow-[inset_0_0_0_1px_var(--line)]">
+              Cmd K
+            </kbd>
+          </span>
+        </button>
         <SidebarActionLink to="/issues" search={{ new: "1" }} icon={MessageSquarePlus}>
           New issue
         </SidebarActionLink>
@@ -214,7 +256,185 @@ export function AppShell(
           </div>
         </ScrollArea>
       </main>
+      {searchOpen ? (
+        <GlobalSearchDialog
+          items={props.searchItems || []}
+          loading={props.searchLoading}
+          onClose={() => setSearchOpen(false)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+const maxGlobalSearchResults = 12;
+const searchKindIcons: Record<ShellSearchItem["kind"], LucideIcon> = {
+  Issue: MessageSquareText,
+  Project: FolderKanban,
+};
+
+function GlobalSearchDialog(props: { items: ShellSearchItem[]; loading?: boolean; onClose: () => void }) {
+  const router = useRouter();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredItems = useMemo(() => {
+    const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+    const matched =
+      tokens.length === 0
+        ? props.items
+        : props.items.filter((item) => {
+            const haystack = [item.kind, item.title, item.subtitle, ...(item.keywords || [])]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
+            return tokens.every((token) => haystack.includes(token));
+          });
+
+    return matched.slice(0, maxGlobalSearchResults);
+  }, [normalizedQuery, props.items]);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [normalizedQuery]);
+
+  useEffect(() => {
+    setActiveIndex((index) => Math.min(index, Math.max(filteredItems.length - 1, 0)));
+  }, [filteredItems.length]);
+
+  useEffect(() => {
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      props.onClose();
+    }
+
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [props.onClose]);
+
+  function navigateToItem(item: ShellSearchItem) {
+    props.onClose();
+    void router.navigate({
+      to: item.to,
+      params: item.params || {},
+      search: item.search || {},
+    } as never);
+  }
+
+  function handleInputKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.min(index + 1, Math.max(filteredItems.length - 1, 0)));
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex((index) => Math.max(index - 1, 0));
+      return;
+    }
+
+    if (event.key === "Enter") {
+      const selectedItem = filteredItems[activeIndex];
+      if (!selectedItem) return;
+      event.preventDefault();
+      navigateToItem(selectedItem);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-[rgba(0,0,0,0.18)] px-4 pt-[12vh]">
+      <button
+        type="button"
+        aria-label="Close global search"
+        className="absolute inset-0 cursor-default"
+        onClick={props.onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Global search"
+        className="relative z-10 w-full max-w-[640px] overflow-hidden rounded-[12px] bg-[color:var(--paper)] text-[color:var(--text)] shadow-[0_24px_80px_rgba(0,0,0,0.18),inset_0_0_0_1px_var(--line)]"
+      >
+        <div className="flex items-center gap-2 border-b border-[color:var(--line)] px-3 py-2">
+          <Search data-icon className="shrink-0 text-[color:var(--faint)]" />
+          <ShadcnInput
+            ref={inputRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={handleInputKeyDown}
+            placeholder="Search issues and projects"
+            className="h-9 min-h-9 border-0 bg-transparent px-0 text-[14px] shadow-none placeholder:text-[color:var(--faint)] focus-visible:border-transparent focus-visible:ring-0"
+          />
+          <kbd className="shrink-0 rounded-[5px] bg-[color:var(--block)] px-1.5 py-0.5 text-[10px] font-medium leading-4 text-[color:var(--faint)] shadow-[inset_0_0_0_1px_var(--line)]">
+            Esc
+          </kbd>
+        </div>
+        <div className="max-h-[420px] overflow-y-auto p-1.5">
+          {filteredItems.length > 0 ? (
+            <div className="flex flex-col gap-1">
+              {filteredItems.map((item, index) => (
+                <GlobalSearchResult
+                  key={item.id}
+                  item={item}
+                  active={index === activeIndex}
+                  onSelect={() => navigateToItem(item)}
+                  onMouseEnter={() => setActiveIndex(index)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="px-3 py-8 text-center text-[13px] leading-5 text-[color:var(--muted)]">
+              {props.loading ? "Loading workspace results." : "No matching workspace results."}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GlobalSearchResult(props: {
+  item: ShellSearchItem;
+  active: boolean;
+  onSelect: () => void;
+  onMouseEnter: () => void;
+}) {
+  const Icon = searchKindIcons[props.item.kind];
+
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex min-h-12 w-full items-center gap-3 rounded-[8px] px-2.5 py-2 text-left transition-[background-color,transform] duration-150 ease-out active:scale-[0.995]",
+        props.active ? "bg-[color:var(--selection)]" : "hover:bg-[color:var(--hover)]",
+      )}
+      onClick={props.onSelect}
+      onMouseEnter={props.onMouseEnter}
+    >
+      <span className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[color:var(--block)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+        <Icon data-icon />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-medium leading-5 text-[color:var(--text)]">
+          {props.item.title}
+        </span>
+        {props.item.subtitle ? (
+          <span className="block truncate text-[12px] leading-5 text-[color:var(--muted)]">
+            {props.item.subtitle}
+          </span>
+        ) : null}
+      </span>
+      <span className="shrink-0 rounded-[5px] bg-[color:var(--block)] px-1.5 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+        {props.item.kind}
+      </span>
+    </button>
   );
 }
 
