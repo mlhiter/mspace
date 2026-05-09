@@ -1,12 +1,12 @@
 # mspace Architecture Notes
 
-> Status: local MVP implementation snapshot, updated 2026-05-08
+> Status: local MVP implementation snapshot, updated 2026-05-09
 
 ## Current Implementation Snapshot
 
 The repository currently contains a runnable local-first desktop MVP:
 
-- Electron desktop shell built with electron-vite, React 19, React Router 7, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
+- Electron desktop shell built with electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless a healthy runner is already listening.
 - SQLite state lives at `~/.mspace/mspace.db`.
@@ -24,8 +24,12 @@ The repository currently contains a runnable local-first desktop MVP:
 - Inbox is an unread review feed powered by server-sent events from `/api/inbox/stream`.
 - Issue comments that mention an enabled agent are saved first, then the desktop calls `POST /api/issues/{issueID}/assign-agent` with the mention-stripped comment as the current turn request and the selected Codex profile.
 - Issue labels are issue-local records in `issue_labels`, exposed on issue lists and editable inline from Issue Detail.
-- Kubernetes is currently represented by project-level `kube_context` and `namespace`, passed into the session as `MSPACE_KUBE_CONTEXT` and `MSPACE_KUBE_NAMESPACE`. Scoped kubeconfig and ServiceAccount generation are still future work.
-- Sessions also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, and `MSPACE_SESSION_CONTEXT`.
+- Kubernetes is currently represented by reusable cluster configs plus issue-level test environment records. Clusters can be imported from selected kubeconfig files or discovered from regular files under `~/.kube`; each imported context stores `kubeconfig_path`, optional `kube_context`, `image_registry_prefix`, default `exposure_mode`, optional `preview_domain`, optional `ingress_class`, optional `node_host`, and a readiness status from a read-only API check.
+- Projects store `default_cluster_id` so issue deploys can use known test cluster access without asking for kubeconfig or registry values each time.
+- Each issue can have one `issue_test_environments` record. It stores the selected cluster id, reserved issue namespace, namespace state, cleanup state, preview URL, deployment session id, cleanup session id, and the resolved registry/kubeconfig/routing values used for that issue.
+- Test deployment is a manual Issue Detail action. It queues a Codex deploy/test turn; the agent creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when configured, probes the preview URL, and writes `test-environment.json` into the session artifact directory when it has a URL to record.
+- Scoped kubeconfig and ServiceAccount generation are still future work. The MVP trusts the kubeconfig path stored in the selected cluster.
+- Sessions also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, `MSPACE_SESSION_ARTIFACT_DIR`, and resolved cluster/test-environment variables when the issue has a test environment.
 - Current desktop visual language is a Notion-like paper workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, and restrained icon actions.
 
 Current shadcn/ui component source:
@@ -48,6 +52,7 @@ Implemented desktop routes:
 - `/issues`
 - `/issues/:issueId`
 - `/agents`
+- `/clusters`
 - `/projects`
 - `/sessions/:sessionId`
 
@@ -58,9 +63,17 @@ Implemented runner API:
 | `GET` | `/health` | Runner health and version. |
 | `GET` | `/api/inbox` | List inbox items. |
 | `GET` | `/api/inbox/stream` | Stream inbox update events over server-sent events. |
+| `GET` | `/api/active-work` | List recent issue work for the shell sidebar. |
 | `GET` | `/api/agents` | List managed agent profiles. |
 | `POST` | `/api/agents` | Create a new Codex-backed agent profile. |
 | `PUT` | `/api/agents/{agentID}` | Update a managed agent profile. |
+| `GET` | `/api/clusters` | List reusable test cluster configs. |
+| `POST` | `/api/clusters` | Create a reusable test cluster config. |
+| `GET` | `/api/clusters/discover-defaults` | Discover selectable kubeconfig candidates and contexts under `~/.kube` without importing them. |
+| `POST` | `/api/clusters/import` | Import selected kubeconfig file paths and check API reachability. |
+| `POST` | `/api/clusters/import-defaults` | Scan `~/.kube`, import kubeconfig contexts, and check API reachability. |
+| `PUT` | `/api/clusters/{clusterID}` | Update a reusable test cluster config. |
+| `DELETE` | `/api/clusters/{clusterID}` | Delete a cluster config when no project or test env references it. |
 | `GET` | `/api/projects` | List projects with issue/session counts. |
 | `POST` | `/api/projects` | Create a project. |
 | `PUT` | `/api/projects/{projectID}` | Update a project. |
@@ -72,6 +85,9 @@ Implemented runner API:
 | `POST` | `/api/issues/{issueID}/comments` | Add a human comment. |
 | `POST` | `/api/issues/{issueID}/assign-agent` | Queue a Codex turn from an issue comment. |
 | `POST` | `/api/issues/{issueID}/sessions` | Queue and start a local agent session. |
+| `POST` | `/api/issues/{issueID}/test-deploy` | Manually queue an issue-scoped test deployment agent turn. |
+| `POST` | `/api/issues/{issueID}/test-environment/cleanup` | Manually queue an agent turn to clean the issue test namespace. |
+| `POST` | `/api/issues/{issueID}/test-environment/retain` | Record that the issue test namespace should be retained. |
 | `GET` | `/api/sessions/{sessionID}` | Load session detail, logs, evidence, and workspace snapshot. |
 | `POST` | `/api/sessions/{sessionID}/cancel` | Cancel a running session. |
 | `POST` | `/api/sessions/{sessionID}/cleanup` | Remove a retained, non-active local session worktree. |
@@ -144,10 +160,28 @@ Current implemented fields:
 - git owner;
 - git repo;
 - default branch;
-- Kubernetes context;
-- Kubernetes namespace;
+- default cluster id;
 - deploy command;
 - validation command.
+- legacy Kubernetes context, kubeconfig path, namespace, registry, preview domain, ingress class, and node host fields for compatibility.
+
+### Cluster
+
+A Cluster is reusable access to a shared Kubernetes test cluster.
+
+Current implemented fields:
+
+- name;
+- kubeconfig path;
+- optional Kubernetes context;
+- image registry prefix;
+- default exposure mode (`nodeport` or `ingress`);
+- optional NodePort host;
+- optional preview domain;
+- optional ingress class;
+- status (`configured`, `ready`, or `unreachable`);
+- last checked time;
+- project and test-environment reference counts.
 
 ### Issue
 
@@ -164,7 +198,30 @@ Current implemented fields:
 - assignee type;
 - comments and progress updates;
 - linked sessions;
-- environment evidence.
+- environment evidence;
+- optional issue test environment record.
+
+### Issue Test Environment
+
+An Issue Test Environment is the per-issue Kubernetes validation record.
+
+Current implemented fields:
+
+- issue id;
+- selected cluster id;
+- issue namespace;
+- namespace status;
+- cleanup status;
+- preview URL;
+- image registry prefix;
+- kubeconfig path;
+- Kubernetes context;
+- exposure mode;
+- preview domain;
+- ingress class;
+- NodePort host;
+- last deploy session id;
+- last cleanup session id.
 
 ### Agent Session
 
@@ -186,12 +243,13 @@ Current implemented fields:
 
 ### Namespace Policy
 
-There are two supported policies:
+There are three policies in the product model:
 
 - project namespace: one long-lived namespace per project;
-- session namespace: one temporary namespace per agent session.
+- issue namespace: one test namespace per issue;
+- session namespace: one temporary namespace per agent runtime session.
 
-The recommended default is session namespace once concurrency matters. The project namespace is acceptable for the first internal prototype because it is simpler and matches the current manual workflow.
+The current local MVP uses one issue test namespace when the user manually triggers deployment. Session namespace becomes relevant later for Kubernetes-hosted agent runtimes. Project namespace remains a compatibility fallback for older project validation commands.
 
 ### Runtime Provider
 
@@ -207,7 +265,7 @@ Provider options in the product model:
 
 The first production-grade MVP path should be local runtime because it keeps iteration simple and matches the current intended workflow.
 
-The implemented MVP uses a desktop-managed local runner process, not a long-running daemon. The runner owns SQLite, HTTP APIs, session process execution, log capture, and git worktree preparation.
+The implemented MVP uses a desktop-managed local runner process, not a long-running daemon. The runner owns SQLite, HTTP APIs, session process execution, log capture, git worktree preparation, and issue test-environment bookkeeping.
 
 ### Validation Environment
 
@@ -218,20 +276,29 @@ Initial environment options:
 - Kubernetes namespace in a shared test cluster;
 - future local container or ephemeral environment only if it preserves enough realism for the product.
 
-The first serious environment should be Kubernetes because the product value depends on real environment isolation, scoped cluster access, and runtime evidence.
+The first serious environment should be Kubernetes because the product value depends on real environment isolation, scoped cluster access, runtime evidence, and a team-accessible preview URL.
 
 ### Kubernetes-First Validation Principle
 
 Kubernetes should be visible as a core design assumption in the validation layer:
 
-- project setup includes cluster and namespace policy by default;
-- session startup can allocate namespace access and scoped kubeconfig;
+- project setup includes kubeconfig, image registry, and preview routing defaults;
+- issue test deployment reserves one namespace per issue and lets the agent create it;
 - issue evidence assumes pod, event, rollout, and ingress data are available;
 - cleanup assumes namespace or workload lifecycle management.
 
 Other validation targets are adapters around this core shape, not peers that redefine the product.
 
 ## Kubernetes Permission Model
+
+Current MVP behavior:
+
+- the user supplies kubeconfig access through the selected Cluster;
+- the deploy/test agent uses that kubeconfig directly;
+- the prompt restricts the agent to the issue namespace and requires it to report preview URL, namespace, image reference, validation result, and blockers;
+- namespace cleanup is manually triggered from Issue Detail.
+
+Target hardened behavior:
 
 Each session that can deploy or inspect the Kubernetes environment gets a dedicated ServiceAccount or equivalent scoped kubeconfig.
 
@@ -245,13 +312,13 @@ Allowed by default:
 Denied by default:
 
 - cluster-scoped writes;
-- namespace create/delete by the agent itself;
+- namespace create/delete by the agent itself in the hardened target model;
 - secrets read;
 - node access;
 - persistent volume cluster operations;
 - cross-namespace reads unless explicitly granted.
 
-The mspace controller, not the agent, creates namespaces, RoleBindings, quotas, and cleanup jobs.
+In the hardened target model, the mspace controller, not the agent, creates namespaces, RoleBindings, quotas, and cleanup jobs.
 
 ## Resource Guardrails
 
@@ -327,6 +394,21 @@ User creates issue
 The local MVP uses these SQLite tables from `runner/migrations/001_init.sql`:
 
 ```text
+clusters
+  id
+  name
+  kubeconfig_path
+  kube_context
+  image_registry_prefix
+  exposure_mode
+  node_host
+  preview_domain
+  ingress_class
+  status
+  last_checked_at
+  created_at
+  updated_at
+
 projects
   id
   name
@@ -340,7 +422,13 @@ projects
   deploy_command
   validation_command
   kube_context
+  kubeconfig_path
   namespace
+  image_registry_prefix
+  preview_domain
+  ingress_class
+  node_host
+  default_cluster_id
   created_at
   updated_at
 
@@ -373,10 +461,31 @@ comments
   body
   created_at
 
+issue_labels
+  id
+  issue_id
+  name
+  color
+  created_at
+
+agent_profiles
+  id
+  name
+  mention
+  provider
+  description
+  instructions
+  enabled
+  built_in
+  sort_order
+  created_at
+  updated_at
+
 agent_sessions
   id
   issue_id
   provider
+  agent_profile
   runtime_mode
   command
   status
@@ -407,6 +516,25 @@ deployment_evidence
   summary
   details
   created_at
+
+issue_test_environments
+  issue_id
+  namespace
+  namespace_status
+  cleanup_status
+  preview_url
+  cluster_id
+  image_registry_prefix
+  kubeconfig_path
+  kube_context
+  exposure_mode
+  preview_domain
+  ingress_class
+  node_host
+  last_deploy_session_id
+  last_cleanup_session_id
+  created_at
+  updated_at
 ```
 
 ### Target Product Schema

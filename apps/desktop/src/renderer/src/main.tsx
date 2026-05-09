@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   createHashHistory,
   createRootRoute,
@@ -11,20 +12,32 @@ import {
 } from "@tanstack/react-router";
 import {
   AgentsPage,
+  ClustersPage,
   InboxPage,
   IssueDetailPage,
   IssuesPage,
   ProjectsPage,
   SessionDetailPage,
 } from "@mspace/views";
+import { api, queryKeys } from "@mspace/core";
 import { AppShell } from "@mspace/ui";
 import mspaceLogoUrl from "../../../assets/brand/mspace-logo.svg";
 import "./globals.css";
 
 const queryClient = new QueryClient();
 
+function RootShell() {
+  const activeWorkQuery = useQuery({
+    queryKey: queryKeys.activeWork,
+    queryFn: api.listActiveWork,
+    refetchInterval: 15_000,
+  });
+
+  return <AppShell brandLogoSrc={mspaceLogoUrl} activeWorkItems={activeWorkQuery.data || []} />;
+}
+
 const rootRoute = createRootRoute({
-  component: () => <AppShell brandLogoSrc={mspaceLogoUrl} />,
+  component: RootShell,
 });
 
 const indexRoute = createRoute({
@@ -57,6 +70,12 @@ const agentsRoute = createRoute({
   component: AgentsPage,
 });
 
+const clustersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/clusters",
+  component: ClustersPage,
+});
+
 const projectsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/projects",
@@ -75,6 +94,7 @@ const routeTree = rootRoute.addChildren([
   issuesRoute,
   issueDetailRoute,
   agentsRoute,
+  clustersRoute,
   projectsRoute,
   sessionDetailRoute,
 ]);

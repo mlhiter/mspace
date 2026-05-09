@@ -37,12 +37,12 @@ The interaction model is closer to a shared engineering document than a terminal
 
 - **Issues are the durable workspace.** Agent turns, progress, blockers, session evidence, and review comments stay attached to the issue.
 - **Local development stays fast.** Sessions run in prepared git worktrees under `~/.mspace/workdirs`.
-- **Validation is real.** Test deployments use a project kubeconfig and image registry prefix to create issue-scoped Kubernetes environments.
+- **Validation is real.** Test deployments use a saved cluster config and issue-scoped namespace to create Kubernetes preview environments.
 - **Evidence is reviewable.** Branch status, diffs, logs, namespace state, preview URLs, and deployment output are visible without reconstructing context from a terminal.
 
 ## Features
 
-- Electron desktop app with Inbox, Issues, Agents, Projects, Issue Detail, and Session Detail screens.
+- Electron desktop app with Inbox, Issues, Agents, Clusters, Projects, Issue Detail, and Session Detail screens.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, and real shadcn/ui source components in `@mspace/ui`.
 - Go local runner with HTTP APIs, SQLite storage, server-sent events, session logs, git-aware project import, and Codex app-server integration.
 - Project import from a local folder or GitHub repository URL, including GitHub remote metadata detection when available.
@@ -50,11 +50,12 @@ The interaction model is closer to a shared engineering document than a terminal
 - Agent mentions from issue comments, with turn queueing, profile instructions, status updates, and issue timeline updates.
 - Per-session git worktrees, workspace inspection, changed file lists, diff previews, commits, and comparison against the project default branch.
 - Issue-local labels, unread Inbox updates, running-session stop controls, and manual worktree cleanup after completion or cancellation.
-- Project-level kubeconfig path, image registry prefix, preview routing defaults, and fallback Kubernetes context or namespace hints.
+- Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
+- Project default cluster selection.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and record evidence.
 
 > [!IMPORTANT]
-> Generated scoped kubeconfigs, ServiceAccounts, automatic PR capture, and Kubernetes-hosted agent runtime are future work. The MVP trusts the kubeconfig path configured on the project or deployment action.
+> Generated scoped kubeconfigs, ServiceAccounts, automatic PR capture, and Kubernetes-hosted agent runtime are future work. The MVP trusts the kubeconfig path configured on the selected cluster.
 
 ## Architecture
 
@@ -64,7 +65,7 @@ mspace separates collaboration, execution, and validation:
 
 | Layer | What it owns | Current implementation |
 | --- | --- | --- |
-| Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review | Electron, React, React Router, React Query, shared `@mspace/ui` |
+| Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review | Electron, React, TanStack Router, React Query, shared `@mspace/ui` |
 | Local runner | API, SQLite state, SSE streams, worktree preparation, Codex session lifecycle | Go, chi, SQLite, `codex app-server --listen stdio://` |
 | Agent runtime | One issue-bound turn in an isolated working directory | Local git worktree under `~/.mspace/workdirs/<project-id>/<session-id>` |
 | Validation target | Build, deploy, inspect, preview, and cleanup issue test environments | Namespace-scoped Kubernetes workflow triggered from Issue Detail |
@@ -98,11 +99,12 @@ pnpm dev:desktop
 ### First workflow
 
 1. Add a project from a local folder or GitHub repository URL.
-2. Create an issue in the Issues tab.
-3. Mention an enabled agent profile, such as `@codex`, in an issue comment.
-4. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
-5. Configure kubeconfig and image registry values on the project when you want a test deployment.
-6. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
+2. Add a reusable test cluster in the Clusters tab, or use the first-run prompt to choose which discovered `~/.kube` kubeconfig files to import.
+3. Select that cluster as the project default when needed.
+4. Create an issue in the Issues tab.
+5. Mention an enabled agent profile, such as `@codex`, in an issue comment.
+6. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
+7. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
 
 ## Configuration
 
@@ -160,6 +162,7 @@ docs/                Product, architecture, IA, references, runbook, and images
 
 - [Product Brief](./docs/product.md)
 - [Architecture Notes](./docs/architecture.md)
+- [Local API Integration Guide](./docs/integration-guide.md)
 - [MVP Information Architecture](./docs/ia.md)
 - [Local Runbook](./docs/runbook.md)
 - [Reference Notes](./docs/references.md)

@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-05-08
+> Status: milestone roadmap, updated 2026-05-09
 
 ## Purpose
 
@@ -18,11 +18,12 @@ Project
   -> Local Agent Session
   -> Inbox review updates
   -> Worktree and evidence review
-  -> Kubernetes validation evidence
+  -> Manual PR or manual issue test deployment
+  -> Issue namespace preview URL and validation evidence
   -> Branch / PR and cleanup
 ```
 
-The roadmap intentionally keeps local workflow first. Kubernetes is the validation target for the MVP, not the first development runtime.
+The roadmap intentionally keeps local workflow first. Kubernetes is the manually triggered test target for the MVP, not the first development runtime.
 
 ## Approved Execution Plan
 
@@ -34,7 +35,7 @@ Target: 5-8 focused development days.
 
 Goal:
 
-- Create or import a project, create an issue, assign it to an agent, watch status updates, and finish with branch/PR output plus Kubernetes validation evidence.
+- Create or import a project, create an issue, assign it to an agent, watch status updates, then manually trigger PR output or an issue-scoped Kubernetes test deployment.
 
 Build in order:
 
@@ -42,12 +43,13 @@ Build in order:
 - Issue creation: keep creation in the Issues surface, allow lightweight prompts, and allow project inference when the user leaves project empty.
 - Agent mention flow: let a user manage agent profiles, write an issue comment with an enabled agent mention, save that comment, and create the local session from the current turn request and selected profile.
 - Inbox realtime updates: move issue/session status changes into the Inbox review feed without relying on slow manual refreshes.
-- Local agent context: send issue body, comments, project metadata, branch, kube context, and namespace into the Codex app-server turn prompt.
+- Local agent context: send issue body, comments, project metadata, branch, selected cluster, kube context, and namespace into the Codex app-server turn prompt.
 - Progress comments: turn meaningful session lifecycle and status updates into issue activity, not just terminal logs.
 - Issue labels and session stop controls: keep issue triage lightweight and allow a human to interrupt queued or running work.
-- Kubernetes validation evidence: capture Pods, Deployments, Services, Ingress, Events, logs, rollout state, and environment URLs after deploy or validation commands run.
-- Branch and PR output: detect the session branch, capture PR URLs when `gh` or provider credentials are available, and keep fallback commands when PR creation is not configured.
-- Cleanup controls: let the user retain or clean session worktrees now, and later clean session namespaces.
+- Manual test deployment: let the user select a saved cluster and optional exposure overrides before queueing a deploy/test agent turn.
+- Issue namespace lifecycle: each issue can reserve one test namespace; the deploy/test agent creates it, deploys resources, validates the preview URL, and writes the result back.
+- Branch and PR output: expose PR generation as a manual action after agent work, not as automatic session cleanup.
+- Cleanup controls: let the user retain or clean session worktrees now, and record retain/cleanup decisions for issue test namespaces.
 
 ### Stage 2: Kubernetes-Hosted Agent Runtime
 
@@ -55,7 +57,7 @@ Target: 1-2 additional weeks after Stage 1 is usable.
 
 Goal:
 
-- Allocate cluster resources for an agent session, deploy the agent/runtime into the assigned namespace, and return runtime and environment access URLs.
+- Allocate cluster resources for hosted agent runtime later, after issue-scoped local-to-Kubernetes deployment is usable.
 
 Build in order:
 
@@ -68,7 +70,7 @@ Build in order:
 
 Decision:
 
-- Stage 1 remains first. Kubernetes-hosted agent runtime starts only after the local issue-to-evidence loop can complete one real internal project without manual reconstruction.
+- Stage 1 remains first. Kubernetes-hosted agent runtime starts only after the local issue-to-test-namespace loop can complete one real internal project without manual reconstruction.
 
 ## Milestone 0: Product Surface Baseline
 
@@ -88,7 +90,7 @@ Acceptance:
 
 ## Milestone 1: Local Issue Workflow
 
-Status: current priority.
+Status: current reliability and usability priority.
 
 Goal:
 
@@ -139,33 +141,39 @@ Acceptance:
 - A user can see commits, changed files, diff previews, logs, and evidence summary in one review path.
 - Issue Detail remains the primary place to understand the work.
 
-## Milestone 3: Kubernetes Validation Evidence
+## Milestone 3: Issue Test Namespace Deployment
+
+Status: mostly implemented for the local MVP path; remaining work is deeper evidence parsing and hardening.
 
 Goal:
 
-- Move Kubernetes from configuration fields to visible validation proof.
+- Move Kubernetes from configuration fields to a manually triggered issue test environment with a usable preview URL.
 
 Build:
 
-- Capture structured output from deploy and validation commands.
-- Capture namespace snapshot data after validation.
-- Show cluster, context, namespace, and environment URL clearly.
-- Show Pods, Services, Ingress, Events, logs, and rollout state in a compact evidence view.
+- Store reusable cluster configs with kubeconfig path, optional context, image registry prefix, and optional preview routing defaults.
+- Discover regular files under `~/.kube` on first Clusters entry, show the candidates and contexts, and let the user choose which kubeconfig files to import.
+- Store project default cluster id.
+- Store one test environment record per issue: cluster id, namespace, preview URL, deploy session, cleanup session, namespace state, and cleanup state.
+- Add a manual "Deploy test env" action from Issue Detail.
+- Queue an agent deployment turn that creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default, uses Ingress when configured, probes the preview URL, and writes preview output back.
+- Add manual retain/cleanup namespace decisions from Issue Detail.
 - Attach Kubernetes evidence to the issue and session.
 
 Acceptance:
 
-- A user can configure a project namespace and validation commands.
-- A session can run validation commands against the configured namespace.
-- The UI shows whether the project actually deployed or failed.
+- A user can configure or import kubeconfig path and image registry prefix once in Clusters.
+- A user can trigger a test deployment only when ready, instead of every agent session deploying automatically.
+- The agent creates and manages the issue namespace.
+- The UI shows the selected cluster, issue namespace, namespace state, cleanup state, exposure mode, and preview URL when available.
 - Kubernetes evidence is stored and reviewable after the session exits.
-- The user does not need a separate terminal just to answer "did this run?"
+- The user does not need a separate terminal just to answer "where can the team test this?"
 
 ## Milestone 4: Branch / PR And Cleanup Loop
 
 Goal:
 
-- Complete the first end-to-end loop from issue to branch or PR, evidence, and cleanup decision.
+- Complete the first end-to-end loop from issue to branch or manually generated PR, issue test namespace, preview URL, evidence, and cleanup decision.
 
 Build:
 

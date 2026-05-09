@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,10 +30,32 @@ var migrationFS embed.FS
 
 var (
 	errProjectNotFound      = errors.New("project not found")
+	errClusterNotFound      = errors.New("cluster not found")
 	errUnknownAgentProfile  = errors.New("unknown agent profile")
+	errActiveIssueSession   = errors.New("issue already has an active session")
 	errSessionActive        = errors.New("session is still active")
 	errUnsafeSessionWorkdir = errors.New("session workdir is outside the mspace workdir root")
 )
+
+const defaultImportedClusterImageRegistryPrefix = "crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter"
+
+type cluster struct {
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	KubeconfigPath      string `json:"kubeconfigPath"`
+	KubeContext         string `json:"kubeContext"`
+	ImageRegistryPrefix string `json:"imageRegistryPrefix"`
+	ExposureMode        string `json:"exposureMode"`
+	NodeHost            string `json:"nodeHost"`
+	PreviewDomain       string `json:"previewDomain"`
+	IngressClass        string `json:"ingressClass"`
+	Status              string `json:"status"`
+	LastCheckedAt       string `json:"lastCheckedAt"`
+	ProjectCount        int    `json:"projectCount"`
+	EnvironmentCount    int    `json:"environmentCount"`
+	CreatedAt           string `json:"createdAt"`
+	UpdatedAt           string `json:"updatedAt"`
+}
 
 type project struct {
 	ID                   string `json:"id"`
@@ -47,7 +70,13 @@ type project struct {
 	DeployCommand        string `json:"deployCommand"`
 	ValidationCommand    string `json:"validationCommand"`
 	KubeContext          string `json:"kubeContext"`
+	KubeconfigPath       string `json:"kubeconfigPath"`
 	Namespace            string `json:"namespace"`
+	ImageRegistryPrefix  string `json:"imageRegistryPrefix"`
+	PreviewDomain        string `json:"previewDomain"`
+	IngressClass         string `json:"ingressClass"`
+	NodeHost             string `json:"nodeHost"`
+	DefaultClusterID     string `json:"defaultClusterId"`
 	IssueCount           int    `json:"issueCount"`
 	SessionCount         int    `json:"sessionCount"`
 	LatestIssueUpdatedAt string `json:"latestIssueUpdatedAt"`
@@ -166,13 +195,34 @@ type deploymentEvidence struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+type issueTestEnvironment struct {
+	IssueID              string `json:"issueId"`
+	ClusterID            string `json:"clusterId"`
+	Namespace            string `json:"namespace"`
+	NamespaceStatus      string `json:"namespaceStatus"`
+	CleanupStatus        string `json:"cleanupStatus"`
+	PreviewURL           string `json:"previewUrl"`
+	ImageRegistryPrefix  string `json:"imageRegistryPrefix"`
+	KubeconfigPath       string `json:"kubeconfigPath"`
+	KubeContext          string `json:"kubeContext"`
+	ExposureMode         string `json:"exposureMode"`
+	PreviewDomain        string `json:"previewDomain"`
+	IngressClass         string `json:"ingressClass"`
+	NodeHost             string `json:"nodeHost"`
+	LastDeploySessionID  string `json:"lastDeploySessionId"`
+	LastCleanupSessionID string `json:"lastCleanupSessionId"`
+	CreatedAt            string `json:"createdAt"`
+	UpdatedAt            string `json:"updatedAt"`
+}
+
 type issueDetail struct {
-	Issue    issue                `json:"issue"`
-	Project  project              `json:"project"`
-	Labels   []issueLabel         `json:"labels"`
-	Comments []comment            `json:"comments"`
-	Sessions []agentSession       `json:"sessions"`
-	Evidence []deploymentEvidence `json:"evidence"`
+	Issue           issue                 `json:"issue"`
+	Project         project               `json:"project"`
+	TestEnvironment *issueTestEnvironment `json:"testEnvironment"`
+	Labels          []issueLabel          `json:"labels"`
+	Comments        []comment             `json:"comments"`
+	Sessions        []agentSession        `json:"sessions"`
+	Evidence        []deploymentEvidence  `json:"evidence"`
 }
 
 type sessionDetail struct {
@@ -182,6 +232,19 @@ type sessionDetail struct {
 	Logs      []sessionLog         `json:"logs"`
 	Evidence  []deploymentEvidence `json:"evidence"`
 	Workspace workspaceSnapshot    `json:"workspace"`
+}
+
+type activeWorkItem struct {
+	IssueID         string `json:"issueId"`
+	ProjectID       string `json:"projectId"`
+	ProjectName     string `json:"projectName"`
+	Title           string `json:"title"`
+	Status          string `json:"status"`
+	Namespace       string `json:"namespace"`
+	NamespaceStatus string `json:"namespaceStatus"`
+	CleanupStatus   string `json:"cleanupStatus"`
+	SessionStatus   string `json:"sessionStatus"`
+	UpdatedAt       string `json:"updatedAt"`
 }
 
 type workspaceSnapshot struct {
@@ -276,15 +339,59 @@ type app struct {
 }
 
 type projectInput struct {
-	Name              string `json:"name"`
-	SourceType        string `json:"sourceType"`
-	RepoPath          string `json:"repoPath"`
-	RepoURL           string `json:"repoUrl"`
-	DefaultBranch     string `json:"defaultBranch"`
-	DeployCommand     string `json:"deployCommand"`
-	ValidationCommand string `json:"validationCommand"`
-	KubeContext       string `json:"kubeContext"`
-	Namespace         string `json:"namespace"`
+	Name                string `json:"name"`
+	SourceType          string `json:"sourceType"`
+	RepoPath            string `json:"repoPath"`
+	RepoURL             string `json:"repoUrl"`
+	DefaultBranch       string `json:"defaultBranch"`
+	DeployCommand       string `json:"deployCommand"`
+	ValidationCommand   string `json:"validationCommand"`
+	KubeContext         string `json:"kubeContext"`
+	KubeconfigPath      string `json:"kubeconfigPath"`
+	Namespace           string `json:"namespace"`
+	ImageRegistryPrefix string `json:"imageRegistryPrefix"`
+	PreviewDomain       string `json:"previewDomain"`
+	IngressClass        string `json:"ingressClass"`
+	NodeHost            string `json:"nodeHost"`
+	DefaultClusterID    string `json:"defaultClusterId"`
+}
+
+type clusterInput struct {
+	Name                string `json:"name"`
+	KubeconfigPath      string `json:"kubeconfigPath"`
+	KubeContext         string `json:"kubeContext"`
+	ImageRegistryPrefix string `json:"imageRegistryPrefix"`
+	ExposureMode        string `json:"exposureMode"`
+	NodeHost            string `json:"nodeHost"`
+	PreviewDomain       string `json:"previewDomain"`
+	IngressClass        string `json:"ingressClass"`
+	Status              string `json:"status"`
+}
+
+type kubeconfigImportRequest struct {
+	Path  string   `json:"path"`
+	Paths []string `json:"paths"`
+}
+
+type kubeconfigImportResult struct {
+	Imported []cluster              `json:"imported"`
+	Skipped  []kubeconfigImportSkip `json:"skipped"`
+}
+
+type kubeconfigDiscoveryResult struct {
+	Candidates []kubeconfigCandidate  `json:"candidates"`
+	Skipped    []kubeconfigImportSkip `json:"skipped"`
+}
+
+type kubeconfigCandidate struct {
+	Path     string   `json:"path"`
+	Contexts []string `json:"contexts"`
+}
+
+type kubeconfigImportSkip struct {
+	Path    string `json:"path"`
+	Context string `json:"context"`
+	Reason  string `json:"reason"`
 }
 
 type sessionRequest struct {
@@ -292,6 +399,15 @@ type sessionRequest struct {
 	AgentProfile string `json:"agentProfile"`
 	Command      string `json:"command"`
 	Branch       string `json:"branch"`
+}
+
+type testDeployRequest struct {
+	AgentProfile  string `json:"agentProfile"`
+	ClusterID     string `json:"clusterId"`
+	ExposureMode  string `json:"exposureMode"`
+	PreviewDomain string `json:"previewDomain"`
+	IngressClass  string `json:"ingressClass"`
+	NodeHost      string `json:"nodeHost"`
 }
 
 type agentProfileInput struct {
@@ -363,9 +479,17 @@ func main() {
 	})
 	router.Get("/api/inbox", application.handleListInbox)
 	router.Get("/api/inbox/stream", application.handleInboxStream)
+	router.Get("/api/active-work", application.handleListActiveWork)
 	router.Get("/api/agents", application.handleListAgentProfiles)
 	router.Post("/api/agents", application.handleCreateAgentProfile)
 	router.Put("/api/agents/{agentID}", application.handleUpdateAgentProfile)
+	router.Get("/api/clusters", application.handleListClusters)
+	router.Post("/api/clusters", application.handleCreateCluster)
+	router.Get("/api/clusters/discover-defaults", application.handleDiscoverDefaultClusters)
+	router.Post("/api/clusters/import", application.handleImportClusters)
+	router.Post("/api/clusters/import-defaults", application.handleImportDefaultClusters)
+	router.Put("/api/clusters/{clusterID}", application.handleUpdateCluster)
+	router.Delete("/api/clusters/{clusterID}", application.handleDeleteCluster)
 	router.Get("/api/projects", application.handleListProjects)
 	router.Post("/api/projects", application.handleCreateProject)
 	router.Put("/api/projects/{projectID}", application.handleUpdateProject)
@@ -377,6 +501,9 @@ func main() {
 	router.Post("/api/issues/{issueID}/comments", application.handleCreateComment)
 	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
 	router.Post("/api/issues/{issueID}/sessions", application.handleCreateSession)
+	router.Post("/api/issues/{issueID}/test-deploy", application.handleStartIssueTestDeploy)
+	router.Post("/api/issues/{issueID}/test-environment/cleanup", application.handleRequestIssueTestEnvironmentCleanup)
+	router.Post("/api/issues/{issueID}/test-environment/retain", application.handleRetainIssueTestEnvironment)
 	router.Get("/api/sessions/{sessionID}", application.handleGetSession)
 	router.Post("/api/sessions/{sessionID}/cancel", application.handleCancelSession)
 	router.Post("/api/sessions/{sessionID}/cleanup", application.handleCleanupSessionWorktree)
@@ -406,6 +533,9 @@ func (a *app) migrate() error {
 			return fmt.Errorf("apply %s: %w", entry.Name(), err)
 		}
 	}
+	if err := a.ensureClusterTables(); err != nil {
+		return err
+	}
 	if err := a.ensureProjectColumns(); err != nil {
 		return err
 	}
@@ -415,11 +545,54 @@ func (a *app) migrate() error {
 	if err := a.ensureIssueLabelTables(); err != nil {
 		return err
 	}
+	if err := a.ensureIssueTestEnvironmentTables(); err != nil {
+		return err
+	}
 	if err := a.ensureAgentProfileTables(); err != nil {
 		return err
 	}
 	if err := a.ensureSessionColumns(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (a *app) ensureClusterTables() error {
+	if _, err := a.db.Exec(`
+		CREATE TABLE IF NOT EXISTS clusters (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			kubeconfig_path TEXT NOT NULL,
+			kube_context TEXT NOT NULL DEFAULT '',
+			image_registry_prefix TEXT NOT NULL DEFAULT '',
+			exposure_mode TEXT NOT NULL DEFAULT 'nodeport',
+			node_host TEXT NOT NULL DEFAULT '',
+			preview_domain TEXT NOT NULL DEFAULT '',
+			ingress_class TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'configured',
+			last_checked_at TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("create clusters: %w", err)
+	}
+	if err := a.ensureTableColumns("clusters", map[string]string{
+		"kube_context":          "TEXT NOT NULL DEFAULT ''",
+		"image_registry_prefix": "TEXT NOT NULL DEFAULT ''",
+		"exposure_mode":         "TEXT NOT NULL DEFAULT 'nodeport'",
+		"node_host":             "TEXT NOT NULL DEFAULT ''",
+		"preview_domain":        "TEXT NOT NULL DEFAULT ''",
+		"ingress_class":         "TEXT NOT NULL DEFAULT ''",
+		"status":                "TEXT NOT NULL DEFAULT 'configured'",
+		"last_checked_at":       "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_clusters_updated_at ON clusters(updated_at)
+	`); err != nil {
+		return fmt.Errorf("create clusters updated index: %w", err)
 	}
 	return nil
 }
@@ -449,11 +622,17 @@ func (a *app) ensureProjectColumns() error {
 	}
 
 	requiredColumns := map[string]string{
-		"source_type":  "TEXT NOT NULL DEFAULT 'local'",
-		"remote_url":   "TEXT NOT NULL DEFAULT ''",
-		"git_provider": "TEXT NOT NULL DEFAULT ''",
-		"git_owner":    "TEXT NOT NULL DEFAULT ''",
-		"git_repo":     "TEXT NOT NULL DEFAULT ''",
+		"source_type":           "TEXT NOT NULL DEFAULT 'local'",
+		"remote_url":            "TEXT NOT NULL DEFAULT ''",
+		"git_provider":          "TEXT NOT NULL DEFAULT ''",
+		"git_owner":             "TEXT NOT NULL DEFAULT ''",
+		"git_repo":              "TEXT NOT NULL DEFAULT ''",
+		"kubeconfig_path":       "TEXT NOT NULL DEFAULT ''",
+		"image_registry_prefix": "TEXT NOT NULL DEFAULT ''",
+		"preview_domain":        "TEXT NOT NULL DEFAULT ''",
+		"ingress_class":         "TEXT NOT NULL DEFAULT ''",
+		"node_host":             "TEXT NOT NULL DEFAULT ''",
+		"default_cluster_id":    "TEXT NOT NULL DEFAULT ''",
 	}
 	for name, definition := range requiredColumns {
 		if existing[name] {
@@ -515,6 +694,55 @@ func (a *app) ensureIssueLabelTables() error {
 		CREATE INDEX IF NOT EXISTS idx_issue_labels_issue_id ON issue_labels(issue_id)
 	`); err != nil {
 		return fmt.Errorf("create issue_labels issue index: %w", err)
+	}
+	return nil
+}
+
+func (a *app) ensureIssueTestEnvironmentTables() error {
+	if _, err := a.db.Exec(`
+		CREATE TABLE IF NOT EXISTS issue_test_environments (
+			issue_id TEXT PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
+			namespace TEXT NOT NULL,
+			namespace_status TEXT NOT NULL DEFAULT 'planned',
+			cleanup_status TEXT NOT NULL DEFAULT 'retained',
+			preview_url TEXT NOT NULL DEFAULT '',
+			cluster_id TEXT NOT NULL DEFAULT '',
+			image_registry_prefix TEXT NOT NULL DEFAULT '',
+			kubeconfig_path TEXT NOT NULL DEFAULT '',
+			kube_context TEXT NOT NULL DEFAULT '',
+			exposure_mode TEXT NOT NULL DEFAULT 'nodeport',
+			preview_domain TEXT NOT NULL DEFAULT '',
+			ingress_class TEXT NOT NULL DEFAULT '',
+			node_host TEXT NOT NULL DEFAULT '',
+			last_deploy_session_id TEXT NOT NULL DEFAULT '',
+			last_cleanup_session_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("create issue_test_environments: %w", err)
+	}
+	if err := a.ensureTableColumns("issue_test_environments", map[string]string{
+		"namespace_status":        "TEXT NOT NULL DEFAULT 'planned'",
+		"cleanup_status":          "TEXT NOT NULL DEFAULT 'retained'",
+		"preview_url":             "TEXT NOT NULL DEFAULT ''",
+		"cluster_id":              "TEXT NOT NULL DEFAULT ''",
+		"image_registry_prefix":   "TEXT NOT NULL DEFAULT ''",
+		"kubeconfig_path":         "TEXT NOT NULL DEFAULT ''",
+		"kube_context":            "TEXT NOT NULL DEFAULT ''",
+		"exposure_mode":           "TEXT NOT NULL DEFAULT 'nodeport'",
+		"preview_domain":          "TEXT NOT NULL DEFAULT ''",
+		"ingress_class":           "TEXT NOT NULL DEFAULT ''",
+		"node_host":               "TEXT NOT NULL DEFAULT ''",
+		"last_deploy_session_id":  "TEXT NOT NULL DEFAULT ''",
+		"last_cleanup_session_id": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_issue_test_environments_namespace ON issue_test_environments(namespace)
+	`); err != nil {
+		return fmt.Errorf("create issue_test_environments namespace index: %w", err)
 	}
 	return nil
 }
@@ -658,6 +886,60 @@ func (a *app) handleListInbox(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, items)
 }
 
+func (a *app) handleListActiveWork(w http.ResponseWriter, _ *http.Request) {
+	items := make([]activeWorkItem, 0)
+	rows, err := a.db.Query(`
+		SELECT
+			i.id,
+			i.project_id,
+			p.name,
+			i.title,
+			i.status,
+			COALESCE(e.namespace, '') AS namespace,
+			COALESCE(e.namespace_status, '') AS namespace_status,
+			COALESCE(e.cleanup_status, '') AS cleanup_status,
+			COALESCE(s.status, '') AS session_status,
+			CASE
+				WHEN s.updated_at IS NOT NULL AND s.updated_at > i.updated_at THEN s.updated_at
+				ELSE i.updated_at
+			END AS work_updated_at
+		FROM issues i
+		JOIN projects p ON p.id = i.project_id
+		LEFT JOIN issue_test_environments e ON e.issue_id = i.id
+		LEFT JOIN agent_sessions s ON s.id = (
+			SELECT id
+			FROM agent_sessions latest
+			WHERE latest.issue_id = i.id
+			ORDER BY latest.updated_at DESC
+			LIMIT 1
+		)
+		ORDER BY
+			CASE
+				WHEN s.status IN ('queued', 'running') THEN 0
+				WHEN e.namespace_status IN ('deploying', 'cleanup_requested') THEN 1
+				WHEN e.cleanup_status = 'retained' AND e.namespace != '' THEN 2
+				ELSE 3
+			END,
+			work_updated_at DESC
+		LIMIT 6
+	`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var item activeWorkItem
+		if err := rows.Scan(&item.IssueID, &item.ProjectID, &item.ProjectName, &item.Title, &item.Status, &item.Namespace, &item.NamespaceStatus, &item.CleanupStatus, &item.SessionStatus, &item.UpdatedAt); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		items = append(items, item)
+	}
+	writeJSON(w, items)
+}
+
 func (a *app) handleListIssues(w http.ResponseWriter, _ *http.Request) {
 	items := make([]issueListItem, 0)
 	rows, err := a.db.Query(`
@@ -784,6 +1066,144 @@ func (a *app) handleUpdateAgentProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, updated)
 }
 
+func (a *app) handleListClusters(w http.ResponseWriter, _ *http.Request) {
+	clusters, err := a.listClusters()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, clusters)
+}
+
+func (a *app) handleCreateCluster(w http.ResponseWriter, r *http.Request) {
+	var input clusterInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	cluster, err := normalizeClusterInput(cluster{}, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	now := nowString()
+	cluster.ID = uuid.NewString()
+	cluster.CreatedAt = now
+	cluster.UpdatedAt = now
+
+	if err := a.insertCluster(cluster); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, cluster)
+}
+
+func (a *app) handleImportClusters(w http.ResponseWriter, r *http.Request) {
+	var input kubeconfigImportRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	paths := normalizeKubeconfigImportPaths(input)
+	if len(paths) == 0 {
+		writeError(w, http.StatusBadRequest, errors.New("at least one kubeconfig path is required"))
+		return
+	}
+	result, err := a.importKubeconfigs(paths)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (a *app) handleDiscoverDefaultClusters(w http.ResponseWriter, _ *http.Request) {
+	paths, err := discoverDefaultKubeconfigPaths(filepath.Join(userHomeDir(), ".kube"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result := discoverKubeconfigs(paths)
+	writeJSON(w, result)
+}
+
+func (a *app) handleImportDefaultClusters(w http.ResponseWriter, _ *http.Request) {
+	paths, err := discoverDefaultKubeconfigPaths(filepath.Join(userHomeDir(), ".kube"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := a.importKubeconfigs(paths)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, result)
+}
+
+func (a *app) handleUpdateCluster(w http.ResponseWriter, r *http.Request) {
+	clusterID := chi.URLParam(r, "clusterID")
+	existing, err := a.loadCluster(clusterID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errClusterNotFound
+		}
+		writeError(w, status, err)
+		return
+	}
+
+	var input clusterInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	updated, err := normalizeClusterInput(existing, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	updated.ID = existing.ID
+	updated.CreatedAt = existing.CreatedAt
+	updated.UpdatedAt = nowString()
+
+	if err := a.updateCluster(updated); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	reloaded, err := a.loadCluster(clusterID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, reloaded)
+}
+
+func (a *app) handleDeleteCluster(w http.ResponseWriter, r *http.Request) {
+	clusterID := chi.URLParam(r, "clusterID")
+	existing, err := a.loadCluster(clusterID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errClusterNotFound
+		}
+		writeError(w, status, err)
+		return
+	}
+	if existing.ProjectCount > 0 || existing.EnvironmentCount > 0 {
+		writeError(w, http.StatusConflict, errors.New("cluster cannot be deleted while projects or test environments reference it"))
+		return
+	}
+	if _, err := a.db.Exec(`DELETE FROM clusters WHERE id = ?`, clusterID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
 func (a *app) handleListProjects(w http.ResponseWriter, _ *http.Request) {
 	projects := make([]project, 0)
 	rows, err := a.db.Query(`
@@ -800,7 +1220,13 @@ func (a *app) handleListProjects(w http.ResponseWriter, _ *http.Request) {
 			p.deploy_command,
 			p.validation_command,
 			p.kube_context,
+			p.kubeconfig_path,
 			p.namespace,
+			p.image_registry_prefix,
+			p.preview_domain,
+			p.ingress_class,
+			p.node_host,
+			p.default_cluster_id,
 			COUNT(DISTINCT i.id) AS issue_count,
 			COUNT(DISTINCT s.id) AS session_count,
 			MAX(i.updated_at) AS latest_issue_updated_at,
@@ -821,7 +1247,7 @@ func (a *app) handleListProjects(w http.ResponseWriter, _ *http.Request) {
 	for rows.Next() {
 		var p project
 		var latestIssueUpdatedAt sql.NullString
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.SourceType, &p.RemoteURL, &p.GitProvider, &p.GitOwner, &p.GitRepo, &p.DefaultBranch, &p.DeployCommand, &p.ValidationCommand, &p.KubeContext, &p.Namespace, &p.IssueCount, &p.SessionCount, &latestIssueUpdatedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.SourceType, &p.RemoteURL, &p.GitProvider, &p.GitOwner, &p.GitRepo, &p.DefaultBranch, &p.DeployCommand, &p.ValidationCommand, &p.KubeContext, &p.KubeconfigPath, &p.Namespace, &p.ImageRegistryPrefix, &p.PreviewDomain, &p.IngressClass, &p.NodeHost, &p.DefaultClusterID, &p.IssueCount, &p.SessionCount, &latestIssueUpdatedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -852,9 +1278,9 @@ func (a *app) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	normalizedProject.UpdatedAt = now
 
 	_, err = a.db.Exec(`
-		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, normalizedProject.ID, normalizedProject.Name, normalizedProject.RepoPath, normalizedProject.SourceType, normalizedProject.RemoteURL, normalizedProject.GitProvider, normalizedProject.GitOwner, normalizedProject.GitRepo, normalizedProject.DefaultBranch, normalizedProject.DeployCommand, normalizedProject.ValidationCommand, normalizedProject.KubeContext, normalizedProject.Namespace, normalizedProject.CreatedAt, normalizedProject.UpdatedAt)
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, kubeconfig_path, namespace, image_registry_prefix, preview_domain, ingress_class, node_host, default_cluster_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, normalizedProject.ID, normalizedProject.Name, normalizedProject.RepoPath, normalizedProject.SourceType, normalizedProject.RemoteURL, normalizedProject.GitProvider, normalizedProject.GitOwner, normalizedProject.GitRepo, normalizedProject.DefaultBranch, normalizedProject.DeployCommand, normalizedProject.ValidationCommand, normalizedProject.KubeContext, normalizedProject.KubeconfigPath, normalizedProject.Namespace, normalizedProject.ImageRegistryPrefix, normalizedProject.PreviewDomain, normalizedProject.IngressClass, normalizedProject.NodeHost, normalizedProject.DefaultClusterID, normalizedProject.CreatedAt, normalizedProject.UpdatedAt)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -895,9 +1321,9 @@ func (a *app) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 
 	_, err = a.db.Exec(`
 		UPDATE projects
-		SET name = ?, repo_path = ?, source_type = ?, remote_url = ?, git_provider = ?, git_owner = ?, git_repo = ?, default_branch = ?, deploy_command = ?, validation_command = ?, kube_context = ?, namespace = ?, updated_at = ?
+		SET name = ?, repo_path = ?, source_type = ?, remote_url = ?, git_provider = ?, git_owner = ?, git_repo = ?, default_branch = ?, deploy_command = ?, validation_command = ?, kube_context = ?, kubeconfig_path = ?, namespace = ?, image_registry_prefix = ?, preview_domain = ?, ingress_class = ?, node_host = ?, default_cluster_id = ?, updated_at = ?
 		WHERE id = ?
-	`, normalizedProject.Name, normalizedProject.RepoPath, normalizedProject.SourceType, normalizedProject.RemoteURL, normalizedProject.GitProvider, normalizedProject.GitOwner, normalizedProject.GitRepo, normalizedProject.DefaultBranch, normalizedProject.DeployCommand, normalizedProject.ValidationCommand, normalizedProject.KubeContext, normalizedProject.Namespace, normalizedProject.UpdatedAt, normalizedProject.ID)
+	`, normalizedProject.Name, normalizedProject.RepoPath, normalizedProject.SourceType, normalizedProject.RemoteURL, normalizedProject.GitProvider, normalizedProject.GitOwner, normalizedProject.GitRepo, normalizedProject.DefaultBranch, normalizedProject.DeployCommand, normalizedProject.ValidationCommand, normalizedProject.KubeContext, normalizedProject.KubeconfigPath, normalizedProject.Namespace, normalizedProject.ImageRegistryPrefix, normalizedProject.PreviewDomain, normalizedProject.IngressClass, normalizedProject.NodeHost, normalizedProject.DefaultClusterID, normalizedProject.UpdatedAt, normalizedProject.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -1093,7 +1519,7 @@ func (a *app) resolveIssueProject(projectID, text string) (project, error) {
 
 func (a *app) listProjectsForIssueInference() ([]project, error) {
 	rows, err := a.db.Query(`
-		SELECT id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at
+		SELECT id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, kubeconfig_path, namespace, image_registry_prefix, preview_domain, ingress_class, node_host, default_cluster_id, created_at, updated_at
 		FROM projects
 		ORDER BY updated_at DESC
 	`)
@@ -1105,7 +1531,7 @@ func (a *app) listProjectsForIssueInference() ([]project, error) {
 	projects := make([]project, 0)
 	for rows.Next() {
 		var p project
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.SourceType, &p.RemoteURL, &p.GitProvider, &p.GitOwner, &p.GitRepo, &p.DefaultBranch, &p.DeployCommand, &p.ValidationCommand, &p.KubeContext, &p.Namespace, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.SourceType, &p.RemoteURL, &p.GitProvider, &p.GitOwner, &p.GitRepo, &p.DefaultBranch, &p.DeployCommand, &p.ValidationCommand, &p.KubeContext, &p.KubeconfigPath, &p.Namespace, &p.ImageRegistryPrefix, &p.PreviewDomain, &p.IngressClass, &p.NodeHost, &p.DefaultClusterID, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		projects = append(projects, p)
@@ -1292,6 +1718,168 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"sessionId": session.ID})
 }
 
+func (a *app) handleStartIssueTestDeploy(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	var input testDeployRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	detail, err := a.loadIssueDetail(issueID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("issue not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if a.issueHasActiveSession(issueID) {
+		writeError(w, http.StatusConflict, errActiveIssueSession)
+		return
+	}
+
+	environment, err := a.buildIssueTestEnvironment(detail, input)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errClusterNotFound) {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err)
+		return
+	}
+	command := buildIssueTestDeployPrompt(detail, environment)
+	if err := a.saveIssueTestEnvironment(environment); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	session, err := a.queueAgentSession(issueID, sessionRequest{
+		Provider:     "codex",
+		AgentProfile: strings.TrimSpace(input.AgentProfile),
+		Command:      command,
+	})
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errUnknownAgentProfile) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err)
+		return
+	}
+
+	environment.LastDeploySessionID = session.ID
+	environment.NamespaceStatus = "deploying"
+	if err := a.saveIssueTestEnvironment(environment); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.addSystemComment(issueID, fmt.Sprintf(
+		"Queued test deployment session `%s` for namespace `%s`.\n\nCluster: `%s`\nRegistry: `%s`\nExposure: %s",
+		shortID(session.ID),
+		environment.Namespace,
+		environment.ClusterID,
+		environment.ImageRegistryPrefix,
+		previewStrategyLabel(environment),
+	))
+	a.publishInboxEvent(issueID, "test-deploy")
+
+	writeJSON(w, map[string]any{
+		"sessionId":       session.ID,
+		"testEnvironment": environment,
+	})
+}
+
+func (a *app) handleRequestIssueTestEnvironmentCleanup(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	var input testDeployRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := a.loadIssueDetail(issueID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("issue not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if detail.TestEnvironment == nil || strings.TrimSpace(detail.TestEnvironment.Namespace) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("issue has no test namespace to clean up"))
+		return
+	}
+	if a.issueHasActiveSession(issueID) {
+		writeError(w, http.StatusConflict, errActiveIssueSession)
+		return
+	}
+
+	environment := *detail.TestEnvironment
+	environment.NamespaceStatus = "cleanup_requested"
+	environment.CleanupStatus = "cleanup_requested"
+	command := buildIssueTestCleanupPrompt(detail, environment)
+	if err := a.saveIssueTestEnvironment(environment); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	session, err := a.queueAgentSession(issueID, sessionRequest{
+		Provider:     "codex",
+		AgentProfile: strings.TrimSpace(input.AgentProfile),
+		Command:      command,
+	})
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errUnknownAgentProfile) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err)
+		return
+	}
+	environment.LastCleanupSessionID = session.ID
+	if err := a.saveIssueTestEnvironment(environment); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.addSystemComment(issueID, fmt.Sprintf("Queued namespace cleanup session `%s` for `%s`.", shortID(session.ID), environment.Namespace))
+	a.publishInboxEvent(issueID, "test-cleanup")
+	writeJSON(w, map[string]any{
+		"sessionId":       session.ID,
+		"testEnvironment": environment,
+	})
+}
+
+func (a *app) handleRetainIssueTestEnvironment(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	detail, err := a.loadIssueDetail(issueID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("issue not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if detail.TestEnvironment == nil || strings.TrimSpace(detail.TestEnvironment.Namespace) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("issue has no test namespace to retain"))
+		return
+	}
+	environment := *detail.TestEnvironment
+	environment.NamespaceStatus = "retained"
+	environment.CleanupStatus = "retained"
+	if err := a.saveIssueTestEnvironment(environment); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.addSystemComment(issueID, fmt.Sprintf("Retained test namespace `%s` for later inspection.", environment.Namespace))
+	a.publishInboxEvent(issueID, "test-retain")
+	writeJSON(w, environment)
+}
+
 func (a *app) queueAgentSession(issueID string, input sessionRequest) (agentSession, error) {
 	input.Provider = strings.TrimSpace(input.Provider)
 	input.AgentProfile = strings.TrimSpace(input.AgentProfile)
@@ -1378,6 +1966,222 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest) (agentSess
 
 	go a.runSession(session, detail.Project)
 	return session, nil
+}
+
+func (a *app) issueHasActiveSession(issueID string) bool {
+	var count int
+	if err := a.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM agent_sessions
+		WHERE issue_id = ? AND status IN ('queued', 'running')
+	`, issueID).Scan(&count); err != nil {
+		return false
+	}
+	return count > 0
+}
+
+func (a *app) buildIssueTestEnvironment(detail issueDetail, input testDeployRequest) (issueTestEnvironment, error) {
+	environment := issueTestEnvironment{}
+	if detail.TestEnvironment != nil {
+		environment = *detail.TestEnvironment
+	}
+	environment.IssueID = detail.Issue.ID
+	if strings.TrimSpace(environment.Namespace) == "" {
+		environment.Namespace = defaultIssueNamespace(detail)
+	}
+	clusterID := firstNonEmpty(input.ClusterID, environment.ClusterID, detail.Project.DefaultClusterID)
+	if clusterID == "" {
+		return environment, errors.New("cluster is required before starting a test deployment")
+	}
+	selectedCluster, err := a.loadCluster(clusterID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return environment, errClusterNotFound
+		}
+		return environment, err
+	}
+	exposureMode, err := normalizeExposureMode(input.ExposureMode)
+	if err != nil {
+		return environment, err
+	}
+	if exposureMode == "" {
+		exposureMode = selectedCluster.ExposureMode
+	}
+	if exposureMode == "" {
+		exposureMode = "nodeport"
+	}
+
+	environment.NamespaceStatus = "planned"
+	environment.CleanupStatus = "retained"
+	environment.ClusterID = selectedCluster.ID
+	environment.KubeconfigPath = selectedCluster.KubeconfigPath
+	environment.KubeContext = selectedCluster.KubeContext
+	environment.ImageRegistryPrefix = selectedCluster.ImageRegistryPrefix
+	environment.ExposureMode = exposureMode
+	environment.NodeHost = firstNonEmpty(input.NodeHost, selectedCluster.NodeHost)
+	if exposureMode == "ingress" {
+		environment.PreviewDomain = firstNonEmpty(input.PreviewDomain, selectedCluster.PreviewDomain)
+		environment.IngressClass = firstNonEmpty(input.IngressClass, selectedCluster.IngressClass)
+	} else {
+		environment.PreviewDomain = ""
+		environment.IngressClass = ""
+	}
+
+	if environment.KubeconfigPath == "" {
+		return environment, errors.New("selected cluster needs a kubeconfig path before starting a test deployment")
+	}
+	if environment.ImageRegistryPrefix == "" {
+		return environment, errors.New("selected cluster needs an image registry prefix before starting a test deployment")
+	}
+	if environment.ExposureMode == "ingress" && environment.PreviewDomain == "" {
+		return environment, errors.New("preview domain is required when ingress exposure is selected")
+	}
+	return environment, nil
+}
+
+func defaultIssueNamespace(detail issueDetail) string {
+	return dnsLabel("mspace-" + detail.Project.Name + "-" + shortID(detail.Issue.ID))
+}
+
+func dnsLabel(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var builder strings.Builder
+	lastHyphen := false
+	for _, r := range value {
+		valid := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if valid {
+			builder.WriteRune(r)
+			lastHyphen = false
+			continue
+		}
+		if !lastHyphen && builder.Len() > 0 {
+			builder.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+	result := strings.Trim(builder.String(), "-")
+	if result == "" {
+		result = "mspace-issue"
+	}
+	if len(result) > 63 {
+		result = strings.TrimRight(result[:63], "-")
+	}
+	if result == "" {
+		return "mspace-issue"
+	}
+	return result
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func buildIssueTestDeployPrompt(detail issueDetail, environment issueTestEnvironment) string {
+	var builder strings.Builder
+	builder.WriteString("Deploy a test environment for this issue.\n\n")
+	builder.WriteString("The user manually triggered this deployment after agent work, so do not create a PR unless explicitly asked in a separate turn.\n\n")
+	if sourceSession := latestSourceSession(detail); sourceSession != nil {
+		builder.WriteString("Source code to deploy:\n")
+		builder.WriteString(fmt.Sprintf("- Source session: %s\n", shortID(sourceSession.ID)))
+		builder.WriteString(fmt.Sprintf("- Source branch: %s\n", valueOrUnset(sourceSession.Branch)))
+		builder.WriteString(fmt.Sprintf("- Source worktree: %s\n", valueOrUnset(sourceSession.Workdir)))
+		builder.WriteString("- If the source worktree exists, build and deploy from that path. Use the current session worktree only for orchestration when needed.\n\n")
+	} else {
+		builder.WriteString("No previous completed source session was found. Use the current prepared worktree as the source.\n\n")
+	}
+	builder.WriteString("Deployment contract:\n")
+	builder.WriteString(fmt.Sprintf("- Cluster ID: %s\n", environment.ClusterID))
+	builder.WriteString(fmt.Sprintf("- Kubeconfig path: %s\n", environment.KubeconfigPath))
+	if environment.KubeContext != "" {
+		builder.WriteString(fmt.Sprintf("- Kube context: %s\n", environment.KubeContext))
+	}
+	builder.WriteString(fmt.Sprintf("- Issue namespace to create and manage: %s\n", environment.Namespace))
+	builder.WriteString(fmt.Sprintf("- Image registry prefix: %s\n", environment.ImageRegistryPrefix))
+	builder.WriteString(fmt.Sprintf("- Project deploy command hint: %s\n", valueOrUnset(detail.Project.DeployCommand)))
+	builder.WriteString(fmt.Sprintf("- Project validation command hint: %s\n", valueOrUnset(detail.Project.ValidationCommand)))
+	builder.WriteString("- Build and push linux/amd64 images unless the issue explicitly requires another platform.\n")
+	builder.WriteString("- Create the namespace yourself if it does not exist.\n")
+	builder.WriteString("- Deploy or update only namespaced resources inside the issue namespace.\n")
+	builder.WriteString("- Do not read Kubernetes Secrets.\n")
+	builder.WriteString("- Return a team-accessible preview URL after deployment.\n")
+	if environment.ExposureMode == "ingress" {
+		builder.WriteString(fmt.Sprintf("- Preferred preview exposure: Ingress or HTTPRoute under domain %s.\n", environment.PreviewDomain))
+		if environment.IngressClass != "" {
+			builder.WriteString(fmt.Sprintf("- Preferred ingress class: %s.\n", environment.IngressClass))
+		}
+	} else {
+		builder.WriteString("- Preferred preview exposure: Service type=NodePort.\n")
+		if environment.NodeHost != "" {
+			builder.WriteString(fmt.Sprintf("- Use this node host when forming the preview URL: %s.\n", environment.NodeHost))
+		} else {
+			builder.WriteString("- Discover a usable node ExternalIP, node hostname, or fallback node address for the NodePort URL.\n")
+		}
+	}
+	builder.WriteString("\nRequired completion evidence:\n")
+	builder.WriteString("- Image reference(s) pushed.\n")
+	builder.WriteString("- Kubernetes resources applied.\n")
+	builder.WriteString("- Pods, Services, Ingress/HTTPRoute if any, and recent Events inspected.\n")
+	builder.WriteString("- Preview URL probed with curl or an equivalent HTTP check.\n")
+	builder.WriteString("- Final answer includes the preview URL, namespace, image reference, validation result, and any blocker.\n")
+	builder.WriteString("- Also write a JSON file to `${MSPACE_SESSION_ARTIFACT_DIR}/test-environment.json` with at least `previewUrl` when a URL is available.\n")
+	return builder.String()
+}
+
+func latestSourceSession(detail issueDetail) *agentSession {
+	for _, session := range detail.Sessions {
+		if session.Status == "queued" || session.Status == "running" {
+			continue
+		}
+		if detail.TestEnvironment != nil {
+			if session.ID == detail.TestEnvironment.LastDeploySessionID || session.ID == detail.TestEnvironment.LastCleanupSessionID {
+				continue
+			}
+		}
+		if isSystemTestEnvironmentCommand(session.Command) {
+			continue
+		}
+		sessionCopy := session
+		return &sessionCopy
+	}
+	return nil
+}
+
+func isSystemTestEnvironmentCommand(command string) bool {
+	command = strings.TrimSpace(command)
+	return strings.HasPrefix(command, "Deploy a test environment for this issue.") ||
+		strings.HasPrefix(command, "Clean up the test environment for this issue.")
+}
+
+func buildIssueTestCleanupPrompt(detail issueDetail, environment issueTestEnvironment) string {
+	var builder strings.Builder
+	builder.WriteString("Clean up the test environment for this issue.\n\n")
+	builder.WriteString("The user manually chose to remove this issue's test namespace. Use the provided kubeconfig and delete only this namespace and resources inside it.\n\n")
+	builder.WriteString(fmt.Sprintf("- Kubeconfig path: %s\n", environment.KubeconfigPath))
+	if environment.KubeContext != "" {
+		builder.WriteString(fmt.Sprintf("- Kube context: %s\n", environment.KubeContext))
+	}
+	builder.WriteString(fmt.Sprintf("- Namespace to delete: %s\n", environment.Namespace))
+	builder.WriteString(fmt.Sprintf("- Issue: %s\n", detail.Issue.Title))
+	builder.WriteString("\nAfter cleanup, verify whether the namespace still exists and report the result. Do not delete any other namespace or cluster-scoped resource.\n")
+	return builder.String()
+}
+
+func previewStrategyLabel(environment issueTestEnvironment) string {
+	if environment.ExposureMode == "ingress" || environment.PreviewDomain != "" {
+		if environment.IngressClass != "" {
+			return fmt.Sprintf("Ingress `%s` on `%s`", environment.IngressClass, environment.PreviewDomain)
+		}
+		return fmt.Sprintf("Ingress on `%s`", environment.PreviewDomain)
+	}
+	if environment.NodeHost != "" {
+		return fmt.Sprintf("NodePort via `%s`", environment.NodeHost)
+	}
+	return "NodePort with discovered node address"
 }
 
 func (a *app) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -1547,15 +2351,21 @@ func (a *app) runSession(session agentSession, project project) {
 	a.updateSessionStatus(session.ID, "completed")
 	a.updateSessionAgentStatus(session.ID, "completed")
 	a.updateIssueStatus(session.IssueID, "completed")
-	a.appendSessionLog(session.ID, "system", "Session completed. Collecting Kubernetes evidence.")
 	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` completed successfully.", shortID(session.ID)))
+	if a.isIssueTestCleanupSession(session) {
+		a.appendSessionLog(session.ID, "system", "Session completed. Updating test namespace cleanup state.")
+		a.updateIssueTestEnvironmentForSession(session, true)
+		return
+	}
+	a.appendSessionLog(session.ID, "system", "Session completed. Collecting Kubernetes evidence.")
 	a.collectEvidence(session, project)
+	a.updateIssueTestEnvironmentForSession(session, true)
 }
 
 func (a *app) runShellSession(ctx context.Context, session agentSession, project project, contextPath string) error {
 	command := exec.CommandContext(ctx, "/bin/zsh", "-lc", session.Command)
 	command.Dir = session.Workdir
-	command.Env = append(os.Environ(), buildSessionEnv(session, project, contextPath)...)
+	command.Env = append(os.Environ(), a.buildSessionEnv(session, project, contextPath)...)
 
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -1600,10 +2410,11 @@ func (a *app) failSession(session agentSession, project *project, err error) {
 	a.updateIssueStatus(session.IssueID, "failed")
 	a.appendSessionLog(session.ID, "system", err.Error())
 	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` failed.\n\n%s", shortID(session.ID), err.Error()))
-	if project != nil && project.Namespace != "" {
+	if project != nil && a.evidenceTargetProject(session, *project).Namespace != "" {
 		a.appendSessionLog(session.ID, "system", "Collecting Kubernetes evidence after failure.")
 		a.collectEvidence(session, *project)
 	}
+	a.updateIssueTestEnvironmentForSession(session, false)
 }
 
 func (a *app) writeSessionContext(session agentSession, project project) (string, error) {
@@ -1639,8 +2450,29 @@ func (a *app) writeSessionContext(session agentSession, project project) (string
 	builder.WriteString(fmt.Sprintf("- GitHub: %s/%s\n", project.GitOwner, project.GitRepo))
 	builder.WriteString(fmt.Sprintf("- Default branch: %s\n", project.DefaultBranch))
 	builder.WriteString(fmt.Sprintf("- Kube context: %s\n", project.KubeContext))
+	builder.WriteString(fmt.Sprintf("- Kubeconfig path: %s\n", valueOrUnset(project.KubeconfigPath)))
 	builder.WriteString(fmt.Sprintf("- Namespace: %s\n", project.Namespace))
+	builder.WriteString(fmt.Sprintf("- Image registry prefix: %s\n", valueOrUnset(project.ImageRegistryPrefix)))
+	builder.WriteString(fmt.Sprintf("- Preview domain: %s\n", valueOrUnset(project.PreviewDomain)))
+	builder.WriteString(fmt.Sprintf("- Ingress class: %s\n", valueOrUnset(project.IngressClass)))
+	builder.WriteString(fmt.Sprintf("- Node host: %s\n", valueOrUnset(project.NodeHost)))
+	builder.WriteString(fmt.Sprintf("- Default cluster ID: %s\n", valueOrUnset(project.DefaultClusterID)))
 	builder.WriteString("\n")
+
+	if detail.TestEnvironment != nil {
+		builder.WriteString("## Issue Test Environment\n\n")
+		builder.WriteString(fmt.Sprintf("- Cluster ID: %s\n", valueOrUnset(detail.TestEnvironment.ClusterID)))
+		builder.WriteString(fmt.Sprintf("- Namespace: %s\n", detail.TestEnvironment.Namespace))
+		builder.WriteString(fmt.Sprintf("- Namespace status: %s\n", detail.TestEnvironment.NamespaceStatus))
+		builder.WriteString(fmt.Sprintf("- Cleanup status: %s\n", detail.TestEnvironment.CleanupStatus))
+		builder.WriteString(fmt.Sprintf("- Preview URL: %s\n", valueOrUnset(detail.TestEnvironment.PreviewURL)))
+		builder.WriteString(fmt.Sprintf("- Image registry prefix: %s\n", valueOrUnset(detail.TestEnvironment.ImageRegistryPrefix)))
+		builder.WriteString(fmt.Sprintf("- Kubeconfig path: %s\n", valueOrUnset(detail.TestEnvironment.KubeconfigPath)))
+		builder.WriteString(fmt.Sprintf("- Kube context: %s\n", valueOrUnset(detail.TestEnvironment.KubeContext)))
+		builder.WriteString(fmt.Sprintf("- Exposure mode: %s\n", valueOrUnset(detail.TestEnvironment.ExposureMode)))
+		builder.WriteString(fmt.Sprintf("- Preview strategy: %s\n", previewStrategyLabel(*detail.TestEnvironment)))
+		builder.WriteString("\n")
+	}
 
 	builder.WriteString("## Session\n\n")
 	builder.WriteString(fmt.Sprintf("- ID: %s\n", session.ID))
@@ -1669,6 +2501,7 @@ func (a *app) writeSessionContext(session agentSession, project project) (string
 }
 
 func (a *app) collectEvidence(session agentSession, project project) {
+	project = a.evidenceTargetProject(session, project)
 	if project.Namespace == "" {
 		a.appendSessionLog(session.ID, "system", "Skipping Kubernetes evidence collection because no namespace is configured for this project.")
 		return
@@ -1723,21 +2556,107 @@ func (a *app) collectEvidence(session agentSession, project project) {
 	})
 }
 
+func (a *app) evidenceTargetProject(session agentSession, project project) project {
+	environment, err := a.loadIssueTestEnvironment(session.IssueID)
+	if err != nil || environment == nil {
+		return project
+	}
+	if strings.TrimSpace(environment.Namespace) != "" {
+		project.Namespace = strings.TrimSpace(environment.Namespace)
+	}
+	if strings.TrimSpace(environment.KubeconfigPath) != "" {
+		project.KubeconfigPath = strings.TrimSpace(environment.KubeconfigPath)
+	}
+	if strings.TrimSpace(environment.KubeContext) != "" {
+		project.KubeContext = strings.TrimSpace(environment.KubeContext)
+	} else if strings.TrimSpace(environment.ClusterID) != "" {
+		project.KubeContext = strings.TrimSpace(environment.ClusterID)
+	}
+	return project
+}
+
+func (a *app) updateIssueTestEnvironmentForSession(session agentSession, success bool) {
+	environment, err := a.loadIssueTestEnvironment(session.IssueID)
+	if err != nil || environment == nil {
+		return
+	}
+	changed := false
+	switch {
+	case environment.LastDeploySessionID == session.ID:
+		changed = true
+		if success {
+			if previewURL := readTestEnvironmentPreviewURL(session); previewURL != "" {
+				environment.PreviewURL = previewURL
+			}
+			environment.NamespaceStatus = "active"
+			environment.CleanupStatus = "retained"
+		} else {
+			environment.NamespaceStatus = "deploy_failed"
+		}
+	case environment.LastCleanupSessionID == session.ID:
+		changed = true
+		if success {
+			environment.NamespaceStatus = "cleaned"
+			environment.CleanupStatus = "cleaned"
+		} else {
+			environment.NamespaceStatus = "cleanup_failed"
+			environment.CleanupStatus = "cleanup_failed"
+		}
+	}
+	if !changed {
+		return
+	}
+	if err := a.saveIssueTestEnvironment(*environment); err == nil {
+		a.publishInboxEvent(session.IssueID, "test-environment")
+	}
+}
+
+func (a *app) isIssueTestCleanupSession(session agentSession) bool {
+	environment, err := a.loadIssueTestEnvironment(session.IssueID)
+	if err != nil || environment == nil {
+		return false
+	}
+	return environment.LastCleanupSessionID == session.ID
+}
+
+func readTestEnvironmentPreviewURL(session agentSession) string {
+	resultPath := filepath.Join(session.Workdir, ".mspace", "session", "test-environment.json")
+	data, err := os.ReadFile(resultPath)
+	if err != nil {
+		return ""
+	}
+	var result struct {
+		PreviewURL string `json:"previewUrl"`
+		PreviewUrl string `json:"preview_url"`
+		URL        string `json:"url"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return ""
+	}
+	return firstNonEmpty(result.PreviewURL, result.PreviewUrl, result.URL)
+}
+
 func (a *app) loadIssueDetail(issueID string) (issueDetail, error) {
 	var detail issueDetail
 	row := a.db.QueryRow(`
 		SELECT i.id, i.project_id, i.title, i.body, i.status, i.assignee, i.assignee_type, i.environment_url, i.created_at, i.updated_at,
-		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.namespace, p.created_at, p.updated_at
+		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id, p.created_at, p.updated_at
 		FROM issues i
 		JOIN projects p ON p.id = i.project_id
 		WHERE i.id = ?
 	`, issueID)
 	if err := row.Scan(
 		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
-		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.Namespace, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
+		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
 	); err != nil {
 		return detail, err
 	}
+
+	testEnvironment, err := a.loadIssueTestEnvironment(issueID)
+	if err != nil {
+		return detail, err
+	}
+	detail.TestEnvironment = testEnvironment
 
 	labels, err := a.listIssueLabels(issueID)
 	if err != nil {
@@ -1782,7 +2701,13 @@ func (a *app) loadProject(projectID string) (project, error) {
 			p.deploy_command,
 			p.validation_command,
 			p.kube_context,
+			p.kubeconfig_path,
 			p.namespace,
+			p.image_registry_prefix,
+			p.preview_domain,
+			p.ingress_class,
+			p.node_host,
+			p.default_cluster_id,
 			COUNT(DISTINCT i.id) AS issue_count,
 			COUNT(DISTINCT s.id) AS session_count,
 			MAX(i.updated_at) AS latest_issue_updated_at,
@@ -1808,7 +2733,13 @@ func (a *app) loadProject(projectID string) (project, error) {
 		&project.DeployCommand,
 		&project.ValidationCommand,
 		&project.KubeContext,
+		&project.KubeconfigPath,
 		&project.Namespace,
+		&project.ImageRegistryPrefix,
+		&project.PreviewDomain,
+		&project.IngressClass,
+		&project.NodeHost,
+		&project.DefaultClusterID,
 		&project.IssueCount,
 		&project.SessionCount,
 		&latestIssueUpdatedAt,
@@ -1819,6 +2750,185 @@ func (a *app) loadProject(projectID string) (project, error) {
 		project.LatestIssueUpdatedAt = latestIssueUpdatedAt.String
 	}
 	return project, err
+}
+
+func (a *app) listClusters() ([]cluster, error) {
+	rows, err := a.db.Query(`
+		SELECT
+			c.id,
+			c.name,
+			c.kubeconfig_path,
+			c.kube_context,
+			c.image_registry_prefix,
+			c.exposure_mode,
+			c.node_host,
+			c.preview_domain,
+			c.ingress_class,
+			c.status,
+			c.last_checked_at,
+			COUNT(DISTINCT p.id) AS project_count,
+			COUNT(DISTINCT e.issue_id) AS environment_count,
+			c.created_at,
+			c.updated_at
+		FROM clusters c
+		LEFT JOIN projects p ON p.default_cluster_id = c.id
+		LEFT JOIN issue_test_environments e ON e.cluster_id = c.id
+		GROUP BY c.id
+		ORDER BY c.updated_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	clusters := make([]cluster, 0)
+	for rows.Next() {
+		var cluster cluster
+		if err := rows.Scan(&cluster.ID, &cluster.Name, &cluster.KubeconfigPath, &cluster.KubeContext, &cluster.ImageRegistryPrefix, &cluster.ExposureMode, &cluster.NodeHost, &cluster.PreviewDomain, &cluster.IngressClass, &cluster.Status, &cluster.LastCheckedAt, &cluster.ProjectCount, &cluster.EnvironmentCount, &cluster.CreatedAt, &cluster.UpdatedAt); err != nil {
+			return nil, err
+		}
+		clusters = append(clusters, cluster)
+	}
+	return clusters, rows.Err()
+}
+
+func (a *app) loadCluster(clusterID string) (cluster, error) {
+	var cluster cluster
+	row := a.db.QueryRow(`
+		SELECT
+			c.id,
+			c.name,
+			c.kubeconfig_path,
+			c.kube_context,
+			c.image_registry_prefix,
+			c.exposure_mode,
+			c.node_host,
+			c.preview_domain,
+			c.ingress_class,
+			c.status,
+			c.last_checked_at,
+			COUNT(DISTINCT p.id) AS project_count,
+			COUNT(DISTINCT e.issue_id) AS environment_count,
+			c.created_at,
+			c.updated_at
+		FROM clusters c
+		LEFT JOIN projects p ON p.default_cluster_id = c.id
+		LEFT JOIN issue_test_environments e ON e.cluster_id = c.id
+		WHERE c.id = ?
+		GROUP BY c.id
+	`, clusterID)
+	err := row.Scan(&cluster.ID, &cluster.Name, &cluster.KubeconfigPath, &cluster.KubeContext, &cluster.ImageRegistryPrefix, &cluster.ExposureMode, &cluster.NodeHost, &cluster.PreviewDomain, &cluster.IngressClass, &cluster.Status, &cluster.LastCheckedAt, &cluster.ProjectCount, &cluster.EnvironmentCount, &cluster.CreatedAt, &cluster.UpdatedAt)
+	return cluster, err
+}
+
+func (a *app) insertCluster(cluster cluster) error {
+	_, err := a.db.Exec(`
+		INSERT INTO clusters (id, name, kubeconfig_path, kube_context, image_registry_prefix, exposure_mode, node_host, preview_domain, ingress_class, status, last_checked_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, cluster.ID, cluster.Name, cluster.KubeconfigPath, cluster.KubeContext, cluster.ImageRegistryPrefix, cluster.ExposureMode, cluster.NodeHost, cluster.PreviewDomain, cluster.IngressClass, cluster.Status, cluster.LastCheckedAt, cluster.CreatedAt, cluster.UpdatedAt)
+	return err
+}
+
+func (a *app) updateCluster(cluster cluster) error {
+	_, err := a.db.Exec(`
+		UPDATE clusters
+		SET name = ?, kubeconfig_path = ?, kube_context = ?, image_registry_prefix = ?, exposure_mode = ?, node_host = ?, preview_domain = ?, ingress_class = ?, status = ?, last_checked_at = ?, updated_at = ?
+		WHERE id = ?
+	`, cluster.Name, cluster.KubeconfigPath, cluster.KubeContext, cluster.ImageRegistryPrefix, cluster.ExposureMode, cluster.NodeHost, cluster.PreviewDomain, cluster.IngressClass, cluster.Status, cluster.LastCheckedAt, cluster.UpdatedAt, cluster.ID)
+	return err
+}
+
+func (a *app) loadClusterByKubeconfig(kubeconfigPath, kubeContext string) (cluster, error) {
+	var cluster cluster
+	row := a.db.QueryRow(`
+		SELECT id, name, kubeconfig_path, kube_context, image_registry_prefix, exposure_mode, node_host, preview_domain, ingress_class, status, last_checked_at, created_at, updated_at
+		FROM clusters
+		WHERE kubeconfig_path = ? AND kube_context = ?
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, kubeconfigPath, kubeContext)
+	err := row.Scan(&cluster.ID, &cluster.Name, &cluster.KubeconfigPath, &cluster.KubeContext, &cluster.ImageRegistryPrefix, &cluster.ExposureMode, &cluster.NodeHost, &cluster.PreviewDomain, &cluster.IngressClass, &cluster.Status, &cluster.LastCheckedAt, &cluster.CreatedAt, &cluster.UpdatedAt)
+	return cluster, err
+}
+
+func (a *app) importKubeconfigs(paths []string) (kubeconfigImportResult, error) {
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		return kubeconfigImportResult{}, errors.New("kubectl is not available on PATH")
+	}
+
+	result := kubeconfigImportResult{
+		Imported: []cluster{},
+		Skipped:  []kubeconfigImportSkip{},
+	}
+	for _, kubeconfigPath := range uniqueStrings(paths) {
+		normalizedPath, err := normalizeKubeconfigPath(kubeconfigPath)
+		if err != nil {
+			result.Skipped = append(result.Skipped, kubeconfigImportSkip{Path: kubeconfigPath, Reason: err.Error()})
+			continue
+		}
+		contexts, err := kubeconfigContexts(normalizedPath)
+		if err != nil {
+			result.Skipped = append(result.Skipped, kubeconfigImportSkip{Path: normalizedPath, Reason: err.Error()})
+			continue
+		}
+		if len(contexts) == 0 {
+			result.Skipped = append(result.Skipped, kubeconfigImportSkip{Path: normalizedPath, Reason: "no kube contexts found"})
+			continue
+		}
+		for _, kubeContext := range contexts {
+			cluster, err := a.importKubeconfigContext(normalizedPath, kubeContext)
+			if err != nil {
+				result.Skipped = append(result.Skipped, kubeconfigImportSkip{Path: normalizedPath, Context: kubeContext, Reason: err.Error()})
+				continue
+			}
+			result.Imported = append(result.Imported, cluster)
+		}
+	}
+	return result, nil
+}
+
+func (a *app) importKubeconfigContext(kubeconfigPath, kubeContext string) (cluster, error) {
+	status := "ready"
+	if err := validateKubeconfigContext(kubeconfigPath, kubeContext); err != nil {
+		status = "unreachable"
+	}
+	now := nowString()
+	existing, err := a.loadClusterByKubeconfig(kubeconfigPath, kubeContext)
+	if err == nil {
+		existing.Status = status
+		existing.LastCheckedAt = now
+		existing.UpdatedAt = now
+		if existing.ImageRegistryPrefix == "" {
+			existing.ImageRegistryPrefix = defaultImportedClusterImageRegistryPrefix
+		}
+		if existing.ExposureMode == "" {
+			existing.ExposureMode = "nodeport"
+		}
+		if err := a.updateCluster(existing); err != nil {
+			return cluster{}, err
+		}
+		return a.loadCluster(existing.ID)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return cluster{}, err
+	}
+
+	importedCluster := cluster{
+		ID:                  uuid.NewString(),
+		Name:                importedClusterName(kubeconfigPath, kubeContext),
+		KubeconfigPath:      kubeconfigPath,
+		KubeContext:         kubeContext,
+		ImageRegistryPrefix: defaultImportedClusterImageRegistryPrefix,
+		ExposureMode:        "nodeport",
+		Status:              status,
+		LastCheckedAt:       now,
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+	if err := a.insertCluster(importedCluster); err != nil {
+		return cluster{}, err
+	}
+	return a.loadCluster(importedCluster.ID)
 }
 
 func (a *app) prepareSessionWorkspace(session agentSession, project project) (agentSession, error) {
@@ -1885,7 +2995,7 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 	row := a.db.QueryRow(`
 		SELECT s.id, s.issue_id, s.provider, s.agent_profile, s.runtime_mode, s.command, s.status, s.branch, s.workdir, s.codex_thread_id, s.codex_turn_id, s.agent_status, s.artifact_dir, s.cleanup_status, s.cleaned_at, s.created_at, s.updated_at,
 		       i.id, i.project_id, i.title, i.body, i.status, i.assignee, i.assignee_type, i.environment_url, i.created_at, i.updated_at,
-		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.namespace, p.created_at, p.updated_at
+		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id, p.created_at, p.updated_at
 		FROM agent_sessions s
 		JOIN issues i ON i.id = s.issue_id
 		JOIN projects p ON p.id = i.project_id
@@ -1894,7 +3004,7 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 	if err := row.Scan(
 		&detail.Session.ID, &detail.Session.IssueID, &detail.Session.Provider, &detail.Session.AgentProfile, &detail.Session.RuntimeMode, &detail.Session.Command, &detail.Session.Status, &detail.Session.Branch, &detail.Session.Workdir, &detail.Session.CodexThreadID, &detail.Session.CodexTurnID, &detail.Session.AgentStatus, &detail.Session.ArtifactDir, &detail.Session.CleanupStatus, &detail.Session.CleanedAt, &detail.Session.CreatedAt, &detail.Session.UpdatedAt,
 		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
-		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.Namespace, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
+		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
 	); err != nil {
 		return detail, err
 	}
@@ -2087,6 +3197,69 @@ func (a *app) listEvidence(issueID string) ([]deploymentEvidence, error) {
 		evidence = append(evidence, e)
 	}
 	return evidence, nil
+}
+
+func (a *app) loadIssueTestEnvironment(issueID string) (*issueTestEnvironment, error) {
+	row := a.db.QueryRow(`
+		SELECT issue_id, cluster_id, namespace, namespace_status, cleanup_status, preview_url, image_registry_prefix, kubeconfig_path, kube_context, exposure_mode, preview_domain, ingress_class, node_host, last_deploy_session_id, last_cleanup_session_id, created_at, updated_at
+		FROM issue_test_environments
+		WHERE issue_id = ?
+	`, issueID)
+	var environment issueTestEnvironment
+	if err := row.Scan(
+		&environment.IssueID,
+		&environment.ClusterID,
+		&environment.Namespace,
+		&environment.NamespaceStatus,
+		&environment.CleanupStatus,
+		&environment.PreviewURL,
+		&environment.ImageRegistryPrefix,
+		&environment.KubeconfigPath,
+		&environment.KubeContext,
+		&environment.ExposureMode,
+		&environment.PreviewDomain,
+		&environment.IngressClass,
+		&environment.NodeHost,
+		&environment.LastDeploySessionID,
+		&environment.LastCleanupSessionID,
+		&environment.CreatedAt,
+		&environment.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &environment, nil
+}
+
+func (a *app) saveIssueTestEnvironment(environment issueTestEnvironment) error {
+	now := nowString()
+	if environment.CreatedAt == "" {
+		environment.CreatedAt = now
+	}
+	environment.UpdatedAt = now
+	_, err := a.db.Exec(`
+		INSERT INTO issue_test_environments (issue_id, cluster_id, namespace, namespace_status, cleanup_status, preview_url, image_registry_prefix, kubeconfig_path, kube_context, exposure_mode, preview_domain, ingress_class, node_host, last_deploy_session_id, last_cleanup_session_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(issue_id) DO UPDATE SET
+			cluster_id = excluded.cluster_id,
+			namespace = excluded.namespace,
+			namespace_status = excluded.namespace_status,
+			cleanup_status = excluded.cleanup_status,
+			preview_url = excluded.preview_url,
+			image_registry_prefix = excluded.image_registry_prefix,
+			kubeconfig_path = excluded.kubeconfig_path,
+			kube_context = excluded.kube_context,
+			exposure_mode = excluded.exposure_mode,
+			preview_domain = excluded.preview_domain,
+			ingress_class = excluded.ingress_class,
+			node_host = excluded.node_host,
+			last_deploy_session_id = excluded.last_deploy_session_id,
+			last_cleanup_session_id = excluded.last_cleanup_session_id,
+			updated_at = excluded.updated_at
+	`, environment.IssueID, environment.ClusterID, environment.Namespace, environment.NamespaceStatus, environment.CleanupStatus, environment.PreviewURL, environment.ImageRegistryPrefix, environment.KubeconfigPath, environment.KubeContext, environment.ExposureMode, environment.PreviewDomain, environment.IngressClass, environment.NodeHost, environment.LastDeploySessionID, environment.LastCleanupSessionID, environment.CreatedAt, environment.UpdatedAt)
+	return err
 }
 
 func (a *app) appendSessionLog(sessionID, stream, message string) {
@@ -2377,21 +3550,280 @@ func (a *app) normalizeProjectInput(input projectInput) (project, error) {
 	if defaultBranch == "" {
 		defaultBranch = detectDefaultBranch(gitPath, repoPath)
 	}
+	defaultClusterID := strings.TrimSpace(input.DefaultClusterID)
+	if defaultClusterID != "" {
+		if _, err := a.loadCluster(defaultClusterID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return project{}, errClusterNotFound
+			}
+			return project{}, err
+		}
+	}
 
 	return project{
-		Name:              name,
-		RepoPath:          repoPath,
-		SourceType:        sourceType,
-		RemoteURL:         remoteURL,
-		GitProvider:       gitInfo.Provider,
-		GitOwner:          gitInfo.Owner,
-		GitRepo:           gitInfo.Repo,
-		DefaultBranch:     defaultBranch,
-		DeployCommand:     strings.TrimSpace(input.DeployCommand),
-		ValidationCommand: strings.TrimSpace(input.ValidationCommand),
-		KubeContext:       strings.TrimSpace(input.KubeContext),
-		Namespace:         strings.TrimSpace(input.Namespace),
+		Name:                name,
+		RepoPath:            repoPath,
+		SourceType:          sourceType,
+		RemoteURL:           remoteURL,
+		GitProvider:         gitInfo.Provider,
+		GitOwner:            gitInfo.Owner,
+		GitRepo:             gitInfo.Repo,
+		DefaultBranch:       defaultBranch,
+		DeployCommand:       strings.TrimSpace(input.DeployCommand),
+		ValidationCommand:   strings.TrimSpace(input.ValidationCommand),
+		KubeContext:         strings.TrimSpace(input.KubeContext),
+		KubeconfigPath:      strings.TrimSpace(input.KubeconfigPath),
+		Namespace:           strings.TrimSpace(input.Namespace),
+		ImageRegistryPrefix: strings.TrimSpace(input.ImageRegistryPrefix),
+		PreviewDomain:       strings.TrimSpace(input.PreviewDomain),
+		IngressClass:        strings.TrimSpace(input.IngressClass),
+		NodeHost:            strings.TrimSpace(input.NodeHost),
+		DefaultClusterID:    defaultClusterID,
 	}, nil
+}
+
+func normalizeClusterInput(existing cluster, input clusterInput) (cluster, error) {
+	exposureMode, err := normalizeExposureMode(input.ExposureMode)
+	if err != nil {
+		return cluster{}, err
+	}
+	if exposureMode == "" {
+		exposureMode = "nodeport"
+	}
+
+	name := strings.TrimSpace(input.Name)
+	kubeconfigPath := strings.TrimSpace(input.KubeconfigPath)
+	imageRegistryPrefix := strings.TrimSpace(input.ImageRegistryPrefix)
+	previewDomain := strings.TrimSpace(input.PreviewDomain)
+	if name == "" {
+		return cluster{}, errors.New("cluster name is required")
+	}
+	if kubeconfigPath == "" {
+		return cluster{}, errors.New("kubeconfig path is required")
+	}
+	if imageRegistryPrefix == "" {
+		return cluster{}, errors.New("image registry prefix is required")
+	}
+	if exposureMode == "ingress" && previewDomain == "" {
+		return cluster{}, errors.New("preview domain is required when ingress is the default exposure mode")
+	}
+
+	status := strings.TrimSpace(input.Status)
+	if status == "" {
+		status = existing.Status
+	}
+	if status == "" {
+		status = "configured"
+	}
+
+	return cluster{
+		ID:                  existing.ID,
+		Name:                name,
+		KubeconfigPath:      kubeconfigPath,
+		KubeContext:         strings.TrimSpace(input.KubeContext),
+		ImageRegistryPrefix: imageRegistryPrefix,
+		ExposureMode:        exposureMode,
+		NodeHost:            strings.TrimSpace(input.NodeHost),
+		PreviewDomain:       previewDomain,
+		IngressClass:        strings.TrimSpace(input.IngressClass),
+		Status:              status,
+		LastCheckedAt:       existing.LastCheckedAt,
+		CreatedAt:           existing.CreatedAt,
+		UpdatedAt:           existing.UpdatedAt,
+	}, nil
+}
+
+func normalizeKubeconfigImportPaths(input kubeconfigImportRequest) []string {
+	paths := append([]string{}, input.Paths...)
+	if strings.TrimSpace(input.Path) != "" {
+		paths = append(paths, input.Path)
+	}
+	return uniqueStrings(paths)
+}
+
+func discoverKubeconfigs(paths []string) kubeconfigDiscoveryResult {
+	result := kubeconfigDiscoveryResult{
+		Candidates: []kubeconfigCandidate{},
+		Skipped:    []kubeconfigImportSkip{},
+	}
+	if _, err := exec.LookPath("kubectl"); err != nil {
+		result.Skipped = append(result.Skipped, kubeconfigImportSkip{Reason: "kubectl is not available on PATH"})
+		return result
+	}
+	for _, kubeconfigPath := range uniqueStrings(paths) {
+		normalizedPath, err := normalizeKubeconfigPath(kubeconfigPath)
+		if err != nil {
+			result.Skipped = append(result.Skipped, kubeconfigImportSkip{Path: kubeconfigPath, Reason: err.Error()})
+			continue
+		}
+		contexts, err := kubeconfigContexts(normalizedPath)
+		if err != nil {
+			result.Skipped = append(result.Skipped, kubeconfigImportSkip{Path: normalizedPath, Reason: err.Error()})
+			continue
+		}
+		if len(contexts) == 0 {
+			result.Skipped = append(result.Skipped, kubeconfigImportSkip{Path: normalizedPath, Reason: "no kube contexts found"})
+			continue
+		}
+		result.Candidates = append(result.Candidates, kubeconfigCandidate{
+			Path:     normalizedPath,
+			Contexts: contexts,
+		})
+	}
+	return result
+}
+
+func discoverDefaultKubeconfigPaths(kubeDir string) ([]string, error) {
+	entries, err := os.ReadDir(kubeDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("read default kube directory: %w", err)
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(kubeDir, entry.Name())
+		info, err := os.Stat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func normalizeKubeconfigPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", errors.New("kubeconfig path is empty")
+	}
+	if strings.HasPrefix(path, "~/") {
+		path = filepath.Join(userHomeDir(), strings.TrimPrefix(path, "~/"))
+	}
+	if !filepath.IsAbs(path) {
+		absolutePath, err := filepath.Abs(path)
+		if err != nil {
+			return "", fmt.Errorf("resolve kubeconfig path: %w", err)
+		}
+		path = absolutePath
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", errors.New("kubeconfig file does not exist")
+		}
+		return "", fmt.Errorf("read kubeconfig file: %w", err)
+	}
+	if info.IsDir() {
+		return "", errors.New("kubeconfig path points to a directory")
+	}
+	return path, nil
+}
+
+type kubeconfigView struct {
+	CurrentContext string `json:"current-context"`
+	Contexts       []struct {
+		Name string `json:"name"`
+	} `json:"contexts"`
+}
+
+func kubeconfigContexts(kubeconfigPath string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfigPath, "config", "view", "-o", "json").CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return nil, errors.New("kubectl config view timed out")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("kubectl config view failed: %s", truncate(strings.TrimSpace(string(output)), 240))
+	}
+
+	var view kubeconfigView
+	if err := json.Unmarshal(output, &view); err != nil {
+		return nil, fmt.Errorf("parse kubeconfig: %w", err)
+	}
+
+	contexts := make([]string, 0, len(view.Contexts)+1)
+	for _, item := range view.Contexts {
+		if name := strings.TrimSpace(item.Name); name != "" {
+			contexts = append(contexts, name)
+		}
+	}
+	contexts = uniqueStrings(contexts)
+	currentContext := strings.TrimSpace(view.CurrentContext)
+	if currentContext == "" {
+		return contexts, nil
+	}
+	filtered := make([]string, 0, len(contexts))
+	for _, name := range contexts {
+		if name != currentContext {
+			filtered = append(filtered, name)
+		}
+	}
+	sort.Strings(filtered)
+	return append([]string{currentContext}, filtered...), nil
+}
+
+func validateKubeconfigContext(kubeconfigPath, kubeContext string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+	defer cancel()
+	args := []string{"--kubeconfig", kubeconfigPath}
+	if strings.TrimSpace(kubeContext) != "" {
+		args = append(args, "--context", kubeContext)
+	}
+	args = append(args, "--request-timeout=5s", "get", "--raw=/version")
+	output, err := exec.CommandContext(ctx, "kubectl", args...).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return errors.New("cluster version check timed out")
+	}
+	if err != nil {
+		return fmt.Errorf("cluster version check failed: %s", truncate(strings.TrimSpace(string(output)), 240))
+	}
+	return nil
+}
+
+func importedClusterName(kubeconfigPath, kubeContext string) string {
+	if strings.TrimSpace(kubeContext) != "" {
+		return strings.Join(strings.Fields(kubeContext), " ")
+	}
+	base := strings.TrimSuffix(filepath.Base(kubeconfigPath), filepath.Ext(kubeconfigPath))
+	if base == "" {
+		return filepath.Base(kubeconfigPath)
+	}
+	return base
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func normalizeExposureMode(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "", "default":
+		return "", nil
+	case "nodeport", "node-port", "node_port":
+		return "nodeport", nil
+	case "ingress":
+		return "ingress", nil
+	default:
+		return "", fmt.Errorf("unsupported exposure mode %q", value)
+	}
 }
 
 func normalizeSourceType(value string) string {
@@ -2881,14 +4313,61 @@ func buildKubeEnv(project project) []string {
 	if project.KubeContext != "" {
 		env = append(env, "MSPACE_KUBE_CONTEXT="+project.KubeContext)
 	}
+	if project.KubeconfigPath != "" {
+		env = append(env, "KUBECONFIG="+project.KubeconfigPath)
+		env = append(env, "MSPACE_KUBECONFIG="+project.KubeconfigPath)
+	}
 	if project.Namespace != "" {
 		env = append(env, "MSPACE_KUBE_NAMESPACE="+project.Namespace)
+	}
+	if project.ImageRegistryPrefix != "" {
+		env = append(env, "MSPACE_IMAGE_REGISTRY_PREFIX="+project.ImageRegistryPrefix)
+	}
+	if project.PreviewDomain != "" {
+		env = append(env, "MSPACE_PREVIEW_DOMAIN="+project.PreviewDomain)
+	}
+	if project.IngressClass != "" {
+		env = append(env, "MSPACE_INGRESS_CLASS="+project.IngressClass)
+	}
+	if project.NodeHost != "" {
+		env = append(env, "MSPACE_NODE_HOST="+project.NodeHost)
 	}
 	return env
 }
 
-func buildSessionEnv(session agentSession, project project, contextPath string) []string {
+func (a *app) buildSessionEnv(session agentSession, project project, contextPath string) []string {
 	env := buildKubeEnv(project)
+	if environment, err := a.loadIssueTestEnvironment(session.IssueID); err == nil && environment != nil {
+		if environment.KubeconfigPath != "" {
+			env = append(env, "KUBECONFIG="+environment.KubeconfigPath)
+			env = append(env, "MSPACE_KUBECONFIG="+environment.KubeconfigPath)
+		}
+		if environment.KubeContext != "" {
+			env = append(env, "MSPACE_KUBE_CONTEXT="+environment.KubeContext)
+		}
+		if environment.Namespace != "" {
+			env = append(env, "MSPACE_TEST_NAMESPACE="+environment.Namespace)
+			env = append(env, "MSPACE_KUBE_NAMESPACE="+environment.Namespace)
+		}
+		if environment.ClusterID != "" {
+			env = append(env, "MSPACE_CLUSTER_ID="+environment.ClusterID)
+		}
+		if environment.ExposureMode != "" {
+			env = append(env, "MSPACE_EXPOSURE_MODE="+environment.ExposureMode)
+		}
+		if environment.ImageRegistryPrefix != "" {
+			env = append(env, "MSPACE_IMAGE_REGISTRY_PREFIX="+environment.ImageRegistryPrefix)
+		}
+		if environment.PreviewDomain != "" {
+			env = append(env, "MSPACE_PREVIEW_DOMAIN="+environment.PreviewDomain)
+		}
+		if environment.IngressClass != "" {
+			env = append(env, "MSPACE_INGRESS_CLASS="+environment.IngressClass)
+		}
+		if environment.NodeHost != "" {
+			env = append(env, "MSPACE_NODE_HOST="+environment.NodeHost)
+		}
+	}
 	env = append(env,
 		"MSPACE_ISSUE_ID="+session.IssueID,
 		"MSPACE_SESSION_ID="+session.ID,
@@ -2907,6 +4386,9 @@ func buildSessionEnv(session agentSession, project project, contextPath string) 
 
 func buildKubectlArgs(project project, args ...string) []string {
 	kubectlArgs := []string{}
+	if project.KubeconfigPath != "" {
+		kubectlArgs = append(kubectlArgs, "--kubeconfig", project.KubeconfigPath)
+	}
 	if project.KubeContext != "" {
 		kubectlArgs = append(kubectlArgs, "--context", project.KubeContext)
 	}

@@ -10,9 +10,9 @@ mspace is for engineering and platform teams that already use coding agents and 
 
 ## Product Purpose
 
-mspace is an Inbox and Issue workspace for coding agents. It turns a fragmented workflow of local agent edits, chat notes, issue trackers, and test-cluster validation into one document-style workspace where an issue can hold the problem statement, discussion, agent session, branch state, Kubernetes evidence, and final review trail.
+mspace is an Inbox and Issue workspace for coding agents. It turns a fragmented workflow of local agent edits, chat notes, issue trackers, reusable test cluster config, and test-cluster validation into one document-style workspace where an issue can hold the problem statement, discussion, agent session, branch state, selected cluster, issue test namespace, preview URL, Kubernetes evidence, and final review trail.
 
-The product succeeds when a team can create or route an issue, assign a local-first agent session, let that agent modify code, deploy or inspect the project in a scoped Kubernetes namespace, and review the result with enough evidence to decide what happens next.
+The product succeeds when a team can create or route an issue, assign a local-first agent session, let that agent modify code, then manually trigger PR generation or an issue-scoped Kubernetes test deployment with enough preview and evidence to decide what happens next.
 
 ## Brand Personality
 
@@ -32,7 +32,7 @@ Calm, operational, and exact. The interface should feel like a serious document 
 - Issues are durable working documents, not transient job cards.
 - Inbox is for messages and state changes that need human review, not the full issue database.
 - Agents should appear as collaborators with assignees, sessions, blockers, and progress updates.
-- Runtime evidence belongs next to the issue story: branch, logs, status, namespace, and environment links should support review.
+- Runtime evidence belongs next to the issue story: branch, logs, status, selected cluster, namespace, preview URL, and environment links should support review.
 - Local-first development and Kubernetes validation are separate concepts, and the UI should make that boundary visible when it matters.
 
 ## Accessibility & Inclusion

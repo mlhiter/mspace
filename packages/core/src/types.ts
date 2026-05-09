@@ -11,11 +11,48 @@ export interface Project {
   deployCommand: string;
   validationCommand: string;
   kubeContext: string;
+  kubeconfigPath: string;
   namespace: string;
+  imageRegistryPrefix: string;
+  previewDomain: string;
+  ingressClass: string;
+  nodeHost: string;
+  defaultClusterId: string;
   issueCount: number;
   sessionCount: number;
   latestIssueUpdatedAt: string | null;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface Cluster {
+  id: string;
+  name: string;
+  kubeconfigPath: string;
+  kubeContext: string;
+  imageRegistryPrefix: string;
+  exposureMode: "nodeport" | "ingress" | string;
+  nodeHost: string;
+  previewDomain: string;
+  ingressClass: string;
+  status: string;
+  lastCheckedAt: string;
+  projectCount: number;
+  environmentCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ActiveWorkItem {
+  issueId: string;
+  projectId: string;
+  projectName: string;
+  title: string;
+  status: string;
+  namespace: string;
+  namespaceStatus: string;
+  cleanupStatus: string;
+  sessionStatus: string;
   updatedAt: string;
 }
 
@@ -166,9 +203,30 @@ export interface DeploymentEvidence {
   createdAt: string;
 }
 
+export interface IssueTestEnvironment {
+  issueId: string;
+  clusterId: string;
+  namespace: string;
+  namespaceStatus: string;
+  cleanupStatus: string;
+  previewUrl: string;
+  imageRegistryPrefix: string;
+  kubeconfigPath: string;
+  kubeContext: string;
+  exposureMode: string;
+  previewDomain: string;
+  ingressClass: string;
+  nodeHost: string;
+  lastDeploySessionId: string;
+  lastCleanupSessionId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface IssueDetail {
   issue: Issue;
   project: Project;
+  testEnvironment: IssueTestEnvironment | null;
   labels: IssueLabel[];
   comments: Comment[];
   sessions: AgentSession[];
@@ -193,7 +251,13 @@ export interface CreateProjectInput {
   deployCommand: string;
   validationCommand: string;
   kubeContext: string;
+  kubeconfigPath: string;
   namespace: string;
+  imageRegistryPrefix: string;
+  previewDomain: string;
+  ingressClass: string;
+  nodeHost: string;
+  defaultClusterId: string;
 }
 
 export interface UpdateProjectInput extends CreateProjectInput {
@@ -233,6 +297,48 @@ export interface AgentProfileInput {
   enabled: boolean;
 }
 
+export interface ClusterInput {
+  name: string;
+  kubeconfigPath: string;
+  kubeContext: string;
+  imageRegistryPrefix: string;
+  exposureMode: "nodeport" | "ingress";
+  nodeHost: string;
+  previewDomain: string;
+  ingressClass: string;
+  status?: string;
+}
+
+export interface KubeconfigImportSkip {
+  path: string;
+  context: string;
+  reason: string;
+}
+
+export interface KubeconfigCandidate {
+  path: string;
+  contexts: string[];
+}
+
+export interface KubeconfigDiscoveryResult {
+  candidates: KubeconfigCandidate[];
+  skipped: KubeconfigImportSkip[];
+}
+
+export interface KubeconfigImportResult {
+  imported: Cluster[];
+  skipped: KubeconfigImportSkip[];
+}
+
+export interface StartTestDeployInput {
+  agentProfile?: string;
+  clusterId: string;
+  exposureMode?: "nodeport" | "ingress" | "";
+  previewDomain?: string;
+  ingressClass?: string;
+  nodeHost?: string;
+}
+
 export interface SessionStreamEvent {
   type: "log" | "status";
   payload: string;
@@ -242,6 +348,7 @@ export interface MspaceDesktopAPI {
   apiBaseUrl: string;
   appVersion: string;
   selectProjectFolder?: () => Promise<string | null>;
+  selectKubeconfigFiles?: () => Promise<string[]>;
   openExternal?: (url: string) => Promise<void>;
   openPath?: (path: string) => Promise<string>;
 }

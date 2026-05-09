@@ -146,7 +146,7 @@ The default desktop shape is a sidebar plus document workspace.
 - Sidebar width: about `252px`.
 - Main content: centered page frame with a max width near `1280px`.
 - Page padding: generous enough for reading, tight enough for operations.
-- Default routes in the app shell: Inbox, Issues, Agents, and Projects. Issue and Session details are reached from objects.
+- Default routes in the app shell: Inbox, Issues, Agents, Clusters, and Projects. Issue and Session details are reached from objects.
 
 Screen priorities:
 
@@ -154,6 +154,7 @@ Screen priorities:
 - Issue Detail: document body first, then activity, session, and evidence.
 - Session Detail: logs, worktree state, branch comparison, evidence.
 - Agents: managed Codex-backed profiles, mentions, enabled state, and instructions.
+- Clusters: reusable kubeconfig, registry, and preview exposure defaults.
 - Projects: repository and runtime policy, not a daily conversation feed.
 
 ## Components
@@ -171,7 +172,7 @@ Screen priorities:
 - Use `Field`, `FieldLabel`, `FieldDescription`, `Input`, and `Textarea`.
 - Keep labels short and specific.
 - Validation states use `data-invalid` on the field and `aria-invalid` on the control.
-- Project configuration forms should expose local repo path, default branch, deploy command, validation command, kube context, and namespace plainly.
+- Project configuration forms should expose local repo path, default branch, deploy command, validation command, and default cluster plainly. Cluster settings own kubeconfig, context, registry, and preview exposure defaults.
 
 ### Cards And Panels
 

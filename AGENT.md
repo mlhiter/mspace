@@ -14,12 +14,12 @@ The product should stay narrow:
 
 ## Current Implementation
 
-- Desktop app: Electron, electron-vite, React 19, React Router 7, React Query 5, Tailwind CSS 4, TypeScript.
+- Desktop app: Electron, electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript.
 - UI system: shadcn/ui source components in `packages/ui/src/components/ui`, Radix UI primitives, lucide-react icons, and shared exports through `@mspace/ui`.
 - Workspace tooling: pnpm workspaces and Turbo.
 - Runner: Go, chi, SQLite through `modernc.org/sqlite`.
 - The Electron main process auto-starts the local runner with `go run .` unless `GET /health` is already healthy.
-- Sidebar navigation currently exposes Inbox, Issues, Agents, and Projects, plus a quick link that opens issue creation from the left rail.
+- Sidebar navigation currently exposes Inbox, Issues, Agents, Clusters, and Projects, plus a quick link that opens issue creation from the left rail and an Active work block for recent issue/session/test-environment activity.
 - Inbox is a review-only unread feed; issue creation and management live in the Issues route.
 - SQLite database path: `~/.mspace/mspace.db`.
 - Imported GitHub repositories are cloned or reused under `~/.mspace/repos/<owner>/<repo>`.
@@ -37,8 +37,13 @@ The product should stay narrow:
 - Inbox invalidation is driven by `GET /api/inbox/stream`, and the issue detail screen starts Codex by saving an agent-mention comment before calling `POST /api/issues/{issueID}/assign-agent`.
 - Supported Codex-backed agents are managed from the Agents route. They share the app-server runtime and differ by stored `agent_profile` prompt instructions.
 - Issue labels are issue-local records in `issue_labels` and should stay lightweight until a global label taxonomy is truly needed.
-- Project Kubernetes context and namespace are passed into sessions as `MSPACE_KUBE_CONTEXT` and `MSPACE_KUBE_NAMESPACE`.
-- Sessions also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, and `MSPACE_SESSION_CONTEXT`.
+- Reusable cluster configs live in `clusters`; they store kubeconfig path, optional context, registry prefix, exposure defaults, readiness status, and last check time.
+- The Clusters route imports kubeconfig files through the desktop file picker. On first empty-state entry, it discovers regular files under `~/.kube`, lists candidates and contexts, and lets the user choose which files to import.
+- Kubeconfig import creates one cluster per context and marks it `ready` or `unreachable` after a read-only `kubectl get --raw=/version` check. Unreachable clusters remain editable.
+- Projects store `default_cluster_id`; issue test deployments can override cluster and exposure mode per run.
+- Each issue can have one `issue_test_environments` record with cluster id, issue namespace, namespace state, cleanup state, preview URL, deploy/cleanup session ids, registry, kubeconfig, context, exposure mode, domain, ingress class, and NodePort host.
+- Deploy/test sessions receive resolved Kubernetes and preview values through `KUBECONFIG`, `MSPACE_KUBECONFIG`, `MSPACE_CLUSTER_ID`, `MSPACE_KUBE_CONTEXT`, `MSPACE_KUBE_NAMESPACE`, `MSPACE_TEST_NAMESPACE`, `MSPACE_IMAGE_REGISTRY_PREFIX`, `MSPACE_EXPOSURE_MODE`, `MSPACE_PREVIEW_DOMAIN`, `MSPACE_INGRESS_CLASS`, and `MSPACE_NODE_HOST`.
+- Sessions also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, and `MSPACE_SESSION_ARTIFACT_DIR`.
 - Tailwind CSS 4 scans monorepo UI packages through `@source` entries in `apps/desktop/src/renderer/src/globals.css`.
 - shadcn/ui semantic tokens are mapped to the Notion-like mspace palette through `@theme inline` in `apps/desktop/src/renderer/src/globals.css`.
 - Vite resolves shadcn aliases through `apps/desktop/electron.vite.config.ts`: `@mspace/ui/components`, `@mspace/ui/lib`, and `@mspace/ui`.
@@ -73,6 +78,7 @@ pnpm dev:desktop
 ```
 
 The desktop app normally starts the runner automatically on `127.0.0.1:7788`.
+If a healthy old runner is already listening, Electron reuses it. After API route changes, restart that runner before judging frontend errors.
 
 Debug the runner separately:
 
@@ -97,6 +103,7 @@ pnpm --filter @mspace/desktop build
 - `ROADMAP.md`: milestone priority and acceptance criteria for the next product work.
 - `docs/product.md`: inbox and issue product positioning, users, workflows, MVP, non-goals.
 - `docs/architecture.md`: collaboration layer, runtime layer, permission model, data sketch, risks.
+- `docs/integration-guide.md`: local runner API contract, cluster import calls, and issue test environment calls.
 - `docs/ia.md`: MVP navigation, screen map, page regions, state model, build sequence.
 - `docs/references.md`: notes from Multica and Optio references.
 - `docs/runbook.md`: local run, data paths, smoke checks, and troubleshooting.
@@ -122,9 +129,9 @@ Use these terms consistently:
 - Project: a repository plus runtime policy.
 - Issue: the durable collaboration document for one unit of work.
 - Agent Session: one agent run attached to one issue.
-- Validation Environment: where the changed project is deployed and tested.
+- Issue Test Environment: the per-issue Kubernetes validation record and namespace lifecycle.
 - Project Namespace: a long-lived namespace owned by one project.
-- Session Namespace: a temporary namespace owned by one agent session.
+- Issue Namespace: a namespace created and managed for one issue's test deployment.
 - Runtime Provider: the mechanism that starts the agent workspace.
 - Scoped Kubeconfig: kubeconfig bound to a session ServiceAccount and namespace policy.
 

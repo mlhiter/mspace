@@ -190,9 +190,30 @@ func TestEnsureProjectColumnsAddsMetadataFields(t *testing.T) {
 		t.Fatalf("ensure project columns should be idempotent: %v", err)
 	}
 
-	for _, column := range []string{"source_type", "remote_url", "git_provider", "git_owner", "git_repo"} {
+	for _, column := range []string{"source_type", "remote_url", "git_provider", "git_owner", "git_repo", "default_cluster_id"} {
 		if !projectColumnExists(t, db, column) {
 			t.Fatalf("expected projects.%s to exist", column)
+		}
+	}
+}
+
+func TestEnsureClusterTablesCreatesClusterTable(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := application.ensureClusterTables(); err != nil {
+		t.Fatalf("ensure cluster tables should be idempotent: %v", err)
+	}
+	for _, column := range []string{"id", "name", "kubeconfig_path", "kube_context", "image_registry_prefix", "exposure_mode", "node_host", "preview_domain", "ingress_class", "status", "last_checked_at"} {
+		if !tableColumnExists(t, db, "clusters", column) {
+			t.Fatalf("expected clusters.%s to exist", column)
 		}
 	}
 }
@@ -307,6 +328,157 @@ func TestEnsureIssueLabelTablesCreatesLabelTable(t *testing.T) {
 	}
 	if !tableColumnExists(t, db, "issue_labels", "name") {
 		t.Fatal("expected issue_labels.name to exist")
+	}
+}
+
+func TestEnsureIssueTestEnvironmentTablesCreatesEnvironmentTable(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TABLE issues (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			title TEXT NOT NULL,
+			body TEXT NOT NULL,
+			status TEXT NOT NULL,
+			assignee TEXT NOT NULL,
+			assignee_type TEXT NOT NULL,
+			environment_url TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create issues table: %v", err)
+	}
+
+	application := &app{db: db}
+	if err := application.ensureIssueTestEnvironmentTables(); err != nil {
+		t.Fatalf("ensure issue test environment tables failed: %v", err)
+	}
+	if err := application.ensureIssueTestEnvironmentTables(); err != nil {
+		t.Fatalf("ensure issue test environment tables should be idempotent: %v", err)
+	}
+	for _, column := range []string{"issue_id", "cluster_id", "namespace", "namespace_status", "cleanup_status", "preview_url", "image_registry_prefix", "kubeconfig_path", "kube_context", "exposure_mode", "last_deploy_session_id", "last_cleanup_session_id"} {
+		if !tableColumnExists(t, db, "issue_test_environments", column) {
+			t.Fatalf("expected issue_test_environments.%s to exist", column)
+		}
+	}
+}
+
+func TestBuildIssueTestEnvironmentUsesSelectedCluster(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	now := nowString()
+	if err := application.insertCluster(cluster{
+		ID:                  "cluster-1",
+		Name:                "Test",
+		KubeconfigPath:      "/tmp/test.kubeconfig",
+		KubeContext:         "test-context",
+		ImageRegistryPrefix: "registry.example.com/mspace",
+		ExposureMode:        "ingress",
+		NodeHost:            "1.2.3.4",
+		PreviewDomain:       "preview.example.com",
+		IngressClass:        "nginx",
+		Status:              "configured",
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}); err != nil {
+		t.Fatalf("insert cluster: %v", err)
+	}
+
+	environment, err := application.buildIssueTestEnvironment(issueDetail{
+		Issue: issue{
+			ID: "issue-1",
+		},
+		Project: project{
+			ID:               "project-1",
+			Name:             "Demo",
+			DefaultClusterID: "cluster-1",
+		},
+	}, testDeployRequest{ExposureMode: "nodeport"})
+	if err != nil {
+		t.Fatalf("build issue test environment failed: %v", err)
+	}
+	if environment.ClusterID != "cluster-1" {
+		t.Fatalf("expected cluster id cluster-1, got %q", environment.ClusterID)
+	}
+	if environment.KubeconfigPath != "/tmp/test.kubeconfig" || environment.KubeContext != "test-context" {
+		t.Fatalf("unexpected kube settings: %+v", environment)
+	}
+	if environment.ImageRegistryPrefix != "registry.example.com/mspace" {
+		t.Fatalf("unexpected registry prefix: %q", environment.ImageRegistryPrefix)
+	}
+	if environment.ExposureMode != "nodeport" || environment.PreviewDomain != "" || environment.IngressClass != "" || environment.NodeHost != "1.2.3.4" {
+		t.Fatalf("expected nodeport override to clear ingress fields, got %+v", environment)
+	}
+}
+
+func TestDiscoverDefaultKubeconfigPathsListsRegularFiles(t *testing.T) {
+	kubeDir := t.TempDir()
+	configPath := filepath.Join(kubeDir, "config")
+	prodPath := filepath.Join(kubeDir, "prod.yaml")
+	writeFile(t, configPath, "apiVersion: v1\n")
+	writeFile(t, prodPath, "apiVersion: v1\n")
+	if err := os.Mkdir(filepath.Join(kubeDir, "cache"), 0o755); err != nil {
+		t.Fatalf("create cache dir: %v", err)
+	}
+
+	paths, err := discoverDefaultKubeconfigPaths(kubeDir)
+	if err != nil {
+		t.Fatalf("discover default kubeconfig paths: %v", err)
+	}
+	expected := []string{configPath, prodPath}
+	if strings.Join(paths, "\n") != strings.Join(expected, "\n") {
+		t.Fatalf("expected paths %#v, got %#v", expected, paths)
+	}
+}
+
+func TestDiscoverKubeconfigsReturnsSelectableCandidates(t *testing.T) {
+	binDir := t.TempDir()
+	kubectlPath := filepath.Join(binDir, "kubectl")
+	writeFile(t, kubectlPath, `#!/bin/sh
+cat <<'JSON'
+{"current-context":"beta","contexts":[{"name":"alpha"},{"name":"beta"},{"name":"alpha"}]}
+JSON
+`)
+	if err := os.Chmod(kubectlPath, 0o755); err != nil {
+		t.Fatalf("chmod kubectl: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	kubeDir := t.TempDir()
+	firstPath := filepath.Join(kubeDir, "first")
+	secondPath := filepath.Join(kubeDir, "second")
+	missingPath := filepath.Join(kubeDir, "missing")
+	writeFile(t, firstPath, "apiVersion: v1\n")
+	writeFile(t, secondPath, "apiVersion: v1\n")
+
+	result := discoverKubeconfigs([]string{firstPath, secondPath, firstPath, missingPath})
+	if len(result.Candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %#v", result.Candidates)
+	}
+	if result.Candidates[0].Path != firstPath || result.Candidates[1].Path != secondPath {
+		t.Fatalf("unexpected candidate paths: %#v", result.Candidates)
+	}
+	for _, candidate := range result.Candidates {
+		if strings.Join(candidate.Contexts, ",") != "beta,alpha" {
+			t.Fatalf("expected current context first and deduped contexts, got %#v", candidate.Contexts)
+		}
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0].Path != missingPath || !strings.Contains(result.Skipped[0].Reason, "does not exist") {
+		t.Fatalf("expected missing kubeconfig skip, got %#v", result.Skipped)
 	}
 }
 
@@ -581,7 +753,7 @@ func TestBuildCodexSessionPromptIncludesRuntimeContext(t *testing.T) {
 		"Created login fix and verified the smoke test.",
 		"Do not introduce yourself",
 		"Do not say you saw the current comment, Issue history, or prior sessions",
-		"Kubernetes namespace: demo-ns",
+		"Project fallback namespace: demo-ns",
 		"Deploy command: pnpm deploy",
 		"Validation command: pnpm test",
 		"Session context file: /tmp/context.md",

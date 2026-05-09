@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-08
+> Status: local MVP operations guide, updated 2026-05-09
 
 ## Local Data
 
@@ -11,8 +11,9 @@
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree created for one local agent session. |
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Markdown session context included in the Codex app-server prompt. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory recorded in `agent_sessions.artifact_dir`. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional deploy/test artifact. When it includes `previewUrl`, the runner copies it back to the issue test environment. |
 
-Issue labels are stored in `issue_labels` as issue-local records. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
+Reusable cluster configs are stored in `clusters`. Issue test namespace records are stored in `issue_test_environments`. Issue labels are stored in `issue_labels` as issue-local records. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
 
 ## Start The App
 
@@ -46,12 +47,20 @@ pnpm dev:desktop
 | `MSPACE_RUNNER_START_TIMEOUT_MS` | Electron main process | `60000` | How long the desktop waits for the runner health check before startup fails. |
 | `MSPACE_PORT` | Go runner | `7788` | Port used by a standalone runner. |
 
-Project Kubernetes fields are passed into sessions as:
+Cluster, project, and issue test environment fields are passed into sessions as:
 
 | Variable | Source |
 | --- | --- |
-| `MSPACE_KUBE_CONTEXT` | Project `kube_context`. |
-| `MSPACE_KUBE_NAMESPACE` | Project `namespace`. |
+| `MSPACE_CLUSTER_ID` | Selected issue test environment cluster id when present. |
+| `MSPACE_KUBE_CONTEXT` | Selected issue test environment `kube_context`, or project `kube_context` for legacy commands. |
+| `KUBECONFIG` / `MSPACE_KUBECONFIG` | Selected issue test environment `kubeconfig_path`, or project `kubeconfig_path` for legacy commands. |
+| `MSPACE_KUBE_NAMESPACE` | Project fallback `namespace`, or issue test namespace when present. |
+| `MSPACE_TEST_NAMESPACE` | Issue test environment namespace. |
+| `MSPACE_IMAGE_REGISTRY_PREFIX` | Selected cluster or issue test environment image registry prefix. |
+| `MSPACE_EXPOSURE_MODE` | Selected issue test environment exposure mode. |
+| `MSPACE_PREVIEW_DOMAIN` | Optional issue preview domain. |
+| `MSPACE_INGRESS_CLASS` | Optional issue ingress class. |
+| `MSPACE_NODE_HOST` | Optional issue NodePort host. |
 
 Session metadata is also passed into the Codex app-server process environment as:
 
@@ -116,6 +125,19 @@ curl http://127.0.0.1:7788/api/agents
 sqlite3 ~/.mspace/mspace.db "select id,name,mention,provider,enabled,built_in,updated_at from agent_profiles order by sort_order,created_at;"
 ```
 
+Reusable test clusters:
+
+```bash
+curl http://127.0.0.1:7788/api/clusters
+curl http://127.0.0.1:7788/api/clusters/discover-defaults
+curl -X POST http://127.0.0.1:7788/api/clusters/import-defaults
+curl -X POST http://127.0.0.1:7788/api/clusters/import \
+  -H 'Content-Type: application/json' \
+  -d '{"paths":["/Users/mlhiter/.kube/test"]}'
+```
+
+Discovery uses `kubectl config view` to list contexts before import. The Clusters UI shows the discovered files and contexts first, then imports only the selected file paths. Import runs a read-only `/version` check for each selected context. Imported clusters are marked `ready` or `unreachable`; unreachable clusters can still be edited later.
+
 Inspect a session worktree:
 
 ```bash
@@ -130,6 +152,24 @@ sqlite3 ~/.mspace/mspace.db "select id,status,cleanup_status,cleaned_at,workdir 
 ```
 
 Cleanup removes the git worktree only. Logs, comments, evidence, and session metadata stay in SQLite. Queued or running sessions return `409 Conflict`; a missing worktree is marked cleaned idempotently after the path safety check passes.
+
+Queue an issue test deployment:
+
+```bash
+CLUSTER_ID="$(sqlite3 ~/.mspace/mspace.db "select id from clusters order by updated_at desc limit 1;")"
+curl -X POST http://127.0.0.1:7788/api/issues/<issue-id>/test-deploy \
+  -H 'Content-Type: application/json' \
+  -d "{\"clusterId\":\"${CLUSTER_ID}\",\"exposureMode\":\"nodeport\",\"nodeHost\":\"test-node.example.com\"}"
+```
+
+The deploy/test agent uses the selected cluster config, creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when selected with a preview domain, probes the preview URL, and can write `previewUrl` to `$MSPACE_SESSION_ARTIFACT_DIR/test-environment.json`.
+
+Record or trigger namespace cleanup:
+
+```bash
+curl -X POST http://127.0.0.1:7788/api/issues/<issue-id>/test-environment/retain
+curl -X POST http://127.0.0.1:7788/api/issues/<issue-id>/test-environment/cleanup -H 'Content-Type: application/json' -d '{}'
+```
 
 Run validation commands:
 
@@ -225,6 +265,21 @@ For standalone runner debugging:
 cd runner && MSPACE_PORT=7790 go run .
 ```
 
+### Clusters Page Shows 405 For Discovery
+
+If `GET /api/clusters/discover-defaults` returns `405 Method Not Allowed`, the desktop is probably connected to an older healthy runner that was already listening on `7788`. The old router treats `discover-defaults` as `{clusterID}` and only allows `PUT`/`DELETE`.
+
+Check and restart the runner:
+
+```bash
+curl -i http://127.0.0.1:7788/api/clusters/discover-defaults
+lsof -nP -iTCP:7788 -sTCP:LISTEN
+kill <runner-pid>
+cd runner && MSPACE_PORT=7788 go run .
+```
+
+Then refresh the desktop app.
+
 ### Project Creation Fails
 
 Local-folder projects must point to an absolute git repository path. Check:
@@ -273,13 +328,14 @@ Common causes:
 
 ### Kubernetes Validation Does Not Run
 
-The local MVP does not create scoped kubeconfigs or ServiceAccounts yet. It reuses the configured local kube context and namespace when project deploy or validation commands use `kubectl`.
+The local MVP does not create scoped kubeconfigs or ServiceAccounts yet. It uses the kubeconfig stored on the selected Cluster and passes the resolved issue namespace to the deploy/test session.
 
 Check:
 
 ```bash
-kubectl config current-context
-kubectl --context <context> -n <namespace> get pods
+sqlite3 ~/.mspace/mspace.db "select id,name,kubeconfig_path,kube_context,status from clusters order by updated_at desc;"
+sqlite3 ~/.mspace/mspace.db "select issue_id,cluster_id,namespace,namespace_status,cleanup_status,preview_url from issue_test_environments order by updated_at desc limit 5;"
+KUBECONFIG=<kubeconfig-path> kubectl --context <context> -n <issue-namespace> get pods
 ```
 
 ### Session Detail Has No Diff

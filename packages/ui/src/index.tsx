@@ -1,14 +1,15 @@
 import {
+  Activity,
   Archive,
   ArrowLeft,
   ArrowRight,
   Bot,
-  Boxes,
   CheckCircle2,
   ChevronRight,
   Circle,
   CircleAlert,
   Clock3,
+  Cloud,
   Files,
   FolderKanban,
   Inbox,
@@ -99,13 +100,8 @@ const sidebarItems = [
   { to: "/inbox", label: "Inbox", icon: Inbox },
   { to: "/issues", label: "Issues", icon: MessageSquareText },
   { to: "/agents", label: "Agents", icon: Bot },
+  { to: "/clusters", label: "Clusters", icon: Cloud },
   { to: "/projects", label: "Projects", icon: FolderKanban },
-];
-
-const sidebarProjects = [
-  { name: "mspace", namespace: "mspace-dev", state: "active" },
-  { name: "kite", namespace: "kite-system", state: "watch" },
-  { name: "devbox", namespace: "devbox-70", state: "idle" },
 ];
 
 let maxObservedHistoryIndex = 0;
@@ -122,7 +118,19 @@ export type BreadcrumbItem = {
   search?: Record<string, unknown>;
 };
 
-export function AppShell(props: { brandLogoSrc?: string } = {}) {
+export type ShellActiveWorkItem = {
+  issueId: string;
+  projectName: string;
+  title: string;
+  status: string;
+  namespace?: string;
+  namespaceStatus?: string;
+  sessionStatus?: string;
+};
+
+export function AppShell(props: { brandLogoSrc?: string; activeWorkItems?: ShellActiveWorkItem[] } = {}) {
+  const activeWorkItems = props.activeWorkItems || [];
+
   return (
     <div className="grid h-full min-h-0 grid-cols-[252px_minmax(0,1fr)] bg-[color:var(--canvas)] text-[color:var(--text)]">
       <div className="app-titlebar" aria-hidden="true" />
@@ -162,34 +170,17 @@ export function AppShell(props: { brandLogoSrc?: string } = {}) {
         </nav>
 
         <div className="mt-5 flex items-center justify-between px-2 text-[12px] font-medium text-[color:var(--faint)]">
-          <span>Namespaces</span>
-          <Boxes data-icon />
+          <span>Active work</span>
+          <Activity data-icon />
         </div>
         <div className="mt-2 flex flex-col gap-1">
-          {sidebarProjects.map((project) => (
-            <button
-              key={project.namespace}
-              type="button"
-              className="group flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] transition-[background-color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-[0.98]"
-            >
-              <span
-                className={cn(
-                  "size-2 rounded-full",
-                  project.state === "active" && "bg-[color:var(--muted-strong)]",
-                  project.state === "watch" && "bg-[color:var(--muted)]",
-                  project.state === "idle" && "bg-[color:var(--faint)]",
-                )}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">{project.name}</span>
-                <span className="block truncate text-[11px] text-[color:var(--muted)]">{project.namespace}</span>
-              </span>
-              <ChevronRight
-                data-icon
-                className="opacity-0 transition-[opacity,transform] duration-150 ease-out group-hover:opacity-100"
-              />
-            </button>
-          ))}
+          {activeWorkItems.length > 0 ? (
+            activeWorkItems.slice(0, 5).map((item) => <ActiveWorkLink key={item.issueId} item={item} />)
+          ) : (
+            <div className="rounded-[8px] px-2 py-2 text-[12px] leading-5 text-[color:var(--muted)]">
+              No active issue work.
+            </div>
+          )}
         </div>
 
         <div className="mt-auto rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
@@ -244,6 +235,38 @@ export function SidebarActionLink(props: PropsWithChildren<{ to: string; search?
     >
       <Icon data-icon />
       <span>{props.children}</span>
+    </Link>
+  );
+}
+
+function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
+  const status = props.item.sessionStatus || props.item.namespaceStatus || props.item.status;
+  const secondary = props.item.namespace || props.item.projectName;
+  return (
+    <Link
+      to="/issues/$issueId"
+      params={{ issueId: props.item.issueId }}
+      className="group flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] transition-[background-color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-[0.98]"
+    >
+      <span
+        className={cn(
+          "size-2 rounded-full",
+          status === "running" || status === "deploying" ? "bg-[color:var(--accent-blue)]" : null,
+          status === "queued" || status === "cleanup_requested" ? "bg-[color:var(--warning)]" : null,
+          status === "completed" || status === "retained" ? "bg-[color:var(--muted)]" : null,
+          !["running", "deploying", "queued", "cleanup_requested", "completed", "retained"].includes(status) ? "bg-[color:var(--faint)]" : null,
+        )}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium">{props.item.title}</span>
+        <span className="block truncate text-[11px] text-[color:var(--muted)]">
+          {props.item.projectName}{secondary && secondary !== props.item.projectName ? ` · ${secondary}` : ""}
+        </span>
+      </span>
+      <ChevronRight
+        data-icon
+        className="opacity-0 transition-[opacity,transform] duration-150 ease-out group-hover:opacity-100"
+      />
     </Link>
   );
 }

@@ -13,10 +13,13 @@ import {
   Code2,
   ExternalLink,
   FileText,
+  Globe2,
   Italic,
   Link as LinkIcon,
+  Rocket,
   Send,
   Tag,
+  Trash2,
   UserRound,
   X,
 } from "lucide-react";
@@ -26,19 +29,29 @@ import {
   queryKeys,
   type AgentProfile,
   type AgentSession,
+  type Cluster,
   type Comment,
   type DeploymentEvidence,
   type IssueLabel,
+  type IssueTestEnvironment,
   type SessionLog,
   type SessionStreamEvent,
+  type StartTestDeployInput,
   type WorkspaceChange,
 } from "@mspace/core";
 import {
   Button,
   CodeBlock,
+  Field,
   InlineMeta,
+  Input,
   Notice,
   PageFrame,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   StatusBadge,
   Textarea,
   cn,
@@ -151,6 +164,25 @@ function parseLabelInput(value: string) {
 
 function labelNames(labels: IssueLabel[]) {
   return listOrEmpty(labels).map((label) => label.name);
+}
+
+function testDeployDefaults(detail: NonNullable<Awaited<ReturnType<typeof api.getIssue>>>, clusters: Cluster[]): StartTestDeployInput {
+  const clusterId = detail.testEnvironment?.clusterId || detail.project.defaultClusterId || clusters[0]?.id || "";
+  const selectedCluster = clusters.find((cluster) => cluster.id === clusterId);
+  return {
+    agentProfile: "codex",
+    clusterId,
+    exposureMode: "",
+    previewDomain: selectedCluster?.previewDomain || detail.testEnvironment?.previewDomain || "",
+    ingressClass: selectedCluster?.ingressClass || detail.testEnvironment?.ingressClass || "",
+    nodeHost: selectedCluster?.nodeHost || detail.testEnvironment?.nodeHost || "",
+  };
+}
+
+function previewStrategy(environment: IssueTestEnvironment | null | undefined) {
+  if (!environment) return "not requested";
+  if (environment.exposureMode === "ingress" || environment.previewDomain) return environment.ingressClass ? `Ingress · ${environment.ingressClass}` : "Ingress";
+  return environment.nodeHost ? `NodePort · ${environment.nodeHost}` : "NodePort";
 }
 
 function isNoisySystemComment(comment: Comment) {
@@ -632,12 +664,172 @@ function LabelEditor(props: {
   );
 }
 
+function TestDeployModal(props: {
+  value: StartTestDeployInput;
+  clusters: Cluster[];
+  isPending: boolean;
+  canSubmit: boolean;
+  error?: Error | null;
+  onChange: (value: StartTestDeployInput) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  const selectedCluster = props.clusters.find((cluster) => cluster.id === props.value.clusterId);
+  const effectiveExposure = props.value.exposureMode || selectedCluster?.exposureMode || "nodeport";
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") props.onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [props]);
+
+  return (
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
+      <button type="button" aria-label="Close test deploy dialog backdrop" className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="test-deploy-title"
+        className="relative max-h-[calc(100vh-40px)] w-full max-w-[620px] overflow-auto rounded-[12px] bg-[color:var(--paper)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.18),0_0_0_1px_var(--line)]"
+      >
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 id="test-deploy-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">Deploy test environment</h2>
+            <p className="mt-1 max-w-[58ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
+              The agent will create the issue namespace, build and push images, deploy resources, and return a probed preview URL.
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close modal"
+            className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
+            onClick={props.onClose}
+          >
+            <X data-icon />
+          </button>
+        </div>
+        <form
+          className="grid gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (props.canSubmit) props.onSubmit();
+          }}
+        >
+          {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
+          {props.clusters.length === 0 ? (
+            <Notice tone="danger">Create a cluster before queueing a test deployment.</Notice>
+          ) : null}
+          <Field label="Cluster">
+            <Select
+              value={props.value.clusterId || "__none"}
+              onValueChange={(clusterId) => {
+                const nextCluster = props.clusters.find((cluster) => cluster.id === clusterId);
+                props.onChange({
+                  ...props.value,
+                  clusterId: clusterId === "__none" ? "" : clusterId,
+                  exposureMode: "",
+                  previewDomain: nextCluster?.previewDomain || "",
+                  ingressClass: nextCluster?.ingressClass || "",
+                  nodeHost: nextCluster?.nodeHost || "",
+                });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">Select cluster</SelectItem>
+                {props.clusters.map((cluster) => (
+                  <SelectItem key={cluster.id} value={cluster.id}>
+                    {cluster.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          {selectedCluster ? (
+            <div className="grid gap-1.5 rounded-[10px] bg-[color:var(--block)] p-3 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="font-medium text-[color:var(--muted-strong)]">{selectedCluster.name}</div>
+              <div className="break-all font-mono">{selectedCluster.kubeconfigPath}</div>
+              <div className="break-all font-mono">{selectedCluster.imageRegistryPrefix}</div>
+              <div>{selectedCluster.exposureMode === "ingress" ? "Ingress default" : "NodePort default"}</div>
+            </div>
+          ) : null}
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Exposure">
+              <Select
+                value={props.value.exposureMode || "default"}
+                onValueChange={(value) =>
+                  props.onChange({
+                    ...props.value,
+                    exposureMode: value === "default" ? "" : (value as StartTestDeployInput["exposureMode"]),
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Use cluster default</SelectItem>
+                  <SelectItem value="nodeport">NodePort</SelectItem>
+                  <SelectItem value="ingress">Ingress</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Node host" hint="Used for NodePort URLs.">
+              <Input
+                value={props.value.nodeHost || ""}
+                onChange={(event) => props.onChange({ ...props.value, nodeHost: event.target.value })}
+                placeholder="optional"
+              />
+            </Field>
+            <Field label="Preview domain" hint={effectiveExposure === "ingress" ? "Required for ingress exposure." : "Optional. NodePort is used without a domain."}>
+              <Input
+                value={props.value.previewDomain || ""}
+                onChange={(event) => props.onChange({ ...props.value, previewDomain: event.target.value })}
+                placeholder="preview.example.com"
+              />
+            </Field>
+            <Field label="Ingress class">
+              <Input
+                value={props.value.ingressClass || ""}
+                onChange={(event) => props.onChange({ ...props.value, ingressClass: event.target.value })}
+                placeholder="optional"
+              />
+            </Field>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isPending}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!props.canSubmit}>
+              <Rocket data-icon />
+              {props.isPending ? "Queueing..." : "Queue deploy"}
+            </Button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 export function IssueDetailPage() {
   const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
   const queryClient = useQueryClient();
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [composerBody, setComposerBody] = useState("");
   const [sessionSnapshotsById, setSessionSnapshotsById] = useState<Record<string, SessionSnapshot>>({});
+  const [testDeployOpen, setTestDeployOpen] = useState(false);
+  const [testDeployForm, setTestDeployForm] = useState<StartTestDeployInput>({
+    agentProfile: "codex",
+    clusterId: "",
+    exposureMode: "",
+    previewDomain: "",
+    ingressClass: "",
+    nodeHost: "",
+  });
 
   const issueQuery = useQuery({
     queryKey: queryKeys.issue(issueId),
@@ -649,9 +841,14 @@ export function IssueDetailPage() {
     queryKey: queryKeys.agents,
     queryFn: api.listAgents,
   });
+  const clustersQuery = useQuery({
+    queryKey: queryKeys.clusters,
+    queryFn: api.listClusters,
+  });
 
   const detail = issueQuery.data;
   const agents = listOrEmpty(agentsQuery.data);
+  const clusters = listOrEmpty(clustersQuery.data);
   const enabledAgents = agents.filter((agent) => agent.enabled);
   const latestSession = detail?.sessions[0];
   const hasActiveSession = latestSession ? ["queued", "running"].includes(latestSession.status) : false;
@@ -784,6 +981,53 @@ export function IssueDetailPage() {
     },
   });
 
+  const startTestDeploy = useMutation({
+    mutationFn: (input: StartTestDeployInput) => api.startTestDeploy(issueId, input),
+    onSuccess: async (data) => {
+      setTestDeployOpen(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.session(data.sessionId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
+      ]);
+    },
+  });
+
+  const cleanupTestEnvironment = useMutation({
+    mutationFn: () => api.requestTestEnvironmentCleanup(issueId, { agentProfile: "codex" }),
+    onSuccess: async (data) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.session(data.sessionId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
+      ]);
+    },
+  });
+
+  const retainTestEnvironment = useMutation({
+    mutationFn: () => api.retainTestEnvironment(issueId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
+      ]);
+    },
+  });
+  const canStartTestDeploy =
+    Boolean(testDeployForm.clusterId.trim()) &&
+    !hasActiveSession &&
+    !startTestDeploy.isPending;
+
+  function openTestDeployModal() {
+    if (!detail) return;
+    setTestDeployForm(testDeployDefaults(detail, clusters));
+    startTestDeploy.reset();
+    setTestDeployOpen(true);
+  }
+
   const timelineItems = useMemo<TimelineItem[]>(() => {
     if (!detail) return [];
     return [
@@ -803,6 +1047,8 @@ export function IssueDetailPage() {
       </PageFrame>
     );
   }
+  const projectCluster = clusters.find((cluster) => cluster.id === detail.project.defaultClusterId);
+  const testCluster = clusters.find((cluster) => cluster.id === detail.testEnvironment?.clusterId);
 
   return (
     <PageFrame
@@ -957,7 +1203,63 @@ export function IssueDetailPage() {
               <div className="grid gap-3">
                 <MetaLine label="Name" value={detail.project.name} />
                 <MetaLine label="Repo" value={detail.project.repoPath || "not configured"} />
-                <MetaLine label="Namespace" value={detail.project.namespace || "not configured"} />
+                <MetaLine label="Default cluster" value={projectCluster?.name || "not configured"} />
+              </div>
+            </SidebarSection>
+
+            <SidebarSection title="Test environment">
+              <div className="grid gap-3">
+                {startTestDeploy.error ? <Notice tone="danger">{startTestDeploy.error.message}</Notice> : null}
+                {cleanupTestEnvironment.error ? <Notice tone="danger">{cleanupTestEnvironment.error.message}</Notice> : null}
+                {retainTestEnvironment.error ? <Notice tone="danger">{retainTestEnvironment.error.message}</Notice> : null}
+                <MetaLine label="Namespace" value={detail.testEnvironment?.namespace || "not created"} />
+                <MetaLine label="Cluster" value={testCluster?.name || detail.testEnvironment?.clusterId || "not selected"} />
+                <MetaLine label="Status" value={detail.testEnvironment?.namespaceStatus || "not requested"} />
+                <MetaLine label="Cleanup" value={detail.testEnvironment?.cleanupStatus || "not decided"} />
+                <MetaLine label="Exposure" value={previewStrategy(detail.testEnvironment)} />
+                {detail.testEnvironment?.previewUrl ? (
+                  <button
+                    type="button"
+                    className="inline-flex min-w-0 items-center gap-1.5 text-left text-[12px] font-medium leading-5 text-[color:var(--accent-blue)] hover:text-[color:var(--text)]"
+                    onClick={() => void openRichLink(detail.testEnvironment!.previewUrl)}
+                  >
+                    <Globe2 data-icon className="shrink-0" />
+                    <span className="min-w-0 break-all">{detail.testEnvironment.previewUrl}</span>
+                  </button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={hasActiveSession || startTestDeploy.isPending}
+                  onClick={openTestDeployModal}
+                >
+                  <Rocket data-icon />
+                  {detail.testEnvironment ? "Deploy again" : "Deploy test env"}
+                </Button>
+                {detail.testEnvironment ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={hasActiveSession || cleanupTestEnvironment.isPending}
+                      onClick={() => cleanupTestEnvironment.mutate()}
+                    >
+                      <Trash2 data-icon />
+                      {cleanupTestEnvironment.isPending ? "Queueing" : "Cleanup"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={retainTestEnvironment.isPending}
+                      onClick={() => retainTestEnvironment.mutate()}
+                    >
+                      Retain
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             </SidebarSection>
 
@@ -983,6 +1285,19 @@ export function IssueDetailPage() {
           </div>
         </aside>
       </div>
+
+      {testDeployOpen ? (
+        <TestDeployModal
+          value={testDeployForm}
+          clusters={clusters}
+          isPending={startTestDeploy.isPending}
+          canSubmit={canStartTestDeploy}
+          error={startTestDeploy.error}
+          onChange={setTestDeployForm}
+          onClose={() => setTestDeployOpen(false)}
+          onSubmit={() => startTestDeploy.mutate(testDeployForm)}
+        />
+      ) : null}
     </PageFrame>
   );
 }

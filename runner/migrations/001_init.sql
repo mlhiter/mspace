@@ -1,3 +1,21 @@
+CREATE TABLE IF NOT EXISTS clusters (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  kubeconfig_path TEXT NOT NULL,
+  kube_context TEXT NOT NULL DEFAULT '',
+  image_registry_prefix TEXT NOT NULL DEFAULT '',
+  exposure_mode TEXT NOT NULL DEFAULT 'nodeport',
+  node_host TEXT NOT NULL DEFAULT '',
+  preview_domain TEXT NOT NULL DEFAULT '',
+  ingress_class TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'configured',
+  last_checked_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_clusters_updated_at ON clusters(updated_at);
+
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -11,7 +29,13 @@ CREATE TABLE IF NOT EXISTS projects (
   deploy_command TEXT NOT NULL,
   validation_command TEXT NOT NULL,
   kube_context TEXT NOT NULL,
+  kubeconfig_path TEXT NOT NULL DEFAULT '',
   namespace TEXT NOT NULL,
+  image_registry_prefix TEXT NOT NULL DEFAULT '',
+  preview_domain TEXT NOT NULL DEFAULT '',
+  ingress_class TEXT NOT NULL DEFAULT '',
+  node_host TEXT NOT NULL DEFAULT '',
+  default_cluster_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -113,3 +137,25 @@ CREATE TABLE IF NOT EXISTS deployment_evidence (
   details TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS issue_test_environments (
+  issue_id TEXT PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
+  namespace TEXT NOT NULL,
+  namespace_status TEXT NOT NULL DEFAULT 'planned',
+  cleanup_status TEXT NOT NULL DEFAULT 'retained',
+  preview_url TEXT NOT NULL DEFAULT '',
+  cluster_id TEXT NOT NULL DEFAULT '',
+  image_registry_prefix TEXT NOT NULL DEFAULT '',
+  kubeconfig_path TEXT NOT NULL DEFAULT '',
+  kube_context TEXT NOT NULL DEFAULT '',
+  exposure_mode TEXT NOT NULL DEFAULT 'nodeport',
+  preview_domain TEXT NOT NULL DEFAULT '',
+  ingress_class TEXT NOT NULL DEFAULT '',
+  node_host TEXT NOT NULL DEFAULT '',
+  last_deploy_session_id TEXT NOT NULL DEFAULT '',
+  last_cleanup_session_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_issue_test_environments_namespace ON issue_test_environments(namespace);

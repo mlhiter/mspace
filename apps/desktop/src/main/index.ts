@@ -13,6 +13,7 @@ import { ensureRunnerStarted, getRunnerBaseUrl, stopRunner } from "./runner-mana
 
 let mainWindow: BrowserWindow | null = null;
 let projectFolderPickerRegistered = false;
+let kubeconfigFilePickerRegistered = false;
 let openHandlersRegistered = false;
 const BRAND_ICON_PATH = join("assets", "brand", "mspace-icon.png");
 
@@ -40,6 +41,24 @@ function registerProjectFolderPicker(): void {
 
     if (result.canceled) return null;
     return result.filePaths[0] || null;
+  });
+}
+
+function registerKubeconfigFilePicker(): void {
+  if (kubeconfigFilePickerRegistered) return;
+  kubeconfigFilePickerRegistered = true;
+
+  ipcMain.handle("mspace:select-kubeconfig-files", async () => {
+    const options: OpenDialogOptions = {
+      title: "Choose kubeconfig files",
+      properties: ["openFile", "multiSelections"],
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+
+    if (result.canceled) return [];
+    return result.filePaths;
   });
 }
 
@@ -97,6 +116,7 @@ function createWindow(iconPath = resolveBrandIconPath()): void {
 
 app.whenReady().then(async () => {
   registerProjectFolderPicker();
+  registerKubeconfigFilePicker();
   registerOpenHandlers();
   await ensureRunnerStarted();
   const brandIconPath = resolveBrandIconPath();

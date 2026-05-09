@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-08
+> Status: local MVP implementation snapshot, updated 2026-05-09
 
 ## One-Line Definition
 
@@ -23,7 +23,10 @@ The repository now has a runnable local desktop MVP:
 - cache imported GitHub repositories under `~/.mspace/repos/<owner>/<repo>`;
 - store session metadata, logs, comments, issues, projects, and evidence in SQLite under `~/.mspace/mspace.db`;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
-- use project-level Kubernetes context and namespace as configurable validation inputs.
+- manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
+- choose a default cluster per project and select a cluster when manually deploying an issue test environment;
+- manually trigger an issue-scoped test deployment where the agent creates the namespace, builds and pushes images, deploys resources, and returns a preview URL;
+- record issue test namespace state, cleanup/retain state, deploy session, cleanup session, and preview URL.
 - use a Notion-like desktop workspace shell with real shadcn/ui primitives, Radix base components, lucide-react icons, and low-contrast document surfaces.
 
 Kubernetes is the deployment and test environment, not the required development runtime for the first version. The current development runtime is local. Running the agent runtime inside Kubernetes remains a later option once the local workflow is stable.
@@ -36,8 +39,9 @@ The current high-leverage developer workflow is no longer just "ask Codex to edi
 2. Keep the problem statement, discussion, and decisions in one durable page.
 3. Attach an agent session to the issue.
 4. Let the agent modify code in a local development runtime.
-5. Give the agent a scoped namespace in the shared test cluster for deployment and validation.
-6. Review the PR together with the logs, environment link, and runtime evidence.
+5. Manually trigger PR generation or a test deployment when the local agent result is ready.
+6. For test deployment, let the agent create an issue namespace in the shared test cluster, deploy the app, and return a probed preview URL.
+7. Review the PR or preview URL together with logs, events, resources, and runtime evidence.
 
 This is already how advanced users work manually: Codex or Claude Code edits the code locally, the developer keeps notes in chat or docs, and then gives the agent access to a test cluster through `kubectl`. mspace turns that fragmented workflow into a repeatable team product with the issue as the center of gravity, local development as the first step, and Kubernetes as the validation environment.
 
@@ -68,7 +72,9 @@ Project
   -> Agent Session
   -> Local code change
   -> Inbox review updates
-  -> Deploy to test namespace
+  -> Manual PR or manual test deploy
+  -> Issue test namespace
+  -> Preview URL
   -> Comments and progress updates
   -> Inspect logs/events/resources
   -> PR + environment evidence
@@ -82,11 +88,18 @@ A project records:
 - local repository path;
 - remote URL and detected Git provider metadata;
 - default branch;
-- Kubernetes context;
-- namespace;
+- default test cluster;
 - deploy command;
 - validation command;
 - allowed Kubernetes resource scope.
+
+A cluster records reusable deployment access:
+
+- kubeconfig path and optional Kubernetes context;
+- image registry prefix;
+- default exposure mode;
+- optional preview domain and ingress class;
+- optional NodePort host.
 
 ### Runtime and Environment Stance
 
@@ -98,7 +111,7 @@ The intended order is:
 - Kubernetes environment for deployment and validation;
 - remote or Kubernetes-hosted runtimes later when the local-first flow is solid.
 
-The product wedge is not "agent runs in Kubernetes" on day one. The wedge is "agent can prove the change in a real Kubernetes environment."
+The product wedge is not "agent runs in Kubernetes" on day one. The wedge is "after local agent work, the user can manually ask the agent to prove the change in a real issue-scoped Kubernetes environment and return a URL the team can open."
 
 ### Inbox and Issue Flow
 
@@ -125,7 +138,8 @@ An Issue should hold:
 - comments and progress updates;
 - assignee and subscriber list;
 - linked branch, PR, and environment evidence;
-- one or more attached agent sessions.
+- one or more attached agent sessions;
+- one issue test environment record with namespace, preview URL, deploy status, and cleanup decision.
 
 ### Session Creation
 
@@ -136,7 +150,7 @@ A user creates a session by writing an issue comment that mentions an enabled ag
 - starts `codex app-server --listen stdio://` inside that worktree for Codex-backed sessions;
 - stores the selected profile in `agent_sessions.agent_profile` and injects the profile instructions from `agent_profiles` into the Codex prompt;
 - streams agent messages, command execution items, status changes, and diagnostics;
-- passes configured Kubernetes context and namespace into the app-server process and turn prompt.
+- passes the selected cluster, Kubernetes context, issue namespace, image registry, and exposure settings into the app-server process and turn prompt.
 
 Scoped namespace, ServiceAccount, and kubeconfig generation are target behavior, not implemented behavior in the current local MVP.
 
@@ -181,7 +195,8 @@ MVP features:
 - local development runtime;
 - git worktree isolation per session;
 - manual session worktree cleanup controls;
-- project-level Kubernetes context and namespace configuration;
+- reusable Clusters route for kubeconfig discovery/import, registry, and exposure defaults;
+- project default cluster selection;
 - terminal/progress stream;
 - session workspace inspection;
 - branch comparison against project default branch;
@@ -194,7 +209,7 @@ Still outside the current implemented MVP:
 - namespace per session;
 - full Kubernetes resource browser;
 - PR link capture;
-- namespace cleanup controls.
+- automated namespace cleanup policy beyond the current manual cleanup/retain decision.
 
 ## Explicit Non-Goals
 
@@ -245,4 +260,4 @@ The test is successful if a developer can:
 4. let Codex operate only the assigned repository and scoped test namespace;
 5. deploy or inspect the project through `kubectl`;
 6. open a PR or leave a branch with runtime evidence attached to the issue;
-7. retain or clean up the local session worktree from mspace, with namespace cleanup becoming the next lifecycle step.
+7. retain or clean up the local session worktree and choose whether to retain or clean the issue test namespace from mspace.

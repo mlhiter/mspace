@@ -248,7 +248,7 @@ func (a *app) runCodexAppServerSession(ctx context.Context, session agentSession
 func (a *app) startCodexAppServer(session agentSession, project project, contextPath, codexPath string) (*codexAppServerClient, error) {
 	cmd := exec.Command(codexPath, "app-server", "--listen", "stdio://")
 	cmd.Dir = session.Workdir
-	cmd.Env = append(os.Environ(), buildSessionEnv(session, project, contextPath)...)
+	cmd.Env = append(os.Environ(), a.buildSessionEnv(session, project, contextPath)...)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -621,7 +621,7 @@ Follow these mspace rules:
 - Inspect the repository before changing code.
 - Keep changes focused on the issue and avoid unrelated refactors.
 - Do not commit, push, create a pull request, or delete the session worktree unless the issue or session instructions explicitly ask for it.
-- If Kubernetes validation is needed, use only the configured context and namespace. Do not perform cluster-wide operations and do not read Secrets.
+- If Kubernetes validation is needed, use only the configured context, kubeconfig, and issue namespace. Creating or deleting the explicitly named issue test namespace is allowed only when the current turn asks for deploy or cleanup. Do not read Secrets.
 - Run relevant tests or validation commands when practical, and report exactly what passed or failed.
 - Answer directly. Do not introduce yourself. Do not state that you saw the current comment, issue history, or prior sessions unless the user explicitly asks what context you received.
 - Finish with a concise answer or, when you changed code, a concise summary of changes, validation, and remaining risks.
@@ -675,10 +675,27 @@ func (a *app) buildCodexSessionPrompt(session agentSession, project project, con
 
 	builder.WriteString("## Validation Context\n\n")
 	builder.WriteString(fmt.Sprintf("- Kubernetes context: %s\n", valueOrUnset(project.KubeContext)))
-	builder.WriteString(fmt.Sprintf("- Kubernetes namespace: %s\n", valueOrUnset(project.Namespace)))
+	builder.WriteString(fmt.Sprintf("- Kubeconfig path: %s\n", valueOrUnset(project.KubeconfigPath)))
+	builder.WriteString(fmt.Sprintf("- Project fallback namespace: %s\n", valueOrUnset(project.Namespace)))
+	builder.WriteString(fmt.Sprintf("- Image registry prefix: %s\n", valueOrUnset(project.ImageRegistryPrefix)))
+	builder.WriteString(fmt.Sprintf("- Preview domain: %s\n", valueOrUnset(project.PreviewDomain)))
+	builder.WriteString(fmt.Sprintf("- Ingress class: %s\n", valueOrUnset(project.IngressClass)))
+	builder.WriteString(fmt.Sprintf("- Node host: %s\n", valueOrUnset(project.NodeHost)))
 	builder.WriteString(fmt.Sprintf("- Deploy command: %s\n", valueOrUnset(project.DeployCommand)))
 	builder.WriteString(fmt.Sprintf("- Validation command: %s\n", valueOrUnset(project.ValidationCommand)))
 	builder.WriteString("\n")
+
+	if detail.TestEnvironment != nil {
+		builder.WriteString("## Issue Test Environment\n\n")
+		builder.WriteString(fmt.Sprintf("- Namespace: %s\n", detail.TestEnvironment.Namespace))
+		builder.WriteString(fmt.Sprintf("- Namespace status: %s\n", detail.TestEnvironment.NamespaceStatus))
+		builder.WriteString(fmt.Sprintf("- Cleanup status: %s\n", detail.TestEnvironment.CleanupStatus))
+		builder.WriteString(fmt.Sprintf("- Preview URL: %s\n", valueOrUnset(detail.TestEnvironment.PreviewURL)))
+		builder.WriteString(fmt.Sprintf("- Image registry prefix: %s\n", valueOrUnset(detail.TestEnvironment.ImageRegistryPrefix)))
+		builder.WriteString(fmt.Sprintf("- Kubeconfig path: %s\n", valueOrUnset(detail.TestEnvironment.KubeconfigPath)))
+		builder.WriteString(fmt.Sprintf("- Preview strategy: %s\n", previewStrategyLabel(*detail.TestEnvironment)))
+		builder.WriteString("\n")
+	}
 
 	builder.WriteString("## Issue Timeline Comments\n\n")
 	builder.WriteString(fmt.Sprintf("Comments are listed oldest to newest. If a recent human comment contains `%s`, treat that as the triggering comment for this turn.\n\n", profile.Mention))

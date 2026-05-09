@@ -12,6 +12,7 @@ const desktopAPI = {
     "http://127.0.0.1:7788",
   appVersion: process.env.npm_package_version || "0.1.0",
   selectProjectFolder: () => ipcRenderer.invoke("mspace:select-project-folder") as Promise<string | null>,
+  selectKubeconfigFiles: () => ipcRenderer.invoke("mspace:select-kubeconfig-files") as Promise<string[]>,
   openExternal: (url: string) => ipcRenderer.invoke("mspace:open-external", url) as Promise<void>,
   openPath: (path: string) => ipcRenderer.invoke("mspace:open-path", path) as Promise<string>,
 };

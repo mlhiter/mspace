@@ -12,7 +12,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api, queryKeys, type CreateProjectInput, type Project } from "@mspace/core";
+import { api, queryKeys, type Cluster, type CreateProjectInput, type Project } from "@mspace/core";
 import {
   Button,
   CollectionEmptyState,
@@ -21,6 +21,11 @@ import {
   Input,
   Notice,
   PageFrame,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   StatusBadge,
   Textarea,
   cn,
@@ -36,7 +41,13 @@ const emptyProjectForm: CreateProjectInput = {
   deployCommand: "",
   validationCommand: "",
   kubeContext: "",
+  kubeconfigPath: "",
   namespace: "",
+  imageRegistryPrefix: "",
+  previewDomain: "",
+  ingressClass: "",
+  nodeHost: "",
+  defaultClusterId: "",
 };
 
 function projectNameFromPath(path: string): string {
@@ -53,7 +64,13 @@ function projectToForm(project: Project): CreateProjectInput {
     deployCommand: project.deployCommand,
     validationCommand: project.validationCommand,
     kubeContext: project.kubeContext,
+    kubeconfigPath: project.kubeconfigPath,
     namespace: project.namespace,
+    imageRegistryPrefix: project.imageRegistryPrefix,
+    previewDomain: project.previewDomain,
+    ingressClass: project.ingressClass,
+    nodeHost: project.nodeHost,
+    defaultClusterId: project.defaultClusterId,
   };
 }
 
@@ -62,6 +79,10 @@ export function ProjectsPage() {
   const projectsQuery = useQuery({
     queryKey: queryKeys.projects,
     queryFn: api.listProjects,
+  });
+  const clustersQuery = useQuery({
+    queryKey: queryKeys.clusters,
+    queryFn: api.listClusters,
   });
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateProjectInput>(emptyProjectForm);
@@ -74,7 +95,10 @@ export function ProjectsPage() {
     onSuccess: async () => {
       setCreateForm(emptyProjectForm);
       setCreateOpen(false);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
+      ]);
     },
   });
   const updateProject = useMutation({
@@ -82,7 +106,10 @@ export function ProjectsPage() {
     onSuccess: async () => {
       setSettingsProject(null);
       setSettingsForm(emptyProjectForm);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
+      ]);
     },
   });
   const deleteProject = useMutation({
@@ -90,11 +117,15 @@ export function ProjectsPage() {
     onSuccess: async () => {
       setSettingsProject(null);
       setSettingsForm(emptyProjectForm);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
+      ]);
     },
   });
 
   const projects = projectsQuery.data || [];
+  const clusters = clustersQuery.data || [];
   const canCreate = createForm.repoPath.trim().length > 0 || createForm.repoUrl.trim().length > 0;
   const settingsProjectHasWork = Boolean(
     settingsProject && (settingsProject.issueCount > 0 || settingsProject.sessionCount > 0),
@@ -186,7 +217,7 @@ export function ProjectsPage() {
           </div>
           <div className="divide-y divide-[color:var(--line)]">
             {projects.map((project) => (
-              <ProjectRow key={project.id} project={project} onSettings={() => openSettings(project)} />
+              <ProjectRow key={project.id} project={project} clusters={clusters} onSettings={() => openSettings(project)} />
             ))}
           </div>
         </div>
@@ -245,6 +276,13 @@ export function ProjectsPage() {
               </div>
             </div>
 
+            <ClusterSelectField
+              clusters={clusters}
+              value={createForm.defaultClusterId}
+              onChange={(defaultClusterId) => setCreateForm({ ...createForm, defaultClusterId })}
+              hint="Optional. Issue deploys use this cluster by default."
+            />
+
             <div className="mt-1 flex justify-end gap-2">
               <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)} disabled={createProject.isPending}>
                 Cancel
@@ -261,7 +299,7 @@ export function ProjectsPage() {
         <Modal
           compact
           title="Project settings"
-          description="Tune namespace and command hints when this project needs them."
+          description="Set the default test cluster and optional command hints for this project."
           onClose={() => setSettingsProject(null)}
         >
           <form className="flex flex-col gap-3" onSubmit={submitSettings}>
@@ -291,22 +329,12 @@ export function ProjectsPage() {
               </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
-              <Field label="Kube context">
-                <Input
-                  value={settingsForm.kubeContext}
-                  onChange={(event) => setSettingsForm({ ...settingsForm, kubeContext: event.target.value })}
-                  placeholder="optional"
-                />
-              </Field>
-              <Field label="Namespace">
-                <Input
-                  value={settingsForm.namespace}
-                  onChange={(event) => setSettingsForm({ ...settingsForm, namespace: event.target.value })}
-                  placeholder="optional"
-                />
-              </Field>
-            </div>
+            <ClusterSelectField
+              clusters={clusters}
+              value={settingsForm.defaultClusterId}
+              onChange={(defaultClusterId) => setSettingsForm({ ...settingsForm, defaultClusterId })}
+              hint="Used as the default for issue test deployments. Deployment runs can still choose a different cluster."
+            />
             <Field label="Deploy command" hint="Optional. Agents can still inspect the repo and decide from issue context.">
               <Textarea
                 className="h-[64px] !min-h-[64px] resize-none leading-5"
@@ -351,8 +379,9 @@ export function ProjectsPage() {
   );
 }
 
-function ProjectRow(props: { project: Project; onSettings: () => void }) {
+function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: () => void }) {
   const { project } = props;
+  const defaultCluster = props.clusters.find((cluster) => cluster.id === project.defaultClusterId);
   const githubLabel =
     project.gitProvider === "github" && project.gitOwner && project.gitRepo
       ? `${project.gitOwner}/${project.gitRepo}`
@@ -364,7 +393,7 @@ function ProjectRow(props: { project: Project; onSettings: () => void }) {
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           <h3 className="truncate text-[15px] font-semibold leading-6">{project.name}</h3>
-          <StatusBadge value={project.namespace || "local"} />
+          <StatusBadge value={defaultCluster?.name || "local"} />
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <InlineMeta icon={Clock3}><RelativeTime value={updatedAt} /></InlineMeta>
@@ -394,6 +423,40 @@ function ProjectRow(props: { project: Project; onSettings: () => void }) {
         </Button>
       </div>
     </article>
+  );
+}
+
+function ClusterSelectField(props: {
+  clusters: Cluster[];
+  value: string;
+  hint?: string;
+  onChange: (clusterId: string) => void;
+}) {
+  return (
+    <Field label="Default cluster" hint={props.hint}>
+      {props.clusters.length === 0 ? (
+        <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+          Create a cluster first to enable reusable test deployments.
+        </div>
+      ) : (
+        <Select
+          value={props.value || "__none"}
+          onValueChange={(value) => props.onChange(value === "__none" ? "" : value)}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none">No default cluster</SelectItem>
+            {props.clusters.map((cluster) => (
+              <SelectItem key={cluster.id} value={cluster.id}>
+                {cluster.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </Field>
   );
 }
 

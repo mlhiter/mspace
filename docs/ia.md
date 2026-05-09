@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-05-08
+> Status: local MVP implementation snapshot, updated 2026-05-09
 
 ## IA Goal
 
@@ -17,7 +17,7 @@ The key balance is:
 
 - the issue page is the primary working surface;
 - the local session is the primary development surface;
-- the Kubernetes environment is the default validation surface behind it.
+- the Kubernetes test environment is manually triggered from the issue after agent work is ready to preview.
 
 ## Primary Navigation
 
@@ -26,6 +26,7 @@ The first MVP should keep the navigation narrow:
 - Inbox
 - Issues
 - Agents
+- Clusters
 - Projects
 
 Navigation rules:
@@ -34,6 +35,7 @@ Navigation rules:
 - Inbox is the unread review surface for issue and session updates.
 - Issues is the durable knowledge surface and issue creation home.
 - Agents is the managed profile surface for Codex-backed collaborators and mentions.
+- Clusters is reusable test cluster access: kubeconfig import, reachability status, registry, and exposure defaults.
 - Projects is configuration and project-level history.
 - Session detail is deep-linked from issues and remains an operational fallback view, not a primary home.
 
@@ -67,6 +69,7 @@ Current implemented desktop routes:
 /issues
 /issues/:issueId
 /agents
+/clusters
 /projects
 /sessions/:sessionId
 ```
@@ -78,13 +81,13 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The MVP does not need more top-level areas than this. The current sidebar exposes Inbox, Issues, Agents, and Projects, with a quick issue creation link under the search affordance. Session detail remains deep-linked from issue work.
+The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a quick issue creation link under the search affordance. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
 Current implementation principles:
 
-- left sidebar contains the workspace identity, search affordance, quick issue creation, primary navigation, namespace hints, and local runner state;
+- left sidebar contains the workspace identity, search affordance, quick issue creation, primary navigation, active issue work, and local runner state;
 - Inbox and Project lists use row-level cards and compact metadata rather than dashboard tiles;
 - Issue Detail should read as a live document with session and evidence context attached around it;
 - Session Detail can be more operational, but should still preserve the same paper workspace tone;
@@ -261,18 +264,18 @@ Secondary actions:
 
 The evidence panel should summarize:
 
-- PR link;
+- PR link when manually generated;
 - branch link;
-- environment URL;
+- preview URL;
 - cluster and namespace summary;
 - pod health;
 - deployment status;
 - recent events;
 - recent logs.
 
-It should answer "did this actually run" without forcing the user into a separate ops view.
+It should answer "where can the team test this?" without forcing the user into a separate ops view.
 
-In the default path, the answer should be grounded in Kubernetes deployment and test evidence rather than generic agent logs alone.
+In the default test path, the answer should be grounded in the issue namespace, image reference, preview URL probe, Kubernetes deployment state, and recent evidence rather than generic agent logs alone.
 
 Current implementation:
 
@@ -284,6 +287,8 @@ Current implementation:
 - shows issue labels in the quiet metadata sidebar and lets users edit them inline;
 - exposes a Stop action for queued or running sessions;
 - streams session logs and status while a session is running, but keeps debug output collapsed by default;
+- exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
+- shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
 - links into full session detail for deep inspection.
 
 ### Layout
@@ -323,7 +328,7 @@ Each row should show:
 - local repository path;
 - active issues;
 - active sessions;
-- Kubernetes context and namespace.
+- default cluster, deploy command, validation command, and repository metadata.
 
 ### Project Detail
 
@@ -342,9 +347,9 @@ Current implementation:
 - lists projects;
 - creates projects in a modal from either a local folder picker or a GitHub repository URL;
 - auto-detects GitHub metadata for local repositories when a remote exists;
-- edits runtime settings in a separate settings modal;
+- edits project name, default cluster, deploy command, and validation command in a separate settings modal;
 - only allows deletion before issues or sessions exist;
-- stores deploy and validation commands plus Kubernetes context and namespace.
+- stores deploy and validation commands plus the default reusable cluster id.
 
 ## Sessions
 
@@ -434,6 +439,7 @@ Must-have for MVP:
 - Manual cleanup for retained local session worktrees
 - Session detail with logs and workspace evidence
 - local session startup with cluster and namespace visibility
+- manual issue test deployment with issue namespace lifecycle state
 
 Can wait until later:
 
@@ -458,11 +464,11 @@ Design rules:
 - avoid making Kubernetes details the first visual focus;
 - make agent activity legible without turning the screen into a terminal wall.
 
-Avoiding Kubernetes as the first visual focus does not mean hiding it. Cluster, namespace, pod health, and rollout state should remain visible enough that the user always knows which environment the issue is operating in.
+Avoiding Kubernetes as the first visual focus does not mean hiding it. Kubeconfig, issue namespace, exposure mode, preview URL, pod health, and rollout state should remain visible enough that the user always knows which environment the issue is operating in.
 
 ## Build Sequence
 
-Implemented as of 2026-05-08:
+Implemented as of 2026-05-09:
 
 1. Inbox review list, Issues list, and issue creation flow.
 2. Issue detail shell with document body and activity thread.
@@ -473,10 +479,12 @@ Implemented as of 2026-05-08:
 7. Local runner process, SQLite storage, and git worktree isolation.
 8. Tailwind CSS 4 monorepo source detection for desktop UI packages.
 9. Issue labels, stop controls for active sessions, and manual worktree cleanup.
+10. Clusters route with desktop file picker import, first-run `~/.kube` discovery, context listing, reachability status, registry, and preview exposure defaults.
+11. Issue test environment records plus manual deploy/cleanup/retain actions.
 
 Next build steps:
 
-1. Kubernetes-backed evidence and namespace inspection.
-2. Scoped kubeconfig or ServiceAccount generation.
-3. Namespace cleanup lifecycle.
+1. Improve deploy/test evidence parsing and preview URL capture from agent artifacts.
+2. Manual PR generation action from Issue Detail.
+3. Scoped kubeconfig or ServiceAccount generation.
 4. Standalone Sessions list view.
