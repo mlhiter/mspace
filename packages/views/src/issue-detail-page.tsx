@@ -7,6 +7,7 @@ import {
   Bold,
   Bot,
   CheckCircle2,
+  CircleAlert,
   CircleDot,
   CircleStop,
   Clock3,
@@ -41,7 +42,6 @@ import {
 } from "@mspace/core";
 import {
   Button,
-  CodeBlock,
   Field,
   InlineMeta,
   Input,
@@ -68,6 +68,27 @@ type LogLine = Pick<SessionLog, "stream" | "message">;
 type SessionSnapshot = {
   logs: LogLine[];
   changes: WorkspaceChange[];
+};
+type EvidenceTone = "healthy" | "warning" | "failed" | "collected";
+type EvidenceResource = {
+  kind: string;
+  name: string;
+  primaryLabel: string;
+  primaryValue: string;
+  fields: Array<{ label: string; value: string }>;
+  tone: EvidenceTone;
+};
+type EvidenceEvent = {
+  lastSeen: string;
+  type: string;
+  reason: string;
+  object: string;
+  message: string;
+};
+type ParsedEvidence = {
+  resources: EvidenceResource[];
+  events: EvidenceEvent[];
+  tone: EvidenceTone;
 };
 
 function useSessionStream(sessionId: string | undefined, onEvent: (event: SessionStreamEvent) => void) {
@@ -312,6 +333,260 @@ function stringsOrEmpty(value: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function splitColumns(line: string) {
+  return line.trim().split(/\s{2,}/).filter(Boolean);
+}
+
+function normalizeResourceKind(value: string) {
+  const kind = value.split("/")[0] || "resource";
+  return kind
+    .replace(/\.apps$/, "")
+    .replace(/^pods?$/, "pod")
+    .replace(/^deployments?$/, "deployment")
+    .replace(/^services?$/, "service")
+    .replace(/^ingresses?$/, "ingress");
+}
+
+function resourceName(value: string) {
+  return value.includes("/") ? value.slice(value.indexOf("/") + 1) : value;
+}
+
+function resourceKindLabel(kind: string) {
+  const normalized = normalizeResourceKind(kind);
+  if (normalized === "pod") return "Pods";
+  if (normalized === "deployment") return "Deployments";
+  if (normalized === "service") return "Services";
+  if (normalized === "ingress") return "Ingresses";
+  return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}s`;
+}
+
+function resourceOrder(kind: string) {
+  const normalized = normalizeResourceKind(kind);
+  if (normalized === "pod") return 0;
+  if (normalized === "deployment") return 1;
+  if (normalized === "service") return 2;
+  if (normalized === "ingress") return 3;
+  return 10;
+}
+
+function readyLooksHealthy(value: string) {
+  const match = value.match(/^(\d+)\/(\d+)$/);
+  return !match || match[1] === match[2];
+}
+
+function inferResourceTone(fields: Array<{ label: string; value: string }>, primaryLabel: string, primaryValue: string): EvidenceTone {
+  const status = primaryLabel === "STATUS" ? primaryValue.toLowerCase() : "";
+  const ready = fields.find((field) => field.label === "READY")?.value || "";
+  const restarts = Number(fields.find((field) => field.label === "RESTARTS")?.value || "0");
+
+  if (/failed|error|crash|imagepull|backoff|evicted/.test(status)) return "failed";
+  if (/pending|terminating|unknown|containercreating/.test(status)) return "warning";
+  if (Number.isFinite(restarts) && restarts > 0) return "warning";
+  if (ready && !readyLooksHealthy(ready)) return "warning";
+  if (status === "running" || status === "succeeded" || primaryLabel === "READY") return "healthy";
+  return "collected";
+}
+
+function parseResourceTables(text: string) {
+  const resources: EvidenceResource[] = [];
+  const blocks = text.split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean);
+
+  for (const block of blocks) {
+    const lines = block.split("\n").map((line) => line.trimEnd()).filter(Boolean);
+    if (lines.length < 2 || !lines[0].trimStart().startsWith("NAME")) continue;
+
+    const headers = splitColumns(lines[0]);
+    for (const rowLine of lines.slice(1)) {
+      const columns = splitColumns(rowLine);
+      if (columns.length < 2) continue;
+
+      const nameValue = columns[0] || "";
+      const fields = headers.map((label, index) => ({ label, value: columns[index] || "" })).filter((field) => field.label && field.value);
+      const primaryLabel =
+        fields.find((field) => field.label === "STATUS")?.label ||
+        fields.find((field) => field.label === "TYPE")?.label ||
+        fields.find((field) => field.label === "READY")?.label ||
+        fields[1]?.label ||
+        "STATE";
+      const primaryValue = fields.find((field) => field.label === primaryLabel)?.value || "";
+      const kind = normalizeResourceKind(nameValue);
+
+      resources.push({
+        kind,
+        name: resourceName(nameValue),
+        primaryLabel,
+        primaryValue,
+        fields: fields.filter((field) => field.label !== "NAME" && field.label !== primaryLabel),
+        tone: inferResourceTone(fields, primaryLabel, primaryValue),
+      });
+    }
+  }
+
+  return resources.sort((a, b) => resourceOrder(a.kind) - resourceOrder(b.kind) || a.name.localeCompare(b.name));
+}
+
+function parseEvidenceEvents(text: string) {
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const events: EvidenceEvent[] = [];
+
+  for (const line of lines) {
+    if (/^LAST\s+SEEN\s+TYPE\s+REASON\s+OBJECT\s+MESSAGE/.test(line)) continue;
+    const match = line.match(/^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$/);
+    if (match) {
+      events.push({
+        lastSeen: match[1],
+        type: match[2],
+        reason: match[3],
+        object: match[4],
+        message: match[5],
+      });
+    } else {
+      events.push({ lastSeen: "", type: "Info", reason: "Output", object: "", message: line });
+    }
+  }
+
+  return events;
+}
+
+function parseEvidenceDetails(evidence: DeploymentEvidence): ParsedEvidence {
+  const details = stringsOrEmpty(evidence.details);
+  const [resourceText = "", eventText = ""] = details.split(/\n\s*--- events ---\s*\n/);
+  const resources = parseResourceTables(resourceText);
+  const events = parseEvidenceEvents(eventText);
+  const failed = evidence.summary.toLowerCase().includes("failed");
+  const hasWarningEvent = events.some((event) => event.type.toLowerCase() === "warning");
+  const hasFailedResource = resources.some((resource) => resource.tone === "failed");
+  const hasWarningResource = resources.some((resource) => resource.tone === "warning");
+
+  return {
+    resources,
+    events,
+    tone: failed || hasFailedResource ? "failed" : hasWarningEvent || hasWarningResource ? "warning" : resources.length > 0 ? "healthy" : "collected",
+  };
+}
+
+function EvidenceStatusPill(props: { tone: EvidenceTone }) {
+  const label = props.tone === "healthy" ? "Healthy" : props.tone === "warning" ? "Needs attention" : props.tone === "failed" ? "Collection failed" : "Collected";
+  const Icon = props.tone === "failed" || props.tone === "warning" ? CircleAlert : props.tone === "healthy" ? CheckCircle2 : CircleDot;
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[12px] font-medium leading-5",
+        props.tone === "healthy" && "bg-[color:var(--success-soft)] text-[color:var(--success)]",
+        props.tone === "warning" && "bg-[color:var(--warning-soft)] text-[color:var(--warning)]",
+        props.tone === "failed" && "bg-[color:var(--danger-soft)] text-[color:var(--danger)]",
+        props.tone === "collected" && "bg-[color:var(--block)] text-[color:var(--muted-strong)]",
+      )}
+    >
+      <Icon data-icon />
+      {label}
+    </span>
+  );
+}
+
+function EvidenceMeta(props: { label: string; value: string }) {
+  if (!props.value) return null;
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5">
+      <span className="shrink-0 text-[color:var(--faint)]">{props.label}</span>
+      <span className="min-w-0 truncate font-mono text-[11px] text-[color:var(--muted-strong)]">{props.value}</span>
+    </span>
+  );
+}
+
+function groupResources(resources: EvidenceResource[]) {
+  const groups = new Map<string, EvidenceResource[]>();
+  for (const resource of resources) {
+    const key = normalizeResourceKind(resource.kind);
+    groups.set(key, [...(groups.get(key) || []), resource]);
+  }
+  return Array.from(groups.entries()).sort(([a], [b]) => resourceOrder(a) - resourceOrder(b));
+}
+
+function ResourceStatePill(props: { resource: EvidenceResource }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex w-fit max-w-full items-center rounded-full px-2 py-0.5 font-mono text-[11px] font-medium leading-5",
+        props.resource.tone === "healthy" && "bg-[color:var(--success-soft)] text-[color:var(--success)]",
+        props.resource.tone === "warning" && "bg-[color:var(--warning-soft)] text-[color:var(--warning)]",
+        props.resource.tone === "failed" && "bg-[color:var(--danger-soft)] text-[color:var(--danger)]",
+        props.resource.tone === "collected" && "bg-[color:var(--block)] text-[color:var(--muted-strong)]",
+      )}
+      title={props.resource.primaryLabel}
+    >
+      {props.resource.primaryValue || "unknown"}
+    </span>
+  );
+}
+
+function EvidenceResourceGroups(props: { resources: EvidenceResource[] }) {
+  if (props.resources.length === 0) return null;
+  return (
+    <div className="mt-3 grid gap-2">
+      {groupResources(props.resources).map(([kind, resources]) => (
+        <section key={kind} className="overflow-hidden rounded-[8px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="flex items-center justify-between gap-3 px-3 py-2">
+            <div className="text-[12px] font-semibold leading-5 text-[color:var(--muted-strong)]">{resourceKindLabel(kind)}</div>
+            <div className="font-mono text-[11px] tabular-nums text-[color:var(--faint)]">{resources.length}</div>
+          </div>
+          <div className="divide-y divide-[color:var(--line)]">
+            {resources.map((resource) => (
+              <div key={`${resource.kind}-${resource.name}`} className="grid gap-2 px-3 py-2 md:grid-cols-[minmax(140px,1fr)_auto_minmax(220px,1.4fr)] md:items-center">
+                <div className="min-w-0 truncate font-mono text-[12px] leading-5 text-[color:var(--text)]" title={resource.name}>
+                  {resource.name}
+                </div>
+                <ResourceStatePill resource={resource} />
+                <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
+                  {resource.fields.slice(0, 4).map((field) => (
+                    <span key={`${resource.name}-${field.label}`} className="inline-flex items-center gap-1.5">
+                      <span className="text-[color:var(--faint)]">{field.label}</span>
+                      <span className="font-mono text-[11px] text-[color:var(--muted-strong)]">{field.value}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function EvidenceEvents(props: { events: EvidenceEvent[] }) {
+  if (props.events.length === 0) return null;
+  const visibleEvents = props.events.slice(-8).reverse();
+  return (
+    <section className="mt-4">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="text-[12px] font-semibold leading-5 text-[color:var(--muted-strong)]">Recent events</div>
+        {props.events.length > visibleEvents.length ? (
+          <div className="text-[12px] leading-5 text-[color:var(--faint)]">+{props.events.length - visibleEvents.length} older</div>
+        ) : null}
+      </div>
+      <div className="overflow-hidden rounded-[8px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
+        {visibleEvents.map((event, index) => {
+          const warning = event.type.toLowerCase() === "warning";
+          return (
+            <div key={`${event.lastSeen}-${event.reason}-${event.object}-${index}`} className="grid gap-1 px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] md:grid-cols-[72px_112px_minmax(0,1fr)] md:gap-3">
+              <div className="font-mono text-[11px] tabular-nums text-[color:var(--faint)]">{event.lastSeen || "event"}</div>
+              <div className={cn("inline-flex min-w-0 items-center gap-1.5 font-medium", warning ? "text-[color:var(--warning)]" : "text-[color:var(--muted-strong)]")}>
+                {warning ? <CircleAlert data-icon /> : <CircleDot data-icon />}
+                <span className="truncate">{event.reason || event.type}</span>
+              </div>
+              <div className="min-w-0">
+                {event.object ? <span className="mr-2 font-mono text-[11px] text-[color:var(--muted-strong)]">{event.object}</span> : null}
+                <span>{event.message}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function SessionStatusMark(props: { status: string }) {
   if (props.status === "completed") {
     return (
@@ -513,15 +788,52 @@ function SessionTimelineItem(props: {
 }
 
 function EvidenceTimelineItem(props: { evidence: DeploymentEvidence }) {
+  const parsed = parseEvidenceDetails(props.evidence);
+  const SnapshotIcon = parsed.tone === "failed" || parsed.tone === "warning" ? CircleAlert : parsed.tone === "healthy" ? CheckCircle2 : CircleDot;
   return (
     <TimelineShell actor="evidence" title="Validation evidence attached" time={props.evidence.createdAt}>
-      <RichText>{props.evidence.summary}</RichText>
-      <details className="mt-2">
-        <summary className="cursor-pointer select-none text-[12px] font-medium text-[color:var(--muted)] hover:text-[color:var(--text)]">
-          Evidence details
-        </summary>
-        <CodeBlock className="mt-3">{props.evidence.details}</CodeBlock>
-      </details>
+      <div className="rounded-[10px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <SnapshotIcon
+                data-icon
+                className={cn(
+                  "shrink-0",
+                  parsed.tone === "failed" && "text-[color:var(--danger)]",
+                  parsed.tone === "warning" && "text-[color:var(--warning)]",
+                  parsed.tone === "healthy" && "text-[color:var(--success)]",
+                  parsed.tone === "collected" && "text-[color:var(--muted)]",
+                )}
+              />
+              <div className="min-w-0 truncate text-[13px] font-semibold leading-5 text-[color:var(--text)]">Kubernetes snapshot</div>
+            </div>
+            <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
+              <EvidenceMeta label="Namespace" value={props.evidence.namespace} />
+              <EvidenceMeta label="Context" value={props.evidence.cluster} />
+              <EvidenceMeta label="Session" value={props.evidence.sessionId.slice(0, 8)} />
+            </div>
+          </div>
+          <EvidenceStatusPill tone={parsed.tone} />
+        </div>
+
+        {parsed.resources.length > 0 ? <EvidenceResourceGroups resources={parsed.resources} /> : null}
+
+        {parsed.resources.length === 0 && parsed.events.length === 0 ? (
+          <div
+            className={cn(
+              "mt-3 rounded-[8px] px-3 py-2 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]",
+              parsed.tone === "failed" ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]" : "bg-[color:var(--paper)] text-[color:var(--muted-strong)]",
+            )}
+          >
+            {parsed.tone === "failed"
+              ? "Kubernetes evidence collection failed. Check the session logs for the kubectl error."
+              : "No Kubernetes resources were captured for this evidence item."}
+          </div>
+        ) : null}
+
+        <EvidenceEvents events={parsed.events} />
+      </div>
     </TimelineShell>
   );
 }
