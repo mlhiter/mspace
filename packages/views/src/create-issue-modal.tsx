@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "@tanstack/react-router";
 import { GitBranch, MessageSquarePlus, X } from "lucide-react";
 import { api, queryKeys, type Project } from "@mspace/core";
 import {
@@ -37,7 +37,7 @@ export function CreateIssueModal(props: {
         queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
       ]);
       props.onClose();
-      void navigate(`/issues/${issueId}`);
+      void navigate({ to: "/issues/$issueId", params: { issueId } });
     },
   });
 

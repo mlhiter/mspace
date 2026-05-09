@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowRight, Bot, Clock3, Inbox, Layers3, MessageSquarePlus, Plus } from "lucide-react";
 import { api, queryKeys, type IssueListItem } from "@mspace/core";
 import { Button, CollectionEmptyState, InlineMeta, PageFrame, StatusBadge } from "@mspace/ui";
@@ -8,7 +8,8 @@ import { CreateIssueModal } from "./create-issue-modal";
 import { RelativeTime } from "./time";
 
 export function IssuesPage() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const search = useSearch({ strict: false }) as { new?: string };
+  const navigate = useNavigate();
   const [createOpen, setCreateOpen] = useState(false);
   const issuesQuery = useQuery({
     queryKey: queryKeys.issues,
@@ -20,11 +21,11 @@ export function IssuesPage() {
   });
 
   useEffect(() => {
-    if (searchParams.get("new") === "1") {
+    if (search.new === "1") {
       setCreateOpen(true);
-      setSearchParams({}, { replace: true });
+      void navigate({ to: "/issues", search: {}, replace: true });
     }
-  }, [searchParams, setSearchParams]);
+  }, [navigate, search.new]);
 
   const issues = issuesQuery.data || [];
   const projects = projectsQuery.data || [];
@@ -82,7 +83,8 @@ function IssueRow(props: { issue: IssueListItem }) {
   const { issue } = props;
   return (
     <Link
-      to={`/issues/${issue.id}`}
+      to="/issues/$issueId"
+      params={{ issueId: issue.id }}
       className="group grid grid-cols-[minmax(220px,1.6fr)_minmax(150px,0.7fr)_150px_130px] items-center gap-4 px-4 py-3 transition-[background-color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-[0.995]"
     >
       <div className="min-w-0">

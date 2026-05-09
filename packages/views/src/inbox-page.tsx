@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link } from "@tanstack/react-router";
 import { ArrowRight, Bot, Clock3, Inbox, Layers3, MessageSquareText } from "lucide-react";
 import { api, buildApiUrl, queryKeys } from "@mspace/core";
 import {
@@ -52,7 +52,8 @@ export function InboxPage() {
             {items.map((item) => (
               <Link
                 key={item.id}
-                to={`/issues/${item.issueId}`}
+                to="/issues/$issueId"
+                params={{ issueId: item.issueId }}
                 className="group flex items-center justify-between gap-4 rounded-[8px] px-3 py-2.5 transition-[background-color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-[0.99]"
               >
                 <div className="min-w-0">

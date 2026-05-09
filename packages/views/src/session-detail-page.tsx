@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams } from "@tanstack/react-router";
 import { Clipboard, Files, GitBranch, GitCommit, GitCompareArrows, HardDrive, SquareTerminal, Trash2 } from "lucide-react";
 import { api, buildApiUrl, queryKeys, type SessionStreamEvent, type WorkspaceChange, type WorkspaceSnapshot } from "@mspace/core";
 import {
@@ -52,7 +52,7 @@ function normalizeWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
 }
 
 export function SessionDetailPage() {
-  const { sessionId = "" } = useParams();
+  const { sessionId = "" } = useParams({ strict: false }) as { sessionId?: string };
   const queryClient = useQueryClient();
   const sessionQuery = useQuery({
     queryKey: queryKeys.session(sessionId),
@@ -209,10 +209,16 @@ export function SessionDetailPage() {
     <PageFrame
       title={`Session ${session.id.slice(0, 8)}`}
       subtitle={`${project.name} · issue ${issue.title}`}
+      breadcrumbs={[
+        { label: "mspace", to: "/inbox" },
+        { label: "Issues", to: "/issues" },
+        { label: issue.title, to: "/issues/$issueId", params: { issueId: issue.id } },
+        { label: `Session ${session.id.slice(0, 8)}` },
+      ]}
       actions={
         <>
           <Button asChild variant="secondary">
-            <Link to={`/issues/${issue.id}`}>Back to issue</Link>
+            <Link to="/issues/$issueId" params={{ issueId: issue.id }}>Back to issue</Link>
           </Button>
           <Button
             variant="danger"

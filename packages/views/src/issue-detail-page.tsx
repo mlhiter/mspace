@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { useParams } from "@tanstack/react-router";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -633,7 +633,7 @@ function LabelEditor(props: {
 }
 
 export function IssueDetailPage() {
-  const { issueId = "" } = useParams();
+  const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
   const queryClient = useQueryClient();
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [composerBody, setComposerBody] = useState("");
@@ -808,6 +808,11 @@ export function IssueDetailPage() {
     <PageFrame
       title={detail.issue.title}
       subtitle={`${detail.project.name} · ${detail.issue.status}`}
+      breadcrumbs={[
+        { label: "mspace", to: "/inbox" },
+        { label: "Issues", to: "/issues" },
+        { label: detail.issue.title },
+      ]}
     >
       <div className="grid gap-10 xl:grid-cols-[minmax(0,780px)_280px] xl:items-start">
         <main className="min-w-0">

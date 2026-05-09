@@ -1,7 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createHashRouter, Navigate, RouterProvider } from "react-router-dom";
+import {
+  createHashHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Navigate,
+  RouterProvider,
+} from "@tanstack/react-router";
 import {
   AgentsPage,
   InboxPage,
@@ -16,21 +23,66 @@ import "./globals.css";
 
 const queryClient = new QueryClient();
 
-const router = createHashRouter([
-  {
-    path: "/",
-    element: <AppShell brandLogoSrc={mspaceLogoUrl} />,
-    children: [
-      { index: true, element: <Navigate to="/inbox" replace /> },
-      { path: "/inbox", element: <InboxPage /> },
-      { path: "/issues", element: <IssuesPage /> },
-      { path: "/issues/:issueId", element: <IssueDetailPage /> },
-      { path: "/agents", element: <AgentsPage /> },
-      { path: "/projects", element: <ProjectsPage /> },
-      { path: "/sessions/:sessionId", element: <SessionDetailPage /> },
-    ],
-  },
+const rootRoute = createRootRoute({
+  component: () => <AppShell brandLogoSrc={mspaceLogoUrl} />,
+});
+
+const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/",
+  component: () => <Navigate to="/inbox" replace />,
+});
+
+const inboxRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/inbox",
+  component: InboxPage,
+});
+
+const issuesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/issues",
+  component: IssuesPage,
+});
+
+const issueDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/issues/$issueId",
+  component: IssueDetailPage,
+});
+
+const agentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/agents",
+  component: AgentsPage,
+});
+
+const projectsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/projects",
+  component: ProjectsPage,
+});
+
+const sessionDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions/$sessionId",
+  component: SessionDetailPage,
+});
+
+const routeTree = rootRoute.addChildren([
+  indexRoute,
+  inboxRoute,
+  issuesRoute,
+  issueDetailRoute,
+  agentsRoute,
+  projectsRoute,
+  sessionDetailRoute,
 ]);
+
+const router = createRouter({
+  routeTree,
+  history: createHashHistory(),
+});
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

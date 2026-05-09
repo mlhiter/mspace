@@ -1,5 +1,7 @@
 import {
   Archive,
+  ArrowLeft,
+  ArrowRight,
   Bot,
   Boxes,
   CheckCircle2,
@@ -20,8 +22,15 @@ import {
   Sparkles,
   SquareTerminal,
 } from "lucide-react";
-import type { ComponentProps, PropsWithChildren, ReactNode } from "react";
-import { Link, NavLink, Outlet } from "react-router-dom";
+import { useEffect, useState, type ComponentProps, type PropsWithChildren, type ReactNode } from "react";
+import {
+  Link,
+  Outlet,
+  type HistoryLocation,
+  useCanGoBack,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router";
 import { Alert, AlertDescription } from "./components/ui/alert";
 import { Badge } from "./components/ui/badge";
 import {
@@ -99,6 +108,20 @@ const sidebarProjects = [
   { name: "devbox", namespace: "devbox-70", state: "idle" },
 ];
 
+let maxObservedHistoryIndex = 0;
+
+function rememberHistoryIndex(index: number, actionType?: string) {
+  maxObservedHistoryIndex = actionType === "PUSH" ? index : Math.max(maxObservedHistoryIndex, index);
+  return maxObservedHistoryIndex;
+}
+
+export type BreadcrumbItem = {
+  label: string;
+  to?: string;
+  params?: Record<string, string>;
+  search?: Record<string, unknown>;
+};
+
 export function AppShell(props: { brandLogoSrc?: string } = {}) {
   return (
     <div className="grid h-full min-h-0 grid-cols-[252px_minmax(0,1fr)] bg-[color:var(--canvas)] text-[color:var(--text)]">
@@ -126,7 +149,7 @@ export function AppShell(props: { brandLogoSrc?: string } = {}) {
             <span>Search projects, sessions, evidence</span>
           </div>
         </div>
-        <SidebarActionLink to="/issues?new=1" icon={MessageSquarePlus}>
+        <SidebarActionLink to="/issues" search={{ new: "1" }} icon={MessageSquarePlus}>
           New issue
         </SidebarActionLink>
 
@@ -192,29 +215,31 @@ export function AppShell(props: { brandLogoSrc?: string } = {}) {
 
 export function SidebarLink(props: PropsWithChildren<{ to: string; icon: LucideIcon }>) {
   const Icon = props.icon;
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const isActive = pathname === props.to || pathname.startsWith(`${props.to}/`);
+
   return (
-    <NavLink
+    <Link
       to={props.to}
-      className={({ isActive }) =>
-        cn(
-          "group flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-[13px] font-medium transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.98]",
-          isActive
-            ? "bg-[color:var(--selection)] text-[color:var(--text)]"
-            : "text-[color:var(--muted)] hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
-        )
-      }
+      className={cn(
+        "group flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-[13px] font-medium transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.98]",
+        isActive
+          ? "bg-[color:var(--selection)] text-[color:var(--text)]"
+          : "text-[color:var(--muted)] hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
+      )}
     >
       <Icon data-icon />
       <span>{props.children}</span>
-    </NavLink>
+    </Link>
   );
 }
 
-export function SidebarActionLink(props: PropsWithChildren<{ to: string; icon: LucideIcon }>) {
+export function SidebarActionLink(props: PropsWithChildren<{ to: string; search?: Record<string, unknown>; icon: LucideIcon }>) {
   const Icon = props.icon;
   return (
     <Link
       to={props.to}
+      search={props.search}
       className="mb-3 group flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-[13px] font-medium text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-[0.98]"
     >
       <Icon data-icon />
@@ -223,14 +248,98 @@ export function SidebarActionLink(props: PropsWithChildren<{ to: string; icon: L
   );
 }
 
-export function PageFrame(props: PropsWithChildren<{ title: string; subtitle?: string; actions?: ReactNode }>) {
+function NavigationControls() {
+  const router = useRouter();
+  const canGoBack = useCanGoBack();
+  const historyIndex = useRouterState({ select: (state) => state.location.state.__TSR_index });
+  const [maxHistoryIndex, setMaxHistoryIndex] = useState(() => rememberHistoryIndex(historyIndex));
+  const canGoForward = historyIndex < maxHistoryIndex;
+
+  useEffect(() => {
+    setMaxHistoryIndex(rememberHistoryIndex(historyIndex));
+  }, [historyIndex]);
+
+  useEffect(() => {
+    return router.history.subscribe(({ location, action }: { location: HistoryLocation; action: { type: string } }) => {
+      setMaxHistoryIndex(rememberHistoryIndex(location.state.__TSR_index, action.type));
+    });
+  }, [router]);
+
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        aria-label="Go back"
+        disabled={!canGoBack}
+        className="grid size-7 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform,opacity] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95 disabled:pointer-events-none disabled:opacity-35"
+        onClick={() => router.history.back()}
+      >
+        <ArrowLeft data-icon />
+      </button>
+      <button
+        type="button"
+        aria-label="Go forward"
+        disabled={!canGoForward}
+        className="grid size-7 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform,opacity] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95 disabled:pointer-events-none disabled:opacity-35"
+        onClick={() => router.history.forward()}
+      >
+        <ArrowRight data-icon />
+      </button>
+    </div>
+  );
+}
+
+function BreadcrumbTrail(props: { items: BreadcrumbItem[] }) {
+  return (
+    <nav aria-label="Breadcrumb" className="min-w-0 flex-1 overflow-hidden">
+      <ol className="flex min-w-0 items-center gap-1.5 text-[12px] text-[color:var(--muted)]">
+        {props.items.map((item, index) => {
+          const isLast = index === props.items.length - 1;
+          const content = (
+            <>
+              {index === 0 ? <Layers3 data-icon className="shrink-0" /> : null}
+              <span className="truncate">{item.label}</span>
+            </>
+          );
+
+          return (
+            <li key={`${index}-${item.label}`} className="flex min-w-0 items-center gap-1.5">
+              {index > 0 ? <ChevronRight data-icon className="shrink-0 text-[color:var(--faint)]" /> : null}
+              {item.to && !isLast ? (
+                <Link
+                  to={item.to}
+                  params={item.params}
+                  search={item.search}
+                  className="flex min-w-0 items-center gap-1.5 rounded-[6px] px-1 py-0.5 transition-[background-color,color] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
+                >
+                  {content}
+                </Link>
+              ) : (
+                <span className={cn("flex min-w-0 items-center gap-1.5 px-1 py-0.5", isLast && "text-[color:var(--muted-strong)]")}>
+                  {content}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
+  );
+}
+
+export function PageFrame(props: PropsWithChildren<{ title: string; subtitle?: string; actions?: ReactNode; breadcrumbs?: BreadcrumbItem[] }>) {
+  const breadcrumbs = props.breadcrumbs || [
+    { label: "mspace", to: "/inbox" },
+    { label: props.title },
+  ];
+
   return (
     <div className="mx-auto min-h-full w-full max-w-[1280px] px-10 pb-12 pt-8">
       <div className="mb-8 flex items-start justify-between gap-6 border-b border-[color:var(--line)] pb-6">
         <div className="min-w-0">
-          <div className="mb-3 flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
-            <Layers3 data-icon />
-            <span>mspace</span>
+          <div className="mb-3 flex min-w-0 items-center gap-2">
+            <NavigationControls />
+            <BreadcrumbTrail items={breadcrumbs} />
           </div>
           <h1 className="page-title text-[32px] font-semibold leading-[1.1] text-[color:var(--text)]">
             {props.title}
