@@ -17,12 +17,18 @@ The product should stay narrow:
 - Desktop app: Electron, electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript.
 - UI system: shadcn/ui source components in `packages/ui/src/components/ui`, Radix UI primitives, lucide-react icons, and shared exports through `@mspace/ui`.
 - Workspace tooling: pnpm workspaces and Turbo.
+- Server control plane: Go, chi, PostgreSQL through `pgx`, with embedded migrations under `server/internal/control/migrations`.
 - Runner: Go, chi, SQLite through `modernc.org/sqlite`.
+- The control plane owns users, workspaces, workspace membership, mspace auth sessions, GitHub identity, and future GitHub App installation state. Desktop and runner code should become runtime clients of this service instead of owning collaboration identity.
+- Desktop GitHub sign-in starts at `GET /api/auth/github/start`, opens the returned GitHub URL in the browser, lets the server-side callback complete OAuth, then polls `GET /api/auth/github/result?state=...` for a single-use `msp_...` session token. Do not move the GitHub client secret into Electron or the runner.
+- The renderer stores the mspace session token under `localStorage["mspace.authToken"]` and a lightweight display identity under `localStorage["mspace.authIdentity"]`; the latter is used only to populate local runner `creator*` and `author*` fields until collaboration state moves fully behind the control plane.
 - The Electron main process auto-starts the local runner with `go run .` unless `GET /health` is already healthy.
 - Sidebar navigation currently exposes Inbox, Issues, Agents, Clusters, and Projects, plus a quick link that opens issue creation from the left rail and an Active work block for recent issue/session/test-environment activity.
 - Inbox is a review-only unread feed; issue creation and management live in the Issues route.
 - The issue creation modal and Issue Detail reply composer use `IssueDocumentEditor`, a TipTap-backed Markdown editor in `packages/views/src/issue-document-editor.tsx`, so checklist task input and comments remain document-like while the runner still receives Markdown. Issue creation does not expose a project selector; mspace infers the project from the note.
 - Issue task lists are modeled as child issues via `issues.parent_issue_id`, then rendered inline on the parent Issue Detail page. Markdown checklist lines typed during issue creation are converted into child issues so the checkbox text is not a second source of truth.
+- Local runner issues store denormalized display fields `creator_name` and `creator_avatar_url`; comments store `author_name` and `author_avatar_url`. Existing anonymous human rows are backfilled to `mlhiter`; system comments display as `mspace`.
+- Human owners and comments should render with the real stored avatar/name when available. Codex-backed agents should render with the shared Codex avatar asset from `packages/views/src/agent-avatar.ts`, not a generic robot icon, unless image loading genuinely fails.
 - SQLite database path: `~/.mspace/mspace.db`.
 - Imported GitHub repositories are cloned or reused under `~/.mspace/repos/<owner>/<repo>`.
 - Session worktree root: `~/.mspace/workdirs/<project-id>/<session-id>`.
@@ -61,6 +67,9 @@ The product should stay narrow:
 - Keep type triage asynchronous. Issue creation must not wait for agent classification.
 - Do not use keyword matching for issue type classification; use the triage agent and validate its structured output against the fixed type set.
 - Keep local development runtime as the MVP default.
+- Keep multiplayer identity and collaboration authority in `server/`, not in the desktop renderer or local runner. The runner may keep local execution state, but users, workspaces, membership, GitHub identity, auth sessions, audit, and future GitHub App installation credentials belong to the control plane.
+- Treat runner `creator_name`, `creator_avatar_url`, `author_name`, and `author_avatar_url` as transitional display snapshots for the local MVP, not the authoritative user model. Do not expand this into a parallel local account system.
+- GitHub OAuth should prove identity only. The product session should be an mspace-issued token, and future GitHub repository automation should use GitHub App installation tokens owned by `server/`, not long-lived personal OAuth tokens stored by desktop/runner.
 - For Codex-backed local sessions, prefer `codex app-server --listen stdio://` over `codex exec` so mspace can retain thread, turn, status, and notification state.
 - Keep agent specialization as SQLite-managed profile instructions on top of the Codex app-server provider unless a genuinely separate runtime is introduced.
 - Keep Kubernetes as the default deployment and test environment.
@@ -83,10 +92,12 @@ The product should stay narrow:
 ```bash
 pnpm install
 pnpm dev:desktop
+pnpm run server
 ```
 
 The desktop app normally starts the runner automatically on `127.0.0.1:7788`.
 If a healthy old runner is already listening, Electron reuses it. After API route changes, restart that runner before judging frontend errors.
+The desktop app also starts the local server control plane automatically on `127.0.0.1:8787` when no healthy server is already listening.
 
 Debug the runner separately:
 
@@ -100,6 +111,7 @@ Validation:
 ```bash
 pnpm typecheck
 pnpm --filter @mspace/desktop build
+pnpm test:server
 (cd packages/ui && pnpm dlx shadcn@latest info --json)
 (cd runner && go test ./...)
 (cd runner && go build ./...)
@@ -110,6 +122,7 @@ pnpm --filter @mspace/desktop build
 - `DESIGN.md`: design system reference for visual thesis, tokens, typography, components, layout, and UI guardrails.
 - `ROADMAP.md`: milestone priority and acceptance criteria for the next product work.
 - `docs/product.md`: inbox and issue product positioning, users, workflows, MVP, non-goals.
+- `docs/control-plane.md`: server/control-plane direction for multiplayer identity, GitHub auth, and runtime-client boundaries.
 - `docs/architecture.md`: collaboration layer, runtime layer, permission model, data sketch, risks.
 - `docs/integration-guide.md`: local runner API contract, cluster import calls, and issue test environment calls.
 - `docs/ia.md`: MVP navigation, screen map, page regions, state model, build sequence.

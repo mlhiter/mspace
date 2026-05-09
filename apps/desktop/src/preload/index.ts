@@ -10,6 +10,10 @@ const desktopAPI = {
     readArgument("mspace-runner-url") ||
     process.env.MSPACE_RUNNER_URL ||
     "http://127.0.0.1:7788",
+  serverBaseUrl:
+    readArgument("mspace-server-url") ||
+    process.env.MSPACE_SERVER_URL ||
+    "http://127.0.0.1:8787",
   appVersion: process.env.npm_package_version || "0.1.0",
   selectProjectFolder: () => ipcRenderer.invoke("mspace:select-project-folder") as Promise<string | null>,
   selectKubeconfigFiles: () => ipcRenderer.invoke("mspace:select-kubeconfig-files") as Promise<string[]>,

@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Bot,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Circle,
   CircleAlert,
@@ -12,9 +13,11 @@ import {
   Cloud,
   Files,
   FolderKanban,
+  GitBranch,
   Inbox,
   Layers3,
   LoaderCircle,
+  LogOut,
   type LucideIcon,
   MessageSquarePlus,
   MessageSquareText,
@@ -23,7 +26,7 @@ import {
   Sparkles,
   SquareTerminal,
 } from "lucide-react";
-import { useEffect, useState, type ComponentProps, type PropsWithChildren, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type PropsWithChildren, type ReactNode } from "react";
 import {
   Link,
   Outlet,
@@ -128,28 +131,37 @@ export type ShellActiveWorkItem = {
   sessionStatus?: string;
 };
 
-export function AppShell(props: { brandLogoSrc?: string; activeWorkItems?: ShellActiveWorkItem[] } = {}) {
+export type ShellAccount = {
+  status: "signed-out" | "loading" | "signed-in" | "error";
+  name?: string;
+  email?: string;
+  avatarUrl?: string;
+  workspaceName?: string;
+  error?: string;
+  actionLabel?: string;
+};
+
+export function AppShell(
+  props: {
+    brandLogoSrc?: string;
+    activeWorkItems?: ShellActiveWorkItem[];
+    account?: ShellAccount;
+    onSignIn?: () => void;
+    onSignOut?: () => void;
+  } = {},
+) {
   const activeWorkItems = props.activeWorkItems || [];
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[252px_minmax(0,1fr)] bg-[color:var(--canvas)] text-[color:var(--text)]">
       <div className="app-titlebar" aria-hidden="true" />
       <aside className="flex min-h-0 flex-col border-r border-[color:var(--line)] bg-[color:var(--sidebar)] px-3 pb-4 pt-12">
-        <div className="mb-4 flex items-center px-2">
-          <div className="flex min-w-0 items-center gap-2.5">
-            <div className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[color:var(--paper)] text-[color:var(--ink)] shadow-[inset_0_0_0_1px_var(--line)]">
-              {props.brandLogoSrc ? (
-                <img src={props.brandLogoSrc} alt="" className="h-5 w-7 object-contain" />
-              ) : (
-                <span className="text-[13px] font-semibold">m</span>
-              )}
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-[13px] font-semibold leading-5">mspace</div>
-              <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">K8s agent workspace</div>
-            </div>
-          </div>
-        </div>
+        <WorkspaceMenu
+          brandLogoSrc={props.brandLogoSrc}
+          account={props.account}
+          onSignIn={props.onSignIn}
+          onSignOut={props.onSignOut}
+        />
 
         <div className="mb-2 rounded-[10px] bg-[color:var(--paper)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
@@ -183,14 +195,16 @@ export function AppShell(props: { brandLogoSrc?: string; activeWorkItems?: Shell
           )}
         </div>
 
-        <div className="mt-auto rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
-          <div className="flex items-center gap-2 text-[12px] font-medium">
-            <SquareTerminal data-icon className="text-[color:var(--muted)]" />
-            Local runner
+        <div className="mt-auto flex flex-col gap-2">
+          <div className="rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+            <div className="flex items-center gap-2 text-[12px] font-medium">
+              <SquareTerminal data-icon className="text-[color:var(--muted)]" />
+              Local runner
+            </div>
+            <p className="mt-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
+              Edits stay local. Kubernetes evidence stays attached to the issue.
+            </p>
           </div>
-          <p className="mt-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
-            Edits stay local. Kubernetes evidence stays attached to the issue.
-          </p>
         </div>
       </aside>
       <main className="min-h-0 min-w-0 bg-[color:var(--paper)]">
@@ -200,6 +214,144 @@ export function AppShell(props: { brandLogoSrc?: string; activeWorkItems?: Shell
           </div>
         </ScrollArea>
       </main>
+    </div>
+  );
+}
+
+function WorkspaceMenu(props: { brandLogoSrc?: string; account?: ShellAccount; onSignIn?: () => void; onSignOut?: () => void }) {
+  const account = props.account || { status: "signed-out" as const };
+  const isBusy = account.status === "loading";
+  const isSignedIn = account.status === "signed-in";
+  const actionLabel = account.actionLabel || (isBusy ? "Waiting for GitHub" : "Sign in with GitHub");
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const workspaceLabel = account.workspaceName || (isSignedIn ? "Personal workspace" : "Local workspace");
+  const statusLabel = isSignedIn ? account.name || account.email || "Signed in" : isBusy ? "GitHub login pending" : "Not signed in";
+
+  useEffect(() => {
+    if (!open) return;
+    function closeOnPointerDown(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative mb-4">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="group flex min-h-10 w-full items-center gap-2.5 rounded-[8px] px-2 py-1.5 text-left transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <div className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-[color:var(--paper)] text-[color:var(--ink)] shadow-[inset_0_0_0_1px_var(--line)]">
+          {props.brandLogoSrc ? (
+            <img src={props.brandLogoSrc} alt="" className="h-5 w-7 object-contain" />
+          ) : (
+            <span className="text-[13px] font-semibold">m</span>
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-semibold leading-5">{workspaceLabel}</div>
+          <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{statusLabel}</div>
+        </div>
+        <ChevronDown
+          data-icon
+          className="shrink-0 text-[color:var(--faint)] transition-[color] duration-150 ease-out group-hover:text-[color:var(--muted)]"
+        />
+      </button>
+
+      {open ? (
+        <div
+          role="menu"
+          className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 rounded-[10px] bg-[color:var(--paper)] p-1.5 shadow-[0_10px_30px_rgba(0,0,0,0.10),inset_0_0_0_1px_var(--line)]"
+        >
+          <div className="px-2 py-2">
+            <div className="text-[11px] leading-4 text-[color:var(--faint)]">Workspace</div>
+            <div className="truncate text-[13px] font-medium leading-5">{workspaceLabel}</div>
+          </div>
+          <div className="mx-2 my-1 h-px bg-[color:var(--line)]" />
+
+          {isSignedIn ? (
+            <div className="px-2 py-2">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <UserAvatar name={account.name} avatarUrl={account.avatarUrl} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[12px] font-medium">{account.name || "mspace user"}</div>
+                  <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
+                    {account.email || "GitHub connected"}
+                  </div>
+                </div>
+              </div>
+              <div className="mx-0 my-1.5 h-px bg-[color:var(--line)]" />
+              <button
+                type="button"
+                role="menuitem"
+                className="flex h-7 w-full items-center gap-2 rounded-[7px] px-2 text-[12px] font-medium text-[color:var(--muted)] transition-[background-color,color] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] [&_[data-icon]]:size-3.5"
+                onClick={() => {
+                  setOpen(false);
+                  props.onSignOut?.();
+                }}
+              >
+                <LogOut data-icon className="text-[color:var(--faint)]" />
+                <span>Sign out</span>
+              </button>
+            </div>
+          ) : (
+            <div className="px-2 py-2">
+              <div className="mb-2 flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
+                {isBusy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
+                <span>{isBusy ? "Waiting for GitHub callback" : "GitHub identity not connected"}</span>
+              </div>
+              <ShadcnButton
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-8 w-full justify-center gap-2 text-[12px]"
+                disabled={isBusy}
+                onClick={() => {
+                  setOpen(false);
+                  props.onSignIn?.();
+                }}
+              >
+                {isBusy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
+                <span>{actionLabel}</span>
+              </ShadcnButton>
+              {account.status === "error" && account.error ? (
+                <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-[color:var(--danger)]">{account.error}</p>
+              ) : null}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function UserAvatar(props: { name?: string; avatarUrl?: string }) {
+  const [failed, setFailed] = useState(false);
+  const initial = props.name?.trim().slice(0, 1).toUpperCase() || "M";
+
+  useEffect(() => {
+    setFailed(false);
+  }, [props.avatarUrl]);
+
+  return (
+    <div className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--selection)] text-[12px] font-semibold text-[color:var(--muted)]">
+      {props.avatarUrl && !failed ? (
+        <img src={props.avatarUrl} alt="" className="size-full object-cover" onError={() => setFailed(true)} />
+      ) : (
+        <span>{initial}</span>
+      )}
     </div>
   );
 }

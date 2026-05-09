@@ -15,6 +15,8 @@
 
 Reusable cluster configs are stored in `clusters`. Issue test namespace records are stored in `issue_test_environments`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
 
+The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, and mspace auth sessions in Postgres through `DATABASE_URL`. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
+
 ## Start The App
 
 Install dependencies:
@@ -29,13 +31,21 @@ Start desktop:
 pnpm dev:desktop
 ```
 
-Electron starts the local Go runner automatically if `GET /health` is not already healthy on the configured port.
+Electron starts the local Go runner and local server control plane automatically if their `GET /health` checks are not already healthy on the configured ports.
 
 Run the runner separately for API debugging:
 
 ```bash
 pnpm runner
 pnpm dev:desktop
+```
+
+Run the server separately for auth or control-plane debugging:
+
+```bash
+cp .env.example .env.local
+# edit .env.local with DATABASE_URL and GitHub OAuth values
+pnpm run server
 ```
 
 ## Environment Variables
@@ -46,6 +56,13 @@ pnpm dev:desktop
 | `MSPACE_RUNNER_URL` | Electron preload/renderer | `http://127.0.0.1:7788` | API base URL exposed to the renderer. |
 | `MSPACE_RUNNER_START_TIMEOUT_MS` | Electron main process | `60000` | How long the desktop waits for the runner health check before startup fails. |
 | `MSPACE_PORT` | Go runner | `7788` | Port used by a standalone runner. |
+| `MSPACE_SERVER_ADDR` | Server and Electron main process | `127.0.0.1:8787` | Address used when the server control plane listens or is started by desktop. |
+| `MSPACE_SERVER_URL` | Electron preload/renderer | `http://127.0.0.1:8787` | Server control-plane base URL exposed to the renderer. |
+| `MSPACE_SERVER_START_TIMEOUT_MS` | Electron main process | `30000` | How long the desktop waits for the server health check before startup fails. |
+| `DATABASE_URL` | Server | none | Postgres connection string for control-plane storage. |
+| `MSPACE_GITHUB_CLIENT_ID` | Server | none | GitHub OAuth App client id. |
+| `MSPACE_GITHUB_CLIENT_SECRET` | Server | none | GitHub OAuth App client secret; keep it server-side only. |
+| `MSPACE_GITHUB_REDIRECT_URI` | Server | none | OAuth callback URL, usually `http://127.0.0.1:8787/api/auth/github/callback` locally. |
 
 Cluster, project, and issue test environment fields are passed into sessions as:
 
@@ -68,6 +85,7 @@ Session metadata is also passed into the Codex app-server process environment as
 | --- | --- |
 | `MSPACE_ISSUE_ID` | Current issue id. |
 | `MSPACE_SESSION_ID` | Current session id. |
+| `MSPACE_API_BASE_URL` | Local runner API base URL. |
 | `MSPACE_AGENT_PROFILE` | Selected managed agent profile id. |
 | `MSPACE_SESSION_BRANCH` | Planned session branch. |
 | `MSPACE_SESSION_WORKDIR` | Prepared git worktree path. |
@@ -100,10 +118,31 @@ codex app-server --help
 
 ## Smoke Checks
 
+Server health:
+
+```bash
+curl http://127.0.0.1:8787/health
+```
+
+GitHub auth start endpoint:
+
+```bash
+curl -i http://127.0.0.1:8787/api/auth/github/start
+```
+
+This endpoint requires `DATABASE_URL`, `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` to be configured in the server environment.
+
 Runner health:
 
 ```bash
 curl http://127.0.0.1:7788/health
+```
+
+Local actor display snapshots:
+
+```bash
+sqlite3 ~/.mspace/mspace.db "select id,title,creator_name,creator_avatar_url from issues order by updated_at desc limit 5;"
+sqlite3 ~/.mspace/mspace.db "select issue_id,author_type,author_name,author_avatar_url,created_at from comments order by created_at desc limit 10;"
 ```
 
 Recent sessions:
@@ -205,6 +244,29 @@ Expected shadcn/ui source components currently include:
 - textarea
 
 ## Common Troubleshooting
+
+### GitHub Login Fails With `failed to fetch`
+
+The renderer calls the server control plane, not the local runner, for GitHub login. Check the server first:
+
+```bash
+curl -i http://127.0.0.1:8787/health
+lsof -nP -iTCP:8787 -sTCP:LISTEN
+```
+
+If the server is not healthy, verify `.env.local` contains the server-only auth configuration and restart the server or desktop:
+
+```bash
+pnpm run server
+```
+
+If the server is healthy but the renderer still fails, check that `MSPACE_SERVER_URL` points at the same origin exposed by Electron preload. For local desktop development the default is `http://127.0.0.1:8787`.
+
+### User Or Agent Avatars Do Not Load
+
+GitHub avatars require the renderer content security policy to allow GitHub image hosts. Check `apps/desktop/src/renderer/index.html` includes `https://avatars.githubusercontent.com` and `https://*.githubusercontent.com` in `img-src`.
+
+Codex agent avatars should use the shared data URL in `packages/views/src/agent-avatar.ts`. If the UI falls back to a letter or generic icon, verify that the data URL is not truncated and that the renderer imports the shared `codexAvatarDataUrl` instead of embedding another copy.
 
 ### Desktop Shows Unstyled HTML
 

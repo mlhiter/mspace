@@ -51,6 +51,8 @@ CREATE TABLE IF NOT EXISTS issues (
   triage_status TEXT NOT NULL DEFAULT 'none',
   assignee TEXT NOT NULL,
   assignee_type TEXT NOT NULL DEFAULT 'human',
+  creator_name TEXT NOT NULL DEFAULT '',
+  creator_avatar_url TEXT NOT NULL DEFAULT '',
   environment_url TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -71,6 +73,8 @@ CREATE TABLE IF NOT EXISTS comments (
   id TEXT PRIMARY KEY,
   issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
   author_type TEXT NOT NULL,
+  author_name TEXT NOT NULL DEFAULT '',
+  author_avatar_url TEXT NOT NULL DEFAULT '',
   body TEXT NOT NULL,
   created_at TEXT NOT NULL
 );

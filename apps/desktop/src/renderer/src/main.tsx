@@ -1,7 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   createHashHistory,
   createRootRoute,
@@ -19,21 +20,97 @@ import {
   ProjectsPage,
   SessionDetailPage,
 } from "@mspace/views";
-import { api, queryKeys } from "@mspace/core";
+import { api, controlPlaneApi, queryKeys, setStoredAuthIdentity } from "@mspace/core";
 import { AppShell } from "@mspace/ui";
 import mspaceLogoUrl from "../../../assets/brand/mspace-logo.svg";
 import "./globals.css";
 
 const queryClient = new QueryClient();
+const AUTH_TOKEN_STORAGE_KEY = "mspace.authToken";
 
 function RootShell() {
+  const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "");
+  const [pendingAuthState, setPendingAuthState] = useState("");
+
   const activeWorkQuery = useQuery({
     queryKey: queryKeys.activeWork,
     queryFn: api.listActiveWork,
     refetchInterval: 15_000,
   });
+  const meQuery = useQuery({
+    queryKey: queryKeys.authMe(authToken),
+    queryFn: () => controlPlaneApi.me(authToken),
+    enabled: authToken !== "",
+    retry: false,
+  });
+  const signInMutation = useMutation({
+    mutationFn: controlPlaneApi.startGitHubLogin,
+    onSuccess: async (result) => {
+      setPendingAuthState(result.state);
+      if (window.mspaceDesktop?.openExternal) {
+        await window.mspaceDesktop.openExternal(result.authorizeUrl);
+        return;
+      }
+      window.open(result.authorizeUrl, "_blank", "noopener,noreferrer");
+    },
+  });
+  const pollQuery = useQuery({
+    queryKey: queryKeys.authPoll(pendingAuthState),
+    queryFn: () => controlPlaneApi.pollGitHubLogin(pendingAuthState),
+    enabled: pendingAuthState !== "",
+    refetchInterval: (query) => (query.state.data?.pending === false ? false : 1_500),
+    retry: false,
+  });
 
-  return <AppShell brandLogoSrc={mspaceLogoUrl} activeWorkItems={activeWorkQuery.data || []} />;
+  useEffect(() => {
+    if (!pollQuery.data || pollQuery.data.pending) return;
+    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, pollQuery.data.token);
+    setStoredAuthIdentity(pollQuery.data.user);
+    setAuthToken(pollQuery.data.token);
+    setPendingAuthState("");
+  }, [pollQuery.data]);
+
+  useEffect(() => {
+    if (meQuery.data?.user) {
+      setStoredAuthIdentity(meQuery.data.user);
+    }
+  }, [meQuery.data?.user]);
+
+  const handleSignOut = () => {
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    setStoredAuthIdentity(null);
+    setAuthToken("");
+    setPendingAuthState("");
+  };
+
+  const authError = signInMutation.error || pollQuery.error || (authToken !== "" ? meQuery.error : null);
+  const accountStatus =
+    authToken && meQuery.data
+      ? "signed-in"
+      : pendingAuthState || signInMutation.isPending
+        ? "loading"
+        : authError
+          ? "error"
+          : "signed-out";
+  const currentWorkspace = meQuery.data?.workspaces[0];
+
+  return (
+    <AppShell
+      brandLogoSrc={mspaceLogoUrl}
+      activeWorkItems={activeWorkQuery.data || []}
+      account={{
+        status: accountStatus,
+        name: meQuery.data?.user.name,
+        email: meQuery.data?.user.email,
+        avatarUrl: meQuery.data?.user.avatarUrl,
+        workspaceName: currentWorkspace?.name,
+        error: authError instanceof Error ? authError.message : undefined,
+        actionLabel: pendingAuthState ? "Waiting for GitHub" : undefined,
+      }}
+      onSignIn={() => signInMutation.mutate()}
+      onSignOut={handleSignOut}
+    />
+  );
 }
 
 const rootRoute = createRootRoute({

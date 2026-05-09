@@ -28,6 +28,29 @@ The desktop uses a rich TipTap editor for issue creation and human comments, but
 
 When `projectId` is omitted, the runner infers the best matching existing project from the title, body, and task text. If no project exists, issue creation returns `400 Bad Request`.
 
+The desktop API client injects the current display identity from `localStorage["mspace.authIdentity"]` into local runner writes. External local integrations may pass the same display snapshots directly:
+
+- `creatorName` and `creatorAvatarUrl` on `POST /api/issues`;
+- `authorName` and `authorAvatarUrl` on `POST /api/issues/{issueID}/comments`.
+
+These fields are for local UI rendering only. They are not authentication, authorization, or the durable account model; authoritative users and workspaces belong to the server control plane.
+
+Create an issue with a creator display snapshot:
+
+```bash
+curl -X POST "$MSPACE_API_BASE/api/issues" \
+  -H 'Content-Type: application/json' \
+  -d '{"body":"Investigate login avatar rendering","creatorName":"mlhiter","creatorAvatarUrl":"https://avatars.githubusercontent.com/u/<github-id>?v=4"}'
+```
+
+Add a comment with an author display snapshot:
+
+```bash
+curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/comments" \
+  -H 'Content-Type: application/json' \
+  -d '{"body":"Avatar fallback is fixed locally.","authorName":"mlhiter","authorAvatarUrl":"https://avatars.githubusercontent.com/u/<github-id>?v=4"}'
+```
+
 ## Issue Task APIs
 
 Task lists are stored as child issues. Markdown checklist lines submitted in `POST /api/issues` are converted into child issue tasks and removed from the parent body.

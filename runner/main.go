@@ -39,6 +39,8 @@ var (
 )
 
 const defaultImportedClusterImageRegistryPrefix = "crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter"
+const defaultHumanActorName = "mlhiter"
+const systemActorName = "mspace"
 
 var checklistItemPattern = regexp.MustCompile(`^\s*(?:[-*+]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
 
@@ -98,6 +100,8 @@ type issue struct {
 	TriageStatus   string `json:"triageStatus"`
 	Assignee       string `json:"assignee"`
 	AssigneeType   string `json:"assigneeType"`
+	CreatorName    string `json:"creatorName"`
+	CreatorAvatar  string `json:"creatorAvatarUrl"`
 	EnvironmentURL string `json:"environmentUrl"`
 	CreatedAt      string `json:"createdAt"`
 	UpdatedAt      string `json:"updatedAt"`
@@ -138,11 +142,13 @@ type issueListItem struct {
 }
 
 type comment struct {
-	ID         string `json:"id"`
-	IssueID    string `json:"issueId"`
-	AuthorType string `json:"authorType"`
-	Body       string `json:"body"`
-	CreatedAt  string `json:"createdAt"`
+	ID           string `json:"id"`
+	IssueID      string `json:"issueId"`
+	AuthorType   string `json:"authorType"`
+	AuthorName   string `json:"authorName"`
+	AuthorAvatar string `json:"authorAvatarUrl"`
+	Body         string `json:"body"`
+	CreatedAt    string `json:"createdAt"`
 }
 
 type issueLabel struct {
@@ -587,6 +593,9 @@ func (a *app) migrate() error {
 	if err := a.ensureIssueColumns(); err != nil {
 		return err
 	}
+	if err := a.ensureCommentColumns(); err != nil {
+		return err
+	}
 	if err := a.ensureIssueLabelTables(); err != nil {
 		return err
 	}
@@ -715,10 +724,12 @@ func (a *app) ensureIssueColumns() error {
 	}
 
 	requiredColumns := map[string]string{
-		"parent_issue_id": "TEXT REFERENCES issues(id) ON DELETE CASCADE",
-		"sort_order":      "INTEGER NOT NULL DEFAULT 0",
-		"assignee_type":   "TEXT NOT NULL DEFAULT 'human'",
-		"triage_status":   "TEXT NOT NULL DEFAULT 'none'",
+		"parent_issue_id":    "TEXT REFERENCES issues(id) ON DELETE CASCADE",
+		"sort_order":         "INTEGER NOT NULL DEFAULT 0",
+		"assignee_type":      "TEXT NOT NULL DEFAULT 'human'",
+		"triage_status":      "TEXT NOT NULL DEFAULT 'none'",
+		"creator_name":       "TEXT NOT NULL DEFAULT ''",
+		"creator_avatar_url": "TEXT NOT NULL DEFAULT ''",
 	}
 	for name, definition := range requiredColumns {
 		if existing[name] {
@@ -737,6 +748,44 @@ func (a *app) ensureIssueColumns() error {
 		CREATE INDEX IF NOT EXISTS idx_issues_project_parent_updated ON issues(project_id, parent_issue_id, updated_at)
 	`); err != nil {
 		return fmt.Errorf("create issues project parent updated index: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		UPDATE issues
+		SET creator_name = ?
+		WHERE creator_name = ''
+	`, defaultHumanActorName); err != nil {
+		return fmt.Errorf("backfill issue creators: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		UPDATE issues
+		SET assignee = ?
+		WHERE assignee_type = 'human' AND (assignee = '' OR assignee = 'me')
+	`, defaultHumanActorName); err != nil {
+		return fmt.Errorf("backfill human assignees: %w", err)
+	}
+	return nil
+}
+
+func (a *app) ensureCommentColumns() error {
+	if err := a.ensureTableColumns("comments", map[string]string{
+		"author_name":       "TEXT NOT NULL DEFAULT ''",
+		"author_avatar_url": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if _, err := a.db.Exec(`
+		UPDATE comments
+		SET author_name = ?
+		WHERE author_type = 'human' AND author_name = ''
+	`, defaultHumanActorName); err != nil {
+		return fmt.Errorf("backfill human comment authors: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		UPDATE comments
+		SET author_name = ?
+		WHERE author_type = 'system' AND author_name = ''
+	`, systemActorName); err != nil {
+		return fmt.Errorf("backfill system comment authors: %w", err)
 	}
 	return nil
 }
@@ -1484,16 +1533,18 @@ func (a *app) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		ProjectID    string           `json:"projectId"`
-		Title        string           `json:"title"`
-		Body         string           `json:"body"`
-		Prompt       string           `json:"prompt"`
-		Tasks        []string         `json:"tasks"`
-		ChildIssues  []issueTaskInput `json:"childIssues"`
-		Labels       []string         `json:"labels"`
-		LabelKeys    []string         `json:"labelKeys"`
-		Assignee     string           `json:"assignee"`
-		AssigneeType string           `json:"assigneeType"`
+		ProjectID     string           `json:"projectId"`
+		Title         string           `json:"title"`
+		Body          string           `json:"body"`
+		Prompt        string           `json:"prompt"`
+		Tasks         []string         `json:"tasks"`
+		ChildIssues   []issueTaskInput `json:"childIssues"`
+		Labels        []string         `json:"labels"`
+		LabelKeys     []string         `json:"labelKeys"`
+		Assignee      string           `json:"assignee"`
+		AssigneeType  string           `json:"assigneeType"`
+		CreatorName   string           `json:"creatorName"`
+		CreatorAvatar string           `json:"creatorAvatarUrl"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1505,6 +1556,8 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	input.Prompt = strings.TrimSpace(input.Prompt)
 	input.Assignee = strings.TrimSpace(input.Assignee)
 	input.AssigneeType = normalizeAssigneeType(input.AssigneeType)
+	input.CreatorName = normalizeHumanActorName(input.CreatorName)
+	input.CreatorAvatar = normalizeActorAvatarURL(input.CreatorAvatar)
 	if input.Body == "" {
 		input.Body = input.Prompt
 	}
@@ -1555,16 +1608,19 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	if hasIssueLabelDimension(initialLabels, issueLabelDimensionType) {
 		triageStatus = "classified"
 	}
-	assignee := input.Assignee
-	if assignee == "" {
-		assignee = "me"
-	}
 	if input.AssigneeType == "" {
 		input.AssigneeType = "human"
 	}
 	if input.AssigneeType != "human" && input.AssigneeType != "agent" {
 		writeError(w, http.StatusBadRequest, errors.New("assignee type must be human or agent"))
 		return
+	}
+	assignee := input.Assignee
+	if input.AssigneeType == "human" {
+		if assignee == "" {
+			assignee = input.CreatorName
+		}
+		assignee = normalizeHumanActorName(assignee)
 	}
 	for _, task := range taskDrafts {
 		if err := validateIssueStatus(task.Status); err != nil {
@@ -1581,9 +1637,9 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(`
-		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
-		VALUES (?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, issueID, input.ProjectID, input.Title, input.Body, status, triageStatus, assignee, input.AssigneeType, "", now, now); err != nil {
+		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at)
+		VALUES (?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, issueID, input.ProjectID, input.Title, input.Body, status, triageStatus, assignee, input.AssigneeType, input.CreatorName, input.CreatorAvatar, "", now, now); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -1595,9 +1651,9 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			taskStatus = "open"
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 'none', ?, 'human', '', ?, ?)
-		`, taskID, input.ProjectID, issueID, index+1, task.Title, task.Body, taskStatus, "me", now, now); err != nil {
+			INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'none', ?, 'human', ?, ?, '', ?, ?)
+		`, taskID, input.ProjectID, issueID, index+1, task.Title, task.Body, taskStatus, input.CreatorName, input.CreatorName, input.CreatorAvatar, now, now); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -1612,9 +1668,9 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := tx.Exec(`
-		INSERT INTO comments (id, issue_id, author_type, body, created_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, uuid.NewString(), issueID, "system", "Issue created and ready for a local-first agent session.", now); err != nil {
+		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, uuid.NewString(), issueID, "system", systemActorName, "", "Issue created and ready for a local-first agent session.", now); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -1982,9 +2038,9 @@ func (a *app) handleCreateIssueTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 'none', 'me', 'human', '', ?, ?)
-	`, taskID, parent.ProjectID, parentIssueID, sortOrder, task.Title, task.Body, task.Status, now, now); err != nil {
+		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'none', ?, 'human', ?, ?, '', ?, ?)
+	`, taskID, parent.ProjectID, parentIssueID, sortOrder, task.Title, task.Body, task.Status, normalizeHumanActorName(parent.CreatorName), normalizeHumanActorName(parent.CreatorName), normalizeActorAvatarURL(parent.CreatorAvatar), now, now); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -2165,21 +2221,26 @@ func (a *app) handleUpdateIssueLabels(w http.ResponseWriter, r *http.Request) {
 func (a *app) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "issueID")
 	var input struct {
-		Body string `json:"body"`
+		Body         string `json:"body"`
+		AuthorName   string `json:"authorName"`
+		AuthorAvatar string `json:"authorAvatarUrl"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if strings.TrimSpace(input.Body) == "" {
+	input.Body = strings.TrimSpace(input.Body)
+	input.AuthorName = normalizeHumanActorName(input.AuthorName)
+	input.AuthorAvatar = normalizeActorAvatarURL(input.AuthorAvatar)
+	if input.Body == "" {
 		writeError(w, http.StatusBadRequest, errors.New("comment body cannot be empty"))
 		return
 	}
 	now := nowString()
 	_, err := a.db.Exec(`
-		INSERT INTO comments (id, issue_id, author_type, body, created_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, uuid.NewString(), issueID, "human", input.Body, now)
+		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, uuid.NewString(), issueID, "human", input.AuthorName, input.AuthorAvatar, input.Body, now)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -2954,6 +3015,7 @@ func (a *app) writeSessionContext(session agentSession, project project) (string
 	builder.WriteString(fmt.Sprintf("- ID: %s\n", detail.Issue.ID))
 	builder.WriteString(fmt.Sprintf("- Title: %s\n", detail.Issue.Title))
 	builder.WriteString(fmt.Sprintf("- Status: %s\n", detail.Issue.Status))
+	builder.WriteString(fmt.Sprintf("- Creator: %s\n", normalizeHumanActorName(detail.Issue.CreatorName)))
 	builder.WriteString(fmt.Sprintf("- Assignee: %s (%s)\n", detail.Issue.Assignee, detail.Issue.AssigneeType))
 	builder.WriteString(fmt.Sprintf("- Labels: %s\n", formatIssueLabels(detail.Labels)))
 	builder.WriteString("\n")
@@ -3161,11 +3223,11 @@ func readTestEnvironmentPreviewURL(session agentSession) string {
 func (a *app) loadIssue(issueID string) (issue, error) {
 	var item issue
 	row := a.db.QueryRow(`
-		SELECT id, project_id, COALESCE(parent_issue_id, ''), sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at
+		SELECT id, project_id, COALESCE(parent_issue_id, ''), sort_order, title, body, status, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at
 		FROM issues
 		WHERE id = ?
 	`, issueID)
-	err := row.Scan(&item.ID, &item.ProjectID, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &item.EnvironmentURL, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.ProjectID, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &item.CreatorName, &item.CreatorAvatar, &item.EnvironmentURL, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
 
@@ -3266,14 +3328,14 @@ func (a *app) listChildIssues(parentIssueID string) ([]issueListItem, error) {
 func (a *app) loadIssueDetail(issueID string) (issueDetail, error) {
 	var detail issueDetail
 	row := a.db.QueryRow(`
-		SELECT i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.triage_status, i.assignee, i.assignee_type, i.environment_url, i.created_at, i.updated_at,
+		SELECT i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.triage_status, i.assignee, i.assignee_type, i.creator_name, i.creator_avatar_url, i.environment_url, i.created_at, i.updated_at,
 		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id, p.created_at, p.updated_at
 		FROM issues i
 		JOIN projects p ON p.id = i.project_id
 		WHERE i.id = ?
 	`, issueID)
 	if err := row.Scan(
-		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
+		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.CreatorName, &detail.Issue.CreatorAvatar, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
 		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
 	); err != nil {
 		return detail, err
@@ -3627,7 +3689,7 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 	}
 	row := a.db.QueryRow(`
 		SELECT s.id, s.issue_id, s.provider, s.agent_profile, s.runtime_mode, s.command, s.status, s.branch, s.workdir, s.codex_thread_id, s.codex_turn_id, s.agent_status, s.artifact_dir, s.cleanup_status, s.cleaned_at, s.created_at, s.updated_at,
-		       i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.triage_status, i.assignee, i.assignee_type, i.environment_url, i.created_at, i.updated_at,
+		       i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.triage_status, i.assignee, i.assignee_type, i.creator_name, i.creator_avatar_url, i.environment_url, i.created_at, i.updated_at,
 		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id, p.created_at, p.updated_at
 		FROM agent_sessions s
 		JOIN issues i ON i.id = s.issue_id
@@ -3636,7 +3698,7 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 	`, sessionID)
 	if err := row.Scan(
 		&detail.Session.ID, &detail.Session.IssueID, &detail.Session.Provider, &detail.Session.AgentProfile, &detail.Session.RuntimeMode, &detail.Session.Command, &detail.Session.Status, &detail.Session.Branch, &detail.Session.Workdir, &detail.Session.CodexThreadID, &detail.Session.CodexTurnID, &detail.Session.AgentStatus, &detail.Session.ArtifactDir, &detail.Session.CleanupStatus, &detail.Session.CleanedAt, &detail.Session.CreatedAt, &detail.Session.UpdatedAt,
-		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
+		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.CreatorName, &detail.Issue.CreatorAvatar, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
 		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
 	); err != nil {
 		return detail, err
@@ -3745,7 +3807,7 @@ func (a *app) listSessionLogs(sessionID string) ([]sessionLog, error) {
 
 func (a *app) listComments(issueID string) ([]comment, error) {
 	rows, err := a.db.Query(`
-		SELECT id, issue_id, author_type, body, created_at
+		SELECT id, issue_id, author_type, author_name, author_avatar_url, body, created_at
 		FROM comments
 		WHERE issue_id = ?
 		ORDER BY created_at DESC
@@ -3757,7 +3819,7 @@ func (a *app) listComments(issueID string) ([]comment, error) {
 	comments := make([]comment, 0)
 	for rows.Next() {
 		var c comment
-		if err := rows.Scan(&c.ID, &c.IssueID, &c.AuthorType, &c.Body, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.IssueID, &c.AuthorType, &c.AuthorName, &c.AuthorAvatar, &c.Body, &c.CreatedAt); err != nil {
 			return nil, err
 		}
 		comments = append(comments, c)
@@ -3933,9 +3995,9 @@ func (a *app) addSystemComment(issueID, body string) {
 	}
 	createdAt := nowString()
 	_, _ = a.db.Exec(`
-		INSERT INTO comments (id, issue_id, author_type, body, created_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, uuid.NewString(), issueID, "system", body, createdAt)
+		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, uuid.NewString(), issueID, "system", systemActorName, "", body, createdAt)
 	_, _ = a.db.Exec(`
 		UPDATE issues SET updated_at = ? WHERE id = ?
 	`, createdAt, issueID)
@@ -4515,6 +4577,18 @@ func normalizeAssigneeType(value string) string {
 	default:
 		return value
 	}
+}
+
+func normalizeHumanActorName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "me" {
+		return defaultHumanActorName
+	}
+	return truncate(value, 120)
+}
+
+func normalizeActorAvatarURL(value string) string {
+	return truncate(strings.TrimSpace(value), 1024)
 }
 
 func defaultAgentProfiles(now string) []agentProfile {

@@ -10,6 +10,7 @@ import {
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ensureRunnerStarted, getRunnerBaseUrl, stopRunner } from "./runner-manager";
+import { ensureServerStarted, getServerBaseUrl, stopServer } from "./server-manager";
 
 let mainWindow: BrowserWindow | null = null;
 let projectFolderPickerRegistered = false;
@@ -95,7 +96,10 @@ function createWindow(iconPath = resolveBrandIconPath()): void {
     ...(iconPath ? { icon: iconPath } : {}),
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
-      additionalArguments: [`--mspace-runner-url=${getRunnerBaseUrl()}`],
+      additionalArguments: [
+        `--mspace-runner-url=${getRunnerBaseUrl()}`,
+        `--mspace-server-url=${getServerBaseUrl()}`,
+      ],
       sandbox: false,
     },
   };
@@ -119,6 +123,11 @@ app.whenReady().then(async () => {
   registerKubeconfigFilePicker();
   registerOpenHandlers();
   await ensureRunnerStarted();
+  try {
+    await ensureServerStarted();
+  } catch (error) {
+    console.error("[server] failed to start", error);
+  }
   const brandIconPath = resolveBrandIconPath();
   if (brandIconPath) app.dock?.setIcon(brandIconPath);
   createWindow(brandIconPath);
@@ -130,11 +139,13 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", async () => {
   if (process.platform !== "darwin") {
+    await stopServer();
     await stopRunner();
     app.quit();
   }
 });
 
 app.on("before-quit", async () => {
+  await stopServer();
   await stopRunner();
 });

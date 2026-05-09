@@ -12,6 +12,7 @@ The repository now has a runnable local desktop MVP:
 
 - create projects from a local folder picker or GitHub repository URL and manage settings later;
 - create and manage issues in the Issues tab;
+- sign in with GitHub through the local server control plane and show the current user/workspace state in the sidebar;
 - write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page, where they can be toggled or deleted;
 - classify new issues asynchronously with a background triage agent that assigns one Conventional Commit type label;
 - label priority manually from Issue Detail, and scan/filter labels from the Issues list;
@@ -23,7 +24,7 @@ The repository now has a runnable local desktop MVP:
 - run sessions in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`;
 - clean a completed or cancelled session worktree from Session Detail while preserving the issue timeline, logs, evidence, and session metadata;
 - cache imported GitHub repositories under `~/.mspace/repos/<owner>/<repo>`;
-- store session metadata, logs, comments, issues, projects, and evidence in SQLite under `~/.mspace/mspace.db`;
+- store session metadata, logs, comments, issues, projects, evidence, and local creator/author display snapshots in SQLite under `~/.mspace/mspace.db`;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
 - choose a default cluster per project and select a cluster when manually deploying an issue test environment;
@@ -214,6 +215,10 @@ Still outside the current implemented MVP:
 - full Kubernetes resource browser;
 - PR link capture;
 - automated namespace cleanup policy beyond the current manual cleanup/retain decision.
+
+The product architecture is now explicitly moving toward a server control plane for multiplayer collaboration. The local desktop runner remains the execution path, but users, workspaces, membership, GitHub identity, auth sessions, audit, and future GitHub App installation state should live in the server rather than in local-only SQLite.
+
+The current runner `creatorName`/`creatorAvatarUrl` and `authorName`/`authorAvatarUrl` fields are local display snapshots for the MVP. They should not become a second account system; shared issue ownership, comments, and permissions belong behind the control plane.
 
 ## Explicit Non-Goals
 

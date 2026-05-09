@@ -18,12 +18,12 @@ import {
   Rocket,
   Send,
   Trash2,
-  UserRound,
   X,
 } from "lucide-react";
 import {
   api,
   buildApiUrl,
+  getStoredAuthIdentity,
   queryKeys,
   type AgentProfile,
   type AgentSession,
@@ -56,6 +56,7 @@ import {
 } from "@mspace/ui";
 import { FileTypeIcon } from "./file-type-icon";
 import { IssueDocumentEditor } from "./issue-document-editor";
+import { codexAvatarDataUrl } from "./agent-avatar";
 import {
   buildIssueLabelSelectionInput,
   issueLabelOptionsByDimension,
@@ -72,6 +73,14 @@ type TimelineItem =
   | { kind: "comment"; createdAt: string; comment: Comment }
   | { kind: "session"; createdAt: string; session: AgentSession }
   | { kind: "evidence"; createdAt: string; evidence: DeploymentEvidence };
+
+type ActorKind = "human" | "codex" | "system" | "evidence";
+
+interface ActorIdentity {
+  kind: ActorKind;
+  name?: string;
+  avatarUrl?: string;
+}
 
 type LogLine = Pick<SessionLog, "stream" | "message">;
 type SessionSnapshot = {
@@ -725,39 +734,98 @@ function SessionSummarySkeleton() {
   );
 }
 
-function ActorMark(props: { kind: "human" | "codex" | "system" | "evidence" }) {
-  const Icon =
-    props.kind === "codex"
-      ? Bot
-      : props.kind === "human"
-        ? UserRound
-        : props.kind === "evidence"
-          ? CheckCircle2
-          : CircleDot;
+function storedHumanActor(): ActorIdentity {
+  const stored = getStoredAuthIdentity();
+  return {
+    kind: "human",
+    name: stored.name || "mlhiter",
+    avatarUrl: stored.avatarUrl || "",
+  };
+}
+
+function humanActor(name?: string, avatarUrl?: string): ActorIdentity {
+  const stored = storedHumanActor();
+  const normalizedName = name?.trim();
+  return {
+    kind: "human",
+    name: !normalizedName || normalizedName === "me" ? stored.name : normalizedName,
+    avatarUrl: avatarUrl?.trim() || stored.avatarUrl,
+  };
+}
+
+function systemActor(name = "mspace"): ActorIdentity {
+  return { kind: "system", name };
+}
+
+function codexActor(name = "Codex"): ActorIdentity {
+  return { kind: "codex", name, avatarUrl: codexAvatarDataUrl };
+}
+
+function evidenceActor(): ActorIdentity {
+  return { kind: "evidence", name: "Evidence" };
+}
+
+function actorForComment(comment: Comment): ActorIdentity {
+  if (comment.authorType === "human") return humanActor(comment.authorName, comment.authorAvatarUrl);
+  if (comment.authorType === "agent") return codexActor(comment.authorName || "Codex");
+  return systemActor(comment.authorName || "mspace");
+}
+
+function actorForAssignee(assigneeType: string, assignee: string): ActorIdentity {
+  if (assigneeType === "agent") return codexActor(displayAgentName(assignee));
+  return humanActor(assignee);
+}
+
+function displayAgentName(value: string): string {
+  const normalized = mentionKey(value) || value.trim();
+  return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : "Codex";
+}
+
+function actorInitial(actor: ActorIdentity): string {
+  return (actor.name?.trim().slice(0, 1).toUpperCase() || (actor.kind === "human" ? "M" : "C"));
+}
+
+function ActorMark(props: { actor: ActorIdentity; size?: "sm" | "md" }) {
+  const [failed, setFailed] = useState(false);
+  const size = props.size || "md";
+  const imageUrl = props.actor.kind === "codex" ? codexAvatarDataUrl : props.actor.avatarUrl;
+  const Icon = props.actor.kind === "evidence" ? CheckCircle2 : props.actor.kind === "system" ? CircleDot : Bot;
+
+  useEffect(() => {
+    setFailed(false);
+  }, [imageUrl]);
+
   return (
     <div
       className={cn(
-        "relative z-10 grid size-8 shrink-0 place-items-center rounded-full bg-[color:var(--paper)] shadow-[0_0_0_1px_var(--line)]",
-        props.kind === "codex" && "text-[color:var(--accent-blue)]",
-        props.kind === "human" && "text-[color:var(--text)]",
-        props.kind === "system" && "text-[color:var(--muted)]",
-        props.kind === "evidence" && "text-[color:var(--success)]",
+        "relative z-10 grid shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--paper)] shadow-[0_0_0_1px_var(--line)]",
+        size === "sm" ? "size-5 text-[10px] [&_[data-icon]]:size-3" : "size-8 text-[12px] [&_[data-icon]]:size-4",
+        props.actor.kind === "codex" && "text-[color:var(--accent-blue)]",
+        props.actor.kind === "human" && "font-semibold text-[color:var(--text)]",
+        props.actor.kind === "system" && "text-[color:var(--muted)]",
+        props.actor.kind === "evidence" && "text-[color:var(--success)]",
       )}
     >
-      <Icon data-icon />
+      {imageUrl && !failed ? (
+        <img src={imageUrl} alt="" className={cn("size-full object-cover", props.actor.kind === "codex" && "p-1")} onError={() => setFailed(true)} />
+      ) : props.actor.kind === "human" ? (
+        <span>{actorInitial(props.actor)}</span>
+      ) : (
+        <Icon data-icon />
+      )}
     </div>
   );
 }
 
 function TimelineShell(props: {
-  actor: "human" | "codex" | "system" | "evidence";
+  actor: ActorIdentity;
   title: string;
   time: string;
   children?: React.ReactNode;
 }) {
   return (
     <article className="grid grid-cols-[32px_minmax(0,1fr)] gap-3">
-      <ActorMark kind={props.actor} />
+      <ActorMark actor={props.actor} />
       <div className="min-w-0 pb-8">
         <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
           <div className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">{props.title}</div>
@@ -770,8 +838,11 @@ function TimelineShell(props: {
 }
 
 function CommentTimelineItem(props: { comment: Comment }) {
-  const actor = props.comment.authorType === "human" ? "human" : "system";
-  const title = props.comment.authorType === "human" ? "mlhiter commented" : "mspace updated the issue";
+  const actor = actorForComment(props.comment);
+  const title =
+    actor.kind === "human" || actor.kind === "codex"
+      ? `${actor.name} commented`
+      : `${actor.name || "mspace"} updated the issue`;
   return (
     <TimelineShell actor={actor} title={title} time={props.comment.createdAt}>
       <RichText>{props.comment.body}</RichText>
@@ -796,7 +867,7 @@ function SessionTimelineItem(props: {
 
   return (
     <TimelineShell
-      actor="codex"
+      actor={codexActor(agent.name)}
       title={isActive ? `${agent.name} is working` : agent.name}
       time={session.updatedAt || session.createdAt}
     >
@@ -843,7 +914,7 @@ function EvidenceTimelineItem(props: { evidence: DeploymentEvidence }) {
   const parsed = parseEvidenceDetails(props.evidence);
   const SnapshotIcon = parsed.tone === "failed" || parsed.tone === "warning" ? CircleAlert : parsed.tone === "healthy" ? CheckCircle2 : CircleDot;
   return (
-    <TimelineShell actor="evidence" title="Validation evidence attached" time={props.evidence.createdAt}>
+    <TimelineShell actor={evidenceActor()} title="Validation evidence attached" time={props.evidence.createdAt}>
       <div className="rounded-[10px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -998,6 +1069,18 @@ function MetaLine(props: { label: string; value: string }) {
     <div className="grid min-w-0 grid-cols-[86px_minmax(0,1fr)] items-baseline gap-2">
       <div className="text-[12px] leading-5 text-[color:var(--muted)]">{props.label}</div>
       <div className="min-w-0 break-words text-[12px] leading-5 text-[color:var(--muted-strong)]">{props.value}</div>
+    </div>
+  );
+}
+
+function MetaIdentityLine(props: { label: string; actor: ActorIdentity }) {
+  return (
+    <div className="grid min-w-0 grid-cols-[86px_minmax(0,1fr)] items-center gap-2">
+      <div className="text-[12px] leading-5 text-[color:var(--muted)]">{props.label}</div>
+      <div className="flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-[color:var(--muted-strong)]">
+        <ActorMark actor={props.actor} size="sm" />
+        <span className="min-w-0 truncate">{props.actor.name || "unassigned"}</span>
+      </div>
     </div>
   );
 }
@@ -1636,6 +1719,9 @@ export function IssueDetailPage() {
       </PageFrame>
     );
   }
+  const creatorActor = humanActor(detail.issue.creatorName, detail.issue.creatorAvatarUrl);
+  const composerActor = storedHumanActor();
+  const assigneeActor = actorForAssignee(detail.issue.assigneeType, detail.issue.assignee);
   const projectCluster = clusters.find((cluster) => cluster.id === detail.project.defaultClusterId);
   const testCluster = clusters.find((cluster) => cluster.id === detail.testEnvironment?.clusterId);
 
@@ -1693,9 +1779,9 @@ export function IssueDetailPage() {
               {timelineItems.map((item) => {
                 if (item.kind === "opened") {
                   return (
-                    <TimelineShell key="opened" actor="system" title="Issue opened" time={item.createdAt}>
+                    <TimelineShell key="opened" actor={creatorActor} title={`${creatorActor.name || "mlhiter"} opened this issue`} time={item.createdAt}>
                       <div className="text-[13px] leading-6 text-[color:var(--muted)]">
-                        {`mspace created this issue in ${detail.project.name}.`}
+                        {`Created in ${detail.project.name}.`}
                       </div>
                     </TimelineShell>
                   );
@@ -1725,7 +1811,7 @@ export function IssueDetailPage() {
           </section>
 
           <section className="mt-2 grid grid-cols-[32px_minmax(0,1fr)] gap-3">
-            <ActorMark kind="human" />
+            <ActorMark actor={composerActor} />
             <form
               className="min-w-0 rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]"
               onSubmit={(event) => {
@@ -1802,7 +1888,7 @@ export function IssueDetailPage() {
                   <span className="text-[12px] leading-5 text-[color:var(--muted)]">Status</span>
                   <StatusBadge value={detail.issue.status} />
                 </div>
-                <MetaLine label="Assignee" value={`${detail.issue.assigneeType === "agent" ? "agent" : "human"} · ${detail.issue.assignee || "unassigned"}`} />
+                <MetaIdentityLine label="Assignee" actor={assigneeActor} />
                 <MetaLine label="Updated" value={formatRelativeTime(detail.issue.updatedAt)} />
                 <LabelEditor
                   labels={listOrEmpty(detail.labels)}

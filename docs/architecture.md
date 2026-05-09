@@ -8,6 +8,8 @@ The repository currently contains a runnable local-first desktop MVP:
 
 - Electron desktop shell built with electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
+- Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`. It owns users, workspaces, membership, GitHub identity, mspace auth sessions, and future GitHub App installation state.
+- Desktop GitHub sign-in uses the server OAuth flow, stores an `msp_...` session token, and caches a lightweight display identity for local runner writes while collaboration data still lives in SQLite.
 - Issue creation and the Issue Detail reply composer use a local TipTap-backed `IssueDocumentEditor` that emits Markdown. This preserves document-like writing surfaces while keeping runner-side checklist extraction and comment storage text-based.
 - Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless a healthy runner is already listening.
 - SQLite state lives at `~/.mspace/mspace.db`.
@@ -24,6 +26,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Project import supports existing local folders and GitHub repository URLs. Local repositories auto-detect git remote metadata when available.
 - Inbox is an unread review feed powered by server-sent events from `/api/inbox/stream`.
 - Issue comments that mention an enabled agent are saved first, then the desktop calls `POST /api/issues/{issueID}/assign-agent` with the mention-stripped comment as the current turn request and the selected Codex profile.
+- Local runner issues and comments keep denormalized display identity snapshots: issue creator name/avatar and comment author name/avatar. Existing anonymous local human rows are backfilled to `mlhiter`; system comments display as `mspace`.
 - Issue task lists are child issues stored on `issues.parent_issue_id`. Checklist lines submitted during issue creation are extracted into child rows, and Issue Detail renders those children inline with checkbox-style status controls.
 - Issue labels use a built-in taxonomy in `issue_label_definitions` and issue links in `issue_labels`. The current dimensions are `type` and `priority`; type is classified asynchronously by the internal `@triage` Codex profile, while priority remains human-selected from Issue Detail.
 - Kubernetes is currently represented by reusable cluster configs plus issue-level test environment records. Clusters can be imported from selected kubeconfig files or discovered from regular files under `~/.kube`; each imported context stores `kubeconfig_path`, optional `kube_context`, `image_registry_prefix`, default `exposure_mode`, optional `preview_domain`, optional `ingress_class`, optional `node_host`, and a readiness status from a read-only API check.
@@ -58,6 +61,17 @@ Implemented desktop routes:
 - `/projects`
 - `/sessions/:sessionId`
 
+Implemented server control-plane API:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Server health. |
+| `GET` | `/api/auth/github/start` | Create an OAuth state and return a GitHub authorization URL. |
+| `GET` | `/api/auth/github/callback` | Validate OAuth state, exchange the GitHub code, link identity, ensure a default workspace, issue an mspace session token, and render a browser success page. |
+| `GET` | `/api/auth/github/result` | Desktop polling endpoint for the state-bound auth result. Returns `202` while pending and consumes the short-lived result once ready. |
+| `GET` | `/api/auth/me` | Load the authenticated user and workspaces from `Authorization: Bearer msp_...`. |
+| `GET` | `/api/workspaces` | List workspaces for the authenticated user. |
+
 Implemented runner API:
 
 | Method | Path | Purpose |
@@ -82,13 +96,13 @@ Implemented runner API:
 | `DELETE` | `/api/projects/{projectID}` | Delete a project and cascaded child data. |
 | `GET` | `/api/issue-label-definitions` | List built-in issue label options for Type and Priority controls. |
 | `GET` | `/api/issues` | List issues across the local workspace. |
-| `POST` | `/api/issues` | Create an issue and inbox item. |
+| `POST` | `/api/issues` | Create an issue and inbox item, optionally including creator display name and avatar snapshots. |
 | `GET` | `/api/issues/{issueID}` | Load issue detail, comments, sessions, and evidence. |
 | `PUT` | `/api/issues/{issueID}` | Update issue title, body, or status. Child task completion uses this status update. |
 | `POST` | `/api/issues/{issueID}/tasks` | Create a child issue task under a parent issue. |
 | `DELETE` | `/api/issues/{issueID}/tasks/{taskID}` | Delete a child issue task after verifying it belongs to the parent issue. |
 | `PUT` | `/api/issues/{issueID}/labels` | Replace issue-local labels. |
-| `POST` | `/api/issues/{issueID}/comments` | Add a human comment. |
+| `POST` | `/api/issues/{issueID}/comments` | Add a human comment, optionally including author display name and avatar snapshots. |
 | `POST` | `/api/issues/{issueID}/assign-agent` | Queue a Codex turn from an issue comment. |
 | `POST` | `/api/issues/{issueID}/sessions` | Queue and start a local agent session. |
 | `POST` | `/api/issues/{issueID}/test-deploy` | Manually queue an issue-scoped test deployment agent turn. |
@@ -101,24 +115,34 @@ Implemented runner API:
 
 ## Architecture Summary
 
-mspace should separate the collaboration layer from the runtime layer.
+mspace should separate the control plane, collaboration layer, runtime layer, and validation layer.
 
-The collaboration layer is the product entry point: Inbox, Issue, comments, subscribers, agent sessions, and evidence. The runtime layer is where the agent edits and runs code. The validation environment layer is where the changed project gets deployed and inspected. In the MVP, the runtime should be local-first and the validation environment should be namespace-scoped Kubernetes.
+The control plane is the durable multiplayer authority: users, workspaces, members, auth sessions, GitHub identity, and future GitHub App installations. The collaboration layer is the product entry point: Inbox, Issue, comments, subscribers, agent sessions, and evidence. The runtime layer is where the agent edits and runs code. The validation environment layer is where the changed project gets deployed and inspected. In the MVP, the runtime should be local-first and the validation environment should be namespace-scoped Kubernetes.
+
+Identity boundary:
+
+- server-side users, workspaces, memberships, GitHub identities, and auth sessions are authoritative;
+- desktop stores only the current bearer token and a lightweight display identity cache;
+- runner `creator_name`, `creator_avatar_url`, `author_name`, and `author_avatar_url` are local MVP display snapshots, not a parallel account system;
+- future shared issue ownership, comments, audit, and collaboration permissions should move behind the control plane.
 
 ```text
-Web UI
-  -> mspace API
-      -> Inbox Review / Issue Service
-      -> Session Service
-      -> Runtime Manager
-          -> Local Runtime Provider
-          -> Remote Runtime Provider
-          -> Future Kubernetes Runtime Provider
-      -> Validation Environment Manager
-          -> Kubernetes Cluster
-              -> Namespace
-              -> ServiceAccount / Role / RoleBinding
-              -> Project Workloads
+Desktop / Web UI
+  -> mspace control plane
+      -> Identity / Workspace / Membership
+      -> GitHub identity and future GitHub App installation state
+      -> Collaboration API
+          -> Inbox Review / Issue Service
+          -> Session Service
+          -> Runtime Registry
+              -> Local Runner Client
+              -> Remote Runtime Provider
+              -> Future Kubernetes Runtime Provider
+          -> Validation Environment Manager
+              -> Kubernetes Cluster
+                  -> Namespace
+                  -> ServiceAccount / Role / RoleBinding
+                  -> Project Workloads
 ```
 
 ## Main Concepts
@@ -136,7 +160,7 @@ Required fields:
 - runtime policy;
 - project list.
 
-The local MVP has not implemented a `workspaces` table yet. It behaves as a single local workspace.
+The control plane implements `workspaces` and `workspace_members`. The local runner still behaves as a single local workspace for issue/session data until those collaboration APIs move behind the server.
 
 ### Inbox Item
 
@@ -201,6 +225,7 @@ Current implemented fields:
 - status;
 - parent issue id and sort order for inline child issue task lists;
 - labels;
+- creator display name and avatar snapshot;
 - assignee;
 - assignee type;
 - comments and progress updates;
@@ -450,6 +475,8 @@ issues
   triage_status
   assignee
   assignee_type
+  creator_name
+  creator_avatar_url
   environment_url
   created_at
   updated_at
@@ -468,6 +495,8 @@ comments
   id
   issue_id
   author_type
+  author_name
+  author_avatar_url
   body
   created_at
 
@@ -628,8 +657,11 @@ comments
   id
   issue_id
   type
+  author_type
+  author_id
+  author_display_name
+  author_avatar_url
   body
-  created_by
   created_at
 
 agent_sessions

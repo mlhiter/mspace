@@ -25,6 +25,8 @@ Project
 
 The roadmap intentionally keeps local workflow first. Kubernetes is the manually triggered test target for the MVP, not the first development runtime.
 
+The first server control-plane slice now exists for GitHub sign-in, mspace auth sessions, users, workspaces, and membership. Full multiplayer collaboration is still later work; do not treat the local runner's display identity snapshots as that architecture.
+
 ## Approved Execution Plan
 
 The product should reach the Multica-like workflow in two stages.
@@ -201,7 +203,7 @@ Do not pull these into the MVP path until Milestone 1 through Milestone 4 are us
 - ServiceAccount and RoleBinding lifecycle;
 - namespace per session;
 - Kubernetes-hosted agent runtime;
-- multi-user workspace and account system;
+- full multi-user workspace management, membership UI, collaboration sync, and runtime-client authorization;
 - automatic merge pipeline;
 - generic agent rules or skill management product.
 

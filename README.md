@@ -5,7 +5,7 @@
 
 # mspace
 
-**A local-first desktop workspace for coding agents, issue review, and Kubernetes validation evidence.**
+**A desktop workspace plus server control plane for coding agents, issue review, and Kubernetes validation evidence.**
 
 ![Status](https://img.shields.io/badge/status-local%20MVP-2d2926?style=flat-square)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white)
@@ -25,7 +25,7 @@ mspace is a review Inbox and Issue workspace for software teams that want coding
 The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, inline child-issue tasks, comments, agent session, branch state, logs, deployment evidence, preview URL, and cleanup decision in one place.
 
 > [!NOTE]
-> mspace is currently a runnable local desktop MVP. Agent execution is local-first through Codex app-server, while Kubernetes is a manually triggered issue test target.
+> mspace is currently a runnable local desktop MVP with a new server/control-plane skeleton. Agent execution is still local-first through Codex app-server, while the server is the target home for users, workspaces, membership, GitHub identity, auth sessions, and future GitHub App installation state.
 
 ## Screenshots
 
@@ -43,6 +43,8 @@ The interaction model is closer to a shared engineering document than a terminal
 ## Features
 
 - Electron desktop app with Inbox, Issues, Agents, Clusters, Projects, Issue Detail, and Session Detail screens.
+- Go server control plane with GitHub OAuth entrypoints, state-bound desktop login polling, Postgres migrations, mspace session tokens, users, workspaces, and workspace membership.
+- GitHub-authenticated sidebar account/workspace state, plus local issue creator and comment actor display snapshots with human and Codex avatars.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, and real shadcn/ui source components in `@mspace/ui`.
 - Go local runner with HTTP APIs, SQLite storage, server-sent events, session logs, git-aware project import, and Codex app-server integration.
 - Project import from a local folder or GitHub repository URL, including GitHub remote metadata detection when available.
@@ -66,12 +68,13 @@ mspace separates collaboration, execution, and validation:
 
 | Layer | What it owns | Current implementation |
 | --- | --- | --- |
+| Control plane | Users, workspaces, membership, GitHub identity, mspace auth sessions, future GitHub App installations | Go server in `server/`, chi, PostgreSQL through `pgx` |
 | Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review | Electron, React, TanStack Router, React Query, shared `@mspace/ui` |
 | Local runner | API, SQLite state, SSE streams, worktree preparation, Codex session lifecycle | Go, chi, SQLite, `codex app-server --listen stdio://` |
 | Agent runtime | One issue-bound turn in an isolated working directory | Local git worktree under `~/.mspace/workdirs/<project-id>/<session-id>` |
 | Validation target | Build, deploy, inspect, preview, and cleanup issue test environments | Namespace-scoped Kubernetes workflow triggered from Issue Detail |
 
-The desktop process starts the Go runner automatically on `127.0.0.1:7788` when no healthy runner is already available.
+The desktop process starts the Go runner automatically on `127.0.0.1:7788` and the server control plane on `127.0.0.1:8787` when no healthy process is already available.
 
 ## Quick Start
 
@@ -97,6 +100,16 @@ pnpm runner
 pnpm dev:desktop
 ```
 
+The desktop app starts the local server control plane automatically. Run it separately only when debugging server behavior:
+
+```bash
+cp .env.example .env.local
+# edit .env.local with your GitHub OAuth App values
+pnpm run server
+```
+
+The server automatically loads `.env.local` from the project root. Keep `MSPACE_GITHUB_CLIENT_SECRET` in local env files or a deployment secret store, never in tracked docs or code.
+
 ### First workflow
 
 1. Add a project from a local folder or GitHub repository URL.
@@ -118,6 +131,13 @@ Runtime variables:
 | `MSPACE_RUNNER_URL` | `http://127.0.0.1:7788` | API base URL exposed to the renderer. |
 | `MSPACE_RUNNER_START_TIMEOUT_MS` | `60000` | Startup health-check timeout for the runner. |
 | `MSPACE_PORT` | `7788` | Port used by a standalone runner. |
+| `MSPACE_SERVER_ADDR` | `127.0.0.1:8787` | Address used by the server control plane. |
+| `MSPACE_SERVER_URL` | `http://127.0.0.1:8787` | Server control-plane URL exposed to the desktop renderer. |
+| `MSPACE_SERVER_START_TIMEOUT_MS` | `30000` | Startup health-check timeout for the server when launched by Electron. |
+| `DATABASE_URL` | none | Postgres connection string for the server control plane. |
+| `MSPACE_GITHUB_CLIENT_ID` | none | GitHub OAuth client ID used by the server. |
+| `MSPACE_GITHUB_CLIENT_SECRET` | none | GitHub OAuth client secret; belongs on the server only. |
+| `MSPACE_GITHUB_REDIRECT_URI` | none | GitHub OAuth callback URL for the server. |
 
 Local data paths:
 
@@ -135,6 +155,7 @@ Local data paths:
 ```bash
 pnpm typecheck
 pnpm build:desktop
+pnpm test:server
 (cd packages/ui && pnpm dlx shadcn@latest info --json)
 (cd runner && go test ./...)
 (cd runner && go build ./...)
@@ -156,6 +177,7 @@ apps/desktop/        Electron desktop shell and renderer entrypoint
 packages/core/       Shared API client and TypeScript types
 packages/ui/         Shared UI primitives and shadcn/ui source components
 packages/views/      Product routes for Inbox, Issues, Agents, Projects, Sessions
+server/              Go control plane for identity, workspaces, auth sessions
 runner/              Go local runner, SQLite migrations, Codex app-server bridge
 docs/                Product, architecture, IA, references, runbook, and images
 ```
@@ -163,6 +185,7 @@ docs/                Product, architecture, IA, references, runbook, and images
 ## Docs
 
 - [Product Brief](./docs/product.md)
+- [Control Plane Direction](./docs/control-plane.md)
 - [Architecture Notes](./docs/architecture.md)
 - [Local API Integration Guide](./docs/integration-guide.md)
 - [MVP Information Architecture](./docs/ia.md)

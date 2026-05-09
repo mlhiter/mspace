@@ -87,7 +87,7 @@ The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with 
 
 Current implementation principles:
 
-- left sidebar contains the workspace identity, search affordance, quick issue creation, primary navigation, active issue work, and local runner state;
+- left sidebar contains the workspace identity/account menu, search affordance, quick issue creation, primary navigation, active issue work, and local runner state;
 - Inbox and Project lists use row-level cards and compact metadata rather than dashboard tiles;
 - Issue Detail should read as a live document with session and evidence context attached around it;
 - Session Detail can be more operational, but should still preserve the same paper workspace tone;
@@ -149,7 +149,7 @@ Each row should show:
 - title;
 - body preview;
 - project;
-- owner;
+- owner avatar and display name;
 - current status;
 - unread marker;
 - attached session count.
@@ -182,7 +182,7 @@ Current implementation:
 - does not show a project selector during issue creation; the runner infers the best matching existing project from the issue text;
 - keeps the creation modal minimal: issue note only, with project routing inferred from the text;
 - supports search, status/type/priority filters, and sorting by updated time, created time, priority, or type;
-- shows unread state, owner type, linked session count, child task count, and labels inline.
+- shows unread state, stored owner avatar/name, owner type, linked session count, child task count, and labels inline.
 
 ## Issue Detail
 
@@ -291,6 +291,7 @@ Current implementation:
 - streams session logs and status while a session is running, but keeps debug output collapsed by default;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
+- renders the issue creator, human comments, system comments, and Codex-backed agent turns with their current display names and avatar sources;
 - links into full session detail for deep inspection.
 
 ### Layout
@@ -483,6 +484,7 @@ Implemented as of 2026-05-09:
 9. Issue labels, stop controls for active sessions, and manual worktree cleanup.
 10. Clusters route with desktop file picker import, first-run `~/.kube` discovery, context listing, reachability status, registry, and preview exposure defaults.
 11. Issue test environment records plus manual deploy/cleanup/retain actions.
+12. Server-backed GitHub sign-in with sidebar account/workspace state and local issue/comment actor display snapshots.
 
 Next build steps:
 

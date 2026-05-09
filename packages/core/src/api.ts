@@ -2,6 +2,9 @@ import type {
   ActiveWorkItem,
   AgentProfile,
   AgentProfileInput,
+  AuthMeResult,
+  AuthPollResult,
+  AuthStartResult,
   Cluster,
   ClusterInput,
   CreateCommentInput,
@@ -18,6 +21,7 @@ import type {
   IssueTestEnvironment,
   KubeconfigDiscoveryResult,
   KubeconfigImportResult,
+  MspaceUser,
   Project,
   SessionDetail,
   StartTestDeployInput,
@@ -26,9 +30,21 @@ import type {
   UpdateProjectInput,
 } from "./types";
 
+export const AUTH_IDENTITY_STORAGE_KEY = "mspace.authIdentity";
+const defaultActorName = "mlhiter";
+
+export interface StoredAuthIdentity {
+  id?: string;
+  name: string;
+  email?: string;
+  avatarUrl?: string;
+}
+
 export const queryKeys = {
   activeWork: ["active-work"] as const,
   agents: ["agents"] as const,
+  authMe: (token: string) => ["auth-me", token] as const,
+  authPoll: (state: string) => ["auth-github-result", state] as const,
   clusters: ["clusters"] as const,
   inbox: ["inbox"] as const,
   issueLabelDefinitions: ["issue-label-definitions"] as const,
@@ -42,8 +58,77 @@ export function getApiBaseUrl(): string {
   return window.mspaceDesktop?.apiBaseUrl || "http://127.0.0.1:7788";
 }
 
+export function getControlPlaneBaseUrl(): string {
+  return window.mspaceDesktop?.serverBaseUrl || "http://127.0.0.1:8787";
+}
+
+function browserStorage(): Storage | undefined {
+  if (typeof window === "undefined") return undefined;
+  return window.localStorage;
+}
+
+export function getStoredAuthIdentity(): StoredAuthIdentity {
+  const fallback = { name: defaultActorName };
+  try {
+    const stored = browserStorage()?.getItem(AUTH_IDENTITY_STORAGE_KEY);
+    if (!stored) return fallback;
+    const parsed = JSON.parse(stored) as Partial<StoredAuthIdentity>;
+    const name = parsed.name?.trim() || defaultActorName;
+    return {
+      id: parsed.id,
+      name,
+      email: parsed.email,
+      avatarUrl: parsed.avatarUrl,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export function setStoredAuthIdentity(user: MspaceUser | null | undefined): void {
+  try {
+    if (!user) {
+      browserStorage()?.removeItem(AUTH_IDENTITY_STORAGE_KEY);
+      return;
+    }
+    browserStorage()?.setItem(
+      AUTH_IDENTITY_STORAGE_KEY,
+      JSON.stringify({
+        id: user.id,
+        name: user.name || defaultActorName,
+        email: user.email,
+        avatarUrl: user.avatarUrl,
+      }),
+    );
+  } catch {
+    // localStorage is best-effort; API calls still fall back to the local actor.
+  }
+}
+
+function withIssueCreator(input: CreateIssueInput): CreateIssueInput {
+  const actor = getStoredAuthIdentity();
+  return {
+    ...input,
+    creatorName: input.creatorName || actor.name,
+    creatorAvatarUrl: input.creatorAvatarUrl || actor.avatarUrl || "",
+  };
+}
+
+function withCommentAuthor(input: CreateCommentInput): CreateCommentInput {
+  const actor = getStoredAuthIdentity();
+  return {
+    ...input,
+    authorName: input.authorName || actor.name,
+    authorAvatarUrl: input.authorAvatarUrl || actor.avatarUrl || "",
+  };
+}
+
 export function buildApiUrl(path: string): string {
   return `${getApiBaseUrl()}${path}`;
+}
+
+export function buildControlPlaneUrl(path: string): string {
+  return `${getControlPlaneBaseUrl()}${path}`;
 }
 
 async function readErrorMessage(response: Response): Promise<string> {
@@ -59,8 +144,8 @@ async function readErrorMessage(response: Response): Promise<string> {
   return message || fallback;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(buildApiUrl(path), {
+async function requestURL<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers || {}),
@@ -73,6 +158,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  return requestURL<T>(buildApiUrl(path), init);
+}
+
+async function requestControlPlane<T>(path: string, init?: RequestInit): Promise<T> {
+  return requestURL<T>(buildControlPlaneUrl(path), init);
 }
 
 export const api = {
@@ -137,7 +230,7 @@ export const api = {
   createIssue: (input: CreateIssueInput) =>
     request<{ issueId: string }>("/api/issues", {
       method: "POST",
-      body: JSON.stringify(input),
+      body: JSON.stringify(withIssueCreator(input)),
     }),
   getIssue: (issueId: string) =>
     request<IssueDetail>(`/api/issues/${issueId}`),
@@ -163,7 +256,7 @@ export const api = {
   addComment: (issueId: string, input: CreateCommentInput) =>
     request<{ ok: boolean }>(`/api/issues/${issueId}/comments`, {
       method: "POST",
-      body: JSON.stringify(input),
+      body: JSON.stringify(withCommentAuthor(input)),
     }),
   assignAgent: (issueId: string, input: CreateSessionInput) =>
     request<{ sessionId: string }>(`/api/issues/${issueId}/assign-agent`, {
@@ -198,5 +291,24 @@ export const api = {
   cleanupSession: (sessionId: string) =>
     request<{ ok: boolean }>(`/api/sessions/${sessionId}/cleanup`, {
       method: "POST",
+    }),
+};
+
+export const controlPlaneApi = {
+  startGitHubLogin: () =>
+    requestControlPlane<AuthStartResult>("/api/auth/github/start"),
+  pollGitHubLogin: (state: string) =>
+    requestControlPlane<AuthPollResult>(`/api/auth/github/result?state=${encodeURIComponent(state)}`),
+  me: (token: string) =>
+    requestControlPlane<AuthMeResult>("/api/auth/me", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }),
+  listWorkspaces: (token: string) =>
+    requestControlPlane<AuthMeResult["workspaces"]>("/api/workspaces", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
     }),
 };

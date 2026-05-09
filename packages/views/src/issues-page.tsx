@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { ArrowRight, Bot, CheckCircle2, Clock3, Inbox, Layers3, MessageSquarePlus, Plus, Search } from "lucide-react";
-import { api, queryKeys, type IssueListItem } from "@mspace/core";
+import { ArrowRight, CheckCircle2, Clock3, Inbox, Layers3, MessageSquarePlus, Plus, Search } from "lucide-react";
+import { api, getStoredAuthIdentity, queryKeys, type IssueListItem } from "@mspace/core";
 import {
   Button,
   CollectionEmptyState,
@@ -17,6 +17,7 @@ import {
   StatusBadge,
 } from "@mspace/ui";
 import { CreateIssueModal } from "./create-issue-modal";
+import { codexAvatarDataUrl } from "./agent-avatar";
 import {
   issueLabelMatchesDimension,
   issueLabelOptionsByDimension,
@@ -35,6 +36,40 @@ const sortOptions = [
 ] as const;
 const toolbarSelectClass =
   "h-7 min-h-7 w-full rounded-[6px] bg-transparent px-2 py-1 text-[12px] leading-4 text-[color:var(--muted)] shadow-none hover:bg-[color:var(--hover)] focus:bg-[color:var(--hover)] focus:shadow-[inset_0_0_0_1px_var(--line)] data-[state=open]:bg-[color:var(--hover)] data-[state=open]:shadow-[inset_0_0_0_1px_var(--line)] sm:w-auto sm:min-w-[96px] [&_svg]:size-3.5";
+
+function issueAssigneeName(issue: IssueListItem): string {
+  if (issue.assigneeType === "agent") {
+    const normalized = issue.assignee.replace(/^@/, "").trim();
+    return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : "Codex";
+  }
+  const stored = getStoredAuthIdentity();
+  const assignee = issue.assignee.trim();
+  return !assignee || assignee === "me" ? stored.name || "mlhiter" : assignee;
+}
+
+function IssueAssigneeMeta(props: { issue: IssueListItem }) {
+  const [failed, setFailed] = useState(false);
+  const stored = getStoredAuthIdentity();
+  const name = issueAssigneeName(props.issue);
+  const avatarUrl = props.issue.assigneeType === "agent" ? codexAvatarDataUrl : stored.avatarUrl || "";
+
+  useEffect(() => {
+    setFailed(false);
+  }, [avatarUrl]);
+
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
+      <span className="grid size-5 shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--paper)] text-[10px] font-semibold text-[color:var(--muted-strong)] shadow-[0_0_0_1px_var(--line)]">
+        {avatarUrl && !failed ? (
+          <img src={avatarUrl} alt="" className="size-full object-cover" onError={() => setFailed(true)} />
+        ) : (
+          <span>{name.slice(0, 1).toUpperCase() || "M"}</span>
+        )}
+      </span>
+      <span className="min-w-0 truncate">{name}</span>
+    </div>
+  );
+}
 
 export function IssuesPage() {
   const search = useSearch({ strict: false }) as { new?: string };
@@ -253,9 +288,7 @@ function IssueRow(props: { issue: IssueListItem }) {
       </div>
 
       <div className="min-w-0">
-        <InlineMeta icon={issue.assigneeType === "agent" ? Bot : Layers3}>
-          {issue.assigneeType === "agent" ? "agent" : "human"} · {issue.assignee || "unassigned"}
-        </InlineMeta>
+        <IssueAssigneeMeta issue={issue} />
       </div>
 
       <div className="flex items-center justify-end gap-2">

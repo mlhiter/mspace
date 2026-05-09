@@ -101,6 +101,8 @@ export interface Issue {
   triageStatus: string;
   assignee: string;
   assigneeType: string;
+  creatorName: string;
+  creatorAvatarUrl: string;
   environmentUrl: string;
   createdAt: string;
   updatedAt: string;
@@ -110,6 +112,8 @@ export interface Comment {
   id: string;
   issueId: string;
   authorType: string;
+  authorName: string;
+  authorAvatarUrl: string;
   body: string;
   createdAt: string;
 }
@@ -300,6 +304,8 @@ export interface CreateIssueInput {
   labelKeys?: string[];
   assignee?: string;
   assigneeType?: string;
+  creatorName?: string;
+  creatorAvatarUrl?: string;
 }
 
 export interface UpdateIssueInput {
@@ -317,6 +323,8 @@ export interface CreateIssueTaskInput {
 
 export interface CreateCommentInput {
   body: string;
+  authorName?: string;
+  authorAvatarUrl?: string;
 }
 
 export interface CreateSessionInput {
@@ -387,8 +395,49 @@ export interface SessionStreamEvent {
   payload: string;
 }
 
+export interface MspaceUser {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MspaceWorkspace {
+  id: string;
+  name: string;
+  slug: string;
+  role: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthStartResult {
+  authorizeUrl: string;
+  state: string;
+  pollUrl: string;
+}
+
+export interface AuthResult {
+  token: string;
+  expiresAt: string;
+  user: MspaceUser;
+  workspaces: MspaceWorkspace[];
+}
+
+export type AuthPollResult =
+  | { pending: true }
+  | ({ pending: false } & AuthResult);
+
+export interface AuthMeResult {
+  user: MspaceUser;
+  workspaces: MspaceWorkspace[];
+}
+
 export interface MspaceDesktopAPI {
   apiBaseUrl: string;
+  serverBaseUrl: string;
   appVersion: string;
   selectProjectFolder?: () => Promise<string | null>;
   selectKubeconfigFiles?: () => Promise<string[]>;

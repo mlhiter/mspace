@@ -337,9 +337,9 @@ func (a *app) applyIssueTypeClassification(issueID string, result issueTriageRes
 		comment = fmt.Sprintf("Triage classified type as `%s`: %s", definition.Name, truncate(result.Reason, 220))
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO comments (id, issue_id, author_type, body, created_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, uuid.NewString(), issueID, "system", comment, now); err != nil {
+		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, uuid.NewString(), issueID, "system", systemActorName, "", comment, now); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -374,9 +374,9 @@ func (a *app) markIssueTriageFailed(issueID string) error {
 		return err
 	}
 	if _, err := tx.Exec(`
-		INSERT INTO comments (id, issue_id, author_type, body, created_at)
-		VALUES (?, ?, ?, ?, ?)
-	`, uuid.NewString(), issueID, "system", "Triage could not classify the issue type. Set a type manually.", now); err != nil {
+		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, uuid.NewString(), issueID, "system", systemActorName, "", "Triage could not classify the issue type. Set a type manually.", now); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
