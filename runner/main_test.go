@@ -218,7 +218,7 @@ func TestEnsureClusterTablesCreatesClusterTable(t *testing.T) {
 	}
 }
 
-func TestEnsureIssueColumnsAddsAssigneeType(t *testing.T) {
+func TestEnsureIssueColumnsAddsTriageStatus(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -250,6 +250,44 @@ func TestEnsureIssueColumnsAddsAssigneeType(t *testing.T) {
 	}
 	if !tableColumnExists(t, db, "issues", "assignee_type") {
 		t.Fatal("expected issues.assignee_type to exist")
+	}
+	if !tableColumnExists(t, db, "issues", "triage_status") {
+		t.Fatal("expected issues.triage_status to exist")
+	}
+	if !tableColumnExists(t, db, "issues", "parent_issue_id") {
+		t.Fatal("expected issues.parent_issue_id to exist")
+	}
+	if !tableColumnExists(t, db, "issues", "sort_order") {
+		t.Fatal("expected issues.sort_order to exist")
+	}
+	if !tableIndexExists(t, db, "issues", "idx_issues_parent_issue_id") {
+		t.Fatal("expected idx_issues_parent_issue_id to exist")
+	}
+	if !tableIndexExists(t, db, "issues", "idx_issues_project_parent_updated") {
+		t.Fatal("expected idx_issues_project_parent_updated to exist")
+	}
+}
+
+func TestExtractIssueTaskDraftsRemovesChecklistLines(t *testing.T) {
+	body, tasks := extractIssueTaskDrafts(strings.Join([]string{
+		"Implement rich issue editing",
+		"",
+		"- [ ] Add inline child issue rows",
+		"- [x] Keep completed tasks checked",
+		"Keep the parent issue body as the durable brief.",
+	}, "\n"))
+
+	if !strings.Contains(body, "Implement rich issue editing") || strings.Contains(body, "[ ]") || strings.Contains(body, "[x]") {
+		t.Fatalf("expected parent body without checklist lines, got %q", body)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("expected two tasks, got %#v", tasks)
+	}
+	if tasks[0].Title != "Add inline child issue rows" || tasks[0].Status != "open" {
+		t.Fatalf("unexpected first task: %#v", tasks[0])
+	}
+	if tasks[1].Title != "Keep completed tasks checked" || tasks[1].Status != "completed" {
+		t.Fatalf("unexpected second task: %#v", tasks[1])
 	}
 }
 
@@ -328,6 +366,19 @@ func TestEnsureIssueLabelTablesCreatesLabelTable(t *testing.T) {
 	}
 	if !tableColumnExists(t, db, "issue_labels", "name") {
 		t.Fatal("expected issue_labels.name to exist")
+	}
+	if !tableColumnExists(t, db, "issue_labels", "label_id") {
+		t.Fatal("expected issue_labels.label_id to exist")
+	}
+	if !tableColumnExists(t, db, "issue_label_definitions", "key") {
+		t.Fatal("expected issue_label_definitions.key to exist")
+	}
+	definitions, err := application.listIssueLabelDefinitions()
+	if err != nil {
+		t.Fatalf("list issue label definitions: %v", err)
+	}
+	if len(definitions) != 15 {
+		t.Fatalf("expected 15 built-in label definitions, got %#v", definitions)
 	}
 }
 
@@ -507,10 +558,10 @@ func TestEnsureAgentProfileTablesSeedsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list agent profiles: %v", err)
 	}
-	if len(profiles) != 3 {
-		t.Fatalf("expected three default profiles, got %#v", profiles)
+	if len(profiles) != 4 {
+		t.Fatalf("expected four default profiles, got %#v", profiles)
 	}
-	if profiles[0].ID != "codex" || profiles[1].ID != "bugfix" || profiles[2].ID != "design" {
+	if profiles[0].ID != "triage" || profiles[1].ID != "codex" || profiles[2].ID != "bugfix" || profiles[3].ID != "design" {
 		t.Fatalf("unexpected default profile order: %#v", profiles)
 	}
 
@@ -562,14 +613,40 @@ func TestResolveAgentProfileRejectsDisabledProfiles(t *testing.T) {
 	}
 }
 
-func TestNormalizeIssueLabelNames(t *testing.T) {
-	labels, err := normalizeIssueLabelNames([]string{" bug ", "#ui", "Bug", "", "needs repro"})
+func TestNormalizeIssueLabelKeys(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db}
+	if err := application.ensureIssueLabelTables(); err != nil {
+		t.Fatalf("ensure issue label tables failed: %v", err)
+	}
+
+	labels, err := application.normalizeIssueLabelKeys([]string{" fix ", "#priority:p1", "Fix", "", "P1"})
 	if err != nil {
 		t.Fatalf("normalize issue labels failed: %v", err)
 	}
-	expected := []string{"bug", "ui", "needs repro"}
-	if strings.Join(labels, ",") != strings.Join(expected, ",") {
-		t.Fatalf("expected labels %#v, got %#v", expected, labels)
+	if len(labels) != 2 {
+		t.Fatalf("expected two labels, got %#v", labels)
+	}
+	if labels[0].Key != "type:fix" || labels[1].Key != "priority:p1" {
+		t.Fatalf("unexpected labels %#v", labels)
+	}
+}
+
+func TestParseIssueTriageResultValidatesType(t *testing.T) {
+	result, err := parseIssueTriageResult(`{"type":"fix","confidence":0.86,"reason":"failure path"}`)
+	if err != nil {
+		t.Fatalf("parse triage result failed: %v", err)
+	}
+	if result.Type != "fix" || result.Confidence != 0.86 {
+		t.Fatalf("unexpected triage result %#v", result)
+	}
+	if _, err := parseIssueTriageResult(`{"type":"p0","confidence":1}`); err == nil {
+		t.Fatal("expected priority-like triage type to be rejected")
 	}
 }
 
@@ -704,6 +781,12 @@ func TestBuildCodexSessionPromptIncludesRuntimeContext(t *testing.T) {
 		t.Fatalf("insert issue: %v", err)
 	}
 	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES ('task-1', ?, 'issue-1', 1, 'Add a regression test', '', 'open', 'none', 'me', 'human', '', ?, ?)
+	`, project.ID, now, now); err != nil {
+		t.Fatalf("insert child issue task: %v", err)
+	}
+	if _, err := db.Exec(`
 		INSERT INTO comments (id, issue_id, author_type, body, created_at)
 		VALUES ('comment-1', 'issue-1', 'human', 'Please add a regression test.', ?)
 	`, now); err != nil {
@@ -738,6 +821,9 @@ func TestBuildCodexSessionPromptIncludesRuntimeContext(t *testing.T) {
 	for _, expected := range []string{
 		"Fix login",
 		"The login flow hangs.",
+		"Task List",
+		"Add a regression test (`task-1`, status: open)",
+		"MSPACE_API_BASE_URL",
 		"Please add a regression test.",
 		"Agent Profile",
 		"Profile: Design (@design)",
@@ -800,6 +886,33 @@ func tableColumnExists(t *testing.T, db *sql.DB, tableName, column string) bool 
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate table info: %v", err)
+	}
+	return false
+}
+
+func tableIndexExists(t *testing.T, db *sql.DB, tableName, indexName string) bool {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA index_list(` + tableName + `)`)
+	if err != nil {
+		t.Fatalf("query index list: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var seq int
+		var name string
+		var unique int
+		var origin string
+		var partial int
+		if err := rows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			t.Fatalf("scan index list: %v", err)
+		}
+		if name == indexName {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate index list: %v", err)
 	}
 	return false
 }

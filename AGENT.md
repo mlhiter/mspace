@@ -21,6 +21,8 @@ The product should stay narrow:
 - The Electron main process auto-starts the local runner with `go run .` unless `GET /health` is already healthy.
 - Sidebar navigation currently exposes Inbox, Issues, Agents, Clusters, and Projects, plus a quick link that opens issue creation from the left rail and an Active work block for recent issue/session/test-environment activity.
 - Inbox is a review-only unread feed; issue creation and management live in the Issues route.
+- The issue creation modal uses `IssueDocumentEditor`, a TipTap-backed Markdown editor in `packages/views/src/issue-document-editor.tsx`, so checklist task input remains document-like while the runner still receives Markdown.
+- Issue task lists are modeled as child issues via `issues.parent_issue_id`, then rendered inline on the parent Issue Detail page. Markdown checklist lines typed during issue creation are converted into child issues so the checkbox text is not a second source of truth.
 - SQLite database path: `~/.mspace/mspace.db`.
 - Imported GitHub repositories are cloned or reused under `~/.mspace/repos/<owner>/<repo>`.
 - Session worktree root: `~/.mspace/workdirs/<project-id>/<session-id>`.
@@ -29,21 +31,23 @@ The product should stay narrow:
 - Codex sessions start `codex app-server --listen stdio://` in the prepared worktree instead of shelling out through `codex exec`.
 - The runner sends `initialize`, `thread/start`, and `turn/start` over newline-delimited JSON-RPC on stdio, then maps app-server notifications into `session_logs`.
 - The runner persists `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at` on `agent_sessions`.
-- Agent definitions live in `agent_profiles`; defaults are seeded for `@codex`, `@bugfix`, and `@design`, but the Issue composer and runner resolve profiles from SQLite instead of hardcoded frontend constants.
+- Agent definitions live in `agent_profiles`; defaults are seeded for internal `@triage` plus user-facing `@codex`, `@bugfix`, and `@design`, but the Issue composer and runner resolve profiles from SQLite instead of hardcoded frontend constants.
 - `POST /api/sessions/{sessionID}/cleanup` removes retained, non-active local session worktrees after validating the path stays under `~/.mspace/workdirs`; session logs, comments, evidence, and metadata remain in SQLite.
 - Session branches default to `mspace/<issue-short-id>/<session-short-id>`.
 - Project creation supports either a desktop folder picker for local repositories or a GitHub repository URL that is cloned into the local cache.
 - Local project imports auto-detect remote metadata when a git remote exists and persist `source_type`, `remote_url`, `git_provider`, `git_owner`, and `git_repo`.
 - Inbox invalidation is driven by `GET /api/inbox/stream`, and the issue detail screen starts Codex by saving an agent-mention comment before calling `POST /api/issues/{issueID}/assign-agent`.
 - Supported Codex-backed agents are managed from the Agents route. They share the app-server runtime and differ by stored `agent_profile` prompt instructions.
-- Issue labels are issue-local records in `issue_labels` and should stay lightweight until a global label taxonomy is truly needed.
+- Issue labels use the built-in `issue_label_definitions` taxonomy and `issue_labels` links. The current dimensions are `type` and `priority`.
+- New issues start with `triage_status=pending` unless a type is set manually. A background `@triage` Codex classifier assigns exactly one Conventional Commit type label asynchronously.
+- Priority labels are manual only. Do not auto-classify priority.
 - Reusable cluster configs live in `clusters`; they store kubeconfig path, optional context, registry prefix, exposure defaults, readiness status, and last check time.
 - The Clusters route imports kubeconfig files through the desktop file picker. On first empty-state entry, it discovers regular files under `~/.kube`, lists candidates and contexts, and lets the user choose which files to import.
 - Kubeconfig import creates one cluster per context and marks it `ready` or `unreachable` after a read-only `kubectl get --raw=/version` check. Unreachable clusters remain editable.
 - Projects store `default_cluster_id`; issue test deployments can override cluster and exposure mode per run.
 - Each issue can have one `issue_test_environments` record with cluster id, issue namespace, namespace state, cleanup state, preview URL, deploy/cleanup session ids, registry, kubeconfig, context, exposure mode, domain, ingress class, and NodePort host.
 - Deploy/test sessions receive resolved Kubernetes and preview values through `KUBECONFIG`, `MSPACE_KUBECONFIG`, `MSPACE_CLUSTER_ID`, `MSPACE_KUBE_CONTEXT`, `MSPACE_KUBE_NAMESPACE`, `MSPACE_TEST_NAMESPACE`, `MSPACE_IMAGE_REGISTRY_PREFIX`, `MSPACE_EXPOSURE_MODE`, `MSPACE_PREVIEW_DOMAIN`, `MSPACE_INGRESS_CLASS`, and `MSPACE_NODE_HOST`.
-- Sessions also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, and `MSPACE_SESSION_ARTIFACT_DIR`.
+- Sessions also receive `MSPACE_API_BASE_URL`, `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, and `MSPACE_SESSION_ARTIFACT_DIR`.
 - Tailwind CSS 4 scans monorepo UI packages through `@source` entries in `apps/desktop/src/renderer/src/globals.css`.
 - shadcn/ui semantic tokens are mapped to the Notion-like mspace palette through `@theme inline` in `apps/desktop/src/renderer/src/globals.css`.
 - Vite resolves shadcn aliases through `apps/desktop/electron.vite.config.ts`: `@mspace/ui/components`, `@mspace/ui/lib`, and `@mspace/ui`.
@@ -51,7 +55,11 @@ The product should stay narrow:
 ## Working Rules
 
 - Keep Inbox and Issue objects as first-class product objects.
+- Keep task lists as inline child issue views, not Markdown checkbox state. Agents should create tasks through `POST /api/issues/{issueID}/tasks` and update task status through `PUT /api/issues/{taskID}` when the local API base URL is available.
 - Keep Inbox review-only. New issue creation belongs in the Issues flow, not in Inbox.
+- Keep issue creation minimal: note plus optional project only. Type is classified asynchronously after creation, and priority is set manually from Issue Detail.
+- Keep type triage asynchronous. Issue creation must not wait for agent classification.
+- Do not use keyword matching for issue type classification; use the triage agent and validate its structured output against the fixed type set.
 - Keep local development runtime as the MVP default.
 - For Codex-backed local sessions, prefer `codex app-server --listen stdio://` over `codex exec` so mspace can retain thread, turn, status, and notification state.
 - Keep agent specialization as SQLite-managed profile instructions on top of the Codex app-server provider unless a genuinely separate runtime is introduced.

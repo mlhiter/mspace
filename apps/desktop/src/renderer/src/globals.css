@@ -146,6 +146,110 @@ svg {
   background: var(--selection);
 }
 
+.mspace-doc-editor {
+  color: var(--text);
+}
+
+.mspace-doc-editor .ProseMirror {
+  min-height: 270px;
+  outline: none;
+  font-size: 16px;
+  line-height: 2;
+}
+
+.mspace-doc-editor .ProseMirror p,
+.mspace-doc-editor .ProseMirror h1,
+.mspace-doc-editor .ProseMirror h2,
+.mspace-doc-editor .ProseMirror h3 {
+  margin: 0 0 0.75rem;
+}
+
+.mspace-doc-editor .ProseMirror h1 {
+  font-size: 24px;
+  line-height: 1.35;
+  font-weight: 650;
+}
+
+.mspace-doc-editor .ProseMirror h2 {
+  font-size: 19px;
+  line-height: 1.45;
+  font-weight: 650;
+}
+
+.mspace-doc-editor .ProseMirror ul,
+.mspace-doc-editor .ProseMirror ol {
+  margin: 0.5rem 0 0.75rem;
+  padding-left: 1.35rem;
+}
+
+.mspace-doc-editor .ProseMirror li {
+  margin: 0.15rem 0;
+  padding-left: 0.1rem;
+}
+
+.mspace-doc-editor .ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+
+.mspace-doc-editor .ProseMirror li[data-type="taskItem"] {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+  padding-left: 0;
+}
+
+.mspace-doc-editor .ProseMirror li[data-type="taskItem"] > label {
+  flex: 0 0 auto;
+  margin-top: 0.45rem;
+  user-select: none;
+}
+
+.mspace-doc-editor .ProseMirror li[data-type="taskItem"] > div {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.mspace-doc-editor .ProseMirror input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--text);
+}
+
+.mspace-doc-editor .ProseMirror code {
+  border-radius: 5px;
+  background: var(--block);
+  padding: 0.12rem 0.32rem;
+  font-size: 0.85em;
+  color: var(--muted-strong);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.mspace-doc-editor .ProseMirror pre {
+  overflow: auto;
+  border-radius: 9px;
+  background: var(--code-bg);
+  padding: 0.75rem 1rem;
+  color: var(--code-text);
+}
+
+.mspace-doc-editor .ProseMirror blockquote {
+  margin: 0.75rem 0;
+  border-left: 1px solid var(--line);
+  padding-left: 0.85rem;
+  color: var(--muted-strong);
+}
+
+.mspace-doc-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--faint);
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   ::before,

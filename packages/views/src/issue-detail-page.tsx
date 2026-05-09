@@ -16,9 +16,10 @@ import {
   Globe2,
   Italic,
   Link as LinkIcon,
+  ListChecks,
+  Plus,
   Rocket,
   Send,
-  Tag,
   Trash2,
   UserRound,
   X,
@@ -33,6 +34,8 @@ import {
   type Comment,
   type DeploymentEvidence,
   type IssueLabel,
+  type IssueLabelDefinition,
+  type IssueListItem,
   type IssueTestEnvironment,
   type SessionLog,
   type SessionStreamEvent,
@@ -56,6 +59,14 @@ import {
   cn,
 } from "@mspace/ui";
 import { FileTypeIcon } from "./file-type-icon";
+import {
+  buildIssueLabelSelectionInput,
+  issueLabelOptionsByDimension,
+  issueLabelOptionsForUI,
+  nextIssueLabelSelection,
+  selectedIssueLabelKey,
+} from "./issue-labels";
+import { IssueLabelOptionLabel, IssueLabelSelectValue } from "./issue-label-chip";
 import { formatAbsoluteTime, formatRelativeTime } from "./time";
 import { workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
@@ -266,17 +277,6 @@ function formatMentionPlaceholder(agents: AgentProfile[]) {
   if (agents.length === 0) return "Write a reply.";
   const mentions = agents.slice(0, 3).map((agent) => agent.mention).join(", ");
   return `Write a reply. Mention ${mentions}.`;
-}
-
-function parseLabelInput(value: string) {
-  return value
-    .split(/[,\n]/)
-    .map((item) => item.trim().replace(/^#/, "").trim())
-    .filter(Boolean);
-}
-
-function labelNames(labels: IssueLabel[]) {
-  return listOrEmpty(labels).map((label) => label.name);
 }
 
 function testDeployDefaults(detail: NonNullable<Awaited<ReturnType<typeof api.getIssue>>>, clusters: Cluster[]): StartTestDeployInput {
@@ -937,19 +937,103 @@ function EvidenceTimelineItem(props: { evidence: DeploymentEvidence }) {
   );
 }
 
-function MetaLine(props: { label: string; value: string; wide?: boolean }) {
+function IssueTaskList(props: {
+  tasks: IssueListItem[];
+  completedCount: number;
+  newTaskTitle: string;
+  isCreating: boolean;
+  createError?: Error | null;
+  updatingTaskId: string;
+  updateError?: Error | null;
+  canCreate: boolean;
+  onNewTaskTitleChange: (value: string) => void;
+  onCreateTask: () => void;
+  onToggleTask: (task: IssueListItem) => void;
+}) {
   return (
-    <div className={cn("min-w-0", props.wide && "md:col-span-2")}>
-      <div className="text-[11px] font-medium uppercase tracking-[0.04em] text-[color:var(--faint)]">{props.label}</div>
-      <div className="mt-0.5 break-words text-[12px] leading-5 text-[color:var(--muted-strong)]">{props.value}</div>
+    <div className="mt-6 border-t border-[color:var(--line)] pt-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="inline-flex min-w-0 items-center gap-2">
+          <ListChecks data-icon className="text-[color:var(--muted)]" />
+          <h2 className="text-[13px] font-semibold leading-5 text-[color:var(--muted-strong)]">Tasks</h2>
+        </div>
+        <div className="text-[12px] leading-5 text-[color:var(--muted)]">
+          {props.completedCount}/{props.tasks.length}
+        </div>
+      </div>
+
+      {props.updateError ? <Notice tone="danger">{props.updateError.message}</Notice> : null}
+      {props.tasks.length > 0 ? (
+        <div className="divide-y divide-[color:var(--line)]">
+          {props.tasks.map((task) => {
+            const completed = task.status === "completed";
+            const updating = props.updatingTaskId === task.id;
+            return (
+              <div key={task.id} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2 py-2">
+                <button
+                  type="button"
+                  aria-label={completed ? "Mark task open" : "Mark task complete"}
+                  title={completed ? "Mark open" : "Complete task"}
+                  className={cn(
+                    "grid size-7 place-items-center rounded-[7px] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-95",
+                    completed ? "text-[color:var(--success)]" : "text-[color:var(--muted)]",
+                    updating && "opacity-60",
+                  )}
+                  disabled={updating}
+                  onClick={() => props.onToggleTask(task)}
+                >
+                  {completed ? <CheckCircle2 data-icon /> : <CircleDot data-icon />}
+                </button>
+                <div className="min-w-0">
+                  <div className={cn("truncate text-[14px] leading-6", completed ? "text-[color:var(--muted)] line-through decoration-[color:var(--faint)]" : "text-[color:var(--text)]")}>
+                    {task.title}
+                  </div>
+                  {task.body ? <div className="line-clamp-1 text-[12px] leading-5 text-[color:var(--muted)]">{task.body}</div> : null}
+                </div>
+                <StatusBadge value={task.status} />
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="py-2 text-[13px] leading-6 text-[color:var(--muted)]">No tasks yet.</div>
+      )}
+
+      <form
+        className="mt-3 flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          props.onCreateTask();
+        }}
+      >
+        <Input
+          value={props.newTaskTitle}
+          onChange={(event) => props.onNewTaskTitleChange(event.target.value)}
+          placeholder="Add a task"
+        />
+        <Button type="submit" variant="secondary" size="sm" disabled={!props.canCreate}>
+          <Plus data-icon />
+          {props.isCreating ? "Adding..." : "Add"}
+        </Button>
+      </form>
+      {props.createError ? <div className="mt-2 text-[12px] leading-5 text-[color:var(--danger)]">{props.createError.message}</div> : null}
+    </div>
+  );
+}
+
+function MetaLine(props: { label: string; value: string }) {
+  return (
+    <div className="grid min-w-0 grid-cols-[86px_minmax(0,1fr)] items-baseline gap-2">
+      <div className="text-[12px] leading-5 text-[color:var(--muted)]">{props.label}</div>
+      <div className="min-w-0 break-words text-[12px] leading-5 text-[color:var(--muted-strong)]">{props.value}</div>
     </div>
   );
 }
 
 function SidebarSection(props: { title: string; children: React.ReactNode }) {
   return (
-    <section className="border-b border-[color:var(--line)] py-4 last:border-b-0">
-      <h2 className="mb-3 text-[12px] font-semibold leading-5 text-[color:var(--muted-strong)]">{props.title}</h2>
+    <section className="grid gap-2.5">
+      <h2 className="text-[12px] font-medium leading-5 text-[color:var(--faint)]">{props.title}</h2>
       {props.children}
     </section>
   );
@@ -1045,80 +1129,90 @@ function AgentMentionMenu(props: {
 
 function LabelEditor(props: {
   labels: IssueLabel[];
+  options: IssueLabelDefinition[];
+  triageStatus: string;
   isPending: boolean;
   error?: Error | null;
-  onChange: (labels: string[]) => void;
+  onChange: (labelKeys: string[]) => void;
 }) {
-  const [draft, setDraft] = useState("");
-  const names = labelNames(props.labels);
+  const typeOptions = issueLabelOptionsByDimension(props.options, "type");
+  const priorityOptions = issueLabelOptionsByDimension(props.options, "priority");
+  const selectedType = selectedIssueLabelKey(props.labels, "type");
+  const selectedPriority = selectedIssueLabelKey(props.labels, "priority");
 
-  function submitDraft() {
-    const additions = parseLabelInput(draft);
-    if (additions.length === 0) return;
-    const next = [...names];
-    for (const label of additions) {
-      if (!next.some((item) => item.toLowerCase() === label.toLowerCase())) {
-        next.push(label);
-      }
-    }
-    props.onChange(next);
-    setDraft("");
-  }
-
-  function removeLabel(name: string) {
-    props.onChange(names.filter((label) => label !== name));
+  function setDimension(dimension: string, key: string) {
+    props.onChange(nextIssueLabelSelection(props.labels, dimension, key));
   }
 
   return (
-    <div className="grid gap-2">
-      <div className="flex min-h-7 flex-wrap items-center gap-1.5">
-        {names.length > 0 ? (
-          names.map((name) => (
-            <span
-              key={name}
-              className="inline-flex max-w-full items-center gap-1 rounded-[6px] bg-[color:var(--block)] px-2 py-1 text-[12px] leading-4 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]"
-            >
-              <Tag data-icon className="shrink-0 text-[color:var(--faint)]" />
-              <span className="truncate">{name}</span>
-              <button
-                type="button"
-                className="grid size-5 shrink-0 place-items-center rounded-[5px] text-[color:var(--faint)] transition-colors hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
-                aria-label={`Remove ${name} label`}
-                disabled={props.isPending}
-                onClick={() => removeLabel(name)}
-              >
-                <X data-icon />
-              </button>
-            </span>
-          ))
-        ) : (
-          <div className="text-[12px] leading-5 text-[color:var(--muted)]">No labels.</div>
-        )}
-      </div>
-      <div className="flex items-center gap-2">
-        <input
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== ",") return;
-            event.preventDefault();
-            submitDraft();
-          }}
-          placeholder="Add label"
-          className="min-h-9 min-w-0 flex-1 rounded-[7px] bg-transparent px-2 text-[13px] text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--line)] outline-none transition-[box-shadow] duration-150 ease-out placeholder:text-[color:var(--faint)] focus:shadow-[inset_0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)]"
-        />
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={props.isPending || parseLabelInput(draft).length === 0}
-          onClick={submitDraft}
-        >
-          Add
-        </Button>
-      </div>
+    <div className="grid gap-1.5">
+      <LabelDimensionPicker
+        title="Type"
+        labels={typeOptions}
+        value={selectedType}
+        emptyLabel="No type"
+        pending={!selectedType && props.triageStatus === "pending"}
+        disabled={props.isPending}
+        onChange={(key) => setDimension("type", key)}
+      />
+      <LabelDimensionPicker
+        title="Priority"
+        labels={priorityOptions}
+        value={selectedPriority}
+        emptyLabel="No priority"
+        disabled={props.isPending}
+        onChange={(key) => setDimension("priority", key)}
+      />
       {props.error ? <div className="text-[12px] leading-5 text-[color:var(--danger)]">{props.error.message}</div> : null}
     </div>
+  );
+}
+
+function LabelDimensionPicker(props: {
+  title: string;
+  labels: IssueLabelDefinition[];
+  value: string;
+  emptyLabel: string;
+  pending?: boolean;
+  disabled: boolean;
+  onChange: (key: string) => void;
+}) {
+  const selectValue = props.value || "none";
+  const selectedLabel = props.labels.find((label) => label.key === props.value);
+
+  return (
+    <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-2">
+      <div className="text-[12px] leading-5 text-[color:var(--muted)]">{props.title}</div>
+      <div className="min-w-0">
+        {props.pending ? (
+          <span className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-[6px] px-1 text-[12px] leading-4 text-[color:var(--muted)]">
+            <span className="size-1.5 shrink-0 rounded-full bg-[color:var(--faint)]" />
+            <span className="truncate">Classifying...</span>
+          </span>
+        ) : (
+          <Select value={selectValue} onValueChange={(key) => props.onChange(key === "none" ? "" : key)} disabled={props.disabled}>
+            <SelectTrigger className={labelSelectClass(Boolean(props.value))}>
+              <IssueLabelSelectValue label={selectedLabel} fallback={props.emptyLabel} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">{props.emptyLabel}</SelectItem>
+              {props.labels.map((label) => (
+                <SelectItem key={label.key} value={label.key}>
+                  <IssueLabelOptionLabel label={label} />
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function labelSelectClass(hasValue: boolean) {
+  return cn(
+    "h-7 min-h-7 w-full rounded-[6px] bg-transparent px-1 py-1 text-[12px] leading-4 shadow-none hover:bg-[color:var(--hover)] focus:bg-[color:var(--hover)] focus:shadow-[inset_0_0_0_1px_var(--line)] data-[state=open]:bg-[color:var(--hover)] data-[state=open]:shadow-[inset_0_0_0_1px_var(--line)] [&_svg]:size-3.5",
+    hasValue ? "font-medium text-[color:var(--muted-strong)]" : "font-normal text-[color:var(--faint)]",
   );
 }
 
@@ -1283,6 +1377,7 @@ export function IssueDetailPage() {
   const [mentionMenuDismissed, setMentionMenuDismissed] = useState(false);
   const [mentionMenuPosition, setMentionMenuPosition] = useState<MentionMenuPosition>({ top: 38, left: 10, width: 384 });
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const [newTaskTitle, setNewTaskTitle] = useState("");
   const [sessionSnapshotsById, setSessionSnapshotsById] = useState<Record<string, SessionSnapshot>>({});
   const [testDeployOpen, setTestDeployOpen] = useState(false);
   const [testDeployForm, setTestDeployForm] = useState<StartTestDeployInput>({
@@ -1308,11 +1403,19 @@ export function IssueDetailPage() {
     queryKey: queryKeys.clusters,
     queryFn: api.listClusters,
   });
+  const labelDefinitionsQuery = useQuery({
+    queryKey: queryKeys.issueLabelDefinitions,
+    queryFn: api.listIssueLabelDefinitions,
+    retry: false,
+  });
 
   const detail = issueQuery.data;
   const agents = listOrEmpty(agentsQuery.data);
   const clusters = listOrEmpty(clustersQuery.data);
+  const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
   const enabledAgents = agents.filter((agent) => agent.enabled);
+  const childIssues = listOrEmpty(detail?.childIssues);
+  const completedChildIssueCount = childIssues.filter((task) => task.status === "completed").length;
   const latestSession = detail?.sessions[0];
   const hasActiveSession = latestSession ? ["queued", "running"].includes(latestSession.status) : false;
   const mentionedAgent = extractAgentMention(composerBody);
@@ -1493,7 +1596,30 @@ export function IssueDetailPage() {
   }
 
   const updateLabels = useMutation({
-    mutationFn: (labels: string[]) => api.updateIssueLabels(issueId, { labels }),
+    mutationFn: api.updateIssueLabels.bind(null, issueId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+      ]);
+    },
+  });
+
+  const createTask = useMutation({
+    mutationFn: (title: string) => api.createIssueTask(issueId, { title }),
+    onSuccess: async () => {
+      setNewTaskTitle("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+      ]);
+    },
+  });
+
+  const updateTaskStatus = useMutation({
+    mutationFn: (input: { taskId: string; status: string }) => api.updateIssue(input.taskId, { status: input.status }),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
@@ -1553,6 +1679,7 @@ export function IssueDetailPage() {
     Boolean(testDeployForm.clusterId.trim()) &&
     !hasActiveSession &&
     !startTestDeploy.isPending;
+  const canCreateTask = Boolean(newTaskTitle.trim()) && !createTask.isPending;
 
   function openTestDeployModal() {
     if (!detail) return;
@@ -1601,6 +1728,29 @@ export function IssueDetailPage() {
             ) : (
               <div className="text-[15px] leading-8 text-[color:var(--muted)]">No issue body yet.</div>
             )}
+            {detail.issue.parentIssueId === "" ? (
+              <IssueTaskList
+                tasks={childIssues}
+                completedCount={completedChildIssueCount}
+                newTaskTitle={newTaskTitle}
+                isCreating={createTask.isPending}
+                createError={createTask.error}
+                updatingTaskId={updateTaskStatus.isPending ? updateTaskStatus.variables?.taskId || "" : ""}
+                updateError={updateTaskStatus.error}
+                canCreate={canCreateTask}
+                onNewTaskTitleChange={setNewTaskTitle}
+                onCreateTask={() => {
+                  if (!canCreateTask) return;
+                  createTask.mutate(newTaskTitle.trim());
+                }}
+                onToggleTask={(task) => {
+                  updateTaskStatus.mutate({
+                    taskId: task.id,
+                    status: task.status === "completed" ? "open" : "completed",
+                  });
+                }}
+              />
+            ) : null}
           </section>
 
           <section className="relative mt-8">
@@ -1715,29 +1865,28 @@ export function IssueDetailPage() {
         </main>
 
         <aside className="xl:sticky xl:top-8">
-          <div className="rounded-[10px] bg-[color:var(--paper)] px-4 shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="grid gap-6 px-1 text-[13px]">
             <SidebarSection title="Issue">
-              <div className="grid gap-3">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[13px] text-[color:var(--muted)]">Status</span>
+              <div className="grid gap-2">
+                <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-2">
+                  <span className="text-[12px] leading-5 text-[color:var(--muted)]">Status</span>
                   <StatusBadge value={detail.issue.status} />
                 </div>
                 <MetaLine label="Assignee" value={`${detail.issue.assigneeType === "agent" ? "agent" : "human"} · ${detail.issue.assignee || "unassigned"}`} />
                 <MetaLine label="Updated" value={formatRelativeTime(detail.issue.updatedAt)} />
-                <div>
-                  <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-[color:var(--faint)]">Labels</div>
-                  <LabelEditor
-                    labels={listOrEmpty(detail.labels)}
-                    isPending={updateLabels.isPending}
-                    error={updateLabels.error}
-                    onChange={(labels) => updateLabels.mutate(labels)}
-                  />
-                </div>
+                <LabelEditor
+                  labels={listOrEmpty(detail.labels)}
+                  options={labelOptions}
+                  triageStatus={detail.issue.triageStatus}
+                  isPending={updateLabels.isPending}
+                  error={updateLabels.error}
+                  onChange={(labelKeys) => updateLabels.mutate(buildIssueLabelSelectionInput(labelKeys, labelOptions))}
+                />
               </div>
             </SidebarSection>
 
             <SidebarSection title="Project">
-              <div className="grid gap-3">
+              <div className="grid gap-2">
                 <MetaLine label="Name" value={detail.project.name} />
                 <MetaLine label="Repo" value={detail.project.repoPath || "not configured"} />
                 <MetaLine label="Default cluster" value={projectCluster?.name || "not configured"} />
@@ -1745,7 +1894,7 @@ export function IssueDetailPage() {
             </SidebarSection>
 
             <SidebarSection title="Test environment">
-              <div className="grid gap-3">
+              <div className="grid gap-2">
                 {startTestDeploy.error ? <Notice tone="danger">{startTestDeploy.error.message}</Notice> : null}
                 {cleanupTestEnvironment.error ? <Notice tone="danger">{cleanupTestEnvironment.error.message}</Notice> : null}
                 {retainTestEnvironment.error ? <Notice tone="danger">{retainTestEnvironment.error.message}</Notice> : null}
@@ -1757,7 +1906,7 @@ export function IssueDetailPage() {
                 {detail.testEnvironment?.previewUrl ? (
                   <button
                     type="button"
-                    className="inline-flex min-w-0 items-center gap-1.5 text-left text-[12px] font-medium leading-5 text-[color:var(--accent-blue)] hover:text-[color:var(--text)]"
+                    className="inline-flex min-w-0 items-center gap-1.5 rounded-[6px] px-1 py-1 text-left text-[12px] font-medium leading-5 text-[color:var(--accent-blue)] hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
                     onClick={() => void openRichLink(detail.testEnvironment!.previewUrl)}
                   >
                     <Globe2 data-icon className="shrink-0" />
@@ -1813,7 +1962,7 @@ export function IssueDetailPage() {
                 <summary className="cursor-pointer select-none text-[13px] font-medium text-[color:var(--muted-strong)]">
                   Project commands
                 </summary>
-                <div className="mt-3 grid gap-3">
+                <div className="mt-2 grid gap-2">
                   <MetaLine label="Deploy" value={detail.project.deployCommand || "not configured"} />
                   <MetaLine label="Validate" value={detail.project.validationCommand || "not configured"} />
                 </div>

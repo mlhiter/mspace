@@ -43,15 +43,21 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE TABLE IF NOT EXISTS issues (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  parent_issue_id TEXT REFERENCES issues(id) ON DELETE CASCADE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
   title TEXT NOT NULL,
   body TEXT NOT NULL,
   status TEXT NOT NULL,
+  triage_status TEXT NOT NULL DEFAULT 'none',
   assignee TEXT NOT NULL,
   assignee_type TEXT NOT NULL DEFAULT 'human',
   environment_url TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_issues_parent_issue_id ON issues(parent_issue_id);
+CREATE INDEX IF NOT EXISTS idx_issues_project_parent_updated ON issues(project_id, parent_issue_id, updated_at);
 
 CREATE TABLE IF NOT EXISTS inbox_items (
   id TEXT PRIMARY KEY,
@@ -72,16 +78,33 @@ CREATE TABLE IF NOT EXISTS comments (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS issue_label_definitions (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  dimension TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  built_in INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_issue_label_definitions_dimension ON issue_label_definitions(dimension, sort_order);
+
 CREATE TABLE IF NOT EXISTS issue_labels (
   id TEXT PRIMARY KEY,
   issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  label_id TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  UNIQUE(issue_id, name)
+  UNIQUE(issue_id, name),
+  UNIQUE(issue_id, label_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_issue_labels_issue_id ON issue_labels(issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_labels_label_id ON issue_labels(label_id);
 
 CREATE TABLE IF NOT EXISTS agent_profiles (
   id TEXT PRIMARY KEY,

@@ -8,6 +8,7 @@ The repository currently contains a runnable local-first desktop MVP:
 
 - Electron desktop shell built with electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
+- Issue creation uses a local TipTap-backed `IssueDocumentEditor` that emits Markdown. This preserves a document-like writing surface while keeping runner-side checklist extraction text-based.
 - Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless a healthy runner is already listening.
 - SQLite state lives at `~/.mspace/mspace.db`.
 - Imported GitHub repositories are cached under `~/.mspace/repos/<owner>/<repo>`.
@@ -23,13 +24,14 @@ The repository currently contains a runnable local-first desktop MVP:
 - Project import supports existing local folders and GitHub repository URLs. Local repositories auto-detect git remote metadata when available.
 - Inbox is an unread review feed powered by server-sent events from `/api/inbox/stream`.
 - Issue comments that mention an enabled agent are saved first, then the desktop calls `POST /api/issues/{issueID}/assign-agent` with the mention-stripped comment as the current turn request and the selected Codex profile.
-- Issue labels are issue-local records in `issue_labels`, exposed on issue lists and editable inline from Issue Detail.
+- Issue task lists are child issues stored on `issues.parent_issue_id`. Checklist lines submitted during issue creation are extracted into child rows, and Issue Detail renders those children inline with checkbox-style status controls.
+- Issue labels use a built-in taxonomy in `issue_label_definitions` and issue links in `issue_labels`. The current dimensions are `type` and `priority`; type is classified asynchronously by the internal `@triage` Codex profile, while priority remains human-selected from Issue Detail.
 - Kubernetes is currently represented by reusable cluster configs plus issue-level test environment records. Clusters can be imported from selected kubeconfig files or discovered from regular files under `~/.kube`; each imported context stores `kubeconfig_path`, optional `kube_context`, `image_registry_prefix`, default `exposure_mode`, optional `preview_domain`, optional `ingress_class`, optional `node_host`, and a readiness status from a read-only API check.
 - Projects store `default_cluster_id` so issue deploys can use known test cluster access without asking for kubeconfig or registry values each time.
 - Each issue can have one `issue_test_environments` record. It stores the selected cluster id, reserved issue namespace, namespace state, cleanup state, preview URL, deployment session id, cleanup session id, and the resolved registry/kubeconfig/routing values used for that issue.
 - Test deployment is a manual Issue Detail action. It queues a Codex deploy/test turn; the agent creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when configured, probes the preview URL, and writes `test-environment.json` into the session artifact directory when it has a URL to record.
 - Scoped kubeconfig and ServiceAccount generation are still future work. The MVP trusts the kubeconfig path stored in the selected cluster.
-- Sessions also receive `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, `MSPACE_SESSION_ARTIFACT_DIR`, and resolved cluster/test-environment variables when the issue has a test environment.
+- Sessions also receive `MSPACE_API_BASE_URL`, `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, `MSPACE_SESSION_ARTIFACT_DIR`, and resolved cluster/test-environment variables when the issue has a test environment.
 - Current desktop visual language is a Notion-like paper workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, and restrained icon actions.
 
 Current shadcn/ui component source:
@@ -78,9 +80,12 @@ Implemented runner API:
 | `POST` | `/api/projects` | Create a project. |
 | `PUT` | `/api/projects/{projectID}` | Update a project. |
 | `DELETE` | `/api/projects/{projectID}` | Delete a project and cascaded child data. |
+| `GET` | `/api/issue-label-definitions` | List built-in issue label options for Type and Priority controls. |
 | `GET` | `/api/issues` | List issues across the local workspace. |
 | `POST` | `/api/issues` | Create an issue and inbox item. |
 | `GET` | `/api/issues/{issueID}` | Load issue detail, comments, sessions, and evidence. |
+| `PUT` | `/api/issues/{issueID}` | Update issue title, body, or status. Child task completion uses this status update. |
+| `POST` | `/api/issues/{issueID}/tasks` | Create a child issue task under a parent issue. |
 | `PUT` | `/api/issues/{issueID}/labels` | Replace issue-local labels. |
 | `POST` | `/api/issues/{issueID}/comments` | Add a human comment. |
 | `POST` | `/api/issues/{issueID}/assign-agent` | Queue a Codex turn from an issue comment. |
@@ -193,6 +198,7 @@ Current implemented fields:
 - title;
 - body;
 - status;
+- parent issue id and sort order for inline child issue task lists;
 - labels;
 - assignee;
 - assignee type;
@@ -435,9 +441,12 @@ projects
 issues
   id
   project_id
+  parent_issue_id
+  sort_order
   title
   body
   status
+  triage_status
   assignee
   assignee_type
   environment_url
@@ -461,9 +470,21 @@ comments
   body
   created_at
 
+issue_label_definitions
+  id
+  key
+  name
+  dimension
+  color
+  sort_order
+  built_in
+  created_at
+  updated_at
+
 issue_labels
   id
   issue_id
+  label_id
   name
   color
   created_at

@@ -12,9 +12,9 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Textarea,
   cn,
 } from "@mspace/ui";
+import { IssueDocumentEditor } from "./issue-document-editor";
 
 export function CreateIssueModal(props: {
   projects: Project[];
@@ -67,9 +67,9 @@ export function CreateIssueModal(props: {
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-issue-title"
-        className="relative w-full max-w-[620px] rounded-[12px] bg-[color:var(--paper)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.18),0_0_0_1px_var(--line)]"
+        className="relative w-full max-w-[720px] overflow-hidden rounded-[12px] bg-[color:var(--paper)] shadow-[0_24px_70px_rgba(0,0,0,0.18),0_0_0_1px_var(--line)]"
       >
-        <div className="mb-5 flex items-start justify-between gap-4">
+        <div className="flex items-start justify-between gap-4 px-8 pb-4 pt-7">
           <div className="min-w-0">
             <div className="mb-2 flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
               <MessageSquarePlus data-icon />
@@ -92,44 +92,49 @@ export function CreateIssueModal(props: {
           </button>
         </div>
 
-        <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
-          {createIssue.error ? <Notice tone="danger">{createIssue.error.message}</Notice> : null}
-          {props.projects.length === 0 ? (
-            <Notice>
-              Project selection is optional, but mspace still needs at least one project before it can route an issue.
-            </Notice>
+        <form className="flex flex-col" onSubmit={handleSubmit}>
+          {createIssue.error || props.projects.length === 0 ? (
+            <div className="grid gap-3 px-8 pb-4">
+              {createIssue.error ? <Notice tone="danger">{createIssue.error.message}</Notice> : null}
+              {props.projects.length === 0 ? (
+                <Notice>
+                  Project selection is optional, but mspace still needs at least one project before it can route an issue.
+                </Notice>
+              ) : null}
+            </div>
           ) : null}
 
-          <Field label="Issue note">
-            <Textarea
+          <section className="mx-8 border-y border-[color:var(--line)] py-5">
+            <IssueDocumentEditor
               autoFocus
-              className="min-h-[150px]"
               value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              placeholder="mspace inbox should show review updates only, not inline issue creation"
+              onChange={setPrompt}
+              placeholder={"Write the issue...\n\n- [ ] Add the first task\n- [ ] Add the next task"}
             />
-          </Field>
+          </section>
 
-          <Field label="Project" hint="Optional. Leave this on auto when the issue text names a project or repository.">
-            <div className="relative">
-              <GitBranch data-icon className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[color:var(--muted)]" />
-              <Select value={projectId || "auto"} onValueChange={(value) => setProjectId(value === "auto" ? "" : value)}>
-                <SelectTrigger className="pl-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="auto">Let agent infer</SelectItem>
-                {props.projects.map((project) => (
-                  <SelectItem key={project.id} value={project.id}>
-                    {project.name}
-                  </SelectItem>
-                ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </Field>
+          <div className="grid gap-4 px-8 py-5">
+            <Field label="Project" hint="Optional. Leave this on auto when the issue text names a project or repository.">
+              <div className="relative">
+                <GitBranch data-icon className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[color:var(--muted)]" />
+                <Select value={projectId || "auto"} onValueChange={(value) => setProjectId(value === "auto" ? "" : value)}>
+                  <SelectTrigger className="pl-9">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Let agent infer</SelectItem>
+                    {props.projects.map((project) => (
+                      <SelectItem key={project.id} value={project.id}>
+                        {project.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </Field>
+          </div>
 
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-2 border-t border-[color:var(--line)] bg-[color:var(--surface)] px-8 py-4">
             <Button type="button" variant="secondary" onClick={props.onClose} disabled={createIssue.isPending}>
               Cancel
             </Button>

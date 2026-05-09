@@ -22,7 +22,7 @@
 
 mspace is a review Inbox and Issue workspace for software teams that want coding agents to work in real repositories and validate changes in namespace-scoped Kubernetes test environments.
 
-The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, comments, agent session, branch state, logs, deployment evidence, preview URL, and cleanup decision in one place.
+The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, inline child-issue tasks, comments, agent session, branch state, logs, deployment evidence, preview URL, and cleanup decision in one place.
 
 > [!NOTE]
 > mspace is currently a runnable local desktop MVP. Agent execution is local-first through Codex app-server, while Kubernetes is a manually triggered issue test target.
@@ -35,7 +35,7 @@ The interaction model is closer to a shared engineering document than a terminal
 
 ## Why mspace
 
-- **Issues are the durable workspace.** Agent turns, progress, blockers, session evidence, and review comments stay attached to the issue.
+- **Issues are the durable workspace.** Agent turns, child tasks, progress, blockers, session evidence, and review comments stay attached to the issue.
 - **Local development stays fast.** Sessions run in prepared git worktrees under `~/.mspace/workdirs`.
 - **Validation is real.** Test deployments use a saved cluster config and issue-scoped namespace to create Kubernetes preview environments.
 - **Evidence is reviewable.** Branch status, diffs, logs, namespace state, preview URLs, and deployment output are visible without reconstructing context from a terminal.
@@ -46,10 +46,10 @@ The interaction model is closer to a shared engineering document than a terminal
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, and real shadcn/ui source components in `@mspace/ui`.
 - Go local runner with HTTP APIs, SQLite storage, server-sent events, session logs, git-aware project import, and Codex app-server integration.
 - Project import from a local folder or GitHub repository URL, including GitHub remote metadata detection when available.
-- Managed agent profiles stored in SQLite, seeded with `@codex`, `@bugfix`, and `@design`.
+- Managed agent profiles stored in SQLite, seeded with internal `@triage` plus user-facing `@codex`, `@bugfix`, and `@design`.
 - Agent mentions from issue comments, with turn queueing, profile instructions, status updates, and issue timeline updates.
 - Per-session git worktrees, workspace inspection, changed file lists, diff previews, commits, and comparison against the project default branch.
-- Issue-local labels, unread Inbox updates, running-session stop controls, and manual worktree cleanup after completion or cancellation.
+- Type and priority labels, child issue task lists, asynchronous type triage, unread Inbox updates, running-session stop controls, and manual worktree cleanup after completion or cancellation.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Project default cluster selection.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and record evidence.

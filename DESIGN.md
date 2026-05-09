@@ -173,6 +173,7 @@ Screen priorities:
 - Keep labels short and specific.
 - Validation states use `data-invalid` on the field and `aria-invalid` on the control.
 - Project configuration forms should expose local repo path, default branch, deploy command, validation command, and default cluster plainly. Cluster settings own kubeconfig, context, registry, and preview exposure defaults.
+- The issue creation document editor is a local TipTap view component, not a shared shadcn primitive. Keep its `.mspace-doc-editor` styling quiet, document-like, and Markdown-compatible.
 
 ### Cards And Panels
 

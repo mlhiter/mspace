@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,8 @@ var (
 )
 
 const defaultImportedClusterImageRegistryPrefix = "crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter"
+
+var checklistItemPattern = regexp.MustCompile(`^\s*(?:[-*+]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
 
 type cluster struct {
 	ID                  string `json:"id"`
@@ -87,9 +90,12 @@ type project struct {
 type issue struct {
 	ID             string `json:"id"`
 	ProjectID      string `json:"projectId"`
+	ParentIssueID  string `json:"parentIssueId"`
+	SortOrder      int    `json:"sortOrder"`
 	Title          string `json:"title"`
 	Body           string `json:"body"`
 	Status         string `json:"status"`
+	TriageStatus   string `json:"triageStatus"`
 	Assignee       string `json:"assignee"`
 	AssigneeType   string `json:"assigneeType"`
 	EnvironmentURL string `json:"environmentUrl"`
@@ -111,19 +117,24 @@ type inboxItem struct {
 }
 
 type issueListItem struct {
-	ID           string       `json:"id"`
-	ProjectID    string       `json:"projectId"`
-	ProjectName  string       `json:"projectName"`
-	Title        string       `json:"title"`
-	Body         string       `json:"body"`
-	Status       string       `json:"status"`
-	Assignee     string       `json:"assignee"`
-	AssigneeType string       `json:"assigneeType"`
-	Labels       []issueLabel `json:"labels"`
-	Unread       bool         `json:"unread"`
-	SessionCount int          `json:"sessionCount"`
-	UpdatedAt    string       `json:"updatedAt"`
-	CreatedAt    string       `json:"createdAt"`
+	ID                       string       `json:"id"`
+	ProjectID                string       `json:"projectId"`
+	ProjectName              string       `json:"projectName"`
+	ParentIssueID            string       `json:"parentIssueId"`
+	SortOrder                int          `json:"sortOrder"`
+	Title                    string       `json:"title"`
+	Body                     string       `json:"body"`
+	Status                   string       `json:"status"`
+	TriageStatus             string       `json:"triageStatus"`
+	Assignee                 string       `json:"assignee"`
+	AssigneeType             string       `json:"assigneeType"`
+	Labels                   []issueLabel `json:"labels"`
+	Unread                   bool         `json:"unread"`
+	SessionCount             int          `json:"sessionCount"`
+	ChildIssueCount          int          `json:"childIssueCount"`
+	CompletedChildIssueCount int          `json:"completedChildIssueCount"`
+	UpdatedAt                string       `json:"updatedAt"`
+	CreatedAt                string       `json:"createdAt"`
 }
 
 type comment struct {
@@ -137,9 +148,25 @@ type comment struct {
 type issueLabel struct {
 	ID        string `json:"id"`
 	IssueID   string `json:"issueId"`
+	LabelID   string `json:"labelId"`
+	Key       string `json:"key"`
 	Name      string `json:"name"`
+	Dimension string `json:"dimension"`
 	Color     string `json:"color"`
+	SortOrder int    `json:"sortOrder"`
 	CreatedAt string `json:"createdAt"`
+}
+
+type issueLabelDefinition struct {
+	ID        string `json:"id"`
+	Key       string `json:"key"`
+	Name      string `json:"name"`
+	Dimension string `json:"dimension"`
+	Color     string `json:"color"`
+	SortOrder int    `json:"sortOrder"`
+	BuiltIn   bool   `json:"builtIn"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 type agentProfile struct {
@@ -219,6 +246,7 @@ type issueDetail struct {
 	Issue           issue                 `json:"issue"`
 	Project         project               `json:"project"`
 	TestEnvironment *issueTestEnvironment `json:"testEnvironment"`
+	ChildIssues     []issueListItem       `json:"childIssues"`
 	Labels          []issueLabel          `json:"labels"`
 	Comments        []comment             `json:"comments"`
 	Sessions        []agentSession        `json:"sessions"`
@@ -401,6 +429,19 @@ type sessionRequest struct {
 	Branch       string `json:"branch"`
 }
 
+type issueTaskInput struct {
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	Status    string `json:"status"`
+	Completed bool   `json:"completed"`
+}
+
+type issueTaskDraft struct {
+	Title  string
+	Body   string
+	Status string
+}
+
 type testDeployRequest struct {
 	AgentProfile  string `json:"agentProfile"`
 	ClusterID     string `json:"clusterId"`
@@ -494,9 +535,12 @@ func main() {
 	router.Post("/api/projects", application.handleCreateProject)
 	router.Put("/api/projects/{projectID}", application.handleUpdateProject)
 	router.Delete("/api/projects/{projectID}", application.handleDeleteProject)
+	router.Get("/api/issue-label-definitions", application.handleListIssueLabelDefinitions)
 	router.Get("/api/issues", application.handleListIssues)
 	router.Post("/api/issues", application.handleCreateIssue)
 	router.Get("/api/issues/{issueID}", application.handleGetIssue)
+	router.Put("/api/issues/{issueID}", application.handleUpdateIssue)
+	router.Post("/api/issues/{issueID}/tasks", application.handleCreateIssueTask)
 	router.Put("/api/issues/{issueID}/labels", application.handleUpdateIssueLabels)
 	router.Post("/api/issues/{issueID}/comments", application.handleCreateComment)
 	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
@@ -669,33 +713,87 @@ func (a *app) ensureIssueColumns() error {
 		return err
 	}
 
-	if !existing["assignee_type"] {
-		if _, err := a.db.Exec(`ALTER TABLE issues ADD COLUMN assignee_type TEXT NOT NULL DEFAULT 'human'`); err != nil {
-			return fmt.Errorf("add issues.assignee_type: %w", err)
+	requiredColumns := map[string]string{
+		"parent_issue_id": "TEXT REFERENCES issues(id) ON DELETE CASCADE",
+		"sort_order":      "INTEGER NOT NULL DEFAULT 0",
+		"assignee_type":   "TEXT NOT NULL DEFAULT 'human'",
+		"triage_status":   "TEXT NOT NULL DEFAULT 'none'",
+	}
+	for name, definition := range requiredColumns {
+		if existing[name] {
+			continue
 		}
+		if _, err := a.db.Exec(fmt.Sprintf("ALTER TABLE issues ADD COLUMN %s %s", name, definition)); err != nil {
+			return fmt.Errorf("add issues.%s: %w", name, err)
+		}
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_issues_parent_issue_id ON issues(parent_issue_id)
+	`); err != nil {
+		return fmt.Errorf("create issues parent index: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_issues_project_parent_updated ON issues(project_id, parent_issue_id, updated_at)
+	`); err != nil {
+		return fmt.Errorf("create issues project parent updated index: %w", err)
 	}
 	return nil
 }
 
 func (a *app) ensureIssueLabelTables() error {
 	if _, err := a.db.Exec(`
+		CREATE TABLE IF NOT EXISTS issue_label_definitions (
+			id TEXT PRIMARY KEY,
+			key TEXT NOT NULL UNIQUE,
+			name TEXT NOT NULL,
+			dimension TEXT NOT NULL,
+			color TEXT NOT NULL DEFAULT '',
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			built_in INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("create issue_label_definitions: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_issue_label_definitions_dimension ON issue_label_definitions(dimension, sort_order)
+	`); err != nil {
+		return fmt.Errorf("create issue_label_definitions dimension index: %w", err)
+	}
+	if _, err := a.db.Exec(`
 		CREATE TABLE IF NOT EXISTS issue_labels (
 			id TEXT PRIMARY KEY,
 			issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+			label_id TEXT NOT NULL DEFAULT '',
 			name TEXT NOT NULL,
 			color TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
-			UNIQUE(issue_id, name)
+			UNIQUE(issue_id, name),
+			UNIQUE(issue_id, label_id)
 		)
 	`); err != nil {
 		return fmt.Errorf("create issue_labels: %w", err)
+	}
+	if err := a.ensureTableColumns("issue_labels", map[string]string{
+		"label_id": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
 	}
 	if _, err := a.db.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_issue_labels_issue_id ON issue_labels(issue_id)
 	`); err != nil {
 		return fmt.Errorf("create issue_labels issue index: %w", err)
 	}
-	return nil
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_issue_labels_label_id ON issue_labels(label_id)
+	`); err != nil {
+		return fmt.Errorf("create issue_labels label index: %w", err)
+	}
+	if err := a.seedIssueLabelDefinitions(); err != nil {
+		return err
+	}
+	return a.backfillIssueLabelIDs()
 }
 
 func (a *app) ensureIssueTestEnvironmentTables() error {
@@ -913,6 +1011,7 @@ func (a *app) handleListActiveWork(w http.ResponseWriter, _ *http.Request) {
 			ORDER BY latest.updated_at DESC
 			LIMIT 1
 		)
+		WHERE COALESCE(i.parent_issue_id, '') = ''
 		ORDER BY
 			CASE
 				WHEN s.status IN ('queued', 'running') THEN 0
@@ -947,19 +1046,26 @@ func (a *app) handleListIssues(w http.ResponseWriter, _ *http.Request) {
 			i.id,
 			i.project_id,
 			p.name,
+			COALESCE(i.parent_issue_id, '') AS parent_issue_id,
+			i.sort_order,
 			i.title,
 			i.body,
 			i.status,
+			i.triage_status,
 			i.assignee,
 			i.assignee_type,
 			COALESCE(ii.unread, 0) AS unread,
 			COUNT(DISTINCT s.id) AS session_count,
+			COUNT(DISTINCT child.id) AS child_issue_count,
+			COUNT(DISTINCT CASE WHEN child.status = 'completed' THEN child.id END) AS completed_child_issue_count,
 			i.updated_at,
 			i.created_at
 		FROM issues i
 		JOIN projects p ON p.id = i.project_id
 		LEFT JOIN inbox_items ii ON ii.issue_id = i.id
 		LEFT JOIN agent_sessions s ON s.issue_id = i.id
+		LEFT JOIN issues child ON child.parent_issue_id = i.id
+		WHERE COALESCE(i.parent_issue_id, '') = ''
 		GROUP BY i.id
 		ORDER BY i.updated_at DESC
 	`)
@@ -972,7 +1078,7 @@ func (a *app) handleListIssues(w http.ResponseWriter, _ *http.Request) {
 	for rows.Next() {
 		var item issueListItem
 		var unread int
-		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.Title, &item.Body, &item.Status, &item.Assignee, &item.AssigneeType, &unread, &item.SessionCount, &item.UpdatedAt, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &unread, &item.SessionCount, &item.ChildIssueCount, &item.CompletedChildIssueCount, &item.UpdatedAt, &item.CreatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -986,6 +1092,15 @@ func (a *app) handleListIssues(w http.ResponseWriter, _ *http.Request) {
 		items = append(items, item)
 	}
 	writeJSON(w, items)
+}
+
+func (a *app) handleListIssueLabelDefinitions(w http.ResponseWriter, _ *http.Request) {
+	definitions, err := a.listIssueLabelDefinitions()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, definitions)
 }
 
 func (a *app) handleInboxStream(w http.ResponseWriter, r *http.Request) {
@@ -1233,7 +1348,7 @@ func (a *app) handleListProjects(w http.ResponseWriter, _ *http.Request) {
 			p.created_at,
 			p.updated_at
 		FROM projects p
-		LEFT JOIN issues i ON i.project_id = p.id
+		LEFT JOIN issues i ON i.project_id = p.id AND COALESCE(i.parent_issue_id, '') = ''
 		LEFT JOIN agent_sessions s ON s.issue_id = i.id
 		GROUP BY p.id
 		ORDER BY p.updated_at DESC
@@ -1368,12 +1483,16 @@ func (a *app) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		ProjectID    string `json:"projectId"`
-		Title        string `json:"title"`
-		Body         string `json:"body"`
-		Prompt       string `json:"prompt"`
-		Assignee     string `json:"assignee"`
-		AssigneeType string `json:"assigneeType"`
+		ProjectID    string           `json:"projectId"`
+		Title        string           `json:"title"`
+		Body         string           `json:"body"`
+		Prompt       string           `json:"prompt"`
+		Tasks        []string         `json:"tasks"`
+		ChildIssues  []issueTaskInput `json:"childIssues"`
+		Labels       []string         `json:"labels"`
+		LabelKeys    []string         `json:"labelKeys"`
+		Assignee     string           `json:"assignee"`
+		AssigneeType string           `json:"assigneeType"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1388,20 +1507,31 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	if input.Body == "" {
 		input.Body = input.Prompt
 	}
-	if input.Body == "" {
-		input.Body = input.Title
-	}
+	parentBody, taskDrafts := extractIssueTaskDrafts(input.Body)
+	taskDrafts = append(taskDrafts, normalizeIssueTaskStrings(input.Tasks)...)
+	taskDrafts = append(taskDrafts, normalizeIssueTaskInputs(input.ChildIssues)...)
 	if input.Title == "" {
-		input.Title = deriveIssueTitle(input.Body)
-	}
-	if input.Body == "" {
-		input.Body = input.Title
+		if parentBody != "" {
+			input.Title = deriveIssueTitle(parentBody)
+		} else if len(taskDrafts) > 0 {
+			input.Title = deriveIssueTitle(taskDrafts[0].Title)
+		} else {
+			input.Title = deriveIssueTitle(input.Body)
+		}
 	}
 	if input.Title == "" {
 		writeError(w, http.StatusBadRequest, errors.New("issue cannot be empty"))
 		return
 	}
-	resolvedProject, err := a.resolveIssueProject(input.ProjectID, input.Title+"\n"+input.Body)
+	input.Body = parentBody
+	labelValues := append([]string{}, input.LabelKeys...)
+	labelValues = append(labelValues, input.Labels...)
+	initialLabels, err := a.normalizeIssueLabelKeys(labelValues)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	resolvedProject, err := a.resolveIssueProject(input.ProjectID, input.Title+"\n"+input.Body+"\n"+formatIssueTaskDraftTitles(taskDrafts))
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1420,6 +1550,10 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	issueID := uuid.NewString()
 	inboxID := uuid.NewString()
 	status := "open"
+	triageStatus := "pending"
+	if hasIssueLabelDimension(initialLabels, issueLabelDimensionType) {
+		triageStatus = "classified"
+	}
 	assignee := input.Assignee
 	if assignee == "" {
 		assignee = "me"
@@ -1431,6 +1565,12 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("assignee type must be human or agent"))
 		return
 	}
+	for _, task := range taskDrafts {
+		if err := validateIssueStatus(task.Status); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 
 	tx, err := a.db.Begin()
 	if err != nil {
@@ -1440,11 +1580,26 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(`
-		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, issueID, input.ProjectID, input.Title, input.Body, status, assignee, input.AssigneeType, "", now, now); err != nil {
+		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES (?, ?, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, issueID, input.ProjectID, input.Title, input.Body, status, triageStatus, assignee, input.AssigneeType, "", now, now); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+
+	for index, task := range taskDrafts {
+		taskID := uuid.NewString()
+		taskStatus := normalizeIssueStatus(task.Status)
+		if taskStatus == "" {
+			taskStatus = "open"
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 'none', ?, 'human', '', ?, ?)
+		`, taskID, input.ProjectID, issueID, index+1, task.Title, task.Body, taskStatus, "me", now, now); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 
 	if _, err := tx.Exec(`
@@ -1463,9 +1618,23 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	for _, label := range initialLabels {
+		if _, err := tx.Exec(`
+			INSERT INTO issue_labels (id, issue_id, label_id, name, color, created_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, uuid.NewString(), issueID, label.ID, label.Name, label.Color, now); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+
+	if triageStatus == "pending" {
+		go a.triageIssueType(issueID)
 	}
 
 	writeJSON(w, map[string]string{"issueId": issueID})
@@ -1485,6 +1654,101 @@ func deriveIssueTitle(body string) string {
 		return string(runes[:64]) + "..."
 	}
 	return title
+}
+
+func extractIssueTaskDrafts(body string) (string, []issueTaskDraft) {
+	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	parentLines := make([]string, 0, len(lines))
+	tasks := make([]issueTaskDraft, 0)
+	for _, line := range lines {
+		matches := checklistItemPattern.FindStringSubmatch(line)
+		if len(matches) != 3 {
+			parentLines = append(parentLines, line)
+			continue
+		}
+		title := strings.TrimSpace(matches[2])
+		if title == "" {
+			parentLines = append(parentLines, line)
+			continue
+		}
+		status := "open"
+		if strings.EqualFold(matches[1], "x") {
+			status = "completed"
+		}
+		tasks = append(tasks, issueTaskDraft{Title: title, Status: status})
+	}
+	return strings.TrimSpace(strings.Join(parentLines, "\n")), tasks
+}
+
+func normalizeIssueTaskStrings(values []string) []issueTaskDraft {
+	tasks := make([]issueTaskDraft, 0, len(values))
+	for _, value := range values {
+		title := strings.TrimSpace(value)
+		if title == "" {
+			continue
+		}
+		tasks = append(tasks, issueTaskDraft{Title: title, Status: "open"})
+	}
+	return tasks
+}
+
+func normalizeIssueTaskInputs(values []issueTaskInput) []issueTaskDraft {
+	tasks := make([]issueTaskDraft, 0, len(values))
+	for _, value := range values {
+		title := strings.TrimSpace(value.Title)
+		body := strings.TrimSpace(value.Body)
+		if title == "" {
+			title = deriveIssueTitle(body)
+		}
+		if title == "" {
+			continue
+		}
+		status := normalizeIssueStatus(value.Status)
+		if status == "" && value.Completed {
+			status = "completed"
+		}
+		if status == "" {
+			status = "open"
+		}
+		tasks = append(tasks, issueTaskDraft{Title: title, Body: body, Status: status})
+	}
+	return tasks
+}
+
+func formatIssueTaskDraftTitles(tasks []issueTaskDraft) string {
+	if len(tasks) == 0 {
+		return ""
+	}
+	titles := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Title != "" {
+			titles = append(titles, task.Title)
+		}
+	}
+	return strings.Join(titles, "\n")
+}
+
+func normalizeIssueStatus(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "", "open", "in_progress", "blocked", "review", "completed", "cancelled", "failed", "running", "queued":
+		return value
+	case "todo":
+		return "open"
+	case "done", "closed":
+		return "completed"
+	default:
+		return value
+	}
+}
+
+func validateIssueStatus(value string) error {
+	switch normalizeIssueStatus(value) {
+	case "open", "in_progress", "blocked", "review", "completed", "cancelled", "failed", "running", "queued":
+		return nil
+	default:
+		return fmt.Errorf("unsupported issue status %q", value)
+	}
 }
 
 func (a *app) resolveIssueProject(projectID, text string) (project, error) {
@@ -1573,16 +1837,191 @@ func (a *app) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, detail)
 }
 
-func (a *app) handleUpdateIssueLabels(w http.ResponseWriter, r *http.Request) {
+func (a *app) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "issueID")
 	var input struct {
-		Labels []string `json:"labels"`
+		Title  *string `json:"title"`
+		Body   *string `json:"body"`
+		Status *string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	labels, err := normalizeIssueLabelNames(input.Labels)
+
+	existing, err := a.loadIssue(issueID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("issue not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+
+	updated := existing
+	if input.Title != nil {
+		updated.Title = strings.TrimSpace(*input.Title)
+		if updated.Title == "" {
+			writeError(w, http.StatusBadRequest, errors.New("issue title cannot be empty"))
+			return
+		}
+	}
+	if input.Body != nil {
+		updated.Body = strings.TrimSpace(*input.Body)
+	}
+	if input.Status != nil {
+		updated.Status = normalizeIssueStatus(*input.Status)
+		if err := validateIssueStatus(updated.Status); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	updated.UpdatedAt = nowString()
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
+		UPDATE issues
+		SET title = ?, body = ?, status = ?, updated_at = ?
+		WHERE id = ?
+	`, updated.Title, updated.Body, updated.Status, updated.UpdatedAt, issueID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	topIssueID := issueID
+	if existing.ParentIssueID == "" {
+		if _, err := tx.Exec(`
+			UPDATE inbox_items SET title = ?, status = ?, updated_at = ?, unread = 1 WHERE issue_id = ?
+		`, updated.Title, updated.Status, updated.UpdatedAt, issueID); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	} else {
+		topIssueID = existing.ParentIssueID
+		if _, err := tx.Exec(`UPDATE issues SET updated_at = ? WHERE id = ?`, updated.UpdatedAt, existing.ParentIssueID); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if _, err := tx.Exec(`
+			UPDATE inbox_items SET updated_at = ?, unread = 1 WHERE issue_id = ?
+		`, updated.UpdatedAt, existing.ParentIssueID); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	a.publishInboxEvent(topIssueID, "updated")
+	reloaded, err := a.loadIssue(issueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, reloaded)
+}
+
+func (a *app) handleCreateIssueTask(w http.ResponseWriter, r *http.Request) {
+	parentIssueID := chi.URLParam(r, "issueID")
+	var input issueTaskInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	parent, err := a.loadIssue(parentIssueID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("issue not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if parent.ParentIssueID != "" {
+		writeError(w, http.StatusBadRequest, errors.New("nested issue tasks are not supported yet"))
+		return
+	}
+
+	taskDrafts := normalizeIssueTaskInputs([]issueTaskInput{input})
+	if len(taskDrafts) == 0 {
+		writeError(w, http.StatusBadRequest, errors.New("task title cannot be empty"))
+		return
+	}
+	task := taskDrafts[0]
+	if err := validateIssueStatus(task.Status); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	now := nowString()
+	taskID := uuid.NewString()
+	tx, err := a.db.Begin()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+
+	var sortOrder int
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(sort_order), 0) + 1 FROM issues WHERE parent_issue_id = ?`, parentIssueID).Scan(&sortOrder); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 'none', 'me', 'human', '', ?, ?)
+	`, taskID, parent.ProjectID, parentIssueID, sortOrder, task.Title, task.Body, task.Status, now, now); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := tx.Exec(`UPDATE issues SET updated_at = ? WHERE id = ?`, now, parentIssueID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := tx.Exec(`UPDATE inbox_items SET updated_at = ?, unread = 1 WHERE issue_id = ?`, now, parentIssueID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	a.publishInboxEvent(parentIssueID, "updated")
+	item, err := a.loadIssueListItem(taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, item)
+}
+
+func (a *app) handleUpdateIssueLabels(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	var input struct {
+		Labels    []string `json:"labels"`
+		LabelKeys []string `json:"labelKeys"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	labelValues := append([]string{}, input.LabelKeys...)
+	labelValues = append(labelValues, input.Labels...)
+	labels, err := a.normalizeIssueLabelKeys(labelValues)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -1596,7 +2035,8 @@ func (a *app) handleUpdateIssueLabels(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	var projectID string
-	if err := tx.QueryRow(`SELECT project_id FROM issues WHERE id = ?`, issueID).Scan(&projectID); err != nil {
+	var currentTriageStatus string
+	if err := tx.QueryRow(`SELECT project_id, triage_status FROM issues WHERE id = ?`, issueID).Scan(&projectID, &currentTriageStatus); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, sql.ErrNoRows) {
 			status = http.StatusNotFound
@@ -1613,14 +2053,20 @@ func (a *app) handleUpdateIssueLabels(w http.ResponseWriter, r *http.Request) {
 	now := nowString()
 	for _, label := range labels {
 		if _, err := tx.Exec(`
-			INSERT INTO issue_labels (id, issue_id, name, color, created_at)
-			VALUES (?, ?, ?, ?, ?)
-		`, uuid.NewString(), issueID, label, "", now); err != nil {
+			INSERT INTO issue_labels (id, issue_id, label_id, name, color, created_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+		`, uuid.NewString(), issueID, label.ID, label.Name, label.Color, now); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 	}
-	if _, err := tx.Exec(`UPDATE issues SET updated_at = ? WHERE id = ?`, now, issueID); err != nil {
+	nextTriageStatus := currentTriageStatus
+	if hasIssueLabelDimension(labels, issueLabelDimensionType) {
+		nextTriageStatus = "classified"
+	} else if currentTriageStatus == "classified" {
+		nextTriageStatus = "none"
+	}
+	if _, err := tx.Exec(`UPDATE issues SET triage_status = ?, updated_at = ? WHERE id = ?`, nextTriageStatus, now, issueID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -2443,6 +2889,8 @@ func (a *app) writeSessionContext(session agentSession, project project) (string
 	}
 	builder.WriteString("\n\n")
 
+	writeIssueTaskList(&builder, detail.ChildIssues)
+
 	builder.WriteString("## Project\n\n")
 	builder.WriteString(fmt.Sprintf("- Name: %s\n", project.Name))
 	builder.WriteString(fmt.Sprintf("- Repository: %s\n", project.RepoPath))
@@ -2636,21 +3084,132 @@ func readTestEnvironmentPreviewURL(session agentSession) string {
 	return firstNonEmpty(result.PreviewURL, result.PreviewUrl, result.URL)
 }
 
+func (a *app) loadIssue(issueID string) (issue, error) {
+	var item issue
+	row := a.db.QueryRow(`
+		SELECT id, project_id, COALESCE(parent_issue_id, ''), sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at
+		FROM issues
+		WHERE id = ?
+	`, issueID)
+	err := row.Scan(&item.ID, &item.ProjectID, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &item.EnvironmentURL, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (a *app) loadIssueListItem(issueID string) (issueListItem, error) {
+	var item issueListItem
+	row := a.db.QueryRow(`
+		SELECT
+			i.id,
+			i.project_id,
+			p.name,
+			COALESCE(i.parent_issue_id, '') AS parent_issue_id,
+			i.sort_order,
+			i.title,
+			i.body,
+			i.status,
+			i.triage_status,
+			i.assignee,
+			i.assignee_type,
+			COALESCE(ii.unread, 0) AS unread,
+			COUNT(DISTINCT s.id) AS session_count,
+			COUNT(DISTINCT child.id) AS child_issue_count,
+			COUNT(DISTINCT CASE WHEN child.status = 'completed' THEN child.id END) AS completed_child_issue_count,
+			i.updated_at,
+			i.created_at
+		FROM issues i
+		JOIN projects p ON p.id = i.project_id
+		LEFT JOIN inbox_items ii ON ii.issue_id = i.id
+		LEFT JOIN agent_sessions s ON s.issue_id = i.id
+		LEFT JOIN issues child ON child.parent_issue_id = i.id
+		WHERE i.id = ?
+		GROUP BY i.id
+	`, issueID)
+	var unread int
+	if err := row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &unread, &item.SessionCount, &item.ChildIssueCount, &item.CompletedChildIssueCount, &item.UpdatedAt, &item.CreatedAt); err != nil {
+		return item, err
+	}
+	item.Unread = unread == 1
+	labels, err := a.listIssueLabels(item.ID)
+	if err != nil {
+		return item, err
+	}
+	item.Labels = labels
+	return item, nil
+}
+
+func (a *app) listChildIssues(parentIssueID string) ([]issueListItem, error) {
+	rows, err := a.db.Query(`
+		SELECT
+			i.id,
+			i.project_id,
+			p.name,
+			COALESCE(i.parent_issue_id, '') AS parent_issue_id,
+			i.sort_order,
+			i.title,
+			i.body,
+			i.status,
+			i.triage_status,
+			i.assignee,
+			i.assignee_type,
+			COALESCE(ii.unread, 0) AS unread,
+			COUNT(DISTINCT s.id) AS session_count,
+			COUNT(DISTINCT child.id) AS child_issue_count,
+			COUNT(DISTINCT CASE WHEN child.status = 'completed' THEN child.id END) AS completed_child_issue_count,
+			i.updated_at,
+			i.created_at
+		FROM issues i
+		JOIN projects p ON p.id = i.project_id
+		LEFT JOIN inbox_items ii ON ii.issue_id = i.id
+		LEFT JOIN agent_sessions s ON s.issue_id = i.id
+		LEFT JOIN issues child ON child.parent_issue_id = i.id
+		WHERE i.parent_issue_id = ?
+		GROUP BY i.id
+		ORDER BY i.sort_order ASC, i.created_at ASC
+	`, parentIssueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]issueListItem, 0)
+	for rows.Next() {
+		var item issueListItem
+		var unread int
+		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &unread, &item.SessionCount, &item.ChildIssueCount, &item.CompletedChildIssueCount, &item.UpdatedAt, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		item.Unread = unread == 1
+		labels, err := a.listIssueLabels(item.ID)
+		if err != nil {
+			return nil, err
+		}
+		item.Labels = labels
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (a *app) loadIssueDetail(issueID string) (issueDetail, error) {
 	var detail issueDetail
 	row := a.db.QueryRow(`
-		SELECT i.id, i.project_id, i.title, i.body, i.status, i.assignee, i.assignee_type, i.environment_url, i.created_at, i.updated_at,
+		SELECT i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.triage_status, i.assignee, i.assignee_type, i.environment_url, i.created_at, i.updated_at,
 		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id, p.created_at, p.updated_at
 		FROM issues i
 		JOIN projects p ON p.id = i.project_id
 		WHERE i.id = ?
 	`, issueID)
 	if err := row.Scan(
-		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
+		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
 		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
 	); err != nil {
 		return detail, err
 	}
+
+	children, err := a.listChildIssues(issueID)
+	if err != nil {
+		return detail, err
+	}
+	detail.ChildIssues = children
 
 	testEnvironment, err := a.loadIssueTestEnvironment(issueID)
 	if err != nil {
@@ -2714,7 +3273,7 @@ func (a *app) loadProject(projectID string) (project, error) {
 			p.created_at,
 			p.updated_at
 		FROM projects p
-		LEFT JOIN issues i ON i.project_id = p.id
+		LEFT JOIN issues i ON i.project_id = p.id AND COALESCE(i.parent_issue_id, '') = ''
 		LEFT JOIN agent_sessions s ON s.issue_id = i.id
 		WHERE p.id = ?
 		GROUP BY p.id
@@ -2994,7 +3553,7 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 	}
 	row := a.db.QueryRow(`
 		SELECT s.id, s.issue_id, s.provider, s.agent_profile, s.runtime_mode, s.command, s.status, s.branch, s.workdir, s.codex_thread_id, s.codex_turn_id, s.agent_status, s.artifact_dir, s.cleanup_status, s.cleaned_at, s.created_at, s.updated_at,
-		       i.id, i.project_id, i.title, i.body, i.status, i.assignee, i.assignee_type, i.environment_url, i.created_at, i.updated_at,
+		       i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.triage_status, i.assignee, i.assignee_type, i.environment_url, i.created_at, i.updated_at,
 		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id, p.created_at, p.updated_at
 		FROM agent_sessions s
 		JOIN issues i ON i.id = s.issue_id
@@ -3003,7 +3562,7 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 	`, sessionID)
 	if err := row.Scan(
 		&detail.Session.ID, &detail.Session.IssueID, &detail.Session.Provider, &detail.Session.AgentProfile, &detail.Session.RuntimeMode, &detail.Session.Command, &detail.Session.Status, &detail.Session.Branch, &detail.Session.Workdir, &detail.Session.CodexThreadID, &detail.Session.CodexTurnID, &detail.Session.AgentStatus, &detail.Session.ArtifactDir, &detail.Session.CleanupStatus, &detail.Session.CleanedAt, &detail.Session.CreatedAt, &detail.Session.UpdatedAt,
-		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
+		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
 		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
 	); err != nil {
 		return detail, err
@@ -3134,10 +3693,28 @@ func (a *app) listComments(issueID string) ([]comment, error) {
 
 func (a *app) listIssueLabels(issueID string) ([]issueLabel, error) {
 	rows, err := a.db.Query(`
-		SELECT id, issue_id, name, color, created_at
-		FROM issue_labels
-		WHERE issue_id = ?
-		ORDER BY created_at ASC, name ASC
+		SELECT
+			il.id,
+			il.issue_id,
+			il.label_id,
+			COALESCE(ld.key, '') AS key,
+			COALESCE(ld.name, il.name) AS name,
+			COALESCE(ld.dimension, '') AS dimension,
+			COALESCE(ld.color, il.color) AS color,
+			COALESCE(ld.sort_order, 999) AS sort_order,
+			il.created_at
+		FROM issue_labels il
+		LEFT JOIN issue_label_definitions ld ON ld.id = il.label_id
+		WHERE il.issue_id = ?
+		ORDER BY
+			CASE COALESCE(ld.dimension, '')
+				WHEN 'type' THEN 0
+				WHEN 'priority' THEN 1
+				ELSE 2
+			END,
+			COALESCE(ld.sort_order, 999) ASC,
+			il.created_at ASC,
+			name COLLATE NOCASE ASC
 	`, issueID)
 	if err != nil {
 		return nil, err
@@ -3147,7 +3724,7 @@ func (a *app) listIssueLabels(issueID string) ([]issueLabel, error) {
 	labels := make([]issueLabel, 0)
 	for rows.Next() {
 		var label issueLabel
-		if err := rows.Scan(&label.ID, &label.IssueID, &label.Name, &label.Color, &label.CreatedAt); err != nil {
+		if err := rows.Scan(&label.ID, &label.IssueID, &label.LabelID, &label.Key, &label.Name, &label.Dimension, &label.Color, &label.SortOrder, &label.CreatedAt); err != nil {
 			return nil, err
 		}
 		labels = append(labels, label)
@@ -3467,6 +4044,24 @@ func formatIssueLabels(labels []issueLabel) string {
 		return "none"
 	}
 	return strings.Join(names, ", ")
+}
+
+func writeIssueTaskList(builder *strings.Builder, childIssues []issueListItem) {
+	builder.WriteString("## Task List\n\n")
+	builder.WriteString("Task list items are child issues. Treat these rows as the source of truth instead of Markdown checkbox text in the issue body.\n")
+	builder.WriteString("When this session needs to create or check tasks, use the mspace API if `MSPACE_API_BASE_URL` is available: `POST /api/issues/${MSPACE_ISSUE_ID}/tasks` to add a task and `PUT /api/issues/<task-id>` with `{\"status\":\"completed\"}` to check one off.\n\n")
+	if len(childIssues) == 0 {
+		builder.WriteString("(no child issue tasks yet)\n\n")
+		return
+	}
+	for _, task := range childIssues {
+		marker := "[ ]"
+		if task.Status == "completed" {
+			marker = "[x]"
+		}
+		builder.WriteString(fmt.Sprintf("- %s %s (`%s`, status: %s)\n", marker, task.Title, task.ID, task.Status))
+	}
+	builder.WriteString("\n")
 }
 
 func plannedSessionWorkdir(root, projectID, sessionID string) string {
@@ -3851,6 +4446,21 @@ func normalizeAssigneeType(value string) string {
 func defaultAgentProfiles(now string) []agentProfile {
 	return []agentProfile{
 		{
+			ID:          "triage",
+			Name:        "Triage",
+			Mention:     "@triage",
+			Provider:    "codex",
+			Description: "Automatic issue type classification for new issues.",
+			Instructions: strings.TrimSpace(`
+Use the triage profile only for classification. Read the issue title, body, and project context, then choose exactly one Conventional Commit type: feat, fix, docs, style, refactor, perf, test, build, ci, chore, or revert. Do not assign priority, change status, or perform implementation work.
+`),
+			Enabled:   false,
+			BuiltIn:   true,
+			SortOrder: 5,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
 			ID:          "codex",
 			Name:        "Codex",
 			Mention:     "@codex",
@@ -4049,35 +4659,6 @@ func boolToInt(value bool) int {
 		return 1
 	}
 	return 0
-}
-
-func normalizeIssueLabelNames(values []string) ([]string, error) {
-	labels := make([]string, 0, len(values))
-	seen := map[string]bool{}
-	for _, raw := range values {
-		label := strings.TrimSpace(raw)
-		label = strings.TrimSpace(strings.TrimPrefix(label, "#"))
-		label = strings.Join(strings.Fields(label), " ")
-		if label == "" {
-			continue
-		}
-		if strings.ContainsAny(label, "\r\n\t") {
-			return nil, fmt.Errorf("label %q contains unsupported whitespace", raw)
-		}
-		if len([]rune(label)) > 32 {
-			return nil, fmt.Errorf("label %q is longer than 32 characters", label)
-		}
-		key := strings.ToLower(label)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		labels = append(labels, label)
-		if len(labels) > 12 {
-			return nil, errors.New("an issue can have at most 12 labels")
-		}
-	}
-	return labels, nil
 }
 
 func isCodexProvider(provider string) bool {
@@ -4369,6 +4950,7 @@ func (a *app) buildSessionEnv(session agentSession, project project, contextPath
 		}
 	}
 	env = append(env,
+		"MSPACE_API_BASE_URL="+mspaceAPIBaseURL(),
 		"MSPACE_ISSUE_ID="+session.IssueID,
 		"MSPACE_SESSION_ID="+session.ID,
 		"MSPACE_AGENT_PROFILE="+session.AgentProfile,
@@ -4382,6 +4964,14 @@ func (a *app) buildSessionEnv(session agentSession, project project, contextPath
 		env = append(env, "MSPACE_SESSION_ARTIFACT_DIR="+session.ArtifactDir)
 	}
 	return env
+}
+
+func mspaceAPIBaseURL() string {
+	port := strings.TrimSpace(os.Getenv("MSPACE_PORT"))
+	if port == "" {
+		port = "7788"
+	}
+	return "http://127.0.0.1:" + port
 }
 
 func buildKubectlArgs(project project, args ...string) []string {

@@ -73,14 +73,19 @@ export interface IssueListItem {
   id: string;
   projectId: string;
   projectName: string;
+  parentIssueId: string;
+  sortOrder: number;
   title: string;
   body: string;
   status: string;
+  triageStatus: string;
   assignee: string;
   assigneeType: string;
   labels: IssueLabel[];
   unread: boolean;
   sessionCount: number;
+  childIssueCount: number;
+  completedChildIssueCount: number;
   updatedAt: string;
   createdAt: string;
 }
@@ -88,9 +93,12 @@ export interface IssueListItem {
 export interface Issue {
   id: string;
   projectId: string;
+  parentIssueId: string;
+  sortOrder: number;
   title: string;
   body: string;
   status: string;
+  triageStatus: string;
   assignee: string;
   assigneeType: string;
   environmentUrl: string;
@@ -109,9 +117,25 @@ export interface Comment {
 export interface IssueLabel {
   id: string;
   issueId: string;
+  labelId: string;
+  key: string;
   name: string;
+  dimension: string;
   color: string;
+  sortOrder: number;
   createdAt: string;
+}
+
+export interface IssueLabelDefinition {
+  id: string;
+  key: string;
+  name: string;
+  dimension: string;
+  color: string;
+  sortOrder: number;
+  builtIn: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AgentProfile {
@@ -227,6 +251,7 @@ export interface IssueDetail {
   issue: Issue;
   project: Project;
   testEnvironment: IssueTestEnvironment | null;
+  childIssues: IssueListItem[];
   labels: IssueLabel[];
   comments: Comment[];
   sessions: AgentSession[];
@@ -269,8 +294,25 @@ export interface CreateIssueInput {
   title?: string;
   body?: string;
   prompt?: string;
+  tasks?: string[];
+  childIssues?: CreateIssueTaskInput[];
+  labels?: string[];
+  labelKeys?: string[];
   assignee?: string;
   assigneeType?: string;
+}
+
+export interface UpdateIssueInput {
+  title?: string;
+  body?: string;
+  status?: string;
+}
+
+export interface CreateIssueTaskInput {
+  title: string;
+  body?: string;
+  status?: string;
+  completed?: boolean;
 }
 
 export interface CreateCommentInput {
@@ -285,7 +327,8 @@ export interface CreateSessionInput {
 }
 
 export interface UpdateIssueLabelsInput {
-  labels: string[];
+  labels?: string[];
+  labelKeys?: string[];
 }
 
 export interface AgentProfileInput {

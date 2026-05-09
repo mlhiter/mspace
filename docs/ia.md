@@ -178,9 +178,11 @@ Current implementation:
 
 - lists issues across the workspace;
 - opens create issue in a modal from the page header or the sidebar quick action;
+- uses a TipTap-backed Markdown document editor for the issue note, including task-list input;
 - allows the user to leave project empty and let the runner resolve it when possible;
-- shows unread state, owner type, and linked session count inline.
-- shows issue labels inline when present.
+- keeps the creation modal minimal: issue note plus optional project only;
+- supports search, status/type/priority filters, and sorting by updated time, created time, priority, or type;
+- shows unread state, owner type, linked session count, child task count, and labels inline.
 
 ## Issue Detail
 
@@ -284,7 +286,7 @@ Current implementation:
 - reads enabled mention suggestions from the Agents module instead of a frontend constant;
 - saves the comment before queuing the Codex app-server session, so the current turn is visible in the issue history;
 - sends the mention-stripped comment as the current turn request, ahead of the original issue context;
-- shows issue labels in the quiet metadata sidebar and lets users edit them inline;
+- shows Type and Priority controls in the quiet metadata sidebar, with a `Classifying...` state while the triage agent is assigning type;
 - exposes a Stop action for queued or running sessions;
 - streams session logs and status while a session is running, but keeps debug output collapsed by default;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;

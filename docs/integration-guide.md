@@ -15,6 +15,64 @@ curl "$MSPACE_API_BASE/health"
 
 The Electron preload exposes the same base URL to the renderer through `window.mspaceDesktop.apiBaseUrl`.
 
+Agent sessions also receive `MSPACE_API_BASE_URL` so they can update issue task state from the prepared worktree when needed.
+
+## Issue Task APIs
+
+Task lists are stored as child issues. Markdown checklist lines submitted in `POST /api/issues` are converted into child issue tasks and removed from the parent body.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `PUT` | `/api/issues/{issueID}` | Update an issue or task title, body, or status. |
+| `POST` | `/api/issues/{issueID}/tasks` | Create a child issue task under a parent issue. |
+
+Create a task:
+
+```bash
+curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/tasks" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Add regression coverage"}'
+```
+
+Mark a task complete:
+
+```bash
+curl -X PUT "$MSPACE_API_BASE/api/issues/<task-id>" \
+  -H 'Content-Type: application/json' \
+  -d '{"status":"completed"}'
+```
+
+## Issue Label APIs
+
+Issue labels are constrained by the built-in label definitions. The current dimensions are `type` and `priority`. Type uses Conventional Commit names and is normally assigned asynchronously by the internal triage agent after issue creation. Priority is manual and should be set from Issue Detail.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/issue-label-definitions` | List Type and Priority options. |
+| `PUT` | `/api/issues/{issueID}/labels` | Replace an issue's selected label keys. |
+
+List available label options:
+
+```bash
+curl "$MSPACE_API_BASE/api/issue-label-definitions"
+```
+
+Set Type and Priority:
+
+```bash
+curl -X PUT "$MSPACE_API_BASE/api/issues/<issue-id>/labels" \
+  -H 'Content-Type: application/json' \
+  -d '{"labelKeys":["type:fix","priority:p1"]}'
+```
+
+Clear Priority while keeping Type:
+
+```bash
+curl -X PUT "$MSPACE_API_BASE/api/issues/<issue-id>/labels" \
+  -H 'Content-Type: application/json' \
+  -d '{"labelKeys":["type:fix"]}'
+```
+
 ## Cluster APIs
 
 Clusters are reusable test-cluster access records. They store kubeconfig path, optional context, image registry prefix, exposure defaults, and reachability status.

@@ -41,11 +41,12 @@ Build in order:
 
 - Project import: support existing local folders, auto-detect GitHub remote metadata, and support direct GitHub repository URLs cloned into the mspace data directory.
 - Issue creation: keep creation in the Issues surface, allow lightweight prompts, and allow project inference when the user leaves project empty.
+- Issue task lists: treat task rows as child issues, convert creation-time Markdown checklist lines into child rows, and let humans or agents update task status from the parent issue.
 - Agent mention flow: let a user manage agent profiles, write an issue comment with an enabled agent mention, save that comment, and create the local session from the current turn request and selected profile.
 - Inbox realtime updates: move issue/session status changes into the Inbox review feed without relying on slow manual refreshes.
 - Local agent context: send issue body, comments, project metadata, branch, selected cluster, kube context, and namespace into the Codex app-server turn prompt.
 - Progress comments: turn meaningful session lifecycle and status updates into issue activity, not just terminal logs.
-- Issue labels and session stop controls: keep issue triage lightweight and allow a human to interrupt queued or running work.
+- Issue labels and session stop controls: keep type triage asynchronous, keep priority manual, and allow a human to interrupt queued or running work.
 - Manual test deployment: let the user select a saved cluster and optional exposure overrides before queueing a deploy/test agent turn.
 - Issue namespace lifecycle: each issue can reserve one test namespace; the deploy/test agent creates it, deploys resources, validates the preview URL, and writes the result back.
 - Branch and PR output: expose PR generation as a manual action after agent work, not as automatic session cleanup.
@@ -103,7 +104,7 @@ Build:
 - Polish Project creation and settings flow.
 - Polish Issue Detail as the durable working document.
 - Make starting a local agent session through an agent mention in the issue composer feel obvious.
-- Support lightweight labels for issue triage.
+- Support type and priority labels for issue triage, with agent-based type classification and manual priority selection.
 - Let users stop queued or running sessions without opening a debug surface.
 - Make session logs and status updates easy to follow from Issue Detail.
 - Make session summary draft generation easy to review and post back.
@@ -112,6 +113,7 @@ Acceptance:
 
 - A user can create a project from a local folder or GitHub repository URL and adjust runtime settings later.
 - A user can create an issue from the Issues surface or sidebar quick action and return to it later.
+- A user can create and check off issue tasks without duplicating state between Markdown checkboxes and child issue rows.
 - A user can manage agent profiles, mention an enabled agent in an issue comment, and start a local session from that current turn request.
 - A user can label an issue and stop an active session from Issue Detail.
 - The session runs in its own worktree.

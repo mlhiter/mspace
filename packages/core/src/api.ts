@@ -6,11 +6,14 @@ import type {
   ClusterInput,
   CreateCommentInput,
   CreateIssueInput,
+  CreateIssueTaskInput,
   CreateProjectInput,
   CreateSessionInput,
   InboxItem,
+  Issue,
   IssueDetail,
   IssueLabel,
+  IssueLabelDefinition,
   IssueListItem,
   IssueTestEnvironment,
   KubeconfigDiscoveryResult,
@@ -19,6 +22,7 @@ import type {
   SessionDetail,
   StartTestDeployInput,
   UpdateIssueLabelsInput,
+  UpdateIssueInput,
   UpdateProjectInput,
 } from "./types";
 
@@ -27,6 +31,7 @@ export const queryKeys = {
   agents: ["agents"] as const,
   clusters: ["clusters"] as const,
   inbox: ["inbox"] as const,
+  issueLabelDefinitions: ["issue-label-definitions"] as const,
   issues: ["issues"] as const,
   projects: ["projects"] as const,
   issue: (issueId: string) => ["issue", issueId] as const,
@@ -126,6 +131,8 @@ export const api = {
     request<{ ok: boolean }>(`/api/projects/${projectId}`, {
       method: "DELETE",
     }),
+  listIssueLabelDefinitions: () =>
+    request<IssueLabelDefinition[]>("/api/issue-label-definitions"),
   listIssues: () => request<IssueListItem[]>("/api/issues"),
   createIssue: (input: CreateIssueInput) =>
     request<{ issueId: string }>("/api/issues", {
@@ -134,6 +141,16 @@ export const api = {
     }),
   getIssue: (issueId: string) =>
     request<IssueDetail>(`/api/issues/${issueId}`),
+  updateIssue: (issueId: string, input: UpdateIssueInput) =>
+    request<Issue>(`/api/issues/${issueId}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  createIssueTask: (issueId: string, input: CreateIssueTaskInput) =>
+    request<IssueListItem>(`/api/issues/${issueId}/tasks`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   updateIssueLabels: (issueId: string, input: UpdateIssueLabelsInput) =>
     request<IssueLabel[]>(`/api/issues/${issueId}/labels`, {
       method: "PUT",

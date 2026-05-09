@@ -13,7 +13,7 @@
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory recorded in `agent_sessions.artifact_dir`. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional deploy/test artifact. When it includes `previewUrl`, the runner copies it back to the issue test environment. |
 
-Reusable cluster configs are stored in `clusters`. Issue test namespace records are stored in `issue_test_environments`. Issue labels are stored in `issue_labels` as issue-local records. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
+Reusable cluster configs are stored in `clusters`. Issue test namespace records are stored in `issue_test_environments`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
 
 ## Start The App
 
@@ -115,7 +115,10 @@ sqlite3 ~/.mspace/mspace.db "select id,provider,agent_profile,status,agent_statu
 Issue labels:
 
 ```bash
-sqlite3 ~/.mspace/mspace.db "select issue_id,name,created_at from issue_labels order by created_at desc limit 20;"
+curl http://127.0.0.1:7788/api/issue-label-definitions
+sqlite3 ~/.mspace/mspace.db "select key,name,dimension,sort_order from issue_label_definitions order by dimension,sort_order;"
+sqlite3 ~/.mspace/mspace.db "select issue_id,label_id,name,created_at from issue_labels order by created_at desc limit 20;"
+sqlite3 ~/.mspace/mspace.db "select id,title,triage_status,updated_at from issues where parent_issue_id is null order by updated_at desc limit 10;"
 ```
 
 Managed agents:
@@ -279,6 +282,21 @@ cd runner && MSPACE_PORT=7788 go run .
 ```
 
 Then refresh the desktop app.
+
+### Type Or Priority Options Are Missing
+
+If the UI shows no Type or Priority choices, or `GET /api/issue-label-definitions` returns `404 Not Found`, the desktop is probably connected to an older healthy runner that does not have the label-definition route.
+
+Check and restart the runner:
+
+```bash
+curl -i http://127.0.0.1:7788/api/issue-label-definitions
+lsof -nP -iTCP:7788 -sTCP:LISTEN
+kill <runner-pid>
+cd runner && MSPACE_PORT=7788 go run .
+```
+
+The renderer has built-in fallback options for the human UI, but the current runner is still required before label writes can persist against the seeded taxonomy.
 
 ### Project Creation Fails
 

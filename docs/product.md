@@ -12,7 +12,9 @@ The repository now has a runnable local desktop MVP:
 
 - create projects from a local folder picker or GitHub repository URL and manage settings later;
 - create and manage issues in the Issues tab;
-- label issues from Issue Detail and scan labels from the Issues list;
+- write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page;
+- classify new issues asynchronously with a background triage agent that assigns one Conventional Commit type label;
+- label priority manually from Issue Detail, and scan/filter labels from the Issues list;
 - manage Codex-backed agents from the Agents route, including mention, description, enabled state, and role instructions;
 - use Inbox as a review feed for unread issue and session updates;
 - open document-style issue detail pages with comments and linked sessions;
@@ -138,6 +140,7 @@ An Issue should hold:
 - comments and progress updates;
 - assignee and subscriber list;
 - linked branch, PR, and environment evidence;
+- inline task rows backed by child issues, not Markdown checkbox state;
 - one or more attached agent sessions;
 - one issue test environment record with namespace, preview URL, deploy status, and cleanup decision.
 
@@ -189,7 +192,7 @@ MVP features:
 - Inbox review list, Issues list, and issue detail;
 - project list with create, settings, and guarded delete;
 - issue comments and assignee field;
-- issue labels;
+- type and priority labels, with asynchronous type triage and manual priority selection from Issue Detail;
 - manage agent profiles and create a Codex session from an enabled agent mention in an issue comment;
 - cancel queued or running sessions;
 - local development runtime;
@@ -200,7 +203,8 @@ MVP features:
 - terminal/progress stream;
 - session workspace inspection;
 - branch comparison against project default branch;
-- issue-summary draft generation from session output.
+- issue-summary draft generation from session output;
+- inline task lists backed by child issues, with status toggles and task creation from Issue Detail.
 
 Still outside the current implemented MVP:
 

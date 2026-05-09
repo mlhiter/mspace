@@ -663,6 +663,8 @@ func (a *app) buildCodexSessionPrompt(session agentSession, project project, con
 	builder.WriteString(strings.TrimSpace(detail.Issue.Body))
 	builder.WriteString("\n\n")
 
+	writeIssueTaskList(&builder, detail.ChildIssues)
+
 	builder.WriteString("## Project\n\n")
 	builder.WriteString(fmt.Sprintf("- Name: %s\n", project.Name))
 	builder.WriteString(fmt.Sprintf("- Repository: %s\n", project.RepoPath))
