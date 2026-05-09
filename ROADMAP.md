@@ -40,7 +40,7 @@ Goal:
 Build in order:
 
 - Project import: support existing local folders, auto-detect GitHub remote metadata, and support direct GitHub repository URLs cloned into the mspace data directory.
-- Issue creation: keep creation in the Issues surface, allow lightweight prompts, and allow project inference when the user leaves project empty.
+- Issue creation: keep creation in the Issues surface, use a document-style note without a project selector, and infer the target project from the issue text.
 - Issue task lists: treat task rows as child issues, convert creation-time Markdown checklist lines into child rows, and let humans or agents update task status from the parent issue.
 - Agent mention flow: let a user manage agent profiles, write an issue comment with an enabled agent mention, save that comment, and create the local session from the current turn request and selected profile.
 - Inbox realtime updates: move issue/session status changes into the Inbox review feed without relying on slow manual refreshes.

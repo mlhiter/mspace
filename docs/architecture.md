@@ -8,7 +8,7 @@ The repository currently contains a runnable local-first desktop MVP:
 
 - Electron desktop shell built with electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
-- Issue creation uses a local TipTap-backed `IssueDocumentEditor` that emits Markdown. This preserves a document-like writing surface while keeping runner-side checklist extraction text-based.
+- Issue creation and the Issue Detail reply composer use a local TipTap-backed `IssueDocumentEditor` that emits Markdown. This preserves document-like writing surfaces while keeping runner-side checklist extraction and comment storage text-based.
 - Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless a healthy runner is already listening.
 - SQLite state lives at `~/.mspace/mspace.db`.
 - Imported GitHub repositories are cached under `~/.mspace/repos/<owner>/<repo>`.
@@ -86,6 +86,7 @@ Implemented runner API:
 | `GET` | `/api/issues/{issueID}` | Load issue detail, comments, sessions, and evidence. |
 | `PUT` | `/api/issues/{issueID}` | Update issue title, body, or status. Child task completion uses this status update. |
 | `POST` | `/api/issues/{issueID}/tasks` | Create a child issue task under a parent issue. |
+| `DELETE` | `/api/issues/{issueID}/tasks/{taskID}` | Delete a child issue task after verifying it belongs to the parent issue. |
 | `PUT` | `/api/issues/{issueID}/labels` | Replace issue-local labels. |
 | `POST` | `/api/issues/{issueID}/comments` | Add a human comment. |
 | `POST` | `/api/issues/{issueID}/assign-agent` | Queue a Codex turn from an issue comment. |

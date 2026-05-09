@@ -3,11 +3,15 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func TestInspectWorkspaceComparison(t *testing.T) {
@@ -288,6 +292,97 @@ func TestExtractIssueTaskDraftsRemovesChecklistLines(t *testing.T) {
 	}
 	if tasks[1].Title != "Keep completed tasks checked" || tasks[1].Status != "completed" {
 		t.Fatalf("unexpected second task: %#v", tasks[1])
+	}
+}
+
+func TestDeleteIssueTaskRemovesChildIssueOnly(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	application := &app{db: db, broker: newEventBroker()}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES ('project-1', 'Demo', '/tmp/demo', 'local', '', '', '', '', 'main', '', '', '', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES
+			('issue-1', 'project-1', NULL, 0, 'Parent issue', 'Parent body', 'open', 'pending', 'me', 'human', '', ?, ?),
+			('issue-2', 'project-1', NULL, 0, 'Other issue', 'Other body', 'open', 'pending', 'me', 'human', '', ?, ?),
+			('task-1', 'project-1', 'issue-1', 1, 'Delete me', '', 'open', 'none', 'me', 'human', '', ?, ?),
+			('task-2', 'project-1', 'issue-2', 1, 'Keep me', '', 'open', 'none', 'me', 'human', '', ?, ?)
+	`, now, now, now, now, now, now, now, now); err != nil {
+		t.Fatalf("insert issues: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO inbox_items (id, issue_id, project_id, title, status, unread, created_at, updated_at)
+		VALUES ('inbox-1', 'issue-1', 'project-1', 'Parent issue', 'open', 0, ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert inbox item: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO comments (id, issue_id, author_type, body, created_at)
+		VALUES ('comment-1', 'task-1', 'human', 'Task note', ?)
+	`, now); err != nil {
+		t.Fatalf("insert task comment: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Delete("/api/issues/{issueID}/tasks/{taskID}", application.handleDeleteIssueTask)
+
+	wrongParent := httptest.NewRecorder()
+	router.ServeHTTP(wrongParent, httptest.NewRequest(http.MethodDelete, "/api/issues/issue-2/tasks/task-1", nil))
+	if wrongParent.Code != http.StatusNotFound {
+		t.Fatalf("expected wrong parent delete to return 404, got %d body=%s", wrongParent.Code, wrongParent.Body.String())
+	}
+
+	correctParent := httptest.NewRecorder()
+	router.ServeHTTP(correctParent, httptest.NewRequest(http.MethodDelete, "/api/issues/issue-1/tasks/task-1", nil))
+	if correctParent.Code != http.StatusOK {
+		t.Fatalf("expected delete to return 200, got %d body=%s", correctParent.Code, correctParent.Body.String())
+	}
+	if !strings.Contains(correctParent.Body.String(), `"ok":true`) {
+		t.Fatalf("expected ok response, got %s", correctParent.Body.String())
+	}
+
+	var taskCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM issues WHERE id = 'task-1'`).Scan(&taskCount); err != nil {
+		t.Fatalf("count deleted task: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("expected task-1 to be deleted, count=%d", taskCount)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM issues WHERE id IN ('issue-1', 'task-2')`).Scan(&taskCount); err != nil {
+		t.Fatalf("count remaining issues: %v", err)
+	}
+	if taskCount != 2 {
+		t.Fatalf("expected parent issue and unrelated task to remain, count=%d", taskCount)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM comments WHERE issue_id = 'task-1'`).Scan(&taskCount); err != nil {
+		t.Fatalf("count cascaded comments: %v", err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("expected deleted task comments to cascade, count=%d", taskCount)
+	}
+	var unread int
+	if err := db.QueryRow(`SELECT unread FROM inbox_items WHERE issue_id = 'issue-1'`).Scan(&unread); err != nil {
+		t.Fatalf("query inbox unread: %v", err)
+	}
+	if unread != 1 {
+		t.Fatalf("expected parent inbox item to become unread, got %d", unread)
 	}
 }
 

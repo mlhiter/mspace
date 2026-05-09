@@ -49,10 +49,6 @@ export function IssuesPage() {
     queryKey: queryKeys.issues,
     queryFn: api.listIssues,
   });
-  const projectsQuery = useQuery({
-    queryKey: queryKeys.projects,
-    queryFn: api.listProjects,
-  });
   const labelDefinitionsQuery = useQuery({
     queryKey: queryKeys.issueLabelDefinitions,
     queryFn: api.listIssueLabelDefinitions,
@@ -67,7 +63,6 @@ export function IssuesPage() {
   }, [navigate, search.new]);
 
   const issues = issuesQuery.data || [];
-  const projects = projectsQuery.data || [];
   const labelOptions = useMemo(() => issueLabelOptionsForUI(labelDefinitionsQuery.data), [labelDefinitionsQuery.data]);
   const typeOptions = useMemo(() => issueLabelOptionsByDimension(labelOptions, "type"), [labelOptions]);
   const priorityOptions = useMemo(() => issueLabelOptionsByDimension(labelOptions, "priority"), [labelOptions]);
@@ -212,7 +207,7 @@ export function IssuesPage() {
         </div>
       )}
 
-      {createOpen ? <CreateIssueModal projects={projects} onClose={closeCreateModal} /> : null}
+      {createOpen ? <CreateIssueModal onClose={closeCreateModal} /> : null}
     </PageFrame>
   );
 }

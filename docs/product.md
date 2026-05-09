@@ -12,12 +12,12 @@ The repository now has a runnable local desktop MVP:
 
 - create projects from a local folder picker or GitHub repository URL and manage settings later;
 - create and manage issues in the Issues tab;
-- write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page;
+- write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page, where they can be toggled or deleted;
 - classify new issues asynchronously with a background triage agent that assigns one Conventional Commit type label;
 - label priority manually from Issue Detail, and scan/filter labels from the Issues list;
 - manage Codex-backed agents from the Agents route, including mention, description, enabled state, and role instructions;
 - use Inbox as a review feed for unread issue and session updates;
-- open document-style issue detail pages with comments and linked sessions;
+- open document-style issue detail pages with Markdown-backed rich comments and linked sessions;
 - mention an enabled agent from issue detail and start local app-server agent sessions with the matching managed profile;
 - stop a queued or running session from Issue Detail or Session Detail;
 - run sessions in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`;
@@ -129,7 +129,7 @@ The Inbox should support:
 The Issues surface should support:
 
 - human-created issues;
-- optional project selection, with project inference when the user leaves it blank;
+- automatic project inference from the issue text, without a project selector in the creation flow;
 - assignments to people or agents;
 - durable list browsing and reopening later.
 
@@ -204,7 +204,7 @@ MVP features:
 - session workspace inspection;
 - branch comparison against project default branch;
 - issue-summary draft generation from session output;
-- inline task lists backed by child issues, with status toggles and task creation from Issue Detail.
+- inline task lists backed by child issues, with status toggles, task creation, and task deletion from Issue Detail.
 
 Still outside the current implemented MVP:
 

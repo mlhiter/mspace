@@ -541,6 +541,7 @@ func main() {
 	router.Get("/api/issues/{issueID}", application.handleGetIssue)
 	router.Put("/api/issues/{issueID}", application.handleUpdateIssue)
 	router.Post("/api/issues/{issueID}/tasks", application.handleCreateIssueTask)
+	router.Delete("/api/issues/{issueID}/tasks/{taskID}", application.handleDeleteIssueTask)
 	router.Put("/api/issues/{issueID}/labels", application.handleUpdateIssueLabels)
 	router.Post("/api/issues/{issueID}/comments", application.handleCreateComment)
 	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
@@ -2007,6 +2008,79 @@ func (a *app) handleCreateIssueTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, item)
+}
+
+func (a *app) handleDeleteIssueTask(w http.ResponseWriter, r *http.Request) {
+	parentIssueID := chi.URLParam(r, "issueID")
+	taskID := chi.URLParam(r, "taskID")
+
+	parent, err := a.loadIssue(parentIssueID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("issue not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if parent.ParentIssueID != "" {
+		writeError(w, http.StatusBadRequest, errors.New("nested issue tasks are not supported yet"))
+		return
+	}
+
+	task, err := a.loadIssue(taskID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("task not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if task.ParentIssueID != parentIssueID {
+		writeError(w, http.StatusNotFound, errors.New("task not found"))
+		return
+	}
+
+	now := nowString()
+	tx, err := a.db.Begin()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(`DELETE FROM issues WHERE id = ? AND parent_issue_id = ?`, taskID, parentIssueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if rowsAffected == 0 {
+		writeError(w, http.StatusNotFound, errors.New("task not found"))
+		return
+	}
+	if _, err := tx.Exec(`UPDATE issues SET updated_at = ? WHERE id = ?`, now, parentIssueID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := tx.Exec(`UPDATE inbox_items SET updated_at = ?, unread = 1 WHERE issue_id = ?`, now, parentIssueID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	a.publishInboxEvent(parentIssueID, "updated")
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func (a *app) handleUpdateIssueLabels(w http.ResponseWriter, r *http.Request) {
@@ -4049,7 +4123,7 @@ func formatIssueLabels(labels []issueLabel) string {
 func writeIssueTaskList(builder *strings.Builder, childIssues []issueListItem) {
 	builder.WriteString("## Task List\n\n")
 	builder.WriteString("Task list items are child issues. Treat these rows as the source of truth instead of Markdown checkbox text in the issue body.\n")
-	builder.WriteString("When this session needs to create or check tasks, use the mspace API if `MSPACE_API_BASE_URL` is available: `POST /api/issues/${MSPACE_ISSUE_ID}/tasks` to add a task and `PUT /api/issues/<task-id>` with `{\"status\":\"completed\"}` to check one off.\n\n")
+	builder.WriteString("When this session needs to create, check, or delete tasks, use the mspace API if `MSPACE_API_BASE_URL` is available: `POST /api/issues/${MSPACE_ISSUE_ID}/tasks` to add a task, `PUT /api/issues/<task-id>` with `{\"status\":\"completed\"}` to check one off, and `DELETE /api/issues/${MSPACE_ISSUE_ID}/tasks/<task-id>` to remove an obsolete task.\n\n")
 	if len(childIssues) == 0 {
 		builder.WriteString("(no child issue tasks yet)\n\n")
 		return

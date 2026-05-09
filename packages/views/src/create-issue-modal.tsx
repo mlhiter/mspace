@@ -1,36 +1,27 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { GitBranch, MessageSquarePlus, X } from "lucide-react";
-import { api, queryKeys, type Project } from "@mspace/core";
+import { MessageSquarePlus, X } from "lucide-react";
+import { api, queryKeys } from "@mspace/core";
 import {
   Button,
-  Field,
   Notice,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   cn,
 } from "@mspace/ui";
 import { IssueDocumentEditor } from "./issue-document-editor";
 
 export function CreateIssueModal(props: {
-  projects: Project[];
   onClose: () => void;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [projectId, setProjectId] = useState("");
   const [prompt, setPrompt] = useState("");
-  const canCreate = prompt.trim().length > 0 && props.projects.length > 0;
+  const canCreate = prompt.trim().length > 0;
 
   const createIssue = useMutation({
     mutationFn: api.createIssue,
     onSuccess: async ({ issueId }) => {
       setPrompt("");
-      setProjectId("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
         queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
@@ -55,7 +46,6 @@ export function CreateIssueModal(props: {
     if (!canCreate) return;
 
     createIssue.mutate({
-      projectId: projectId || undefined,
       prompt,
     });
   }
@@ -79,7 +69,7 @@ export function CreateIssueModal(props: {
               New issue
             </h2>
             <p className="mt-1 max-w-[58ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
-              Describe the work in one note. mspace can infer the project, or you can pin one explicitly.
+              Describe the work in one note. mspace will route it to the best matching project.
             </p>
           </div>
           <button
@@ -93,14 +83,9 @@ export function CreateIssueModal(props: {
         </div>
 
         <form className="flex flex-col" onSubmit={handleSubmit}>
-          {createIssue.error || props.projects.length === 0 ? (
+          {createIssue.error ? (
             <div className="grid gap-3 px-8 pb-4">
-              {createIssue.error ? <Notice tone="danger">{createIssue.error.message}</Notice> : null}
-              {props.projects.length === 0 ? (
-                <Notice>
-                  Project selection is optional, but mspace still needs at least one project before it can route an issue.
-                </Notice>
-              ) : null}
+              <Notice tone="danger">{createIssue.error.message}</Notice>
             </div>
           ) : null}
 
@@ -112,27 +97,6 @@ export function CreateIssueModal(props: {
               placeholder={"Write the issue...\n\n- [ ] Add the first task\n- [ ] Add the next task"}
             />
           </section>
-
-          <div className="grid gap-4 px-8 py-5">
-            <Field label="Project" hint="Optional. Leave this on auto when the issue text names a project or repository.">
-              <div className="relative">
-                <GitBranch data-icon className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[color:var(--muted)]" />
-                <Select value={projectId || "auto"} onValueChange={(value) => setProjectId(value === "auto" ? "" : value)}>
-                  <SelectTrigger className="pl-9">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="auto">Let agent infer</SelectItem>
-                    {props.projects.map((project) => (
-                      <SelectItem key={project.id} value={project.id}>
-                        {project.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </Field>
-          </div>
 
           <div className="flex justify-end gap-2 border-t border-[color:var(--line)] bg-[color:var(--surface)] px-8 py-4">
             <Button type="button" variant="secondary" onClick={props.onClose} disabled={createIssue.isPending}>

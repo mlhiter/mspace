@@ -179,8 +179,8 @@ Current implementation:
 - lists issues across the workspace;
 - opens create issue in a modal from the page header or the sidebar quick action;
 - uses a TipTap-backed Markdown document editor for the issue note, including task-list input;
-- allows the user to leave project empty and let the runner resolve it when possible;
-- keeps the creation modal minimal: issue note plus optional project only;
+- does not show a project selector during issue creation; the runner infers the best matching existing project from the issue text;
+- keeps the creation modal minimal: issue note only, with project routing inferred from the text;
 - supports search, status/type/priority filters, and sorting by updated time, created time, priority, or type;
 - shows unread state, owner type, linked session count, child task count, and labels inline.
 
@@ -238,7 +238,7 @@ System events should be visually quieter than human and agent messages. Raw thre
 
 The composer is the main interaction control:
 
-- plain text comments stay on the issue;
+- Markdown comments stay on the issue through the same TipTap-backed document editor used for issue creation;
 - supported agent mentions save the comment and start a Codex app-server turn with the selected managed profile;
 - unsupported agent mentions should be visible but not queued;
 - when an agent is already working, a second agent turn should be disabled until the current turn finishes or is stopped.
@@ -282,7 +282,7 @@ In the default test path, the answer should be grounded in the issue namespace, 
 Current implementation:
 
 - shows issue body first, then a timeline of human comments, Codex turns, and evidence;
-- supports plain comments and managed agent mentions from the same reply box;
+- supports rich Markdown comments and managed agent mentions from the same reply box;
 - reads enabled mention suggestions from the Agents module instead of a frontend constant;
 - saves the comment before queuing the Codex app-server session, so the current turn is visible in the issue history;
 - sends the mention-stripped comment as the current turn request, ahead of the original issue context;

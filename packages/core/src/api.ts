@@ -151,6 +151,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  deleteIssueTask: (issueId: string, taskId: string) =>
+    request<{ ok: boolean }>(`/api/issues/${issueId}/tasks/${taskId}`, {
+      method: "DELETE",
+    }),
   updateIssueLabels: (issueId: string, input: UpdateIssueLabelsInput) =>
     request<IssueLabel[]>(`/api/issues/${issueId}/labels`, {
       method: "PUT",

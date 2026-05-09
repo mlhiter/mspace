@@ -314,7 +314,7 @@ GitHub imports must use a GitHub repository URL. The runner clones them into `~/
 test -d ~/.mspace/repos/<owner>/<repo>/.git && git -C ~/.mspace/repos/<owner>/<repo> remote -v
 ```
 
-If issue creation fails immediately after project setup, the usual cause is that no project exists yet or the runner could not resolve the project from the issue prompt. Create the project first or select it explicitly in the issue modal.
+If issue creation fails immediately after project setup, the usual cause is that no project exists yet. The issue modal no longer exposes a project selector; when more than one project exists, include the intended project or repository name in the issue note so the runner can infer the best matching existing project.
 
 ### Project Delete Fails
 

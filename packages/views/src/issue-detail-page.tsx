@@ -1,21 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
+import type { Editor } from "@tiptap/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  Bold,
   Bot,
   CheckCircle2,
   CircleAlert,
   CircleDot,
   CircleStop,
   Clock3,
-  Code2,
   ExternalLink,
   Globe2,
-  Italic,
-  Link as LinkIcon,
   ListChecks,
   Plus,
   Rocket,
@@ -55,10 +52,10 @@ import {
   SelectTrigger,
   SelectValue,
   StatusBadge,
-  Textarea,
   cn,
 } from "@mspace/ui";
 import { FileTypeIcon } from "./file-type-icon";
+import { IssueDocumentEditor } from "./issue-document-editor";
 import {
   buildIssueLabelSelectionInput,
   issueLabelOptionsByDimension,
@@ -86,6 +83,11 @@ type MentionMenuPosition = {
   top: number;
   left: number;
   width: number;
+};
+type EditorMentionMatch = {
+  query: string;
+  from: number;
+  to: number;
 };
 type EvidenceResource = {
   kind: string;
@@ -157,16 +159,19 @@ function trailingMentionQuery(value: string) {
   return value.match(/(?:^|[^\w])@([a-z0-9_-]*)$/i)?.[1].toLowerCase() ?? null;
 }
 
-function mentionMatchAtCursor(value: string, cursor: number) {
-  const beforeCursor = value.slice(0, Math.max(0, Math.min(cursor, value.length)));
+function mentionMatchInEditor(editor: Editor): EditorMentionMatch | null {
+  const { selection } = editor.state;
+  if (!selection.empty) return null;
+  const beforeCursor = editor.state.doc.textBetween(0, selection.from, "\n", "\n");
   const match = beforeCursor.match(/(?:^|[^\w])@([a-z0-9_-]*)$/i);
   if (!match || match.index === undefined) return null;
-  const startsWithMention = match[0].startsWith("@");
-  const start = match.index + (startsWithMention ? 0 : 1);
+  const mentionStartInMatch = match[0].lastIndexOf("@");
+  const mentionStartInText = match.index + mentionStartInMatch;
+  const mentionLength = beforeCursor.length - mentionStartInText;
   return {
     query: match[1].toLowerCase(),
-    start,
-    end: beforeCursor.length,
+    from: Math.max(1, selection.from - mentionLength),
+    to: selection.from,
   };
 }
 
@@ -183,71 +188,19 @@ function insertAgentMention(value: string, agent: AgentProfile) {
   return `${value}${separator}${mention} `;
 }
 
-function insertAgentMentionAtMatch(value: string, agent: AgentProfile, match: ReturnType<typeof mentionMatchAtCursor>) {
-  const mention = agentMentionText(agent);
-  if (!match) {
-    const next = insertAgentMention(value, agent);
-    return { value: next, caret: next.length };
-  }
-  const next = `${value.slice(0, match.start)}${mention} ${value.slice(match.end)}`;
-  return { value: next, caret: match.start + mention.length + 1 };
-}
-
 function agentMentionOptionId(agent: AgentProfile) {
   return `issue-agent-mention-${agent.id.replace(/[^a-z0-9_-]/gi, "-")}`;
 }
 
-function measureTextareaCaret(textarea: HTMLTextAreaElement, position: number) {
-  const style = window.getComputedStyle(textarea);
-  const mirror = document.createElement("div");
-  const marker = document.createElement("span");
-
-  mirror.textContent = textarea.value.slice(0, position);
-  marker.textContent = "\u200b";
-  mirror.append(marker);
-
-  Object.assign(mirror.style, {
-    position: "absolute",
-    top: "0",
-    left: "-9999px",
-    visibility: "hidden",
-    boxSizing: style.boxSizing,
-    width: `${textarea.clientWidth}px`,
-    minHeight: "0",
-    height: "auto",
-    overflow: "hidden",
-    whiteSpace: "pre-wrap",
-    overflowWrap: "break-word",
-    font: style.font,
-    lineHeight: style.lineHeight,
-    letterSpacing: style.letterSpacing,
-    textAlign: style.textAlign,
-    textTransform: style.textTransform,
-    wordSpacing: style.wordSpacing,
-    tabSize: style.tabSize,
-    padding: style.padding,
-    border: style.border,
-  });
-
-  document.body.append(mirror);
-  const fontSize = Number.parseFloat(style.fontSize) || 14;
-  const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.45;
-  const coordinates = {
-    top: marker.offsetTop - textarea.scrollTop,
-    left: marker.offsetLeft - textarea.scrollLeft,
-    lineHeight,
-  };
-  mirror.remove();
-  return coordinates;
-}
-
-function mentionMenuPositionForTextarea(textarea: HTMLTextAreaElement, match: NonNullable<ReturnType<typeof mentionMatchAtCursor>>): MentionMenuPosition {
+function mentionMenuPositionForEditor(editor: Editor, match: EditorMentionMatch): MentionMenuPosition {
   const gutter = 10;
-  const width = Math.min(384, Math.max(240, textarea.clientWidth - gutter * 2));
-  const caret = measureTextareaCaret(textarea, match.start);
+  const container = editor.view.dom.closest("[data-comment-composer='true']") as HTMLElement | null;
+  const containerRect = container?.getBoundingClientRect() || editor.view.dom.getBoundingClientRect();
+  const caret = editor.view.coordsAtPos(match.to);
+  const width = Math.min(384, Math.max(240, containerRect.width - gutter * 2));
   return {
-    top: Math.max(8, caret.top + caret.lineHeight + 4),
-    left: Math.max(gutter, Math.min(caret.left, textarea.clientWidth - width - gutter)),
+    top: Math.max(8, caret.bottom - containerRect.top + 6),
+    left: Math.max(gutter, Math.min(caret.left - containerRect.left, containerRect.width - width - gutter)),
     width,
   };
 }
@@ -945,10 +898,13 @@ function IssueTaskList(props: {
   createError?: Error | null;
   updatingTaskId: string;
   updateError?: Error | null;
+  deletingTaskId: string;
+  deleteError?: Error | null;
   canCreate: boolean;
   onNewTaskTitleChange: (value: string) => void;
   onCreateTask: () => void;
   onToggleTask: (task: IssueListItem) => void;
+  onDeleteTask: (task: IssueListItem) => void;
 }) {
   return (
     <div className="mt-6 border-t border-[color:var(--line)] pt-4">
@@ -963,13 +919,16 @@ function IssueTaskList(props: {
       </div>
 
       {props.updateError ? <Notice tone="danger">{props.updateError.message}</Notice> : null}
+      {props.deleteError ? <Notice tone="danger">{props.deleteError.message}</Notice> : null}
       {props.tasks.length > 0 ? (
         <div className="divide-y divide-[color:var(--line)]">
           {props.tasks.map((task) => {
             const completed = task.status === "completed";
             const updating = props.updatingTaskId === task.id;
+            const deleting = props.deletingTaskId === task.id;
+            const busy = updating || deleting;
             return (
-              <div key={task.id} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2 py-2">
+              <div key={task.id} className="grid grid-cols-[28px_minmax(0,1fr)_auto_auto] items-center gap-2 py-2">
                 <button
                   type="button"
                   aria-label={completed ? "Mark task open" : "Mark task complete"}
@@ -979,7 +938,7 @@ function IssueTaskList(props: {
                     completed ? "text-[color:var(--success)]" : "text-[color:var(--muted)]",
                     updating && "opacity-60",
                   )}
-                  disabled={updating}
+                  disabled={busy}
                   onClick={() => props.onToggleTask(task)}
                 >
                   {completed ? <CheckCircle2 data-icon /> : <CircleDot data-icon />}
@@ -991,6 +950,19 @@ function IssueTaskList(props: {
                   {task.body ? <div className="line-clamp-1 text-[12px] leading-5 text-[color:var(--muted)]">{task.body}</div> : null}
                 </div>
                 <StatusBadge value={task.status} />
+                <button
+                  type="button"
+                  aria-label="Delete task"
+                  title={deleting ? "Deleting task" : "Delete task"}
+                  className={cn(
+                    "grid size-7 place-items-center rounded-[7px] text-[color:var(--faint)] transition-[background-color,color,transform,opacity] duration-150 ease-out hover:bg-[color:var(--danger-soft)] hover:text-[color:var(--danger)] active:scale-95",
+                    busy && "opacity-60",
+                  )}
+                  disabled={busy}
+                  onClick={() => props.onDeleteTask(task)}
+                >
+                  <Trash2 data-icon />
+                </button>
               </div>
             );
           })}
@@ -1036,47 +1008,6 @@ function SidebarSection(props: { title: string; children: React.ReactNode }) {
       <h2 className="text-[12px] font-medium leading-5 text-[color:var(--faint)]">{props.title}</h2>
       {props.children}
     </section>
-  );
-}
-
-function ComposerToolbar(props: { onInsert: (prefix: string, suffix: string, placeholder: string) => void }) {
-  return (
-    <div className="flex items-center gap-1 border-b border-[color:var(--line)] px-2 py-1.5">
-      <ComposerTool
-        label="Bold"
-        icon={<Bold data-icon />}
-        onClick={() => props.onInsert("**", "**", "bold text")}
-      />
-      <ComposerTool
-        label="Italic"
-        icon={<Italic data-icon />}
-        onClick={() => props.onInsert("_", "_", "italic text")}
-      />
-      <ComposerTool
-        label="Inline code"
-        icon={<Code2 data-icon />}
-        onClick={() => props.onInsert("`", "`", "code")}
-      />
-      <ComposerTool
-        label="Link"
-        icon={<LinkIcon data-icon />}
-        onClick={() => props.onInsert("[", "](https://)", "link text")}
-      />
-    </div>
-  );
-}
-
-function ComposerTool(props: { label: string; icon: React.ReactNode; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.label}
-      className="grid size-8 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
-      onClick={props.onClick}
-    >
-      {props.icon}
-    </button>
   );
 }
 
@@ -1370,10 +1301,10 @@ function TestDeployModal(props: {
 export function IssueDetailPage() {
   const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
   const queryClient = useQueryClient();
-  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const [composerEditor, setComposerEditor] = useState<Editor | null>(null);
   const [composerBody, setComposerBody] = useState("");
-  const [composerCaret, setComposerCaret] = useState(0);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [composerMentionMatch, setComposerMentionMatch] = useState<EditorMentionMatch | null>(null);
   const [mentionMenuDismissed, setMentionMenuDismissed] = useState(false);
   const [mentionMenuPosition, setMentionMenuPosition] = useState<MentionMenuPosition>({ top: 38, left: 10, width: 384 });
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
@@ -1422,8 +1353,7 @@ export function IssueDetailPage() {
   const mentionedAgentConfig = mentionedAgent ? findAgent(enabledAgents, mentionedAgent) : undefined;
   const isSupportedAgentMention = Boolean(mentionedAgentConfig);
   const isUnsupportedAgentMention = Boolean(mentionedAgent && !mentionedAgentConfig);
-  const mentionMatch = mentionMatchAtCursor(composerBody, composerCaret);
-  const mentionQuery = mentionMatch?.query ?? null;
+  const mentionQuery = composerMentionMatch?.query ?? null;
   const agentSuggestions =
     mentionQuery === null
       ? []
@@ -1508,6 +1438,8 @@ export function IssueDetailPage() {
     },
     onSuccess: async () => {
       setComposerBody("");
+      composerEditor?.commands.clearContent(false);
+      setComposerMentionMatch(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
@@ -1520,31 +1452,33 @@ export function IssueDetailPage() {
     !isUnsupportedAgentMention &&
     !(isSupportedAgentMention && hasActiveSession);
 
-  function syncComposerCaret(textarea: HTMLTextAreaElement) {
-    const cursor = textarea.selectionStart ?? textarea.value.length;
-    const match = mentionMatchAtCursor(textarea.value, cursor);
-    setComposerCaret(cursor);
+  function syncComposerEditorState(editor: Editor) {
+    const match = mentionMatchInEditor(editor);
+    setComposerMentionMatch(match);
     if (match) {
-      setMentionMenuPosition(mentionMenuPositionForTextarea(textarea, match));
+      setMentionMenuPosition(mentionMenuPositionForEditor(editor, match));
     }
   }
 
   function selectAgentSuggestion(agent: AgentProfile) {
-    const textarea = composerRef.current;
-    const cursor = textarea?.selectionStart ?? composerCaret;
-    const match = mentionMatchAtCursor(composerBody, cursor) || mentionMatch;
-    const next = insertAgentMentionAtMatch(composerBody, agent, match);
-    setComposerBody(next.value);
-    setComposerCaret(next.caret);
+    const mention = agentMentionText(agent);
+    const match = composerEditor ? mentionMatchInEditor(composerEditor) || composerMentionMatch : null;
+    if (composerEditor) {
+      if (match) {
+        composerEditor.chain().focus().insertContentAt({ from: match.from, to: match.to }, `${mention} `).run();
+      } else {
+        const separator = composerBody === "" || composerBody.endsWith(" ") || composerBody.endsWith("\n") ? "" : " ";
+        composerEditor.chain().focus().insertContent(`${separator}${mention} `).run();
+      }
+      window.requestAnimationFrame(() => syncComposerEditorState(composerEditor));
+    } else {
+      setComposerBody(insertAgentMention(composerBody, agent));
+    }
     setActiveMentionIndex(0);
     setMentionMenuDismissed(false);
-    window.requestAnimationFrame(() => {
-      textarea?.focus();
-      textarea?.setSelectionRange(next.caret, next.caret);
-    });
   }
 
-  function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+  function handleComposerKeyDown(event: React.KeyboardEvent<HTMLDivElement>, editor: Editor) {
     const isComposing = event.nativeEvent.isComposing || event.keyCode === 229;
     if (isComposing) return;
 
@@ -1574,25 +1508,9 @@ export function IssueDetailPage() {
       }
     }
 
-    if (event.key !== "Enter" || event.shiftKey || event.altKey) return;
+    if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
     event.preventDefault();
-    event.currentTarget.form?.requestSubmit();
-  }
-
-  function insertComposerMarkup(prefix: string, suffix: string, placeholder: string) {
-    const textarea = composerRef.current;
-    const start = textarea?.selectionStart ?? composerBody.length;
-    const end = textarea?.selectionEnd ?? composerBody.length;
-    const selected = composerBody.slice(start, end) || placeholder;
-    const next = `${composerBody.slice(0, start)}${prefix}${selected}${suffix}${composerBody.slice(end)}`;
-    const nextStart = start + prefix.length;
-    const nextEnd = nextStart + selected.length;
-    setComposerBody(next);
-    setComposerCaret(nextEnd);
-    window.requestAnimationFrame(() => {
-      textarea?.focus();
-      textarea?.setSelectionRange(nextStart, nextEnd);
-    });
+    (editor.view.dom.closest("form") as HTMLFormElement | null)?.requestSubmit();
   }
 
   const updateLabels = useMutation({
@@ -1620,6 +1538,17 @@ export function IssueDetailPage() {
 
   const updateTaskStatus = useMutation({
     mutationFn: (input: { taskId: string; status: string }) => api.updateIssue(input.taskId, { status: input.status }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+      ]);
+    },
+  });
+
+  const deleteTask = useMutation({
+    mutationFn: (taskId: string) => api.deleteIssueTask(issueId, taskId),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
@@ -1737,6 +1666,8 @@ export function IssueDetailPage() {
                 createError={createTask.error}
                 updatingTaskId={updateTaskStatus.isPending ? updateTaskStatus.variables?.taskId || "" : ""}
                 updateError={updateTaskStatus.error}
+                deletingTaskId={deleteTask.isPending ? deleteTask.variables || "" : ""}
+                deleteError={deleteTask.error}
                 canCreate={canCreateTask}
                 onNewTaskTitleChange={setNewTaskTitle}
                 onCreateTask={() => {
@@ -1748,6 +1679,9 @@ export function IssueDetailPage() {
                     taskId: task.id,
                     status: task.status === "completed" ? "open" : "completed",
                   });
+                }}
+                onDeleteTask={(task) => {
+                  deleteTask.mutate(task.id);
                 }}
               />
             ) : null}
@@ -1801,30 +1735,26 @@ export function IssueDetailPage() {
               }}
             >
               {sendComposer.error ? <Notice tone="danger">{sendComposer.error.message}</Notice> : null}
-              <ComposerToolbar onInsert={insertComposerMarkup} />
-              <div className="relative">
-                <Textarea
-                  ref={composerRef}
+              <div className="relative" data-comment-composer="true">
+                <IssueDocumentEditor
+                  variant="comment"
+                  ariaLabel="Issue comment"
                   value={composerBody}
-                  aria-autocomplete="list"
-                  aria-controls={mentionMenuOpen ? "issue-agent-mention-menu" : undefined}
-                  aria-activedescendant={mentionMenuOpen ? agentMentionOptionId(agentSuggestions[selectedMentionIndex]) : undefined}
-                  onChange={(event) => {
-                    setComposerBody(event.target.value);
-                    syncComposerCaret(event.target);
+                  onChange={(value) => {
+                    setComposerBody(value);
                     setMentionMenuDismissed(false);
                   }}
-                  onFocus={(event) => {
+                  onReady={setComposerEditor}
+                  onEditorStateChange={syncComposerEditorState}
+                  onFocus={(editor) => {
                     setComposerFocused(true);
-                    syncComposerCaret(event.currentTarget);
+                    syncComposerEditorState(editor);
                   }}
-                  onBlur={() => setComposerFocused(false)}
-                  onClick={(event) => syncComposerCaret(event.currentTarget)}
-                  onKeyUp={(event) => syncComposerCaret(event.currentTarget)}
-                  onSelect={(event) => syncComposerCaret(event.currentTarget)}
+                  onBlur={() => {
+                    setComposerFocused(false);
+                  }}
                   onKeyDown={handleComposerKeyDown}
                   placeholder={formatMentionPlaceholder(enabledAgents)}
-                  className="min-h-28 rounded-none bg-transparent shadow-none focus-visible:bg-transparent focus-visible:shadow-none"
                 />
                 {mentionMenuOpen ? (
                   <AgentMentionMenu

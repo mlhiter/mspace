@@ -48,8 +48,9 @@ The interaction model is closer to a shared engineering document than a terminal
 - Project import from a local folder or GitHub repository URL, including GitHub remote metadata detection when available.
 - Managed agent profiles stored in SQLite, seeded with internal `@triage` plus user-facing `@codex`, `@bugfix`, and `@design`.
 - Agent mentions from issue comments, with turn queueing, profile instructions, status updates, and issue timeline updates.
+- Markdown-backed TipTap writing surfaces for issue creation and human issue comments, including checklist input that becomes child tasks.
 - Per-session git worktrees, workspace inspection, changed file lists, diff previews, commits, and comparison against the project default branch.
-- Type and priority labels, child issue task lists, asynchronous type triage, unread Inbox updates, running-session stop controls, and manual worktree cleanup after completion or cancellation.
+- Type and priority labels, child issue task lists with create/toggle/delete controls, asynchronous type triage, unread Inbox updates, running-session stop controls, and manual worktree cleanup after completion or cancellation.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Project default cluster selection.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and record evidence.
@@ -101,10 +102,11 @@ pnpm dev:desktop
 1. Add a project from a local folder or GitHub repository URL.
 2. Add a reusable test cluster in the Clusters tab, or use the first-run prompt to choose which discovered `~/.kube` kubeconfig files to import.
 3. Select that cluster as the project default when needed.
-4. Create an issue in the Issues tab.
-5. Mention an enabled agent profile, such as `@codex`, in an issue comment.
-6. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
-7. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
+4. Create an issue in the Issues tab with a document-style note; include the project or repository name when multiple projects exist.
+5. Use checklist rows such as `- [ ] Add tests` when the issue needs child tasks.
+6. Mention an enabled agent profile, such as `@codex`, in a rich issue comment.
+7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
+8. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
 
 ## Configuration
 

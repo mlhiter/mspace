@@ -17,6 +17,17 @@ The Electron preload exposes the same base URL to the renderer through `window.m
 
 Agent sessions also receive `MSPACE_API_BASE_URL` so they can update issue task state from the prepared worktree when needed.
 
+## Issue Writing APIs
+
+The desktop uses a rich TipTap editor for issue creation and human comments, but the runner API stores Markdown text.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/issues` | Create an issue from `title`, `body` or `prompt`, optional `projectId`, optional labels, and optional child task drafts. |
+| `POST` | `/api/issues/{issueID}/comments` | Add a Markdown human comment. |
+
+When `projectId` is omitted, the runner infers the best matching existing project from the title, body, and task text. If no project exists, issue creation returns `400 Bad Request`.
+
 ## Issue Task APIs
 
 Task lists are stored as child issues. Markdown checklist lines submitted in `POST /api/issues` are converted into child issue tasks and removed from the parent body.
@@ -25,6 +36,7 @@ Task lists are stored as child issues. Markdown checklist lines submitted in `PO
 | --- | --- | --- |
 | `PUT` | `/api/issues/{issueID}` | Update an issue or task title, body, or status. |
 | `POST` | `/api/issues/{issueID}/tasks` | Create a child issue task under a parent issue. |
+| `DELETE` | `/api/issues/{issueID}/tasks/{taskID}` | Delete a child issue task from its parent issue. |
 
 Create a task:
 
@@ -40,6 +52,12 @@ Mark a task complete:
 curl -X PUT "$MSPACE_API_BASE/api/issues/<task-id>" \
   -H 'Content-Type: application/json' \
   -d '{"status":"completed"}'
+```
+
+Delete a task:
+
+```bash
+curl -X DELETE "$MSPACE_API_BASE/api/issues/<issue-id>/tasks/<task-id>"
 ```
 
 ## Issue Label APIs

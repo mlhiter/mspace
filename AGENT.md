@@ -21,7 +21,7 @@ The product should stay narrow:
 - The Electron main process auto-starts the local runner with `go run .` unless `GET /health` is already healthy.
 - Sidebar navigation currently exposes Inbox, Issues, Agents, Clusters, and Projects, plus a quick link that opens issue creation from the left rail and an Active work block for recent issue/session/test-environment activity.
 - Inbox is a review-only unread feed; issue creation and management live in the Issues route.
-- The issue creation modal uses `IssueDocumentEditor`, a TipTap-backed Markdown editor in `packages/views/src/issue-document-editor.tsx`, so checklist task input remains document-like while the runner still receives Markdown.
+- The issue creation modal and Issue Detail reply composer use `IssueDocumentEditor`, a TipTap-backed Markdown editor in `packages/views/src/issue-document-editor.tsx`, so checklist task input and comments remain document-like while the runner still receives Markdown. Issue creation does not expose a project selector; mspace infers the project from the note.
 - Issue task lists are modeled as child issues via `issues.parent_issue_id`, then rendered inline on the parent Issue Detail page. Markdown checklist lines typed during issue creation are converted into child issues so the checkbox text is not a second source of truth.
 - SQLite database path: `~/.mspace/mspace.db`.
 - Imported GitHub repositories are cloned or reused under `~/.mspace/repos/<owner>/<repo>`.
@@ -55,9 +55,9 @@ The product should stay narrow:
 ## Working Rules
 
 - Keep Inbox and Issue objects as first-class product objects.
-- Keep task lists as inline child issue views, not Markdown checkbox state. Agents should create tasks through `POST /api/issues/{issueID}/tasks` and update task status through `PUT /api/issues/{taskID}` when the local API base URL is available.
+- Keep task lists as inline child issue views, not Markdown checkbox state. Agents should create tasks through `POST /api/issues/{issueID}/tasks`, update task status through `PUT /api/issues/{taskID}`, and remove obsolete tasks through `DELETE /api/issues/{issueID}/tasks/{taskID}` when the local API base URL is available.
 - Keep Inbox review-only. New issue creation belongs in the Issues flow, not in Inbox.
-- Keep issue creation minimal: note plus optional project only. Type is classified asynchronously after creation, and priority is set manually from Issue Detail.
+- Keep issue creation minimal: note only. Project routing is inferred from the issue text, type is classified asynchronously after creation, and priority is set manually from Issue Detail.
 - Keep type triage asynchronous. Issue creation must not wait for agent classification.
 - Do not use keyword matching for issue type classification; use the triage agent and validate its structured output against the fixed type set.
 - Keep local development runtime as the MVP default.

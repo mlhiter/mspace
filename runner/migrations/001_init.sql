@@ -56,9 +56,6 @@ CREATE TABLE IF NOT EXISTS issues (
   updated_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_issues_parent_issue_id ON issues(parent_issue_id);
-CREATE INDEX IF NOT EXISTS idx_issues_project_parent_updated ON issues(project_id, parent_issue_id, updated_at);
-
 CREATE TABLE IF NOT EXISTS inbox_items (
   id TEXT PRIMARY KEY,
   issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
@@ -104,7 +101,6 @@ CREATE TABLE IF NOT EXISTS issue_labels (
 );
 
 CREATE INDEX IF NOT EXISTS idx_issue_labels_issue_id ON issue_labels(issue_id);
-CREATE INDEX IF NOT EXISTS idx_issue_labels_label_id ON issue_labels(label_id);
 
 CREATE TABLE IF NOT EXISTS agent_profiles (
   id TEXT PRIMARY KEY,
