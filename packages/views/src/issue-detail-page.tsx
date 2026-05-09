@@ -71,6 +71,11 @@ type SessionSnapshot = {
   changes: WorkspaceChange[];
 };
 type EvidenceTone = "healthy" | "warning" | "failed" | "collected";
+type MentionMenuPosition = {
+  top: number;
+  left: number;
+  width: number;
+};
 type EvidenceResource = {
   kind: string;
   name: string;
@@ -141,13 +146,99 @@ function trailingMentionQuery(value: string) {
   return value.match(/(?:^|[^\w])@([a-z0-9_-]*)$/i)?.[1].toLowerCase() ?? null;
 }
 
+function mentionMatchAtCursor(value: string, cursor: number) {
+  const beforeCursor = value.slice(0, Math.max(0, Math.min(cursor, value.length)));
+  const match = beforeCursor.match(/(?:^|[^\w])@([a-z0-9_-]*)$/i);
+  if (!match || match.index === undefined) return null;
+  const startsWithMention = match[0].startsWith("@");
+  const start = match.index + (startsWithMention ? 0 : 1);
+  return {
+    query: match[1].toLowerCase(),
+    start,
+    end: beforeCursor.length,
+  };
+}
+
+function agentMentionText(agent: AgentProfile) {
+  return agent.mention.startsWith("@") ? agent.mention : `@${agent.mention}`;
+}
+
 function insertAgentMention(value: string, agent: AgentProfile) {
-  const mention = agent.mention.startsWith("@") ? agent.mention : `@${agent.mention}`;
+  const mention = agentMentionText(agent);
   if (trailingMentionQuery(value) !== null) {
     return value.replace(/@([a-z0-9_-]*)$/i, `${mention} `);
   }
   const separator = value === "" || value.endsWith(" ") || value.endsWith("\n") ? "" : " ";
   return `${value}${separator}${mention} `;
+}
+
+function insertAgentMentionAtMatch(value: string, agent: AgentProfile, match: ReturnType<typeof mentionMatchAtCursor>) {
+  const mention = agentMentionText(agent);
+  if (!match) {
+    const next = insertAgentMention(value, agent);
+    return { value: next, caret: next.length };
+  }
+  const next = `${value.slice(0, match.start)}${mention} ${value.slice(match.end)}`;
+  return { value: next, caret: match.start + mention.length + 1 };
+}
+
+function agentMentionOptionId(agent: AgentProfile) {
+  return `issue-agent-mention-${agent.id.replace(/[^a-z0-9_-]/gi, "-")}`;
+}
+
+function measureTextareaCaret(textarea: HTMLTextAreaElement, position: number) {
+  const style = window.getComputedStyle(textarea);
+  const mirror = document.createElement("div");
+  const marker = document.createElement("span");
+
+  mirror.textContent = textarea.value.slice(0, position);
+  marker.textContent = "\u200b";
+  mirror.append(marker);
+
+  Object.assign(mirror.style, {
+    position: "absolute",
+    top: "0",
+    left: "-9999px",
+    visibility: "hidden",
+    boxSizing: style.boxSizing,
+    width: `${textarea.clientWidth}px`,
+    minHeight: "0",
+    height: "auto",
+    overflow: "hidden",
+    whiteSpace: "pre-wrap",
+    overflowWrap: "break-word",
+    font: style.font,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    textAlign: style.textAlign,
+    textTransform: style.textTransform,
+    wordSpacing: style.wordSpacing,
+    tabSize: style.tabSize,
+    padding: style.padding,
+    border: style.border,
+  });
+
+  document.body.append(mirror);
+  const fontSize = Number.parseFloat(style.fontSize) || 14;
+  const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.45;
+  const coordinates = {
+    top: marker.offsetTop - textarea.scrollTop,
+    left: marker.offsetLeft - textarea.scrollLeft,
+    lineHeight,
+  };
+  mirror.remove();
+  return coordinates;
+}
+
+function mentionMenuPositionForTextarea(textarea: HTMLTextAreaElement, match: NonNullable<ReturnType<typeof mentionMatchAtCursor>>): MentionMenuPosition {
+  const gutter = 10;
+  const width = Math.min(384, Math.max(240, textarea.clientWidth - gutter * 2));
+  const caret = measureTextareaCaret(textarea, match.start);
+  return {
+    top: Math.max(8, caret.top + caret.lineHeight + 4),
+    left: Math.max(gutter, Math.min(caret.left, textarea.clientWidth - width - gutter)),
+    width,
+  };
 }
 
 function fallbackAgent(agentId: string): AgentProfile {
@@ -905,6 +996,53 @@ function ComposerTool(props: { label: string; icon: React.ReactNode; onClick: ()
   );
 }
 
+function AgentMentionMenu(props: {
+  agents: AgentProfile[];
+  activeIndex: number;
+  position: MentionMenuPosition;
+  onActiveIndexChange: (index: number) => void;
+  onSelect: (agent: AgentProfile) => void;
+}) {
+  return (
+    <div
+      id="issue-agent-mention-menu"
+      role="listbox"
+      aria-label="Agent mentions"
+      style={{ top: props.position.top, left: props.position.left, width: props.position.width }}
+      className="absolute z-[90] max-h-72 overflow-y-auto overflow-x-hidden rounded-[9px] bg-[color:var(--paper)] p-1 shadow-[0_18px_56px_rgba(0,0,0,0.16),0_0_0_1px_var(--line)]"
+    >
+      <div className="px-2 py-1 text-[11px] font-medium leading-4 text-[color:var(--faint)]">Mention agent</div>
+      {props.agents.map((agent, index) => {
+        const active = index === props.activeIndex;
+        return (
+          <button
+            id={agentMentionOptionId(agent)}
+            key={agent.id}
+            type="button"
+            role="option"
+            aria-selected={active}
+            className={cn(
+              "flex min-h-10 w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] outline-none transition-[background-color] duration-150 ease-out",
+              active ? "bg-[color:var(--selection)]" : "hover:bg-[color:var(--hover)]",
+            )}
+            onMouseEnter={() => props.onActiveIndexChange(index)}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => props.onSelect(agent)}
+          >
+            <span className="grid size-7 shrink-0 place-items-center rounded-[7px] bg-[color:var(--block)] text-[color:var(--muted)]">
+              <Bot data-icon />
+            </span>
+            <span className="grid min-w-0 flex-1">
+              <span className="truncate font-medium leading-5 text-[color:var(--text)]">{agent.mention}</span>
+              <span className="truncate text-[12px] leading-4 text-[color:var(--muted)]">{agent.description || agent.name}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function LabelEditor(props: {
   labels: IssueLabel[];
   isPending: boolean;
@@ -1140,6 +1278,11 @@ export function IssueDetailPage() {
   const queryClient = useQueryClient();
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [composerBody, setComposerBody] = useState("");
+  const [composerCaret, setComposerCaret] = useState(0);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [mentionMenuDismissed, setMentionMenuDismissed] = useState(false);
+  const [mentionMenuPosition, setMentionMenuPosition] = useState<MentionMenuPosition>({ top: 38, left: 10, width: 384 });
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [sessionSnapshotsById, setSessionSnapshotsById] = useState<Record<string, SessionSnapshot>>({});
   const [testDeployOpen, setTestDeployOpen] = useState(false);
   const [testDeployForm, setTestDeployForm] = useState<StartTestDeployInput>({
@@ -1176,11 +1319,14 @@ export function IssueDetailPage() {
   const mentionedAgentConfig = mentionedAgent ? findAgent(enabledAgents, mentionedAgent) : undefined;
   const isSupportedAgentMention = Boolean(mentionedAgentConfig);
   const isUnsupportedAgentMention = Boolean(mentionedAgent && !mentionedAgentConfig);
-  const mentionQuery = trailingMentionQuery(composerBody);
+  const mentionMatch = mentionMatchAtCursor(composerBody, composerCaret);
+  const mentionQuery = mentionMatch?.query ?? null;
   const agentSuggestions =
     mentionQuery === null
       ? []
       : enabledAgents.filter((agent) => mentionKey(agent.mention).startsWith(mentionQuery) || agent.name.toLowerCase().startsWith(mentionQuery));
+  const selectedMentionIndex = agentSuggestions.length === 0 ? 0 : Math.min(activeMentionIndex, agentSuggestions.length - 1);
+  const mentionMenuOpen = composerFocused && !mentionMenuDismissed && agentSuggestions.length > 0;
 
   useEffect(() => {
     const sessions = detail?.sessions || [];
@@ -1233,6 +1379,11 @@ export function IssueDetailPage() {
 
   useSessionStream(latestSession?.id, handleSessionEvent);
 
+  useEffect(() => {
+    setActiveMentionIndex(0);
+    setMentionMenuDismissed(false);
+  }, [mentionQuery]);
+
   const sendComposer = useMutation({
     mutationFn: async (body: string) => {
       const trimmedBody = body.trim();
@@ -1266,16 +1417,78 @@ export function IssueDetailPage() {
     !isUnsupportedAgentMention &&
     !(isSupportedAgentMention && hasActiveSession);
 
+  function syncComposerCaret(textarea: HTMLTextAreaElement) {
+    const cursor = textarea.selectionStart ?? textarea.value.length;
+    const match = mentionMatchAtCursor(textarea.value, cursor);
+    setComposerCaret(cursor);
+    if (match) {
+      setMentionMenuPosition(mentionMenuPositionForTextarea(textarea, match));
+    }
+  }
+
+  function selectAgentSuggestion(agent: AgentProfile) {
+    const textarea = composerRef.current;
+    const cursor = textarea?.selectionStart ?? composerCaret;
+    const match = mentionMatchAtCursor(composerBody, cursor) || mentionMatch;
+    const next = insertAgentMentionAtMatch(composerBody, agent, match);
+    setComposerBody(next.value);
+    setComposerCaret(next.caret);
+    setActiveMentionIndex(0);
+    setMentionMenuDismissed(false);
+    window.requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(next.caret, next.caret);
+    });
+  }
+
+  function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    const isComposing = event.nativeEvent.isComposing || event.keyCode === 229;
+    if (isComposing) return;
+
+    if (mentionMenuOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setActiveMentionIndex((index) => (index + 1) % agentSuggestions.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveMentionIndex((index) => (index - 1 + agentSuggestions.length) % agentSuggestions.length);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMentionMenuDismissed(true);
+        return;
+      }
+      if ((event.key === "Enter" && !event.shiftKey && !event.altKey) || (event.key === "Tab" && !event.shiftKey)) {
+        const agent = agentSuggestions[selectedMentionIndex];
+        if (agent) {
+          event.preventDefault();
+          selectAgentSuggestion(agent);
+          return;
+        }
+      }
+    }
+
+    if (event.key !== "Enter" || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  }
+
   function insertComposerMarkup(prefix: string, suffix: string, placeholder: string) {
     const textarea = composerRef.current;
     const start = textarea?.selectionStart ?? composerBody.length;
     const end = textarea?.selectionEnd ?? composerBody.length;
     const selected = composerBody.slice(start, end) || placeholder;
     const next = `${composerBody.slice(0, start)}${prefix}${selected}${suffix}${composerBody.slice(end)}`;
+    const nextStart = start + prefix.length;
+    const nextEnd = nextStart + selected.length;
     setComposerBody(next);
+    setComposerCaret(nextEnd);
     window.requestAnimationFrame(() => {
       textarea?.focus();
-      textarea?.setSelectionRange(start + prefix.length, start + prefix.length + selected.length);
+      textarea?.setSelectionRange(nextStart, nextEnd);
     });
   }
 
@@ -1439,36 +1652,40 @@ export function IssueDetailPage() {
             >
               {sendComposer.error ? <Notice tone="danger">{sendComposer.error.message}</Notice> : null}
               <ComposerToolbar onInsert={insertComposerMarkup} />
-              <Textarea
-                ref={composerRef}
-                value={composerBody}
-                onChange={(event) => setComposerBody(event.target.value)}
-                onKeyDown={(event) => {
-                  const isComposing = event.nativeEvent.isComposing || event.keyCode === 229;
-                  if (isComposing || event.key !== "Enter" || event.shiftKey || event.altKey) return;
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }}
-                placeholder={formatMentionPlaceholder(enabledAgents)}
-                className="min-h-28 rounded-none bg-transparent shadow-none focus-visible:bg-transparent focus-visible:shadow-none"
-              />
-              {agentSuggestions.length > 0 ? (
-                <div className="border-t border-[color:var(--line)] px-2 py-2">
-                  {agentSuggestions.map((agent) => (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]"
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => setComposerBody((value) => insertAgentMention(value, agent))}
-                    >
-                      <Bot data-icon className="text-[color:var(--accent-blue)]" />
-                      <span className="font-medium text-[color:var(--text)]">{agent.mention}</span>
-                      <span className="min-w-0 truncate text-[12px] text-[color:var(--muted)]">{agent.description}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
+              <div className="relative">
+                <Textarea
+                  ref={composerRef}
+                  value={composerBody}
+                  aria-autocomplete="list"
+                  aria-controls={mentionMenuOpen ? "issue-agent-mention-menu" : undefined}
+                  aria-activedescendant={mentionMenuOpen ? agentMentionOptionId(agentSuggestions[selectedMentionIndex]) : undefined}
+                  onChange={(event) => {
+                    setComposerBody(event.target.value);
+                    syncComposerCaret(event.target);
+                    setMentionMenuDismissed(false);
+                  }}
+                  onFocus={(event) => {
+                    setComposerFocused(true);
+                    syncComposerCaret(event.currentTarget);
+                  }}
+                  onBlur={() => setComposerFocused(false)}
+                  onClick={(event) => syncComposerCaret(event.currentTarget)}
+                  onKeyUp={(event) => syncComposerCaret(event.currentTarget)}
+                  onSelect={(event) => syncComposerCaret(event.currentTarget)}
+                  onKeyDown={handleComposerKeyDown}
+                  placeholder={formatMentionPlaceholder(enabledAgents)}
+                  className="min-h-28 rounded-none bg-transparent shadow-none focus-visible:bg-transparent focus-visible:shadow-none"
+                />
+                {mentionMenuOpen ? (
+                  <AgentMentionMenu
+                    agents={agentSuggestions}
+                    activeIndex={selectedMentionIndex}
+                    position={mentionMenuPosition}
+                    onActiveIndexChange={setActiveMentionIndex}
+                    onSelect={selectAgentSuggestion}
+                  />
+                ) : null}
+              </div>
               <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[color:var(--line)] px-3 py-2">
                 <div className="text-[12px] leading-5 text-[color:var(--muted)]">
                   {isSupportedAgentMention
