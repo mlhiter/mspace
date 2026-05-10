@@ -15,6 +15,7 @@ import type {
   CreateTeamIssueEventInput,
   InboxItem,
   Issue,
+  IssueAttachment,
   IssueDetail,
   IssueLabel,
   IssueLabelDefinition,
@@ -167,13 +168,18 @@ function mergeHeaders(...values: Array<HeadersInit | undefined>): HeadersInit {
   return merged;
 }
 
+function isFormDataBody(body: BodyInit | null | undefined): boolean {
+  return typeof FormData !== "undefined" && body instanceof FormData;
+}
+
 async function requestURL<T>(url: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers || {});
+  if (!headers.has("Content-Type") && !isFormDataBody(init?.body)) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(url, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...Object.fromEntries(new Headers(init?.headers || {}).entries()),
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -202,7 +208,13 @@ function authHeaders(token: string): HeadersInit {
 }
 
 export const api = {
-  health: () => request<{ ok: boolean; version: string }>("/health"),
+  health: () =>
+    request<{
+      ok: boolean;
+      version: string;
+      runnerProtocol?: number;
+      capabilities?: Record<string, boolean>;
+    }>("/health"),
   configureControlPlaneSession: (input: { serverBaseUrl: string; token: string; workspaceId: string }) =>
     request<{ ok: boolean }>("/api/control-plane/session", {
       method: "POST",
@@ -268,6 +280,14 @@ export const api = {
     }),
   listIssueLabelDefinitions: () =>
     request<IssueLabelDefinition[]>("/api/issue-label-definitions"),
+  uploadAttachment: (file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return request<IssueAttachment>("/api/attachments", {
+      method: "POST",
+      body,
+    });
+  },
   listIssues: () => request<IssueListItem[]>("/api/issues"),
   createIssue: (input: CreateIssueInput) =>
     request<{ issueId: string }>("/api/issues", {
@@ -296,7 +316,7 @@ export const api = {
       body: JSON.stringify(input),
     }),
   addComment: (issueId: string, input: CreateCommentInput) =>
-    request<{ ok: boolean }>(`/api/issues/${issueId}/comments`, {
+    request<{ ok: boolean; commentId: string }>(`/api/issues/${issueId}/comments`, {
       method: "POST",
       body: JSON.stringify(withCommentAuthor(input)),
     }),

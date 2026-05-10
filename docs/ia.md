@@ -180,7 +180,7 @@ Current implementation:
 
 - lists issues across the workspace;
 - opens create issue in a modal from the page header or the sidebar quick action;
-- uses a TipTap-backed Markdown document editor for the issue note, including task-list input;
+- uses a TipTap-backed Markdown document editor for the issue note, including task-list input and pasted or dropped image attachments rendered as thumbnails;
 - does not show a project selector during issue creation; the runner infers the best matching existing project from the issue text;
 - keeps the creation modal minimal: issue note only, with project routing inferred from the text;
 - supports search, status/type/priority filters, and sorting by updated time, created time, priority, or type;
@@ -242,7 +242,7 @@ Status changes are timeline events, not long comments. Render them in one line a
 
 The composer is the main interaction control:
 
-- Markdown comments stay on the issue through the same TipTap-backed document editor used for issue creation;
+- Markdown comments stay on the issue through the same TipTap-backed document editor used for issue creation, including image upload, paste, drop, and thumbnail previews;
 - supported agent mentions save the comment and start a Codex app-server turn with the selected managed profile;
 - unsupported agent mentions should be visible but not queued;
 - when an agent is already working, a second agent turn should be disabled until the current turn finishes or is stopped.

@@ -31,7 +31,7 @@ Start desktop:
 pnpm dev:desktop
 ```
 
-Electron starts the local Go runner and local server control plane automatically if their `GET /health` checks are not already healthy on the configured ports.
+Electron starts the local Go runner and local server control plane automatically if their `GET /health` checks are not already healthy on the configured ports. The runner health response must also advertise the expected protocol capabilities; in dev, a stale local runner on `7788` is terminated and replaced with the current source tree.
 
 Run the runner separately for API debugging:
 
@@ -150,6 +150,14 @@ Local fallback Inbox checks:
 ```bash
 curl http://127.0.0.1:7788/api/inbox
 sqlite3 ~/.mspace/mspace.db "select issue_id,title,status,unread,updated_at from inbox_items order by updated_at desc limit 10;"
+```
+
+Image attachment smoke check:
+
+```bash
+curl -sS -o /tmp/mspace-attachment.png -w '%{http_code} %{content_type} %{size_download}\n' \
+  http://127.0.0.1:7788/api/attachments/<attachment-id>
+file /tmp/mspace-attachment.png
 ```
 
 Local actor display snapshots:
@@ -290,6 +298,20 @@ GitHub avatars require the renderer content security policy to allow GitHub imag
 
 Codex agent avatars should use the shared data URL in `packages/views/src/agent-avatar.ts`. If the UI falls back to a letter or generic icon, verify that the data URL is not truncated and that the renderer imports the shared `codexAvatarDataUrl` instead of embedding another copy.
 
+### Pasted Images Show A Placeholder Instead Of A Thumbnail
+
+First verify the runner can serve the attachment:
+
+```bash
+curl -sS -o /tmp/mspace-attachment.png -w '%{http_code} %{content_type} %{size_download}\n' \
+  http://127.0.0.1:7788/api/attachments/<attachment-id>
+file /tmp/mspace-attachment.png
+```
+
+If the response is `200 image/*`, check the renderer content security policy in `apps/desktop/src/renderer/index.html`. Local attachment thumbnails require `img-src` to allow the local runner origin, normally `http://127.0.0.1:*` and `http://localhost:*`. Reload the Electron window or restart `pnpm dev:desktop` after changing CSP because it is applied when the page loads.
+
+If the response is `404` or `405`, check `curl http://127.0.0.1:7788/health`. The health payload should include `runnerProtocol` and `capabilities.issueAttachments=true`; otherwise the desktop is talking to a stale runner.
+
 ### Desktop Shows Unstyled HTML
 
 Tailwind CSS 4 must scan the monorepo package sources and map shadcn semantic tokens. Check that `apps/desktop/src/renderer/src/globals.css` contains:
@@ -354,9 +376,7 @@ cd runner && MSPACE_PORT=7790 go run .
 
 ### Clusters Page Shows 405 For Discovery
 
-If `GET /api/clusters/discover-defaults` returns `405 Method Not Allowed`, the desktop is probably connected to an older healthy runner that was already listening on `7788`. The old router treats `discover-defaults` as `{clusterID}` and only allows `PUT`/`DELETE`.
-
-Check and restart the runner:
+If `GET /api/clusters/discover-defaults` returns `405 Method Not Allowed`, the desktop is probably connected to an older runner that was already listening on `7788`. The old router treats `discover-defaults` as `{clusterID}` and only allows `PUT`/`DELETE`. Current desktop startup should replace stale runners automatically, but the manual check is:
 
 ```bash
 curl -i http://127.0.0.1:7788/api/clusters/discover-defaults
@@ -369,9 +389,7 @@ Then refresh the desktop app.
 
 ### Type Or Priority Options Are Missing
 
-If the UI shows no Type or Priority choices, or `GET /api/issue-label-definitions` returns `404 Not Found`, the desktop is probably connected to an older healthy runner that does not have the label-definition route.
-
-Check and restart the runner:
+If the UI shows no Type or Priority choices, or `GET /api/issue-label-definitions` returns `404 Not Found`, the desktop is probably connected to an older runner that does not have the label-definition route. Current desktop startup should replace stale runners automatically, but the manual check is:
 
 ```bash
 curl -i http://127.0.0.1:7788/api/issue-label-definitions

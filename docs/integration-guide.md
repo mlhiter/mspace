@@ -23,13 +23,15 @@ Review evidence is exposed from the same issue detail response as `reviewEvidenc
 
 ## Issue Writing APIs
 
-The desktop uses a rich TipTap editor for issue creation and human comments, but the runner API stores Markdown text. Issue write APIs require a bearer token:
+The desktop uses a rich TipTap editor for issue creation and human comments, but the runner API stores Markdown text. Image uploads are stored as attachment records and inserted into Markdown as stable `/api/attachments/<id>` image URLs, so future storage backends can change without rewriting issue bodies. Issue write APIs require a bearer token:
 
 - human requests use the mspace session token from GitHub sign-in, verified by the control plane through `GET /api/auth/me`;
 - agent requests use the scoped `MSPACE_AGENT_TOKEN` injected into the session environment.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `POST` | `/api/attachments` | Upload one image as multipart form field `file`; returns a stable attachment URL. |
+| `GET` | `/api/attachments/{attachmentID}` | Read an uploaded image attachment by id. |
 | `POST` | `/api/issues` | Create an issue from `title`, `body` or `prompt`, optional `projectId`, optional labels, and optional child task drafts. |
 | `POST` | `/api/issues/{issueID}/comments` | Add a Markdown human comment. |
 
@@ -41,6 +43,28 @@ The desktop API client attaches `Authorization: Bearer <msp-token>` and injects 
 - `authorName` and `authorAvatarUrl` on `POST /api/issues/{issueID}/comments`.
 
 These fields are for local UI rendering only. They are not authentication, authorization, or the durable account model; authoritative users and workspaces belong to the server control plane.
+
+Image upload constraints:
+
+- accepted content types are PNG, JPEG, GIF, and WebP;
+- maximum image size is 10 MB;
+- upload responses include `id`, `url`, `filename`, `contentType`, `sizeBytes`, and `storageBackend`;
+- pass referenced attachment ids as `attachmentIds` on `POST /api/issues` or `POST /api/issues/{issueID}/comments` so the runner binds them to the issue/comment in the same transaction.
+
+Upload and bind an image to a comment:
+
+```bash
+attachment_json="$(curl -sS -X POST "$MSPACE_API_BASE/api/attachments" \
+  -H "Authorization: Bearer <msp-token>" \
+  -F "file=@/path/to/screenshot.png")"
+attachment_id="$(printf '%s' "$attachment_json" | jq -r '.id')"
+attachment_url="$(printf '%s' "$attachment_json" | jq -r '.url')"
+
+curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/comments" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H "Content-Type: application/json" \
+  -d "{\"body\":\"Screenshot attached.\\n\\n![screenshot]($attachment_url)\",\"attachmentIds\":[\"$attachment_id\"]}"
+```
 
 ## Inbox APIs
 
@@ -222,6 +246,6 @@ The deploy/test session receives the selected source commit, source session, kub
 
 ## Error Notes
 
-- `405 Method Not Allowed` from `GET /api/clusters/discover-defaults` usually means the desktop is connected to an older runner already listening on the configured port. Restart the runner so the current route table is loaded.
+- `404 Not Found` or `405 Method Not Allowed` from newly added runner routes usually means the desktop is connected to an older runner already listening on the configured port. Current desktop startup checks `/health` protocol capabilities and should replace stale local runners automatically; if debugging manually, restart the runner so the current route table is loaded.
 - `kubectl is not available on PATH` means discovery or import cannot inspect kubeconfig contexts.
 - An `unreachable` imported cluster means kubeconfig parsing worked, but the read-only cluster `/version` check failed. The cluster remains editable.

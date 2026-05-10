@@ -372,6 +372,13 @@ function RichText(props: { children: string; basePath?: string; className?: stri
               {isHttpUrl(href) ? <ExternalLink data-icon className="ml-1 inline-block align-[-2px]" /> : null}
             </a>
           ),
+          img: ({ src = "", alt = "" }) => (
+            <img
+              src={attachmentImageSrc(String(src))}
+              alt={alt}
+              className="my-3 max-h-[520px] max-w-full rounded-[8px] object-contain shadow-[0_0_0_1px_var(--line)]"
+            />
+          ),
           p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
           ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
           ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
@@ -407,6 +414,15 @@ function RichText(props: { children: string; basePath?: string; className?: stri
 
 function stringsOrEmpty(value: string) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function attachmentImageSrc(src: string) {
+  if (src.startsWith("/api/attachments/")) return buildApiUrl(src);
+  return src;
+}
+
+function attachmentIdsReferencedBy(markdown: string, attachmentIds: string[]) {
+  return attachmentIds.filter((id) => markdown.includes(`/api/attachments/${id}`));
 }
 
 function splitColumns(line: string) {
@@ -2047,6 +2063,7 @@ export function IssueDetailPage() {
   const queryClient = useQueryClient();
   const [composerEditor, setComposerEditor] = useState<Editor | null>(null);
   const [composerBody, setComposerBody] = useState("");
+  const [composerAttachmentIds, setComposerAttachmentIds] = useState<string[]>([]);
   const [composerFocused, setComposerFocused] = useState(false);
   const [composerMentionMatch, setComposerMentionMatch] = useState<EditorMentionMatch | null>(null);
   const [mentionMenuDismissed, setMentionMenuDismissed] = useState(false);
@@ -2176,7 +2193,10 @@ export function IssueDetailPage() {
       if (agent && !agentConfig) {
         throw new Error(`@${agent} is not available.`);
       }
-      await api.addComment(issueId, { body: trimmedBody });
+      await api.addComment(issueId, {
+        body: trimmedBody,
+        attachmentIds: attachmentIdsReferencedBy(trimmedBody, composerAttachmentIds),
+      });
       if (agentConfig) {
         const command = stripAgentMention(trimmedBody, mentionKey(agentConfig.mention));
         await api.assignAgent(issueId, {
@@ -2188,6 +2208,7 @@ export function IssueDetailPage() {
     },
     onSuccess: async () => {
       setComposerBody("");
+      setComposerAttachmentIds([]);
       composerEditor?.commands.clearContent(false);
       setComposerMentionMatch(null);
       await Promise.all([
@@ -2201,6 +2222,16 @@ export function IssueDetailPage() {
     !sendComposer.isPending &&
     !isUnsupportedAgentMention &&
     !(isSupportedAgentMention && hasActiveSession);
+
+  async function uploadComposerImage(file: File) {
+    const attachment = await api.uploadAttachment(file);
+    setComposerAttachmentIds((current) => current.includes(attachment.id) ? current : [...current, attachment.id]);
+    return {
+      id: attachment.id,
+      url: attachment.url,
+      filename: attachment.filename,
+    };
+  }
 
   function syncComposerEditorState(editor: Editor) {
     const match = mentionMatchInEditor(editor);
@@ -2529,6 +2560,7 @@ export function IssueDetailPage() {
                         setComposerBody(value);
                         setMentionMenuDismissed(false);
                       }}
+                      onImageUpload={uploadComposerImage}
                       onReady={setComposerEditor}
                       onEditorStateChange={syncComposerEditorState}
                       onFocus={(editor) => {

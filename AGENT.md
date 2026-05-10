@@ -22,14 +22,15 @@ The product should stay narrow:
 - The control plane owns users, workspaces, workspace membership, mspace auth sessions, GitHub identity, and future GitHub App installation state. Desktop and runner code should become runtime clients of this service instead of owning collaboration identity.
 - Desktop GitHub sign-in starts at `GET /api/auth/github/start`, opens the returned GitHub URL in the browser, lets the server-side callback complete OAuth, then polls `GET /api/auth/github/result?state=...` for a single-use `msp_...` session token. Do not move the GitHub client secret into Electron or the runner.
 - The renderer stores the mspace session token under `localStorage["mspace.authToken"]` and a lightweight display identity under `localStorage["mspace.authIdentity"]`; the latter is used only to populate local runner `creator*` and `author*` fields until collaboration state moves fully behind the control plane.
-- The Electron main process auto-starts the local runner with `go run .` unless `GET /health` is already healthy.
+- The Electron main process auto-starts the local runner with `go run .` unless `GET /health` is healthy and advertises the expected runner protocol capabilities. In dev, a stale local runner on `127.0.0.1:7788` is replaced before startup continues.
 - Sidebar navigation currently exposes Inbox, Issues, Agents, Clusters, and Projects, plus a global search / Command+K palette for issues and projects, a quick link that opens issue creation from the left rail, and an Active work block for recent issue/session/test-environment activity.
 - Inbox is a review-only feed for per-user team issue events. The server control plane stores `issue_events`, `issue_event_receipts`, and `issue_watchers`; the local runner `inbox_items.unread` path remains a fallback until issue collaboration fully moves behind `server/`.
-- The issue creation modal and Issue Detail reply composer use `IssueDocumentEditor`, a TipTap-backed Markdown editor in `packages/views/src/issue-document-editor.tsx`, so checklist task input and comments remain document-like while the runner still receives Markdown. Issue creation does not expose a project selector; mspace infers the project from the note.
+- The issue creation modal and Issue Detail reply composer use `IssueDocumentEditor`, a TipTap-backed Markdown editor in `packages/views/src/issue-document-editor.tsx`, so checklist task input and comments remain document-like while the runner still receives Markdown. The editor supports direct image upload, paste, and drop through stable `/api/attachments/<id>` Markdown image URLs backed by runner `issue_attachments` rows and rendered as thumbnail node views. Issue creation does not expose a project selector; mspace infers the project from the note.
 - Issue task lists are modeled as child issues via `issues.parent_issue_id`, then rendered inline on the parent Issue Detail page. Markdown checklist lines typed during issue creation are converted into child issues so the checkbox text is not a second source of truth.
 - Local runner issues store denormalized display fields `creator_name` and `creator_avatar_url`; comments store `author_name` and `author_avatar_url`. Existing anonymous human rows are backfilled to `mlhiter`; ordinary system comments display as `mspace`. Status-transition comments should be stored with the actor that made the change so the timeline says the human or agent performed the update, not `mspace`.
 - Human owners and comments should render with the real stored avatar/name when available. Codex-backed agents should render with the shared Codex avatar asset from `packages/views/src/agent-avatar.ts`, not a generic robot icon, unless image loading genuinely fails.
-- SQLite database path: `~/.mspace/mspace.db`.
+- Renderer CSP in `apps/desktop/src/renderer/index.html` must allow local runner image origins (`http://127.0.0.1:*` and `http://localhost:*`) so attachment thumbnails can load.
+- SQLite database path: `~/.mspace/mspace.db`; local MVP issue images are stored as `sqlite_blob` attachment rows so issue Markdown does not depend on loose local files.
 - Imported GitHub repositories are cloned or reused under `~/.mspace/repos/<owner>/<repo>`.
 - Session worktree root: `~/.mspace/workdirs/<project-id>/<session-id>`.
 - Session context markdown is written to `~/.mspace/workdirs/_contexts/<session-id>.md`.
@@ -103,7 +104,7 @@ pnpm run server
 ```
 
 The desktop app normally starts the runner automatically on `127.0.0.1:7788`.
-If a healthy old runner is already listening, Electron reuses it. After API route changes, restart that runner before judging frontend errors.
+If an old runner is already listening but does not advertise the expected health capabilities, Electron treats it as stale and replaces it before judging frontend errors.
 The desktop app also starts the local server control plane automatically on `127.0.0.1:8787` when no healthy server is already listening.
 
 Debug the runner separately:

@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"maps"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +18,23 @@ import (
 
 	"github.com/go-chi/chi/v5"
 )
+
+func TestRunnerHealthPayloadAdvertisesRequiredCapabilities(t *testing.T) {
+	payload := runnerHealthPayload()
+	if payload["ok"] != true {
+		t.Fatalf("expected ok=true, got %#v", payload["ok"])
+	}
+	if payload["runnerProtocol"] != runnerProtocolVersion {
+		t.Fatalf("expected runner protocol %d, got %#v", runnerProtocolVersion, payload["runnerProtocol"])
+	}
+	capabilities, ok := payload["capabilities"].(map[string]bool)
+	if !ok {
+		t.Fatalf("expected boolean capabilities map, got %#v", payload["capabilities"])
+	}
+	if !maps.Equal(capabilities, map[string]bool{"issueAttachments": true}) {
+		t.Fatalf("unexpected capabilities: %#v", capabilities)
+	}
+}
 
 func TestInspectWorkspaceComparison(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
@@ -436,6 +457,152 @@ func TestGetIssueDoesNotClearInboxUnread(t *testing.T) {
 	}
 	if unread != 1 {
 		t.Fatalf("expected GET issue to leave inbox unread, got %d", unread)
+	}
+}
+
+func TestIssueAttachmentUploadServeAndCommentBinding(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Image issue", "open")
+
+	router := chi.NewRouter()
+	router.Post("/api/attachments", application.handleUploadAttachment)
+	router.Get("/api/attachments/{attachmentID}", application.handleGetAttachment)
+	router.Post("/api/issues/{issueID}/comments", application.handleCreateComment)
+
+	imageBytes := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
+	upload := httptest.NewRecorder()
+	router.ServeHTTP(upload, multipartFileRequest(t, http.MethodPost, "/api/attachments", "screenshot.png", imageBytes, humanToken))
+	if upload.Code != http.StatusOK {
+		t.Fatalf("expected image upload to return 200, got %d body=%s", upload.Code, upload.Body.String())
+	}
+	var attachment issueAttachment
+	if err := json.NewDecoder(upload.Body).Decode(&attachment); err != nil {
+		t.Fatalf("decode attachment: %v", err)
+	}
+	if attachment.ID == "" || attachment.URL != "/api/attachments/"+attachment.ID {
+		t.Fatalf("unexpected attachment response: %+v", attachment)
+	}
+	if attachment.StorageBackend != "sqlite_blob" || attachment.ContentType != "image/png" {
+		t.Fatalf("unexpected attachment storage metadata: %+v", attachment)
+	}
+
+	served := httptest.NewRecorder()
+	router.ServeHTTP(served, httptest.NewRequest(http.MethodGet, attachment.URL, nil))
+	if served.Code != http.StatusOK {
+		t.Fatalf("expected attachment GET to return 200, got %d body=%s", served.Code, served.Body.String())
+	}
+	if served.Header().Get("Content-Type") != "image/png" || !bytes.Equal(served.Body.Bytes(), imageBytes) {
+		t.Fatalf("unexpected served attachment content type=%q body=%v", served.Header().Get("Content-Type"), served.Body.Bytes())
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"body":          "Screenshot attached.\n\n![screenshot](" + attachment.URL + ")",
+		"attachmentIds": []string{attachment.ID},
+	})
+	if err != nil {
+		t.Fatalf("marshal comment payload: %v", err)
+	}
+	comment := httptest.NewRecorder()
+	router.ServeHTTP(comment, authRequest(http.MethodPost, "/api/issues/issue-1/comments", string(payload), humanToken))
+	if comment.Code != http.StatusOK {
+		t.Fatalf("expected comment to return 200, got %d body=%s", comment.Code, comment.Body.String())
+	}
+	var commentResponse struct {
+		CommentID string `json:"commentId"`
+	}
+	if err := json.NewDecoder(comment.Body).Decode(&commentResponse); err != nil {
+		t.Fatalf("decode comment response: %v", err)
+	}
+	if commentResponse.CommentID == "" {
+		t.Fatalf("expected comment id response, got %#v", commentResponse)
+	}
+
+	var issueID, commentID, boundAt string
+	if err := db.QueryRow(`
+		SELECT issue_id, comment_id, bound_at
+		FROM issue_attachments
+		WHERE id = ?
+	`, attachment.ID).Scan(&issueID, &commentID, &boundAt); err != nil {
+		t.Fatalf("query bound attachment: %v", err)
+	}
+	if issueID != "issue-1" || commentID != commentResponse.CommentID || boundAt == "" {
+		t.Fatalf("unexpected bound attachment issue=%q comment=%q boundAt=%q", issueID, commentID, boundAt)
+	}
+}
+
+func TestCreateIssueBindsUploadedAttachments(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES ('project-1', 'Demo', '/tmp/demo', 'local', '', '', '', '', 'main', '', '', '', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Post("/api/attachments", application.handleUploadAttachment)
+	router.Post("/api/issues", application.handleCreateIssue)
+
+	upload := httptest.NewRecorder()
+	router.ServeHTTP(upload, multipartFileRequest(t, http.MethodPost, "/api/attachments", "issue.png", []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, humanToken))
+	if upload.Code != http.StatusOK {
+		t.Fatalf("expected image upload to return 200, got %d body=%s", upload.Code, upload.Body.String())
+	}
+	var attachment issueAttachment
+	if err := json.NewDecoder(upload.Body).Decode(&attachment); err != nil {
+		t.Fatalf("decode attachment: %v", err)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"prompt":        "Investigate screenshot.\n\n![issue](" + attachment.URL + ")",
+		"attachmentIds": []string{attachment.ID},
+		"labelKeys":     []string{"type:fix"},
+	})
+	if err != nil {
+		t.Fatalf("marshal issue payload: %v", err)
+	}
+	create := httptest.NewRecorder()
+	router.ServeHTTP(create, authRequest(http.MethodPost, "/api/issues", string(payload), humanToken))
+	if create.Code != http.StatusOK {
+		t.Fatalf("expected issue create to return 200, got %d body=%s", create.Code, create.Body.String())
+	}
+	var createResponse struct {
+		IssueID string `json:"issueId"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode issue response: %v", err)
+	}
+	if createResponse.IssueID == "" {
+		t.Fatalf("expected issue id response, got %#v", createResponse)
+	}
+
+	var issueID string
+	var commentID sql.NullString
+	if err := db.QueryRow(`
+		SELECT issue_id, comment_id
+		FROM issue_attachments
+		WHERE id = ?
+	`, attachment.ID).Scan(&issueID, &commentID); err != nil {
+		t.Fatalf("query issue attachment: %v", err)
+	}
+	if issueID != createResponse.IssueID || commentID.Valid {
+		t.Fatalf("unexpected issue attachment binding issue=%q comment=%v", issueID, commentID)
+	}
+}
+
+func TestIssueAttachmentUploadRejectsNonImages(t *testing.T) {
+	application, _ := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	router := chi.NewRouter()
+	router.Post("/api/attachments", application.handleUploadAttachment)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, multipartFileRequest(t, http.MethodPost, "/api/attachments", "note.txt", []byte("hello"), humanToken))
+	if recorder.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected non-image upload to return 415, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -1486,6 +1653,28 @@ func authRequest(method, target, body, token string) *http.Request {
 	}
 	if strings.TrimSpace(body) != "" {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	return req
+}
+
+func multipartFileRequest(t *testing.T, method, target, filename string, content []byte, token string) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create multipart file: %v", err)
+	}
+	if _, err := part.Write(content); err != nil {
+		t.Fatalf("write multipart file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	req := httptest.NewRequest(method, target, &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	return req
 }

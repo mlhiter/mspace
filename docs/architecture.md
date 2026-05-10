@@ -10,9 +10,9 @@ The repository currently contains a runnable local-first desktop MVP:
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`. It owns users, workspaces, membership, GitHub identity, mspace auth sessions, and future GitHub App installation state.
 - Desktop GitHub sign-in uses the server OAuth flow, stores an `msp_...` session token, and caches a lightweight display identity for local runner writes while collaboration data still lives in SQLite.
-- Issue creation and the Issue Detail reply composer use a local TipTap-backed `IssueDocumentEditor` that emits Markdown. This preserves document-like writing surfaces while keeping runner-side checklist extraction and comment storage text-based.
-- Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless a healthy runner is already listening.
-- SQLite state lives at `~/.mspace/mspace.db`.
+- Issue creation and the Issue Detail reply composer use a local TipTap-backed `IssueDocumentEditor` that emits Markdown. This preserves document-like writing surfaces while keeping runner-side checklist extraction and comment storage text-based. Images can be uploaded, pasted, or dropped into the editor; Markdown stores stable `/api/attachments/<id>` image URLs backed by runner attachment records rather than loose local files, and the renderer shows them as thumbnail node views.
+- Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless `/health` is healthy and advertises the expected runner protocol capabilities; in desktop development, stale local runners on `127.0.0.1:7788` are replaced before startup continues.
+- SQLite state lives at `~/.mspace/mspace.db`, including local MVP issue image attachment blobs in `issue_attachments`.
 - Imported GitHub repositories are cached under `~/.mspace/repos/<owner>/<repo>`.
 - Session worktrees live under `~/.mspace/workdirs/<project-id>/<session-id>`.
 - Session context markdown lives under `~/.mspace/workdirs/_contexts/<session-id>.md`.
@@ -84,7 +84,7 @@ Implemented runner API:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/health` | Runner health and version. |
+| `GET` | `/health` | Runner health, version, protocol, and feature capabilities. |
 | `POST` | `/api/control-plane/session` | Cache the current server base URL, bearer token, and workspace id so the runner can report reviewable issue events to the control plane. |
 | `GET` | `/api/inbox` | List inbox items. |
 | `POST` | `/api/inbox/issues/{issueID}/read` | Mark the local fallback inbox item for one issue read. Does not mutate server receipts. |
@@ -105,6 +105,8 @@ Implemented runner API:
 | `PUT` | `/api/projects/{projectID}` | Update a project. |
 | `DELETE` | `/api/projects/{projectID}` | Delete a project and cascaded child data. |
 | `GET` | `/api/issue-label-definitions` | List built-in issue label options for Type and Priority controls. |
+| `POST` | `/api/attachments` | Upload one issue/comment image attachment as multipart form field `file`. |
+| `GET` | `/api/attachments/{attachmentID}` | Serve a stored image attachment by id. |
 | `GET` | `/api/issues` | List issues across the local workspace. |
 | `POST` | `/api/issues` | Create an issue and inbox item, optionally including creator display name and avatar snapshots. |
 | `GET` | `/api/issues/{issueID}` | Load issue detail, comments, sessions, and evidence. |
@@ -518,6 +520,20 @@ comments
   author_avatar_url
   body
   created_at
+
+issue_attachments
+  id
+  issue_id
+  comment_id
+  filename
+  content_type
+  size_bytes
+  storage_backend
+  storage_key
+  content
+  created_at
+  updated_at
+  bound_at
 
 issue_label_definitions
   id

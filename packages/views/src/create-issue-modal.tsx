@@ -16,12 +16,14 @@ export function CreateIssueModal(props: {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [prompt, setPrompt] = useState("");
+  const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const canCreate = prompt.trim().length > 0;
 
   const createIssue = useMutation({
     mutationFn: api.createIssue,
     onSuccess: async ({ issueId }) => {
       setPrompt("");
+      setAttachmentIds([]);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
         queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
@@ -47,7 +49,18 @@ export function CreateIssueModal(props: {
 
     createIssue.mutate({
       prompt,
+      attachmentIds: attachmentIdsReferencedBy(prompt, attachmentIds),
     });
+  }
+
+  async function uploadIssueImage(file: File) {
+    const attachment = await api.uploadAttachment(file);
+    setAttachmentIds((current) => current.includes(attachment.id) ? current : [...current, attachment.id]);
+    return {
+      id: attachment.id,
+      url: attachment.url,
+      filename: attachment.filename,
+    };
   }
 
   return (
@@ -94,6 +107,7 @@ export function CreateIssueModal(props: {
               autoFocus
               value={prompt}
               onChange={setPrompt}
+              onImageUpload={uploadIssueImage}
               placeholder={"Write the issue...\n\n- [ ] Add the first task\n- [ ] Add the next task"}
             />
           </section>
@@ -110,4 +124,8 @@ export function CreateIssueModal(props: {
       </section>
     </div>
   );
+}
+
+function attachmentIdsReferencedBy(markdown: string, attachmentIds: string[]) {
+  return attachmentIds.filter((id) => markdown.includes(`/api/attachments/${id}`));
 }

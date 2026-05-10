@@ -51,7 +51,7 @@ The interaction model is closer to a shared engineering document than a terminal
 - Project import from a local folder or GitHub repository URL, including GitHub remote metadata detection when available.
 - Managed agent profiles stored in SQLite, seeded with internal `@triage` plus user-facing `@codex`, `@bugfix`, and `@design`.
 - Agent mentions from issue comments, with turn queueing, profile instructions, status updates, and issue timeline updates.
-- Markdown-backed TipTap writing surfaces for issue creation and human issue comments, including checklist input that becomes child tasks.
+- Markdown-backed TipTap writing surfaces for issue creation and human issue comments, including checklist input that becomes child tasks plus image upload, paste, drop, and thumbnail previews backed by stable attachment URLs.
 - Per-session git worktrees, workspace inspection, changed file lists, diff previews, commits, and comparison against the project default branch.
 - Type and priority labels, child issue task lists with create/toggle/delete controls, asynchronous type triage, server-backed unread Inbox updates with a sidebar badge, running-session stop controls, and manual worktree cleanup after completion or cancellation.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
@@ -75,7 +75,7 @@ mspace separates collaboration, execution, and validation:
 | Agent runtime | One issue-bound turn in an isolated working directory | Local git worktree under `~/.mspace/workdirs/<project-id>/<session-id>` |
 | Validation target | Build, deploy, inspect, preview, and cleanup issue test environments | Namespace-scoped Kubernetes workflow triggered from Issue Detail |
 
-The desktop process starts the Go runner automatically on `127.0.0.1:7788` and the server control plane on `127.0.0.1:8787` when no healthy process is already available.
+The desktop process starts the Go runner automatically on `127.0.0.1:7788` and the server control plane on `127.0.0.1:8787`. Runner reuse requires a healthy `/health` response with the expected protocol capabilities, so stale local runners are replaced during desktop development.
 
 ## Quick Start
 
@@ -117,7 +117,7 @@ The server automatically loads `.env.local` from the project root. Keep `MSPACE_
 2. Add a reusable test cluster in the Clusters tab, or use the first-run prompt to choose which discovered `~/.kube` kubeconfig files to import.
 3. Select that cluster as the project default when needed.
 4. Create an issue in the Issues tab with a document-style note; include the project or repository name when multiple projects exist.
-5. Use checklist rows such as `- [ ] Add tests` when the issue needs child tasks.
+5. Use checklist rows such as `- [ ] Add tests` when the issue needs child tasks, or paste/drop screenshots when the issue needs visual context.
 6. Mention an enabled agent profile, such as `@codex`, in a rich issue comment.
 7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
 8. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
@@ -144,7 +144,7 @@ Local data paths:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.mspace/mspace.db` | SQLite database. |
+| `~/.mspace/mspace.db` | SQLite database for issues, comments, sessions, evidence, and local issue image attachment blobs. |
 | `~/.mspace/repos/<owner>/<repo>` | Cached clone path for GitHub-imported projects. |
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree for one agent session. |
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Session context markdown included in Codex prompts. |

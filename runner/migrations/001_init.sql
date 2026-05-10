@@ -79,6 +79,25 @@ CREATE TABLE IF NOT EXISTS comments (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS issue_attachments (
+  id TEXT PRIMARY KEY,
+  issue_id TEXT REFERENCES issues(id) ON DELETE CASCADE,
+  comment_id TEXT REFERENCES comments(id) ON DELETE SET NULL,
+  filename TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK(size_bytes >= 0),
+  storage_backend TEXT NOT NULL DEFAULT 'sqlite_blob',
+  storage_key TEXT NOT NULL DEFAULT '',
+  content BLOB,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  bound_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue_id ON issue_attachments(issue_id);
+CREATE INDEX IF NOT EXISTS idx_issue_attachments_comment_id ON issue_attachments(comment_id);
+CREATE INDEX IF NOT EXISTS idx_issue_attachments_created_at ON issue_attachments(created_at);
+
 CREATE TABLE IF NOT EXISTS issue_label_definitions (
   id TEXT PRIMARY KEY,
   key TEXT NOT NULL UNIQUE,

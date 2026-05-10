@@ -140,6 +140,19 @@ export interface Comment {
   createdAt: string;
 }
 
+export interface IssueAttachment {
+  id: string;
+  issueId: string;
+  commentId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  storageBackend: string;
+  url: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface IssueLabel {
   id: string;
   issueId: string;
@@ -393,6 +406,7 @@ export interface CreateIssueInput {
   assigneeType?: string;
   creatorName?: string;
   creatorAvatarUrl?: string;
+  attachmentIds?: string[];
 }
 
 export interface UpdateIssueInput {
@@ -412,6 +426,7 @@ export interface CreateCommentInput {
   body: string;
   authorName?: string;
   authorAvatarUrl?: string;
+  attachmentIds?: string[];
 }
 
 export interface CreateSessionInput {

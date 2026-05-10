@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -45,8 +46,21 @@ const defaultImportedClusterImageRegistryPrefix = "crpi-7jr40k6elhldekqp.cn-hang
 const defaultHumanActorName = "mlhiter"
 const systemActorName = "mspace"
 const agentTokenPrefix = "mspace-agent-"
+const maxIssueAttachmentBytes = 10 * 1024 * 1024
+const runnerProtocolVersion = 1
 
 var checklistItemPattern = regexp.MustCompile(`^\s*(?:[-*+]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
+
+func runnerHealthPayload() map[string]any {
+	return map[string]any{
+		"ok":             true,
+		"version":        "0.1.0",
+		"runnerProtocol": runnerProtocolVersion,
+		"capabilities": map[string]bool{
+			"issueAttachments": true,
+		},
+	}
+}
 
 type cluster struct {
 	ID                  string `json:"id"`
@@ -162,6 +176,19 @@ type comment struct {
 	AuthorAvatar string `json:"authorAvatarUrl"`
 	Body         string `json:"body"`
 	CreatedAt    string `json:"createdAt"`
+}
+
+type issueAttachment struct {
+	ID             string `json:"id"`
+	IssueID        string `json:"issueId"`
+	CommentID      string `json:"commentId"`
+	Filename       string `json:"filename"`
+	ContentType    string `json:"contentType"`
+	SizeBytes      int64  `json:"sizeBytes"`
+	StorageBackend string `json:"storageBackend"`
+	URL            string `json:"url"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
 }
 
 type issueLabel struct {
@@ -608,7 +635,7 @@ func main() {
 	router := chi.NewRouter()
 	router.Use(jsonMiddleware)
 	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ok": true, "version": "0.1.0"})
+		writeJSON(w, runnerHealthPayload())
 	})
 	router.Post("/api/control-plane/session", application.handleConfigureControlPlaneSession)
 	router.Get("/api/inbox", application.handleListInbox)
@@ -625,6 +652,8 @@ func main() {
 	router.Post("/api/clusters/import-defaults", application.handleImportDefaultClusters)
 	router.Put("/api/clusters/{clusterID}", application.handleUpdateCluster)
 	router.Delete("/api/clusters/{clusterID}", application.handleDeleteCluster)
+	router.Post("/api/attachments", application.handleUploadAttachment)
+	router.Get("/api/attachments/{attachmentID}", application.handleGetAttachment)
 	router.Get("/api/projects", application.handleListProjects)
 	router.Post("/api/projects", application.handleCreateProject)
 	router.Put("/api/projects/{projectID}", application.handleUpdateProject)
@@ -682,6 +711,9 @@ func (a *app) migrate() error {
 		return err
 	}
 	if err := a.ensureCommentColumns(); err != nil {
+		return err
+	}
+	if err := a.ensureIssueAttachmentTables(); err != nil {
 		return err
 	}
 	if err := a.ensureIssueLabelTables(); err != nil {
@@ -917,6 +949,57 @@ func (a *app) ensureCommentColumns() error {
 		WHERE author_type = 'system' AND author_name = ''
 	`, systemActorName); err != nil {
 		return fmt.Errorf("backfill system comment authors: %w", err)
+	}
+	return nil
+}
+
+func (a *app) ensureIssueAttachmentTables() error {
+	if _, err := a.db.Exec(`
+		CREATE TABLE IF NOT EXISTS issue_attachments (
+			id TEXT PRIMARY KEY,
+			issue_id TEXT REFERENCES issues(id) ON DELETE CASCADE,
+			comment_id TEXT REFERENCES comments(id) ON DELETE SET NULL,
+			filename TEXT NOT NULL,
+			content_type TEXT NOT NULL,
+			size_bytes INTEGER NOT NULL CHECK(size_bytes >= 0),
+			storage_backend TEXT NOT NULL DEFAULT 'sqlite_blob',
+			storage_key TEXT NOT NULL DEFAULT '',
+			content BLOB,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			bound_at TEXT NOT NULL DEFAULT ''
+		)
+	`); err != nil {
+		return fmt.Errorf("create issue attachments: %w", err)
+	}
+	if err := a.ensureTableColumns("issue_attachments", map[string]string{
+		"issue_id":        "TEXT REFERENCES issues(id) ON DELETE CASCADE",
+		"comment_id":      "TEXT REFERENCES comments(id) ON DELETE SET NULL",
+		"filename":        "TEXT NOT NULL DEFAULT ''",
+		"content_type":    "TEXT NOT NULL DEFAULT ''",
+		"size_bytes":      "INTEGER NOT NULL DEFAULT 0",
+		"storage_backend": "TEXT NOT NULL DEFAULT 'sqlite_blob'",
+		"storage_key":     "TEXT NOT NULL DEFAULT ''",
+		"content":         "BLOB",
+		"updated_at":      "TEXT NOT NULL DEFAULT ''",
+		"bound_at":        "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_issue_attachments_issue_id ON issue_attachments(issue_id)
+	`); err != nil {
+		return fmt.Errorf("create issue attachments issue index: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_issue_attachments_comment_id ON issue_attachments(comment_id)
+	`); err != nil {
+		return fmt.Errorf("create issue attachments comment index: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_issue_attachments_created_at ON issue_attachments(created_at)
+	`); err != nil {
+		return fmt.Errorf("create issue attachments created index: %w", err)
 	}
 	return nil
 }
@@ -1791,6 +1874,103 @@ func (a *app) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
+func (a *app) handleUploadAttachment(w http.ResponseWriter, r *http.Request) {
+	_, ok := a.requireHumanActor(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxIssueAttachmentBytes+(1024*1024))
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("image file is required"))
+		return
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(io.LimitReader(file, maxIssueAttachmentBytes+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(content) == 0 {
+		writeError(w, http.StatusBadRequest, errors.New("image file cannot be empty"))
+		return
+	}
+	if len(content) > maxIssueAttachmentBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("image file must be %dMB or smaller", maxIssueAttachmentBytes/(1024*1024)))
+		return
+	}
+
+	contentType := normalizeIssueAttachmentContentType(header.Header.Get("Content-Type"), content)
+	if !isAllowedIssueAttachmentContentType(contentType) {
+		writeError(w, http.StatusUnsupportedMediaType, errors.New("only png, jpeg, gif, and webp images are supported"))
+		return
+	}
+
+	now := nowString()
+	attachment := issueAttachment{
+		ID:             uuid.NewString(),
+		Filename:       normalizeIssueAttachmentFilename(header.Filename, contentType),
+		ContentType:    contentType,
+		SizeBytes:      int64(len(content)),
+		StorageBackend: "sqlite_blob",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	attachment.URL = issueAttachmentURL(attachment.ID)
+
+	if _, err := a.db.Exec(`
+		INSERT INTO issue_attachments (id, filename, content_type, size_bytes, storage_backend, storage_key, content, created_at, updated_at, bound_at)
+		VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, '')
+	`, attachment.ID, attachment.Filename, attachment.ContentType, attachment.SizeBytes, attachment.StorageBackend, content, now, now); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	writeJSON(w, attachment)
+}
+
+func (a *app) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
+	attachmentID := strings.TrimSpace(chi.URLParam(r, "attachmentID"))
+	if attachmentID == "" {
+		writeError(w, http.StatusNotFound, errors.New("attachment not found"))
+		return
+	}
+	var filename string
+	var contentType string
+	var sizeBytes int64
+	var storageBackend string
+	var content []byte
+	err := a.db.QueryRow(`
+		SELECT filename, content_type, size_bytes, storage_backend, content
+		FROM issue_attachments
+		WHERE id = ?
+	`, attachmentID).Scan(&filename, &contentType, &sizeBytes, &storageBackend, &content)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, errors.New("attachment not found"))
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if storageBackend != "sqlite_blob" {
+		writeError(w, http.StatusNotImplemented, errors.New("attachment storage backend is not available locally"))
+		return
+	}
+	if int64(len(content)) != sizeBytes {
+		writeError(w, http.StatusInternalServerError, errors.New("attachment content is incomplete"))
+		return
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(sizeBytes, 10))
+	w.Header().Set("Content-Disposition", "inline; filename="+strconv.Quote(filename))
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(content)
+}
+
 func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	actor, ok := a.requireHumanActor(w, r)
 	if !ok {
@@ -1809,6 +1989,7 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		AssigneeType  string           `json:"assigneeType"`
 		CreatorName   string           `json:"creatorName"`
 		CreatorAvatar string           `json:"creatorAvatarUrl"`
+		AttachmentIDs []string         `json:"attachmentIds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1947,6 +2128,11 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+	}
+
+	if err := bindIssueAttachmentsTx(tx, input.AttachmentIDs, issueID, "", now); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -2558,9 +2744,10 @@ func (a *app) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Body         string `json:"body"`
-		AuthorName   string `json:"authorName"`
-		AuthorAvatar string `json:"authorAvatarUrl"`
+		Body          string   `json:"body"`
+		AuthorName    string   `json:"authorName"`
+		AuthorAvatar  string   `json:"authorAvatarUrl"`
+		AttachmentIDs []string `json:"attachmentIds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -2574,18 +2761,38 @@ func (a *app) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := nowString()
-	_, err := a.db.Exec(`
-		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, uuid.NewString(), issueID, "human", input.AuthorName, input.AuthorAvatar, input.Body, now)
+	commentID := uuid.NewString()
+	tx, err := a.db.Begin()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	_, _ = a.db.Exec(`UPDATE issues SET updated_at = ? WHERE id = ?`, now, issueID)
-	_, _ = a.db.Exec(`UPDATE inbox_items SET updated_at = ?, unread = 1 WHERE issue_id = ?`, now, issueID)
+	defer tx.Rollback()
+	if _, err := tx.Exec(`
+		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, commentID, issueID, "human", input.AuthorName, input.AuthorAvatar, input.Body, now); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := bindIssueAttachmentsTx(tx, input.AttachmentIDs, issueID, commentID, now); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if _, err := tx.Exec(`UPDATE issues SET updated_at = ? WHERE id = ?`, now, issueID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := tx.Exec(`UPDATE inbox_items SET updated_at = ?, unread = 1 WHERE issue_id = ?`, now, issueID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	a.publishInboxEvent(issueID, "updated")
-	writeJSON(w, map[string]bool{"ok": true})
+	writeJSON(w, map[string]any{"ok": true, "commentId": commentID})
 }
 
 func (a *app) handleAssignIssueToAgent(w http.ResponseWriter, r *http.Request) {
@@ -3035,6 +3242,109 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func issueAttachmentURL(attachmentID string) string {
+	return "/api/attachments/" + url.PathEscape(attachmentID)
+}
+
+func normalizeIssueAttachmentContentType(value string, content []byte) string {
+	value = strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
+	if isAllowedIssueAttachmentContentType(value) {
+		return value
+	}
+	detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(content), ";")[0]))
+	if isAllowedIssueAttachmentContentType(detected) {
+		return detected
+	}
+	return value
+}
+
+func isAllowedIssueAttachmentContentType(value string) bool {
+	switch value {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeIssueAttachmentFilename(value, contentType string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	filename := filepath.Base(value)
+	if filename == "." || filename == "/" {
+		filename = ""
+	}
+	filename = strings.TrimSpace(filename)
+	if filename != "" {
+		return filename
+	}
+	switch contentType {
+	case "image/png":
+		return "image.png"
+	case "image/jpeg":
+		return "image.jpg"
+	case "image/gif":
+		return "image.gif"
+	case "image/webp":
+		return "image.webp"
+	default:
+		return "image"
+	}
+}
+
+func normalizeIssueAttachmentIDs(values []string) ([]string, error) {
+	seen := map[string]bool{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		id := strings.TrimSpace(value)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		result = append(result, id)
+	}
+	if len(result) > 50 {
+		return nil, errors.New("too many attachments")
+	}
+	return result, nil
+}
+
+func bindIssueAttachmentsTx(tx *sql.Tx, attachmentIDs []string, issueID, commentID, now string) error {
+	attachmentIDs, err := normalizeIssueAttachmentIDs(attachmentIDs)
+	if err != nil {
+		return err
+	}
+	if len(attachmentIDs) == 0 {
+		return nil
+	}
+	issueID = strings.TrimSpace(issueID)
+	commentID = strings.TrimSpace(commentID)
+	if issueID == "" {
+		return errors.New("attachment issue id is required")
+	}
+	var commentValue any
+	if commentID != "" {
+		commentValue = commentID
+	}
+	for _, attachmentID := range attachmentIDs {
+		result, err := tx.Exec(`
+			UPDATE issue_attachments
+			SET issue_id = ?, comment_id = ?, updated_at = ?, bound_at = CASE WHEN bound_at = '' THEN ? ELSE bound_at END
+			WHERE id = ? AND (issue_id IS NULL OR issue_id = '' OR issue_id = ?)
+		`, issueID, commentValue, now, now, attachmentID, issueID)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return fmt.Errorf("attachment %s was not found or belongs to another issue", attachmentID)
+		}
+	}
+	return nil
 }
 
 func buildIssueTestDeployPrompt(detail issueDetail, environment issueTestEnvironment, source issueChangeNode) string {

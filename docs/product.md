@@ -19,13 +19,13 @@ The repository now has a runnable local desktop MVP:
 - label priority manually from Issue Detail, and scan/filter labels from the Issues list;
 - manage Codex-backed agents from the Agents route, including mention, description, enabled state, and role instructions;
 - use Inbox as a review feed for unread issue and session updates;
-- open document-style issue detail pages with Markdown-backed rich comments and linked sessions;
+- open document-style issue detail pages with Markdown-backed rich comments, image attachment thumbnails, and linked sessions;
 - mention an enabled agent from issue detail and start local app-server agent sessions with the matching managed profile;
 - stop a queued or running session from Issue Detail or Session Detail;
 - run sessions in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`;
 - clean a completed or cancelled session worktree from Session Detail while preserving the issue timeline, logs, evidence, and session metadata;
 - cache imported GitHub repositories under `~/.mspace/repos/<owner>/<repo>`;
-- store session metadata, logs, comments, issues, projects, evidence, and local creator/author display snapshots in SQLite under `~/.mspace/mspace.db`;
+- store session metadata, logs, comments, issues, projects, evidence, local creator/author display snapshots, and issue image attachment blobs in SQLite under `~/.mspace/mspace.db`;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
 - choose a default cluster per project and select a cluster when manually deploying an issue test environment;

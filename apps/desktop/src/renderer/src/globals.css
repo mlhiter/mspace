@@ -275,6 +275,109 @@ svg {
   color: var(--muted-strong);
 }
 
+.mspace-doc-editor .ProseMirror img:not(.mspace-doc-editor-image) {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  margin: 0.85rem 0;
+  border-radius: 8px;
+  object-fit: contain;
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.mspace-doc-editor--comment .ProseMirror img:not(.mspace-doc-editor-image) {
+  max-height: 360px;
+  margin: 0.65rem 0;
+}
+
+.mspace-doc-editor-image-frame {
+  position: relative;
+  display: inline-flex;
+  max-width: min(100%, 520px);
+  min-width: 180px;
+  min-height: 112px;
+  margin: 0.85rem 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(248, 247, 244, 0.78)),
+    var(--block);
+  box-shadow:
+    inset 0 0 0 1px var(--line),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+  vertical-align: top;
+}
+
+.mspace-doc-editor--comment .mspace-doc-editor-image-frame {
+  max-width: min(100%, 280px);
+  min-width: 176px;
+  min-height: 104px;
+  margin: 0.45rem 0 0.65rem;
+}
+
+.mspace-doc-editor-image-frame.is-selected {
+  box-shadow:
+    inset 0 0 0 1px var(--text),
+    0 0 0 3px var(--selection);
+}
+
+.mspace-doc-editor-image-frame.is-failed {
+  background: var(--block);
+}
+
+.mspace-doc-editor-image-frame .mspace-doc-editor-image {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  margin: 0;
+  border-radius: 8px;
+  object-fit: contain;
+  box-shadow: none;
+}
+
+.mspace-doc-editor--comment .mspace-doc-editor-image-frame .mspace-doc-editor-image {
+  max-height: 168px;
+}
+
+.mspace-doc-editor-image-frame:not(.is-loaded) .mspace-doc-editor-image {
+  width: 100%;
+  min-height: 112px;
+  opacity: 0;
+}
+
+.mspace-doc-editor--comment .mspace-doc-editor-image-frame:not(.is-loaded) .mspace-doc-editor-image {
+  min-height: 104px;
+}
+
+.mspace-doc-editor-image-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.mspace-doc-editor-image-fallback span {
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mspace-doc-editor-image-fallback svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
 .mspace-doc-editor .ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;
@@ -282,6 +385,74 @@ svg {
   color: var(--faint);
   pointer-events: none;
   white-space: pre-wrap;
+}
+
+.mspace-doc-editor-attachments {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.mspace-doc-editor--comment .mspace-doc-editor-attachments {
+  padding: 0 12px 10px;
+}
+
+.mspace-doc-editor-attachment-button {
+  display: grid;
+  width: 30px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0;
+  color: var(--muted-strong);
+  cursor: pointer;
+  transition:
+    background-color 150ms ease-out,
+    color 150ms ease-out,
+    transform 150ms ease-out;
+}
+
+.mspace-doc-editor-attachment-button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.mspace-doc-editor-attachment-button:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
+.mspace-doc-editor-attachment-button:active {
+  transform: scale(0.96);
+}
+
+.mspace-doc-editor-attachment-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.mspace-doc-editor-spinner {
+  animation: mspace-spin 0.9s linear infinite;
+}
+
+.mspace-doc-editor-attachment-note,
+.mspace-doc-editor-attachment-error {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.mspace-doc-editor-attachment-error {
+  color: var(--danger);
+}
+
+@keyframes mspace-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .mspace-editor-bubble {
