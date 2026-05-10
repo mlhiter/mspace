@@ -268,7 +268,6 @@ function IssueRow(props: { issue: IssueListItem }) {
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[15px] font-semibold leading-6 text-[color:var(--text)]">{issue.title}</span>
-          {issue.unread ? <span className="size-1.5 shrink-0 rounded-full bg-[color:var(--accent)]" /> : null}
         </div>
         <div className="mt-1 line-clamp-1 text-[12px] leading-5 text-[color:var(--muted)]">{issue.body}</div>
         {issue.labels?.length > 0 || issue.triageStatus === "pending" ? (
