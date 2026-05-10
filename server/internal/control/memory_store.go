@@ -201,7 +201,7 @@ func (s *MemoryStore) ListInbox(_ Context, userID, workspaceID string) ([]InboxE
 			unreadByIssue[receipt.IssueID]++
 		}
 	}
-	items := make([]InboxEntry, 0)
+	latestByIssue := map[string]InboxEntry{}
 	for _, receipt := range s.receipts {
 		if receipt.WorkspaceID != workspaceID || receipt.UserID != userID || receipt.State != "unread" {
 			continue
@@ -210,7 +210,7 @@ func (s *MemoryStore) ListInbox(_ Context, userID, workspaceID string) ([]InboxE
 		if !ok {
 			continue
 		}
-		items = append(items, InboxEntry{
+		item := InboxEntry{
 			EventID:     event.ID,
 			WorkspaceID: event.WorkspaceID,
 			IssueID:     event.IssueID,
@@ -221,11 +221,25 @@ func (s *MemoryStore) ListInbox(_ Context, userID, workspaceID string) ([]InboxE
 			State:       receipt.State,
 			UnreadCount: unreadByIssue[event.IssueID],
 			CreatedAt:   event.CreatedAt,
-		})
+		}
+		existing, exists := latestByIssue[event.IssueID]
+		if !exists || item.CreatedAt > existing.CreatedAt || (item.CreatedAt == existing.CreatedAt && item.EventID > existing.EventID) {
+			latestByIssue[event.IssueID] = item
+		}
+	}
+	items := make([]InboxEntry, 0, len(latestByIssue))
+	for _, item := range latestByIssue {
+		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt == items[j].CreatedAt {
+			return items[i].EventID > items[j].EventID
+		}
 		return items[i].CreatedAt > items[j].CreatedAt
 	})
+	if len(items) > 100 {
+		items = items[:100]
+	}
 	return items, nil
 }
 

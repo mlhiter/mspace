@@ -215,25 +215,41 @@ func (s *PostgresStore) ListInbox(ctx Context, userID, workspaceID string) ([]In
 		return nil, err
 	}
 	rows, err := s.pool.Query(dbctx, `
-		SELECT
-			e.id::text,
-			e.workspace_id::text,
-			e.issue_id,
-			COALESCE(e.actor_user_id::text, ''),
-			e.kind,
-			e.summary,
-			e.payload,
-			r.state,
-			COUNT(*) OVER (PARTITION BY e.issue_id) AS unread_count,
-			e.created_at
-		FROM issue_event_receipts r
-		JOIN issue_events e ON e.id = r.event_id
-		WHERE r.workspace_id = $1
-			AND r.user_id = $2
-			AND r.state = 'unread'
-		ORDER BY e.created_at DESC
-		LIMIT 100
-	`, workspaceID, userID)
+			WITH unread AS (
+				SELECT
+					e.id,
+					e.workspace_id,
+					e.issue_id,
+					e.actor_user_id,
+					e.kind,
+					e.summary,
+					e.payload,
+					r.state,
+					e.created_at,
+					COUNT(*) OVER (PARTITION BY e.issue_id) AS unread_count,
+					ROW_NUMBER() OVER (PARTITION BY e.issue_id ORDER BY e.created_at DESC, e.id DESC) AS issue_rank
+				FROM issue_event_receipts r
+				JOIN issue_events e ON e.id = r.event_id
+				WHERE r.workspace_id = $1
+					AND r.user_id = $2
+					AND r.state = 'unread'
+			)
+			SELECT
+				id::text,
+				workspace_id::text,
+				issue_id,
+				COALESCE(actor_user_id::text, ''),
+				kind,
+				summary,
+				payload,
+				state,
+				unread_count,
+				created_at
+			FROM unread
+			WHERE issue_rank = 1
+			ORDER BY created_at DESC
+			LIMIT 100
+		`, workspaceID, userID)
 	if err != nil {
 		return nil, err
 	}

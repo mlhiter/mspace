@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeGitHubClient struct{}
@@ -133,8 +134,36 @@ func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 		t.Fatalf("unexpected inbox: %+v", inbox)
 	}
 
+	time.Sleep(time.Millisecond)
+	secondEventBody := `{"issueId":"issue-1","kind":"status_changed","summary":"Issue moved to review.","payload":{"title":"Fix inbox","status":"needs_review","projectName":"mspace"}}`
+	secondEventRecorder := httptest.NewRecorder()
+	secondEventReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issue-events", strings.NewReader(secondEventBody))
+	secondEventReq.Header.Set("Authorization", "Bearer "+auth.Token)
+	router.ServeHTTP(secondEventRecorder, secondEventReq)
+	if secondEventRecorder.Code != http.StatusCreated {
+		t.Fatalf("create second event status=%d body=%s", secondEventRecorder.Code, secondEventRecorder.Body.String())
+	}
+	var secondEvent IssueEvent
+	if err := json.Unmarshal(secondEventRecorder.Body.Bytes(), &secondEvent); err != nil {
+		t.Fatalf("parse second event response: %v", err)
+	}
+
+	groupedInboxRecorder := httptest.NewRecorder()
+	groupedInboxReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/inbox", nil)
+	groupedInboxReq.Header.Set("Authorization", "Bearer "+auth.Token)
+	router.ServeHTTP(groupedInboxRecorder, groupedInboxReq)
+	if groupedInboxRecorder.Code != http.StatusOK {
+		t.Fatalf("grouped inbox status=%d body=%s", groupedInboxRecorder.Code, groupedInboxRecorder.Body.String())
+	}
+	if err := json.Unmarshal(groupedInboxRecorder.Body.Bytes(), &inbox); err != nil {
+		t.Fatalf("parse grouped inbox response: %v", err)
+	}
+	if len(inbox) != 1 || inbox[0].EventID != secondEvent.ID || inbox[0].UnreadCount != 2 {
+		t.Fatalf("expected latest event grouped by issue with unread count 2, got %+v", inbox)
+	}
+
 	readRecorder := httptest.NewRecorder()
-	readReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/issue-1/read-through", strings.NewReader(`{"throughEventId":"`+event.ID+`"}`))
+	readReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/issue-1/read-through", strings.NewReader(`{"throughEventId":"`+secondEvent.ID+`"}`))
 	readReq.Header.Set("Authorization", "Bearer "+auth.Token)
 	router.ServeHTTP(readRecorder, readReq)
 	if readRecorder.Code != http.StatusOK {
