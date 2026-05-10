@@ -21,3 +21,15 @@ export function workspaceChangeStatusTone(statusCode?: string) {
   if (label === "R" || label === "C") return "text-[color:var(--warning)]";
   return "text-[color:var(--accent-blue)]";
 }
+
+function stripLineSuffix(path: string) {
+  return path.replace(/:\d+(?::\d+)?$/, "");
+}
+
+export function isWorkspaceDirectoryChange(change: { path?: string }) {
+  return /[\\/]$/.test(stripLineSuffix(change.path || "").trim());
+}
+
+export function visibleWorkspaceFileChanges<T extends { path?: string }>(changes: T[]) {
+  return changes.filter((change) => !isWorkspaceDirectoryChange(change));
+}

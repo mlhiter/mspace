@@ -17,7 +17,7 @@ import {
 } from "@mspace/ui";
 import { FileTypeIcon } from "./file-type-icon";
 import { RelativeTime } from "./time";
-import { workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
+import { visibleWorkspaceFileChanges, workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
 function ChangeRow({ change }: { change: WorkspaceChange }) {
   return (
@@ -51,11 +51,11 @@ function normalizeWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
   return {
     ...workspace,
     statusLines: listOrEmpty(workspace.statusLines),
-    changes: listOrEmpty(workspace.changes),
+    changes: visibleWorkspaceFileChanges(listOrEmpty(workspace.changes)),
     comparison: {
       ...workspace.comparison,
       commitLines: listOrEmpty(workspace.comparison?.commitLines),
-      changes: listOrEmpty(workspace.comparison?.changes),
+      changes: visibleWorkspaceFileChanges(listOrEmpty(workspace.comparison?.changes)),
     },
   };
 }

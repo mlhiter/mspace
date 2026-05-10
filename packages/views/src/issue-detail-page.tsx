@@ -70,7 +70,7 @@ import {
 } from "./issue-labels";
 import { IssueLabelOptionLabel, IssueLabelSelectValue } from "./issue-label-chip";
 import { formatAbsoluteTime, formatRelativeTime } from "./time";
-import { workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
+import { visibleWorkspaceFileChanges, workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
 type TimelineItem =
   | { kind: "opened"; createdAt: string }
@@ -708,7 +708,8 @@ function StopSessionButton(props: { isStopping?: boolean; onStop: () => void }) 
 }
 
 function SessionFileChanges(props: { changes: WorkspaceChange[]; workdir: string }) {
-  const changes = props.changes.slice(0, 6);
+  const visibleChanges = visibleWorkspaceFileChanges(props.changes);
+  const changes = visibleChanges.slice(0, 6);
   if (changes.length === 0 || !props.workdir) return null;
 
   return (
@@ -738,8 +739,8 @@ function SessionFileChanges(props: { changes: WorkspaceChange[]; workdir: string
           </button>
         );
       })}
-      {props.changes.length > changes.length ? (
-        <span className="text-[12px] leading-5 text-[color:var(--muted)]">+{props.changes.length - changes.length} more</span>
+      {visibleChanges.length > changes.length ? (
+        <span className="text-[12px] leading-5 text-[color:var(--muted)]">+{visibleChanges.length - changes.length} more</span>
       ) : null}
     </div>
   );
@@ -795,12 +796,13 @@ function IssueSubTabs(props: {
 }
 
 function ChangeNodeFileList(props: { changes: WorkspaceChange[]; workdir: string }) {
-  if (props.changes.length === 0) {
+  const visibleChanges = visibleWorkspaceFileChanges(props.changes);
+  if (visibleChanges.length === 0) {
     return <div className="text-[13px] leading-6 text-[color:var(--muted)]">No changed files were reported for this commit.</div>;
   }
   return (
     <div className="grid gap-1.5">
-      {props.changes.map((change) => {
+      {visibleChanges.map((change) => {
         const targetPath = props.workdir ? joinLocalPath(props.workdir, change.path) : "";
         return (
           <button

@@ -7,7 +7,7 @@
 The repository currently contains a runnable local-first desktop MVP:
 
 - Electron desktop shell built with electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
-- Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
+- Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`. It owns users, workspaces, membership, GitHub identity, mspace auth sessions, and future GitHub App installation state.
 - Desktop GitHub sign-in uses the server OAuth flow, stores an `msp_...` session token, and caches a lightweight display identity for local runner writes while collaboration data still lives in SQLite.
 - Issue creation and the Issue Detail reply composer use a local TipTap-backed `IssueDocumentEditor` that emits Markdown. This preserves document-like writing surfaces while keeping runner-side checklist extraction and comment storage text-based.

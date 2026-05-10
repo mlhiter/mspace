@@ -15,7 +15,7 @@ The product should stay narrow:
 ## Current Implementation
 
 - Desktop app: Electron, electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript.
-- UI system: shadcn/ui source components in `packages/ui/src/components/ui`, Radix UI primitives, lucide-react icons, and shared exports through `@mspace/ui`.
+- UI system: shadcn/ui source components in `packages/ui/src/components/ui`, Radix UI primitives, lucide-react icons, Material Icon Theme file icons for file surfaces, and shared exports through `@mspace/ui`.
 - Workspace tooling: pnpm workspaces and Turbo.
 - Server control plane: Go, chi, PostgreSQL through `pgx`, with embedded migrations under `server/internal/control/migrations`.
 - Runner: Go, chi, SQLite through `modernc.org/sqlite`.
@@ -38,6 +38,7 @@ The product should stay narrow:
 - The runner sends `initialize`, `thread/start`, and `turn/start` over newline-delimited JSON-RPC on stdio, then maps app-server notifications into `session_logs`.
 - The runner persists `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at` on `agent_sessions`.
 - Normal source-code agent sessions are captured as `issue_change_nodes` when they finish with git changes. The runner creates one commit from the session worktree, excludes `.mspace` artifacts, and exposes commit metadata plus diff preview from Issue Detail.
+- Changed-file chips and rows use `packages/views/src/file-type-icon.tsx`, backed by `material-icon-theme`, so file surfaces match IDE-style file type icons. Directory-only placeholder changes such as `.mspace/` are filtered from changed-file displays; concrete files under those directories still show normally.
 - Agent definitions live in `agent_profiles`; defaults are seeded for internal `@triage` plus user-facing `@codex`, `@bugfix`, and `@design`, but the Issue composer and runner resolve profiles from SQLite instead of hardcoded frontend constants.
 - `POST /api/sessions/{sessionID}/cleanup` removes retained, non-active local session worktrees after validating the path stays under `~/.mspace/workdirs`; session logs, comments, evidence, and metadata remain in SQLite.
 - Session branches default to `mspace/<issue-short-id>/<session-short-id>`.

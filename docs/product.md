@@ -31,7 +31,7 @@ The repository now has a runnable local desktop MVP:
 - choose a default cluster per project and select a cluster when manually deploying an issue test environment;
 - manually trigger an issue-scoped test deployment where the agent creates the namespace, builds and pushes images, deploys resources, and returns a preview URL;
 - record issue test namespace state, cleanup/retain state, deploy session, cleanup session, and preview URL.
-- use a Notion-like desktop workspace shell with real shadcn/ui primitives, Radix base components, lucide-react icons, and low-contrast document surfaces.
+- use a Notion-like desktop workspace shell with real shadcn/ui primitives, Radix base components, lucide-react icons, Material Icon Theme file icons, and low-contrast document surfaces.
 
 Kubernetes is the deployment and test environment, not the required development runtime for the first version. The current development runtime is local. Running the agent runtime inside Kubernetes remains a later option once the local workflow is stable.
 

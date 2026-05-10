@@ -24,7 +24,7 @@ Use Tailwind CSS 4 as the single styling system for product UI.
 - Global CSS and token mapping live in `apps/desktop/src/renderer/src/globals.css`.
 - shadcn semantic tokens are mapped through `@theme inline`.
 - Monorepo sources must stay visible to Tailwind through `@source` entries for `packages/ui/src` and `packages/views/src`.
-- Do not introduce CSS Modules, styled-components, emotion, or a second icon library for normal product UI.
+- Do not introduce CSS Modules, styled-components, emotion, or a second icon library for normal product UI. The only scoped exception is Material Icon Theme for file-type surfaces.
 - Avoid dynamically constructed Tailwind class names for theme colors. Use static classes or CSS variables.
 
 ## Component Source
@@ -198,12 +198,13 @@ Screen priorities:
 
 ## Icons
 
-Use `lucide-react` for normal product UI. File-type chips and file-change rows may use a small, direct-imported `@mui/icons-material` mapping when the icon represents the file type itself.
+Use `lucide-react` for normal product UI. File-type chips and file-change rows use `material-icon-theme` SVG assets so they match the IDE-style file type icons users expect from VS Code-like file trees.
 
 - Keep icon stroke consistent with the global `svg` rule.
 - Do not add manual `size-*` classes inside shadcn buttons unless the component requires it.
 - Prefer concrete icons: Inbox, Folder, Terminal, Git branch, Logs, Check, Alert, Clock.
-- Keep Material file icons scoped to file surfaces and a short extension map. Do not import the full barrel or recreate a full IDE icon theme.
+- Keep Material Icon Theme scoped to file surfaces through `packages/views/src/file-type-icon.tsx`; do not reintroduce MUI or Emotion just for file icons.
+- Hide directory-only placeholder entries from changed-file lists; show the concrete files inside those directories instead.
 - Avoid abstract sparkle or AI icons except where the local runner or agent identity needs a quiet hint.
 
 ## Motion
@@ -251,7 +252,7 @@ Don't:
 - build marketing heroes inside the app;
 - add decorative gradient backgrounds;
 - create card grids where rows would scan better;
-- mix icon libraries;
+- mix icon libraries outside the explicit lucide product UI plus Material Icon Theme file-surface boundary;
 - use raw Tailwind colors for semantic state;
 - hide Kubernetes scope behind vague "environment" copy when namespace matters.
 

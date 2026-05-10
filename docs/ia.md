@@ -386,6 +386,7 @@ Current implementation:
 - shows session-scoped logs and evidence;
 - inspects the session worktree with `git status`, changed files, and diff preview;
 - compares the session branch against the project default branch through merge-base, ahead/behind count, commits, changed files, and diff preview;
+- keeps changed-file lists file-focused by hiding directory-only placeholder entries and using IDE-style file type icons for visible file rows;
 - generates an issue-summary draft from the session and can post it back to the issue.
 
 ## State Model
@@ -401,10 +402,17 @@ Inbox item states:
 Issue states:
 
 - open
-- running
-- completed
+- in_progress
+- needs_review
+- changes_requested
+- ready_for_test
+- test_in_progress
+- test_passed
+- test_failed
+- blocked
 - failed
 - cancelled
+- closed
 
 Session states:
 
