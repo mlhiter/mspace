@@ -48,6 +48,9 @@
   --accent: #1f1f1f;
   --accent-soft: rgba(0, 0, 0, 0.08);
   --accent-blue: #3f6ea8;
+  --inbox-badge: #e5f0ff;
+  --inbox-badge-text: #2f5f9e;
+  --inbox-unread-dot: #5f98d1;
   --blue-soft: #f1f5fb;
   --success: #2f6f4e;
   --success-soft: #eef7f1;

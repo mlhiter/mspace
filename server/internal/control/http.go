@@ -3,6 +3,7 @@ package control
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,6 +32,10 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/auth/github/result", s.handleGitHubResult)
 	r.Get("/api/auth/me", s.handleMe)
 	r.Get("/api/workspaces", s.handleWorkspaces)
+	r.Get("/api/workspaces/{workspaceID}/inbox", s.handleWorkspaceInbox)
+	r.Post("/api/workspaces/{workspaceID}/issue-events", s.handleCreateIssueEvent)
+	r.Post("/api/workspaces/{workspaceID}/issue-events/{eventID}/read", s.handleMarkIssueEventRead)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/read-through", s.handleMarkIssueReadThrough)
 	return r
 }
 
@@ -178,6 +183,77 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workspaces)
 }
 
+func (s *Server) handleWorkspaceInbox(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	items, err := s.store.ListInbox(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleCreateIssueEvent(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	var input CreateIssueEventInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	input.WorkspaceID = strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	event, err := s.store.CreateIssueEvent(r.Context(), user.ID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, event)
+}
+
+func (s *Server) handleMarkIssueEventRead(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	eventID := strings.TrimSpace(chi.URLParam(r, "eventID"))
+	if eventID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("eventID is required"))
+		return
+	}
+	if err := s.store.MarkIssueEventRead(r.Context(), user.ID, workspaceID, eventID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleMarkIssueReadThrough(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ReadThroughInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	issueID := strings.TrimSpace(chi.URLParam(r, "issueID"))
+	count, err := s.store.MarkIssueReadThrough(r.Context(), user.ID, workspaceID, issueID, input.ThroughEventID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "readCount": count})
+}
+
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (User, []Workspace, bool) {
 	token := bearerToken(r)
 	if token == "" {
@@ -221,4 +297,16 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+func writeStoreError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	if errors.Is(err, ErrNotFound) {
+		status = http.StatusNotFound
+	} else if errors.Is(err, ErrExpired) {
+		status = http.StatusUnauthorized
+	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "valid JSON") {
+		status = http.StatusBadRequest
+	}
+	writeError(w, status, err)
 }

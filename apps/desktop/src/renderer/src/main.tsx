@@ -17,16 +17,16 @@ import {
   InboxPage,
   IssueDetailPage,
   IssuesPage,
+  MspaceAuthProvider,
   ProjectsPage,
   SessionDetailPage,
 } from "@mspace/views";
-import { api, controlPlaneApi, queryKeys, setStoredAuthIdentity } from "@mspace/core";
+import { api, AUTH_TOKEN_STORAGE_KEY, controlPlaneApi, getControlPlaneBaseUrl, queryKeys, setStoredAuthIdentity } from "@mspace/core";
 import { AppShell, type ShellSearchItem } from "@mspace/ui";
 import mspaceLogoUrl from "../../../assets/brand/mspace-logo.svg";
 import "./globals.css";
 
 const queryClient = new QueryClient();
-const AUTH_TOKEN_STORAGE_KEY = "mspace.authToken";
 
 function joinSearchSubtitle(values: Array<string | number | null | undefined>): string {
   return values
@@ -51,6 +51,11 @@ function RootShell() {
   const projectsQuery = useQuery({
     queryKey: queryKeys.projects,
     queryFn: api.listProjects,
+  });
+  const localInboxQuery = useQuery({
+    queryKey: queryKeys.inbox,
+    queryFn: api.listInbox,
+    refetchInterval: 5_000,
   });
   const meQuery = useQuery({
     queryKey: queryKeys.authMe(authToken),
@@ -91,6 +96,25 @@ function RootShell() {
     }
   }, [meQuery.data?.user]);
 
+  const currentWorkspace = meQuery.data?.workspaces[0];
+  const teamInboxEnabled = authToken !== "" && Boolean(currentWorkspace?.id);
+  const teamInboxQuery = useQuery({
+    queryKey: queryKeys.teamInbox(currentWorkspace?.id || "", authToken),
+    queryFn: () => controlPlaneApi.listInbox(authToken, currentWorkspace?.id || ""),
+    enabled: teamInboxEnabled,
+    refetchInterval: teamInboxEnabled ? 5_000 : false,
+  });
+
+  useEffect(() => {
+    void api.configureControlPlaneSession({
+      serverBaseUrl: getControlPlaneBaseUrl(),
+      token: authToken,
+      workspaceId: currentWorkspace?.id || "",
+    }).catch(() => {
+      // The local runner may not be ready yet; Inbox still has server and local query fallbacks.
+    });
+  }, [authToken, currentWorkspace?.id]);
+
   const handleSignOut = () => {
     window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
     setStoredAuthIdentity(null);
@@ -107,7 +131,12 @@ function RootShell() {
         : authError
           ? "error"
           : "signed-out";
-  const currentWorkspace = meQuery.data?.workspaces[0];
+  const inboxUnreadCount = useMemo(() => {
+    const teamItems = teamInboxQuery.data || [];
+    const teamIssueIds = new Set(teamItems.map((item) => item.issueId));
+    const localOnlyItems = (localInboxQuery.data || []).filter((item) => !teamIssueIds.has(item.issueId));
+    return teamItems.length + localOnlyItems.length;
+  }, [localInboxQuery.data, teamInboxQuery.data]);
   const searchItems = useMemo<ShellSearchItem[]>(() => {
     const issueItems: ShellSearchItem[] = (issuesQuery.data || []).map((issue) => ({
       id: `issue:${issue.id}`,
@@ -151,23 +180,33 @@ function RootShell() {
   }, [issuesQuery.data, projectsQuery.data]);
 
   return (
-    <AppShell
-      brandLogoSrc={mspaceLogoUrl}
-      activeWorkItems={activeWorkQuery.data || []}
-      searchItems={searchItems}
-      searchLoading={issuesQuery.isLoading || projectsQuery.isLoading}
-      account={{
+    <MspaceAuthProvider
+      value={{
+        token: authToken,
+        user: meQuery.data?.user,
+        workspace: currentWorkspace,
         status: accountStatus,
-        name: meQuery.data?.user.name,
-        email: meQuery.data?.user.email,
-        avatarUrl: meQuery.data?.user.avatarUrl,
-        workspaceName: currentWorkspace?.name,
-        error: authError instanceof Error ? authError.message : undefined,
-        actionLabel: pendingAuthState ? "Waiting for GitHub" : undefined,
       }}
-      onSignIn={() => signInMutation.mutate()}
-      onSignOut={handleSignOut}
-    />
+    >
+      <AppShell
+        brandLogoSrc={mspaceLogoUrl}
+        activeWorkItems={activeWorkQuery.data || []}
+        inboxUnreadCount={inboxUnreadCount}
+        searchItems={searchItems}
+        searchLoading={issuesQuery.isLoading || projectsQuery.isLoading}
+        account={{
+          status: accountStatus,
+          name: meQuery.data?.user.name,
+          email: meQuery.data?.user.email,
+          avatarUrl: meQuery.data?.user.avatarUrl,
+          workspaceName: currentWorkspace?.name,
+          error: authError instanceof Error ? authError.message : undefined,
+          actionLabel: pendingAuthState ? "Waiting for GitHub" : undefined,
+        }}
+        onSignIn={() => signInMutation.mutate()}
+        onSignOut={handleSignOut}
+      />
+    </MspaceAuthProvider>
   );
 }
 

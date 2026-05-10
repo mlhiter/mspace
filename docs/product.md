@@ -123,10 +123,12 @@ Work should start as Issues, with Inbox reflecting unread updates from those iss
 
 The Inbox should support:
 
-- unread state;
+- per-user unread/read/archive state;
 - status and assignee changes;
 - quick jump back into the linked issue;
 - progress updates from attached agent sessions.
+
+For the team-ready model, unread is not an issue property. Reviewable changes are written as issue events, and each user receives their own receipt. Opening or polling an issue must not clear unread state; read state changes only through explicit Inbox read-through actions.
 
 The Issues surface should support:
 

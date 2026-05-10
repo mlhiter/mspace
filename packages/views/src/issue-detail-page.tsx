@@ -12,7 +12,10 @@ import {
   CircleStop,
   Clock3,
   ExternalLink,
+  Files,
+  GitCommit,
   Globe2,
+  History,
   ListChecks,
   Plus,
   Rocket,
@@ -30,6 +33,7 @@ import {
   type Cluster,
   type Comment,
   type DeploymentEvidence,
+  type IssueChangeNode,
   type IssueLabel,
   type IssueLabelDefinition,
   type IssueListItem,
@@ -74,6 +78,7 @@ type TimelineItem =
   | { kind: "session"; createdAt: string; session: AgentSession }
   | { kind: "evidence"; createdAt: string; evidence: DeploymentEvidence };
 
+type IssueTab = "overview" | "commits" | "sessions" | "evidence";
 type ActorKind = "human" | "codex" | "system" | "evidence";
 
 interface ActorIdentity {
@@ -118,6 +123,14 @@ type ParsedEvidence = {
   events: EvidenceEvent[];
   tone: EvidenceTone;
 };
+
+function isClosedIssueStatus(status: string) {
+  return status === "closed" || status === "completed";
+}
+
+function displayIssueStatus(status: string) {
+  return status === "completed" ? "closed" : status;
+}
 
 function useSessionStream(sessionId: string | undefined, onEvent: (event: SessionStreamEvent) => void) {
   useEffect(() => {
@@ -244,6 +257,11 @@ function formatMentionPlaceholder(agents: AgentProfile[]) {
 function testDeployDefaults(detail: NonNullable<Awaited<ReturnType<typeof api.getIssue>>>, clusters: Cluster[]): StartTestDeployInput {
   const clusterId = detail.testEnvironment?.clusterId || detail.project.defaultClusterId || clusters[0]?.id || "";
   const selectedCluster = clusters.find((cluster) => cluster.id === clusterId);
+  const changeNodes = listOrEmpty(detail.changeNodes);
+  const selectedSource =
+    changeNodes.find((node) => node.commitSha === detail.testEnvironment?.sourceCommitSha) ||
+    changeNodes.find((node) => node.sessionId === detail.testEnvironment?.sourceSessionId) ||
+    changeNodes[0];
   return {
     agentProfile: "codex",
     clusterId,
@@ -251,6 +269,8 @@ function testDeployDefaults(detail: NonNullable<Awaited<ReturnType<typeof api.ge
     previewDomain: selectedCluster?.previewDomain || detail.testEnvironment?.previewDomain || "",
     ingressClass: selectedCluster?.ingressClass || detail.testEnvironment?.ingressClass || "",
     nodeHost: selectedCluster?.nodeHost || detail.testEnvironment?.nodeHost || "",
+    sourceSessionId: selectedSource?.sessionId || "",
+    sourceCommitSha: selectedSource?.commitSha || "",
   };
 }
 
@@ -725,6 +745,256 @@ function SessionFileChanges(props: { changes: WorkspaceChange[]; workdir: string
   );
 }
 
+function changeNodeSession(node: IssueChangeNode, sessions: AgentSession[]) {
+  return sessions.find((session) => session.id === node.sessionId);
+}
+
+function sourceNodeLabel(node: IssueChangeNode) {
+  const commit = node.shortCommitSha || node.commitSha.slice(0, 12) || "commit";
+  const subject = node.subject ? ` · ${node.subject}` : "";
+  return `${commit}${subject}`;
+}
+
+function IssueSubTabs(props: {
+  active: IssueTab;
+  onChange: (tab: IssueTab) => void;
+}) {
+  const tabs: Array<{ value: IssueTab; label: string; icon: typeof CircleDot }> = [
+    { value: "overview", label: "Overview", icon: CircleDot },
+    { value: "commits", label: "Commits", icon: GitCommit },
+    { value: "sessions", label: "Sessions", icon: History },
+    { value: "evidence", label: "Evidence", icon: CheckCircle2 },
+  ];
+
+  return (
+    <div className="mb-7 flex min-w-0 flex-wrap gap-1 border-b border-[color:var(--line)] pb-2" role="tablist" aria-label="Issue sections">
+      {tabs.map((tab) => {
+        const Icon = tab.icon;
+        const active = props.active === tab.value;
+        return (
+          <button
+            key={tab.value}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            className={cn(
+              "inline-flex h-8 max-w-full items-center gap-1.5 rounded-[7px] px-2.5 text-[13px] font-medium leading-5 transition-[background-color,color,transform] duration-150 ease-out active:scale-95",
+              active
+                ? "bg-[color:var(--selection)] text-[color:var(--text)]"
+                : "text-[color:var(--muted)] hover:bg-[color:var(--hover)] hover:text-[color:var(--muted-strong)]",
+            )}
+            onClick={() => props.onChange(tab.value)}
+          >
+            <Icon data-icon className="shrink-0" />
+            <span className="truncate">{tab.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChangeNodeFileList(props: { changes: WorkspaceChange[]; workdir: string }) {
+  if (props.changes.length === 0) {
+    return <div className="text-[13px] leading-6 text-[color:var(--muted)]">No changed files were reported for this commit.</div>;
+  }
+  return (
+    <div className="grid gap-1.5">
+      {props.changes.map((change) => {
+        const targetPath = props.workdir ? joinLocalPath(props.workdir, change.path) : "";
+        return (
+          <button
+            key={`${change.statusCode}-${change.previousPath}-${change.path}`}
+            type="button"
+            className="grid min-h-9 grid-cols-[42px_18px_minmax(0,1fr)] items-center gap-2 rounded-[7px] px-2 text-left text-[12px] leading-5 transition-[background-color,color] hover:bg-[color:var(--hover)]"
+            disabled={!targetPath}
+            onClick={() => {
+              if (targetPath) void window.mspaceDesktop?.openPath?.(targetPath);
+            }}
+            title={targetPath || change.path}
+          >
+            <span className={cn("font-mono text-[11px] font-semibold", workspaceChangeStatusTone(change.statusCode))}>
+              {workspaceChangeStatusLabel(change.statusCode)}
+            </span>
+            <FileTypeIcon path={change.path} />
+            <span className="min-w-0 truncate text-[color:var(--muted-strong)]">
+              {change.previousPath ? `${change.previousPath} -> ${change.path}` : change.path}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function IssueCommitsTab(props: { changeNodes: IssueChangeNode[]; sessions: AgentSession[]; agents: AgentProfile[] }) {
+  const nodes = listOrEmpty(props.changeNodes);
+  const [selectedCommit, setSelectedCommit] = useState(nodes[0]?.commitSha || "");
+
+  useEffect(() => {
+    if (nodes.length === 0) {
+      setSelectedCommit("");
+      return;
+    }
+    if (!nodes.some((node) => node.commitSha === selectedCommit)) {
+      setSelectedCommit(nodes[0].commitSha);
+    }
+  }, [nodes, selectedCommit]);
+
+  if (nodes.length === 0) {
+    return (
+      <section className="grid gap-3">
+        <div className="flex items-center gap-2 text-[14px] font-semibold leading-6 text-[color:var(--text)]">
+          <GitCommit data-icon className="text-[color:var(--muted)]" />
+          Commits
+        </div>
+        <Notice>No commits have been captured for this issue yet. Run an agent session that changes code, then each captured commit will appear here with its diff.</Notice>
+      </section>
+    );
+  }
+
+  const selectedNode = nodes.find((node) => node.commitSha === selectedCommit) || nodes[0];
+  const selectedSession = changeNodeSession(selectedNode, props.sessions);
+  const selectedAgent = selectedSession ? sessionAgent(selectedSession, props.agents) : undefined;
+
+  return (
+    <section className="grid gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <GitCommit data-icon className="shrink-0 text-[color:var(--muted)]" />
+          <div className="min-w-0">
+            <h2 className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">Commits</h2>
+            <div className="text-[12px] leading-5 text-[color:var(--muted)]">Select a captured commit to inspect its files and diff.</div>
+          </div>
+        </div>
+        <InlineMeta>{nodes.length} captured</InlineMeta>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[290px_minmax(0,1fr)]">
+        <div className="grid content-start gap-1 rounded-[10px] bg-[color:var(--paper)] p-1 shadow-[inset_0_0_0_1px_var(--line)]">
+          {nodes.map((node) => {
+            const session = changeNodeSession(node, props.sessions);
+            const agent = session ? sessionAgent(session, props.agents) : undefined;
+            const active = selectedNode.commitSha === node.commitSha;
+            return (
+              <button
+                key={node.id || node.commitSha}
+                type="button"
+                className={cn(
+                  "grid gap-1 rounded-[8px] px-3 py-2.5 text-left transition-[background-color,color] duration-150 ease-out",
+                  active ? "bg-[color:var(--selection)]" : "hover:bg-[color:var(--hover)]",
+                )}
+                onClick={() => setSelectedCommit(node.commitSha)}
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <GitCommit data-icon className={cn("shrink-0", node.error ? "text-[color:var(--danger)]" : "text-[color:var(--accent-blue)]")} />
+                  <span className="min-w-0 truncate font-mono text-[12px] font-semibold text-[color:var(--text)]">{node.shortCommitSha || node.commitSha}</span>
+                  <span className="ml-auto shrink-0 text-[11px] text-[color:var(--faint)]">{node.filesChanged} files</span>
+                </div>
+                <div className="line-clamp-2 text-[12px] leading-5 text-[color:var(--muted-strong)]">{node.subject || "No commit subject"}</div>
+                <div className="flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[11px] leading-4 text-[color:var(--faint)]">
+                  <span>{agent?.name || "Codex"}</span>
+                  <span>Session {node.sessionId.slice(0, 8)}</span>
+                  <span title={formatAbsoluteTime(node.createdAt)}>{formatRelativeTime(node.createdAt)}</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="min-w-0 rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="border-b border-[color:var(--line)] px-4 py-3">
+            <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  <GitCommit data-icon className="shrink-0 text-[color:var(--accent-blue)]" />
+                  <span className="font-mono text-[12px] font-semibold text-[color:var(--text)]">{selectedNode.commitSha}</span>
+                </div>
+                <div className="mt-1 text-[13px] leading-6 text-[color:var(--muted-strong)]">{selectedNode.subject || "No commit subject"}</div>
+              </div>
+              {selectedNode.diffTruncated ? <InlineMeta>Diff truncated</InlineMeta> : null}
+            </div>
+            <div className="mt-2 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
+              <span>{selectedAgent?.name || "Codex"}</span>
+              <span>Session {selectedNode.sessionId.slice(0, 8)}</span>
+              <span>{selectedNode.branch || "detached"}</span>
+              <span>{selectedNode.filesChanged} files</span>
+            </div>
+          </div>
+          {selectedNode.error ? <Notice tone="danger">{selectedNode.error}</Notice> : null}
+          <div className="grid gap-4 p-4">
+            <div>
+              <div className="mb-2 flex items-center gap-2 text-[12px] font-semibold leading-5 text-[color:var(--muted-strong)]">
+                <Files data-icon />
+                Changed files
+              </div>
+              <ChangeNodeFileList changes={listOrEmpty(selectedNode.changes)} workdir={selectedSession?.workdir || ""} />
+            </div>
+            <div>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="text-[12px] font-semibold leading-5 text-[color:var(--muted-strong)]">Diff</div>
+                {selectedNode.diffTruncated ? <InlineMeta>Truncated</InlineMeta> : null}
+              </div>
+              {selectedNode.diffPreview ? (
+                <pre className="max-h-[560px] overflow-auto rounded-[9px] bg-[color:var(--code-bg)] px-4 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)] whitespace-pre-wrap">
+                  {selectedNode.diffPreview}
+                </pre>
+              ) : (
+                <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                  No diff preview is available for this commit.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function IssueSessionsTab(props: { sessions: AgentSession[]; agents: AgentProfile[] }) {
+  const sessions = listOrEmpty(props.sessions);
+  if (sessions.length === 0) {
+    return <Notice>No agent sessions have run on this issue yet.</Notice>;
+  }
+  return (
+    <section className="grid gap-2">
+      {sessions.map((session) => {
+        const agent = sessionAgent(session, props.agents);
+        return (
+          <div key={session.id} className="grid gap-1 rounded-[9px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <ActorMark actor={codexActor(agent.name)} size="sm" />
+              <span className="font-medium text-[13px] leading-5 text-[color:var(--text)]">{agent.name}</span>
+              <StatusBadge value={session.status} />
+              {session.sourceCommitSha ? <span className="font-mono text-[11px] text-[color:var(--faint)]">deploy {session.sourceCommitSha.slice(0, 12)}</span> : null}
+            </div>
+            <div className="min-w-0 break-all font-mono text-[12px] leading-5 text-[color:var(--muted)]">{session.branch || session.workdir}</div>
+            <TimeMeta value={session.updatedAt || session.createdAt} />
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function IssueEvidenceTab(props: { evidence: DeploymentEvidence[] }) {
+  const evidence = listOrEmpty(props.evidence);
+  if (evidence.length === 0) {
+    return <Notice>No deployment evidence has been captured for this issue yet.</Notice>;
+  }
+  return (
+    <section className="relative">
+      <div className="absolute bottom-0 left-4 top-0 w-px bg-[color:var(--line)]" aria-hidden="true" />
+      <div className="relative">
+        {evidence.map((item) => (
+          <EvidenceTimelineItem key={item.id} evidence={item} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function SessionSummarySkeleton() {
   return (
     <div className="mt-2 grid gap-2" aria-hidden="true">
@@ -994,7 +1264,7 @@ function IssueTaskList(props: {
       {props.tasks.length > 0 ? (
         <div className="divide-y divide-[color:var(--line)]">
           {props.tasks.map((task) => {
-            const completed = task.status === "completed";
+            const completed = isClosedIssueStatus(task.status);
             const updating = props.updatingTaskId === task.id;
             const deleting = props.deletingTaskId === task.id;
             const busy = updating || deleting;
@@ -1020,7 +1290,7 @@ function IssueTaskList(props: {
                   </div>
                   {task.body ? <div className="line-clamp-1 text-[12px] leading-5 text-[color:var(--muted)]">{task.body}</div> : null}
                 </div>
-                <StatusBadge value={task.status} />
+                <StatusBadge value={displayIssueStatus(task.status)} />
                 <button
                   type="button"
                   aria-label="Delete task"
@@ -1233,6 +1503,9 @@ function labelSelectClass(hasValue: boolean) {
 function TestDeployModal(props: {
   value: StartTestDeployInput;
   clusters: Cluster[];
+  changeNodes: IssueChangeNode[];
+  sessions: AgentSession[];
+  agents: AgentProfile[];
   isPending: boolean;
   canSubmit: boolean;
   error?: Error | null;
@@ -1242,6 +1515,9 @@ function TestDeployModal(props: {
 }) {
   const selectedCluster = props.clusters.find((cluster) => cluster.id === props.value.clusterId);
   const effectiveExposure = props.value.exposureMode || selectedCluster?.exposureMode || "nodeport";
+  const selectedNode = props.changeNodes.find((node) => node.commitSha === props.value.sourceCommitSha);
+  const selectedSession = selectedNode ? changeNodeSession(selectedNode, props.sessions) : undefined;
+  const selectedAgent = selectedSession ? sessionAgent(selectedSession, props.agents) : undefined;
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -1286,6 +1562,50 @@ function TestDeployModal(props: {
           {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
           {props.clusters.length === 0 ? (
             <Notice tone="danger">Create a cluster before queueing a test deployment.</Notice>
+          ) : null}
+          {props.changeNodes.length === 0 ? (
+            <Notice tone="danger">Run an agent session that changes code before queueing a test deployment.</Notice>
+          ) : null}
+          <Field label="Source commit">
+            <Select
+              value={props.value.sourceCommitSha || "__none"}
+              onValueChange={(commitSha) => {
+                const node = props.changeNodes.find((item) => item.commitSha === commitSha);
+                props.onChange({
+                  ...props.value,
+                  sourceCommitSha: node?.commitSha || "",
+                  sourceSessionId: node?.sessionId || "",
+                });
+              }}
+              disabled={props.changeNodes.length === 0}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">Select commit</SelectItem>
+                {props.changeNodes.map((node) => (
+                  <SelectItem key={node.id || node.commitSha} value={node.commitSha}>
+                    {sourceNodeLabel(node)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          {selectedNode ? (
+            <div className="grid gap-1.5 rounded-[10px] bg-[color:var(--block)] p-3 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="flex min-w-0 items-center gap-2 font-medium text-[color:var(--muted-strong)]">
+                <GitCommit data-icon className="shrink-0 text-[color:var(--accent-blue)]" />
+                <span className="min-w-0 truncate font-mono">{selectedNode.commitSha}</span>
+              </div>
+              <div className="line-clamp-2">{selectedNode.subject || "No commit subject"}</div>
+              <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
+                <span>{selectedAgent?.name || "Codex"}</span>
+                <span>{selectedNode.filesChanged} files</span>
+                <span>Session {selectedNode.sessionId.slice(0, 8)}</span>
+              </div>
+              {selectedNode.error ? <div className="text-[color:var(--danger)]">{selectedNode.error}</div> : null}
+            </div>
           ) : null}
           <Field label="Cluster">
             <Select
@@ -1393,6 +1713,7 @@ export function IssueDetailPage() {
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [sessionSnapshotsById, setSessionSnapshotsById] = useState<Record<string, SessionSnapshot>>({});
+  const [issueTab, setIssueTab] = useState<IssueTab>("overview");
   const [testDeployOpen, setTestDeployOpen] = useState(false);
   const [testDeployForm, setTestDeployForm] = useState<StartTestDeployInput>({
     agentProfile: "codex",
@@ -1401,6 +1722,8 @@ export function IssueDetailPage() {
     previewDomain: "",
     ingressClass: "",
     nodeHost: "",
+    sourceSessionId: "",
+    sourceCommitSha: "",
   });
 
   const issueQuery = useQuery({
@@ -1429,7 +1752,8 @@ export function IssueDetailPage() {
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
   const enabledAgents = agents.filter((agent) => agent.enabled);
   const childIssues = listOrEmpty(detail?.childIssues);
-  const completedChildIssueCount = childIssues.filter((task) => task.status === "completed").length;
+  const changeNodes = listOrEmpty(detail?.changeNodes);
+  const completedChildIssueCount = childIssues.filter((task) => isClosedIssueStatus(task.status)).length;
   const latestSession = detail?.sessions[0];
   const hasActiveSession = latestSession ? ["queued", "running"].includes(latestSession.status) : false;
   const mentionedAgent = extractAgentMention(composerBody);
@@ -1458,7 +1782,9 @@ export function IssueDetailPage() {
           session.id,
           {
             logs: listOrEmpty(sessionDetail.logs).map((log) => ({ stream: log.stream, message: log.message })),
-            changes: listOrEmpty(sessionDetail.workspace?.changes),
+            changes: listOrEmpty(sessionDetail.workspace?.changes).length > 0
+              ? listOrEmpty(sessionDetail.workspace?.changes)
+              : listOrEmpty(sessionDetail.workspace?.comparison?.changes),
           },
         ] as const;
       }),
@@ -1689,6 +2015,8 @@ export function IssueDetailPage() {
   });
   const canStartTestDeploy =
     Boolean(testDeployForm.clusterId.trim()) &&
+    Boolean(testDeployForm.sourceCommitSha?.trim()) &&
+    changeNodes.length > 0 &&
     !hasActiveSession &&
     !startTestDeploy.isPending;
   const canCreateTask = Boolean(newTaskTitle.trim()) && !createTask.isPending;
@@ -1728,156 +2056,170 @@ export function IssueDetailPage() {
   return (
     <PageFrame
       title={detail.issue.title}
-      subtitle={`${detail.project.name} · ${detail.issue.status}`}
+      subtitle={`${detail.project.name} · ${displayIssueStatus(detail.issue.status)}`}
       breadcrumbs={[
         { label: "mspace", to: "/inbox" },
         { label: "Issues", to: "/issues" },
         { label: detail.issue.title },
       ]}
     >
+      <IssueSubTabs
+        active={issueTab}
+        onChange={setIssueTab}
+      />
       <div className="grid gap-10 xl:grid-cols-[minmax(0,780px)_280px] xl:items-start">
         <main className="min-w-0">
-          <section className="border-b border-[color:var(--line)] pb-8">
-            {detail.issue.body ? (
-              <RichText className="text-[15px] leading-8">{detail.issue.body}</RichText>
-            ) : (
-              <div className="text-[15px] leading-8 text-[color:var(--muted)]">No issue body yet.</div>
-            )}
-            {detail.issue.parentIssueId === "" ? (
-              <IssueTaskList
-                tasks={childIssues}
-                completedCount={completedChildIssueCount}
-                newTaskTitle={newTaskTitle}
-                isCreating={createTask.isPending}
-                createError={createTask.error}
-                updatingTaskId={updateTaskStatus.isPending ? updateTaskStatus.variables?.taskId || "" : ""}
-                updateError={updateTaskStatus.error}
-                deletingTaskId={deleteTask.isPending ? deleteTask.variables || "" : ""}
-                deleteError={deleteTask.error}
-                canCreate={canCreateTask}
-                onNewTaskTitleChange={setNewTaskTitle}
-                onCreateTask={() => {
-                  if (!canCreateTask) return;
-                  createTask.mutate(newTaskTitle.trim());
-                }}
-                onToggleTask={(task) => {
-                  updateTaskStatus.mutate({
-                    taskId: task.id,
-                    status: task.status === "completed" ? "open" : "completed",
-                  });
-                }}
-                onDeleteTask={(task) => {
-                  deleteTask.mutate(task.id);
-                }}
-              />
-            ) : null}
-          </section>
-
-          <section className="relative mt-8">
-            <div className="absolute bottom-0 left-4 top-0 w-px bg-[color:var(--line)]" aria-hidden="true" />
-            <div className="relative">
-              {timelineItems.map((item) => {
-                if (item.kind === "opened") {
-                  return (
-                    <TimelineShell key="opened" actor={creatorActor} title={`${creatorActor.name || "mlhiter"} opened this issue`} time={item.createdAt}>
-                      <div className="text-[13px] leading-6 text-[color:var(--muted)]">
-                        {`Created in ${detail.project.name}.`}
-                      </div>
-                    </TimelineShell>
-                  );
-                }
-                if (item.kind === "comment") {
-                  return <CommentTimelineItem key={`comment-${item.comment.id}`} comment={item.comment} />;
-                }
-                if (item.kind === "session") {
-                  const sessionSnapshot = sessionSnapshotsById[item.session.id];
-                  return (
-                    <SessionTimelineItem
-                      key={`session-${item.session.id}`}
-                      session={item.session}
-                      logs={sessionSnapshot?.logs || []}
-                      changes={sessionSnapshot?.changes || []}
-                      agents={agents}
-                      isSnapshotPending={!sessionSnapshot}
-                      isStopping={stopSession.isPending && stopSession.variables === item.session.id}
-                      stopError={stopSession.error && stopSession.variables === item.session.id ? stopSession.error : null}
-                      onStop={["queued", "running"].includes(item.session.status) ? () => stopSession.mutate(item.session.id) : undefined}
-                    />
-                  );
-                }
-                return <EvidenceTimelineItem key={`evidence-${item.evidence.id}`} evidence={item.evidence} />;
-              })}
-            </div>
-          </section>
-
-          <section className="mt-2 grid grid-cols-[32px_minmax(0,1fr)] gap-3">
-            <ActorMark actor={composerActor} />
-            <form
-              className="min-w-0 rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]"
-              onSubmit={(event) => {
-                event.preventDefault();
-                if (!canSendComposer) return;
-                sendComposer.mutate(composerBody);
-              }}
-            >
-              {sendComposer.error ? <Notice tone="danger">{sendComposer.error.message}</Notice> : null}
-              <div className="relative" data-comment-composer="true">
-                <IssueDocumentEditor
-                  variant="comment"
-                  ariaLabel="Issue comment"
-                  value={composerBody}
-                  onChange={(value) => {
-                    setComposerBody(value);
-                    setMentionMenuDismissed(false);
-                  }}
-                  onReady={setComposerEditor}
-                  onEditorStateChange={syncComposerEditorState}
-                  onFocus={(editor) => {
-                    setComposerFocused(true);
-                    syncComposerEditorState(editor);
-                  }}
-                  onBlur={() => {
-                    setComposerFocused(false);
-                  }}
-                  onKeyDown={handleComposerKeyDown}
-                  placeholder={formatMentionPlaceholder(enabledAgents)}
-                />
-                {mentionMenuOpen ? (
-                  <AgentMentionMenu
-                    agents={agentSuggestions}
-                    activeIndex={selectedMentionIndex}
-                    position={mentionMenuPosition}
-                    onActiveIndexChange={setActiveMentionIndex}
-                    onSelect={selectAgentSuggestion}
+          {issueTab === "overview" ? (
+            <>
+              <section className="border-b border-[color:var(--line)] pb-8">
+                {detail.issue.body ? (
+                  <RichText className="text-[15px] leading-8">{detail.issue.body}</RichText>
+                ) : (
+                  <div className="text-[15px] leading-8 text-[color:var(--muted)]">No issue body yet.</div>
+                )}
+                {detail.issue.parentIssueId === "" ? (
+                  <IssueTaskList
+                    tasks={childIssues}
+                    completedCount={completedChildIssueCount}
+                    newTaskTitle={newTaskTitle}
+                    isCreating={createTask.isPending}
+                    createError={createTask.error}
+                    updatingTaskId={updateTaskStatus.isPending ? updateTaskStatus.variables?.taskId || "" : ""}
+                    updateError={updateTaskStatus.error}
+                    deletingTaskId={deleteTask.isPending ? deleteTask.variables || "" : ""}
+                    deleteError={deleteTask.error}
+                    canCreate={canCreateTask}
+                    onNewTaskTitleChange={setNewTaskTitle}
+                    onCreateTask={() => {
+                      if (!canCreateTask) return;
+                      createTask.mutate(newTaskTitle.trim());
+                    }}
+                    onToggleTask={(task) => {
+                      updateTaskStatus.mutate({
+                        taskId: task.id,
+                        status: isClosedIssueStatus(task.status) ? "open" : "closed",
+                      });
+                    }}
+                    onDeleteTask={(task) => {
+                      deleteTask.mutate(task.id);
+                    }}
                   />
                 ) : null}
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[color:var(--line)] px-3 py-2">
-                <div className="text-[12px] leading-5 text-[color:var(--muted)]">
-                  {isSupportedAgentMention
-                    ? `This comment will be saved and sent to ${mentionedAgentConfig?.name}.`
-                    : isUnsupportedAgentMention
-                      ? `@${mentionedAgent} is not available yet.`
-                      : "Comments stay on the issue. Mention an agent when you want a turn."}
+              </section>
+
+              <section className="relative mt-8">
+                <div className="absolute bottom-0 left-4 top-0 w-px bg-[color:var(--line)]" aria-hidden="true" />
+                <div className="relative">
+                  {timelineItems.map((item) => {
+                    if (item.kind === "opened") {
+                      return (
+                        <TimelineShell key="opened" actor={creatorActor} title={`${creatorActor.name || "mlhiter"} opened this issue`} time={item.createdAt}>
+                          <div className="text-[13px] leading-6 text-[color:var(--muted)]">
+                            {`Created in ${detail.project.name}.`}
+                          </div>
+                        </TimelineShell>
+                      );
+                    }
+                    if (item.kind === "comment") {
+                      return <CommentTimelineItem key={`comment-${item.comment.id}`} comment={item.comment} />;
+                    }
+                    if (item.kind === "session") {
+                      const sessionSnapshot = sessionSnapshotsById[item.session.id];
+                      return (
+                        <SessionTimelineItem
+                          key={`session-${item.session.id}`}
+                          session={item.session}
+                          logs={sessionSnapshot?.logs || []}
+                          changes={sessionSnapshot?.changes || []}
+                          agents={agents}
+                          isSnapshotPending={!sessionSnapshot}
+                          isStopping={stopSession.isPending && stopSession.variables === item.session.id}
+                          stopError={stopSession.error && stopSession.variables === item.session.id ? stopSession.error : null}
+                          onStop={["queued", "running"].includes(item.session.status) ? () => stopSession.mutate(item.session.id) : undefined}
+                        />
+                      );
+                    }
+                    return <EvidenceTimelineItem key={`evidence-${item.evidence.id}`} evidence={item.evidence} />;
+                  })}
                 </div>
-                <Button
-                  type="submit"
-                  variant="secondary"
-                  size="sm"
-                  disabled={!canSendComposer}
+              </section>
+
+              <section className="mt-2 grid grid-cols-[32px_minmax(0,1fr)] gap-3">
+                <ActorMark actor={composerActor} />
+                <form
+                  className="min-w-0 rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (!canSendComposer) return;
+                    sendComposer.mutate(composerBody);
+                  }}
                 >
-                  <Send data-icon />
-                  {sendComposer.isPending
-                    ? "Sending..."
-                    : isSupportedAgentMention
-                      ? hasActiveSession
-                        ? "Agent is working"
-                        : `Send to ${mentionedAgentConfig?.name}`
-                      : "Comment"}
-                </Button>
-              </div>
-            </form>
-          </section>
+                  {sendComposer.error ? <Notice tone="danger">{sendComposer.error.message}</Notice> : null}
+                  <div className="relative" data-comment-composer="true">
+                    <IssueDocumentEditor
+                      variant="comment"
+                      ariaLabel="Issue comment"
+                      value={composerBody}
+                      onChange={(value) => {
+                        setComposerBody(value);
+                        setMentionMenuDismissed(false);
+                      }}
+                      onReady={setComposerEditor}
+                      onEditorStateChange={syncComposerEditorState}
+                      onFocus={(editor) => {
+                        setComposerFocused(true);
+                        syncComposerEditorState(editor);
+                      }}
+                      onBlur={() => {
+                        setComposerFocused(false);
+                      }}
+                      onKeyDown={handleComposerKeyDown}
+                      placeholder={formatMentionPlaceholder(enabledAgents)}
+                    />
+                    {mentionMenuOpen ? (
+                      <AgentMentionMenu
+                        agents={agentSuggestions}
+                        activeIndex={selectedMentionIndex}
+                        position={mentionMenuPosition}
+                        onActiveIndexChange={setActiveMentionIndex}
+                        onSelect={selectAgentSuggestion}
+                      />
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[color:var(--line)] px-3 py-2">
+                    <div className="text-[12px] leading-5 text-[color:var(--muted)]">
+                      {isSupportedAgentMention
+                        ? `This comment will be saved and sent to ${mentionedAgentConfig?.name}.`
+                        : isUnsupportedAgentMention
+                          ? `@${mentionedAgent} is not available yet.`
+                          : "Comments stay on the issue. Mention an agent when you want a turn."}
+                    </div>
+                    <Button
+                      type="submit"
+                      variant="secondary"
+                      size="sm"
+                      disabled={!canSendComposer}
+                    >
+                      <Send data-icon />
+                      {sendComposer.isPending
+                        ? "Sending..."
+                        : isSupportedAgentMention
+                          ? hasActiveSession
+                            ? "Agent is working"
+                            : `Send to ${mentionedAgentConfig?.name}`
+                          : "Comment"}
+                    </Button>
+                  </div>
+                </form>
+              </section>
+            </>
+          ) : issueTab === "commits" ? (
+            <IssueCommitsTab changeNodes={changeNodes} sessions={listOrEmpty(detail.sessions)} agents={agents} />
+          ) : issueTab === "sessions" ? (
+            <IssueSessionsTab sessions={listOrEmpty(detail.sessions)} agents={agents} />
+          ) : (
+            <IssueEvidenceTab evidence={listOrEmpty(detail.evidence)} />
+          )}
         </main>
 
         <aside className="xl:sticky xl:top-8">
@@ -1886,7 +2228,7 @@ export function IssueDetailPage() {
               <div className="grid gap-2">
                 <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-2">
                   <span className="text-[12px] leading-5 text-[color:var(--muted)]">Status</span>
-                  <StatusBadge value={detail.issue.status} />
+                  <StatusBadge value={displayIssueStatus(detail.issue.status)} />
                 </div>
                 <MetaIdentityLine label="Assignee" actor={assigneeActor} />
                 <MetaLine label="Updated" value={formatRelativeTime(detail.issue.updatedAt)} />
@@ -1919,6 +2261,7 @@ export function IssueDetailPage() {
                 <MetaLine label="Status" value={detail.testEnvironment?.namespaceStatus || "not requested"} />
                 <MetaLine label="Cleanup" value={detail.testEnvironment?.cleanupStatus || "not decided"} />
                 <MetaLine label="Exposure" value={previewStrategy(detail.testEnvironment)} />
+                <MetaLine label="Source" value={detail.testEnvironment?.sourceCommitSha ? detail.testEnvironment.sourceCommitSha.slice(0, 12) : "not selected"} />
                 {detail.testEnvironment?.previewUrl ? (
                   <button
                     type="button"
@@ -1992,6 +2335,9 @@ export function IssueDetailPage() {
         <TestDeployModal
           value={testDeployForm}
           clusters={clusters}
+          changeNodes={changeNodes}
+          sessions={listOrEmpty(detail.sessions)}
+          agents={agents}
           isPending={startTestDeploy.isPending}
           canSubmit={canStartTestDeploy}
           error={startTestDeploy.error}

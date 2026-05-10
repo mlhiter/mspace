@@ -12,6 +12,7 @@ import type {
   CreateIssueTaskInput,
   CreateProjectInput,
   CreateSessionInput,
+  CreateTeamIssueEventInput,
   InboxItem,
   Issue,
   IssueDetail,
@@ -25,11 +26,13 @@ import type {
   Project,
   SessionDetail,
   StartTestDeployInput,
+  TeamInboxItem,
   UpdateIssueLabelsInput,
   UpdateIssueInput,
   UpdateProjectInput,
 } from "./types";
 
+export const AUTH_TOKEN_STORAGE_KEY = "mspace.authToken";
 export const AUTH_IDENTITY_STORAGE_KEY = "mspace.authIdentity";
 const defaultActorName = "mlhiter";
 
@@ -45,6 +48,7 @@ export const queryKeys = {
   agents: ["agents"] as const,
   authMe: (token: string) => ["auth-me", token] as const,
   authPoll: (state: string) => ["auth-github-result", state] as const,
+  teamInbox: (workspaceId: string, token: string) => ["team-inbox", workspaceId, token] as const,
   clusters: ["clusters"] as const,
   inbox: ["inbox"] as const,
   issueLabelDefinitions: ["issue-label-definitions"] as const,
@@ -168,8 +172,19 @@ async function requestControlPlane<T>(path: string, init?: RequestInit): Promise
   return requestURL<T>(buildControlPlaneUrl(path), init);
 }
 
+function authHeaders(token: string): HeadersInit {
+  return {
+    Authorization: `Bearer ${token}`,
+  };
+}
+
 export const api = {
   health: () => request<{ ok: boolean; version: string }>("/health"),
+  configureControlPlaneSession: (input: { serverBaseUrl: string; token: string; workspaceId: string }) =>
+    request<{ ok: boolean }>("/api/control-plane/session", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   listActiveWork: () => request<ActiveWorkItem[]>("/api/active-work"),
   listAgents: () => request<AgentProfile[]>("/api/agents"),
   createAgent: (input: AgentProfileInput) =>
@@ -209,6 +224,10 @@ export const api = {
       body: JSON.stringify({ paths }),
     }),
   listInbox: () => request<InboxItem[]>("/api/inbox"),
+  markInboxIssueRead: (issueId: string) =>
+    request<{ ok: boolean }>(`/api/inbox/issues/${issueId}/read`, {
+      method: "POST",
+    }),
   listProjects: () => request<Project[]>("/api/projects"),
   createProject: (input: CreateProjectInput) =>
     request<Project>("/api/projects", {
@@ -301,14 +320,31 @@ export const controlPlaneApi = {
     requestControlPlane<AuthPollResult>(`/api/auth/github/result?state=${encodeURIComponent(state)}`),
   me: (token: string) =>
     requestControlPlane<AuthMeResult>("/api/auth/me", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: authHeaders(token),
     }),
   listWorkspaces: (token: string) =>
     requestControlPlane<AuthMeResult["workspaces"]>("/api/workspaces", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: authHeaders(token),
+    }),
+  listInbox: (token: string, workspaceId: string) =>
+    requestControlPlane<TeamInboxItem[]>(`/api/workspaces/${workspaceId}/inbox`, {
+      headers: authHeaders(token),
+    }),
+  createIssueEvent: (token: string, workspaceId: string, input: CreateTeamIssueEventInput) =>
+    requestControlPlane<{ id: string }>(`/api/workspaces/${workspaceId}/issue-events`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  markIssueEventRead: (token: string, workspaceId: string, eventId: string) =>
+    requestControlPlane<{ ok: boolean }>(`/api/workspaces/${workspaceId}/issue-events/${eventId}/read`, {
+      method: "POST",
+      headers: authHeaders(token),
+    }),
+  markIssueReadThrough: (token: string, workspaceId: string, issueId: string, throughEventId?: string) =>
+    requestControlPlane<{ ok: boolean; readCount: number }>(`/api/workspaces/${workspaceId}/issues/${issueId}/read-through`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ throughEventId: throughEventId || "" }),
     }),
 };

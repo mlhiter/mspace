@@ -131,8 +131,10 @@ Each row should show:
 
 Current implementation:
 
-- lists inbox items from the local runner;
-- refreshes through `/api/inbox/stream`;
+- lists signed-in team Inbox items from server issue-event receipts;
+- falls back to local runner inbox items when there is no signed-in workspace item for the same issue;
+- refreshes local fallback data through `/api/inbox/stream` and polls server receipts for team state;
+- shows a sidebar count badge when unread Inbox items exist;
 - navigates to issue detail for review and action;
 - keeps assignee state visible so agent and human ownership changes are obvious.
 
@@ -394,6 +396,7 @@ Inbox item states:
 
 - unread
 - read
+- archived
 
 Issue states:
 

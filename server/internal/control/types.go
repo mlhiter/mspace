@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"time"
@@ -53,6 +54,44 @@ type Workspace struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+type IssueEvent struct {
+	ID          string          `json:"id"`
+	WorkspaceID string          `json:"workspaceId"`
+	IssueID     string          `json:"issueId"`
+	ActorUserID string          `json:"actorUserId"`
+	Kind        string          `json:"kind"`
+	Summary     string          `json:"summary"`
+	Payload     json.RawMessage `json:"payload"`
+	CreatedAt   string          `json:"createdAt"`
+}
+
+type InboxEntry struct {
+	EventID     string          `json:"eventId"`
+	WorkspaceID string          `json:"workspaceId"`
+	IssueID     string          `json:"issueId"`
+	ActorUserID string          `json:"actorUserId"`
+	Kind        string          `json:"kind"`
+	Summary     string          `json:"summary"`
+	Payload     json.RawMessage `json:"payload"`
+	State       string          `json:"state"`
+	UnreadCount int             `json:"unreadCount"`
+	CreatedAt   string          `json:"createdAt"`
+}
+
+type CreateIssueEventInput struct {
+	WorkspaceID      string          `json:"workspaceId"`
+	IssueID          string          `json:"issueId"`
+	ActorUserID      string          `json:"actorUserId"`
+	Kind             string          `json:"kind"`
+	Summary          string          `json:"summary"`
+	Payload          json.RawMessage `json:"payload"`
+	RecipientUserIDs []string        `json:"recipientUserIds"`
+}
+
+type ReadThroughInput struct {
+	ThroughEventID string `json:"throughEventId"`
+}
+
 type OAuthState struct {
 	State       string
 	Provider    string
@@ -96,10 +135,25 @@ type Store interface {
 	UpsertIdentity(ctx Context, profile IdentityProfile) (User, []Workspace, error)
 	CreateAuthSession(ctx Context, userID string, ttl time.Duration) (token string, expiresAt time.Time, err error)
 	GetUserBySessionToken(ctx Context, token string) (User, []Workspace, error)
+	ListInbox(ctx Context, userID, workspaceID string) ([]InboxEntry, error)
+	CreateIssueEvent(ctx Context, requesterUserID string, input CreateIssueEventInput) (IssueEvent, error)
+	MarkIssueEventRead(ctx Context, userID, workspaceID, eventID string) error
+	MarkIssueReadThrough(ctx Context, userID, workspaceID, issueID, throughEventID string) (int, error)
 }
 
 type Context interface {
 	Done() <-chan struct{}
 	Err() error
 	Value(key any) any
+}
+
+func normalizeJSONPayload(payload json.RawMessage) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return json.RawMessage(`{}`), nil
+	}
+	if !json.Valid(trimmed) {
+		return nil, errors.New("payload must be valid JSON")
+	}
+	return append(json.RawMessage(nil), trimmed...), nil
 }

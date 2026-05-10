@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-09
+> Status: local MVP operations guide, updated 2026-05-10
 
 ## Local Data
 
@@ -13,9 +13,9 @@
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory recorded in `agent_sessions.artifact_dir`. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional deploy/test artifact. When it includes `previewUrl`, the runner copies it back to the issue test environment. |
 
-Reusable cluster configs are stored in `clusters`. Issue test namespace records are stored in `issue_test_environments`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
+Reusable cluster configs are stored in `clusters`. Issue test namespace records are stored in `issue_test_environments`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
 
-The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, and mspace auth sessions in Postgres through `DATABASE_URL`. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
+The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
 
 ## Start The App
 
@@ -132,10 +132,24 @@ curl -i http://127.0.0.1:8787/api/auth/github/start
 
 This endpoint requires `DATABASE_URL`, `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` to be configured in the server environment.
 
+Team Inbox receipt checks:
+
+```bash
+curl -H "Authorization: Bearer <msp-token>" \
+  http://127.0.0.1:8787/api/workspaces/<workspace-id>/inbox
+```
+
 Runner health:
 
 ```bash
 curl http://127.0.0.1:7788/health
+```
+
+Local fallback Inbox checks:
+
+```bash
+curl http://127.0.0.1:7788/api/inbox
+sqlite3 ~/.mspace/mspace.db "select issue_id,title,status,unread,updated_at from inbox_items order by updated_at desc limit 10;"
 ```
 
 Local actor display snapshots:

@@ -290,7 +290,7 @@ func TestExtractIssueTaskDraftsRemovesChecklistLines(t *testing.T) {
 	if tasks[0].Title != "Add inline child issue rows" || tasks[0].Status != "open" {
 		t.Fatalf("unexpected first task: %#v", tasks[0])
 	}
-	if tasks[1].Title != "Keep completed tasks checked" || tasks[1].Status != "completed" {
+	if tasks[1].Title != "Keep completed tasks checked" || tasks[1].Status != "closed" {
 		t.Fatalf("unexpected second task: %#v", tasks[1])
 	}
 }
@@ -386,6 +386,117 @@ func TestDeleteIssueTaskRemovesChildIssueOnly(t *testing.T) {
 	}
 }
 
+func TestGetIssueDoesNotClearInboxUnread(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	application := &app{db: db, broker: newEventBroker()}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES ('project-1', 'Demo', '/tmp/demo', 'local', '', '', '', '', 'main', '', '', '', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES ('issue-1', 'project-1', NULL, 0, 'Parent issue', 'Parent body', 'open', 'pending', 'me', 'human', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO inbox_items (id, issue_id, project_id, title, status, unread, created_at, updated_at)
+		VALUES ('inbox-1', 'issue-1', 'project-1', 'Parent issue', 'open', 1, ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert inbox item: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Get("/api/issues/{issueID}", application.handleGetIssue)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/issues/issue-1", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected get issue to return 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var unread int
+	if err := db.QueryRow(`SELECT unread FROM inbox_items WHERE issue_id = 'issue-1'`).Scan(&unread); err != nil {
+		t.Fatalf("query inbox unread: %v", err)
+	}
+	if unread != 1 {
+		t.Fatalf("expected GET issue to leave inbox unread, got %d", unread)
+	}
+}
+
+func TestMigrateClosedIssueStatusesKeepsSessionCompletion(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+
+	application := &app{db: db, broker: newEventBroker()}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES ('project-1', 'Demo', '/tmp/demo', 'local', '', '', '', '', 'main', '', '', '', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES ('issue-1', 'project-1', NULL, 0, 'Parent issue', 'Parent body', 'completed', 'pending', 'me', 'human', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO inbox_items (id, issue_id, project_id, title, status, unread, created_at, updated_at)
+		VALUES ('inbox-1', 'issue-1', 'project-1', 'Parent issue', 'completed', 1, ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert inbox item: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES ('session-1', 'issue-1', 'codex', 'codex', 'local', 'done', 'completed', 'mspace/issue/session', '/tmp/workdir', '', '', 'completed', '', 'retained', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	if err := application.migrateClosedIssueStatuses(); err != nil {
+		t.Fatalf("migrate closed issue statuses: %v", err)
+	}
+
+	var issueStatus, inboxStatus, sessionStatus string
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'issue-1'`).Scan(&issueStatus); err != nil {
+		t.Fatalf("query issue status: %v", err)
+	}
+	if err := db.QueryRow(`SELECT status FROM inbox_items WHERE id = 'inbox-1'`).Scan(&inboxStatus); err != nil {
+		t.Fatalf("query inbox status: %v", err)
+	}
+	if err := db.QueryRow(`SELECT status FROM agent_sessions WHERE id = 'session-1'`).Scan(&sessionStatus); err != nil {
+		t.Fatalf("query session status: %v", err)
+	}
+	if issueStatus != "closed" || inboxStatus != "closed" || sessionStatus != "completed" {
+		t.Fatalf("unexpected statuses issue=%q inbox=%q session=%q", issueStatus, inboxStatus, sessionStatus)
+	}
+}
+
 func TestEnsureSessionColumnsAddsCodexFields(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
 	if err != nil {
@@ -418,7 +529,7 @@ func TestEnsureSessionColumnsAddsCodexFields(t *testing.T) {
 		t.Fatalf("ensure session columns should be idempotent: %v", err)
 	}
 
-	for _, column := range []string{"codex_thread_id", "codex_turn_id", "agent_status", "artifact_dir", "agent_profile", "cleanup_status", "cleaned_at"} {
+	for _, column := range []string{"codex_thread_id", "codex_turn_id", "agent_status", "artifact_dir", "agent_profile", "source_session_id", "source_commit_sha", "cleanup_status", "cleaned_at"} {
 		if !tableColumnExists(t, db, "agent_sessions", column) {
 			t.Fatalf("expected agent_sessions.%s to exist", column)
 		}
@@ -508,10 +619,34 @@ func TestEnsureIssueTestEnvironmentTablesCreatesEnvironmentTable(t *testing.T) {
 	if err := application.ensureIssueTestEnvironmentTables(); err != nil {
 		t.Fatalf("ensure issue test environment tables should be idempotent: %v", err)
 	}
-	for _, column := range []string{"issue_id", "cluster_id", "namespace", "namespace_status", "cleanup_status", "preview_url", "image_registry_prefix", "kubeconfig_path", "kube_context", "exposure_mode", "last_deploy_session_id", "last_cleanup_session_id"} {
+	for _, column := range []string{"issue_id", "cluster_id", "namespace", "namespace_status", "cleanup_status", "preview_url", "image_registry_prefix", "kubeconfig_path", "kube_context", "exposure_mode", "last_deploy_session_id", "last_cleanup_session_id", "source_session_id", "source_commit_sha"} {
 		if !tableColumnExists(t, db, "issue_test_environments", column) {
 			t.Fatalf("expected issue_test_environments.%s to exist", column)
 		}
+	}
+}
+
+func TestEnsureIssueChangeNodeTablesCreatesTable(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db}
+	if err := application.ensureIssueChangeNodeTables(); err != nil {
+		t.Fatalf("ensure issue change node tables failed: %v", err)
+	}
+	if err := application.ensureIssueChangeNodeTables(); err != nil {
+		t.Fatalf("ensure issue change node tables should be idempotent: %v", err)
+	}
+	for _, column := range []string{"id", "issue_id", "session_id", "commit_sha", "branch", "subject", "files_changed", "created_at"} {
+		if !tableColumnExists(t, db, "issue_change_nodes", column) {
+			t.Fatalf("expected issue_change_nodes.%s to exist", column)
+		}
+	}
+	if !tableIndexExists(t, db, "issue_change_nodes", "idx_issue_change_nodes_issue_created") {
+		t.Fatal("expected issue change node issue index to exist")
 	}
 }
 
@@ -708,6 +843,150 @@ func TestResolveAgentProfileRejectsDisabledProfiles(t *testing.T) {
 	}
 }
 
+func TestRecordSourceChangeNodeCommitsWorkspace(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for source change node test")
+	}
+
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init", "-b", "main")
+	runGit(t, repoDir, "config", "user.name", "mspace test")
+	runGit(t, repoDir, "config", "user.email", "mspace@example.com")
+	writeFile(t, filepath.Join(repoDir, "README.md"), "# demo\n")
+	runGit(t, repoDir, "add", "README.md")
+	runGit(t, repoDir, "commit", "-m", "base")
+
+	workdirRoot := filepath.Join(t.TempDir(), "workdirs")
+	sessionWorkdir := filepath.Join(workdirRoot, "project-1", "session-1")
+	if err := os.MkdirAll(filepath.Dir(sessionWorkdir), 0o755); err != nil {
+		t.Fatalf("create worktree parent: %v", err)
+	}
+	runGit(t, repoDir, "worktree", "add", "-b", "mspace/issue/session-1", sessionWorkdir, "HEAD")
+	writeFile(t, filepath.Join(sessionWorkdir, "app.txt"), "hello\n")
+	if err := os.MkdirAll(filepath.Join(sessionWorkdir, ".mspace", "session"), 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	writeFile(t, filepath.Join(sessionWorkdir, ".mspace", "session", "test-environment.json"), `{"previewUrl":"http://example.test"}`)
+
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db, broker: newEventBroker(), workdir: workdirRoot, repoRoot: t.TempDir()}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	now := nowString()
+	project := project{
+		ID:            "project-1",
+		Name:          "Demo",
+		RepoPath:      repoDir,
+		SourceType:    "local",
+		DefaultBranch: "main",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES (?, ?, ?, ?, '', '', '', '', ?, '', '', '', '', ?, ?)
+	`, project.ID, project.Name, project.RepoPath, project.SourceType, project.DefaultBranch, project.CreatedAt, project.UpdatedAt); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES ('issue-1', ?, 'Add app file', '', 'running', 'codex', 'agent', '', ?, ?)
+	`, project.ID, now, now); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES ('session-1', 'issue-1', 'codex', 'codex', 'local', 'Implement the issue.', 'running', 'mspace/issue/session-1', ?, '', '', 'running', '', 'retained', '', ?, ?)
+	`, sessionWorkdir, now, now); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	node, err := application.recordSourceChangeNode(agentSession{
+		ID:           "session-1",
+		IssueID:      "issue-1",
+		Provider:     "codex",
+		AgentProfile: "codex",
+		Command:      "Implement the issue.",
+		Status:       "running",
+		Branch:       "mspace/issue/session-1",
+		Workdir:      sessionWorkdir,
+	}, project)
+	if err != nil {
+		t.Fatalf("record source change node failed: %v", err)
+	}
+	if node == nil {
+		t.Fatal("expected source change node")
+	}
+	if node.FilesChanged != 1 || len(node.Changes) != 1 || node.Changes[0].Path != "app.txt" {
+		t.Fatalf("expected only app.txt to be committed, got %+v", node)
+	}
+	if strings.Contains(node.DiffPreview, ".mspace") {
+		t.Fatalf("expected .mspace artifacts to be excluded, diff=%s", node.DiffPreview)
+	}
+
+	loaded, err := application.loadIssueChangeNodeForDeploy("issue-1", node.CommitSHA, node.SessionID, project)
+	if err != nil {
+		t.Fatalf("load issue change node for deploy failed: %v", err)
+	}
+	if loaded.CommitSHA != node.CommitSHA || loaded.SessionID != "session-1" {
+		t.Fatalf("unexpected deploy source node: %+v", loaded)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM issue_change_nodes WHERE issue_id = 'issue-1' AND session_id = 'session-1'`).Scan(&count); err != nil {
+		t.Fatalf("query issue change node count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one issue change node row, got %d", count)
+	}
+}
+
+func TestPrepareSessionWorkspaceChecksOutSourceCommit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for source checkout test")
+	}
+
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init", "-b", "main")
+	runGit(t, repoDir, "config", "user.name", "mspace test")
+	runGit(t, repoDir, "config", "user.email", "mspace@example.com")
+	writeFile(t, filepath.Join(repoDir, "README.md"), "# demo\n")
+	runGit(t, repoDir, "add", "README.md")
+	runGit(t, repoDir, "commit", "-m", "base")
+	runGit(t, repoDir, "checkout", "-b", "mspace/issue/source")
+	writeFile(t, filepath.Join(repoDir, "app.txt"), "source\n")
+	runGit(t, repoDir, "add", "app.txt")
+	runGit(t, repoDir, "commit", "-m", "source commit")
+	sourceCommit := strings.TrimSpace(gitOutput(t, repoDir, "rev-parse", "HEAD"))
+	runGit(t, repoDir, "checkout", "main")
+
+	application := &app{workdir: filepath.Join(t.TempDir(), "workdirs")}
+	session, err := application.prepareSessionWorkspace(agentSession{
+		ID:              "deploy-session",
+		IssueID:         "issue-1",
+		Branch:          "mspace/issue/deploy-session",
+		SourceSessionID: "source-session",
+		SourceCommitSHA: sourceCommit,
+	}, project{
+		ID:            "project-1",
+		RepoPath:      repoDir,
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("prepare session workspace failed: %v", err)
+	}
+	head := strings.TrimSpace(gitOutput(t, session.Workdir, "rev-parse", "HEAD"))
+	if head != sourceCommit {
+		t.Fatalf("expected worktree head %s, got %s", sourceCommit, head)
+	}
+}
+
 func TestNormalizeIssueLabelKeys(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
 	if err != nil {
@@ -785,13 +1064,13 @@ func TestCleanupSessionWorktreeRemovesWorktree(t *testing.T) {
 	}
 	if _, err := db.Exec(`
 		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
-		VALUES ('issue-1', 'project-1', 'Cleanup issue', 'Clean this session.', 'completed', 'codex', 'agent', '', ?, ?)
+		VALUES ('issue-1', 'project-1', 'Cleanup issue', 'Clean this session.', 'closed', 'codex', 'agent', '', ?, ?)
 	`, now, now); err != nil {
 		t.Fatalf("insert issue: %v", err)
 	}
 	if _, err := db.Exec(`
 		INSERT INTO inbox_items (id, issue_id, project_id, title, status, unread, created_at, updated_at)
-		VALUES ('inbox-1', 'issue-1', 'project-1', 'Cleanup issue', 'completed', 0, ?, ?)
+		VALUES ('inbox-1', 'issue-1', 'project-1', 'Cleanup issue', 'closed', 0, ?, ?)
 	`, now, now); err != nil {
 		t.Fatalf("insert inbox item: %v", err)
 	}
@@ -1019,6 +1298,16 @@ func runGit(t *testing.T, repoDir string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
 	}
+}
+
+func gitOutput(t *testing.T, repoDir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", repoDir}, args...)...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return string(output)
 }
 
 func writeFile(t *testing.T, path, content string) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -208,6 +209,202 @@ func (s *PostgresStore) GetUserBySessionToken(ctx Context, token string) (User, 
 	return user, workspaces, nil
 }
 
+func (s *PostgresStore) ListInbox(ctx Context, userID, workspaceID string) ([]InboxEntry, error) {
+	dbctx := asContext(ctx)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT
+			e.id::text,
+			e.workspace_id::text,
+			e.issue_id,
+			COALESCE(e.actor_user_id::text, ''),
+			e.kind,
+			e.summary,
+			e.payload,
+			r.state,
+			COUNT(*) OVER (PARTITION BY e.issue_id) AS unread_count,
+			e.created_at
+		FROM issue_event_receipts r
+		JOIN issue_events e ON e.id = r.event_id
+		WHERE r.workspace_id = $1
+			AND r.user_id = $2
+			AND r.state = 'unread'
+		ORDER BY e.created_at DESC
+		LIMIT 100
+	`, workspaceID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []InboxEntry
+	for rows.Next() {
+		var item InboxEntry
+		var payload []byte
+		var createdAt time.Time
+		if err := rows.Scan(&item.EventID, &item.WorkspaceID, &item.IssueID, &item.ActorUserID, &item.Kind, &item.Summary, &payload, &item.State, &item.UnreadCount, &createdAt); err != nil {
+			return nil, err
+		}
+		item.Payload = json.RawMessage(payload)
+		item.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *PostgresStore) CreateIssueEvent(ctx Context, requesterUserID string, input CreateIssueEventInput) (IssueEvent, error) {
+	dbctx := asContext(ctx)
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	input.IssueID = strings.TrimSpace(input.IssueID)
+	input.ActorUserID = strings.TrimSpace(input.ActorUserID)
+	input.Kind = strings.TrimSpace(input.Kind)
+	input.Summary = strings.TrimSpace(input.Summary)
+	if input.WorkspaceID == "" || input.IssueID == "" || input.Kind == "" {
+		return IssueEvent{}, errors.New("workspaceId, issueId, and kind are required")
+	}
+	payload, err := normalizeJSONPayload(input.Payload)
+	if err != nil {
+		return IssueEvent{}, err
+	}
+
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return IssueEvent{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	if err := ensureWorkspaceMember(dbctx, tx, input.WorkspaceID, requesterUserID); err != nil {
+		return IssueEvent{}, err
+	}
+	if input.ActorUserID != "" {
+		if err := ensureWorkspaceMember(dbctx, tx, input.WorkspaceID, input.ActorUserID); err != nil {
+			return IssueEvent{}, err
+		}
+	}
+
+	var event IssueEvent
+	var eventPayload []byte
+	var createdAt time.Time
+	err = tx.QueryRow(dbctx, `
+		INSERT INTO issue_events (workspace_id, issue_id, actor_user_id, kind, summary, payload)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6)
+		RETURNING id::text, workspace_id::text, issue_id, COALESCE(actor_user_id::text, ''), kind, summary, payload, created_at
+	`, input.WorkspaceID, input.IssueID, input.ActorUserID, input.Kind, input.Summary, payload).Scan(
+		&event.ID,
+		&event.WorkspaceID,
+		&event.IssueID,
+		&event.ActorUserID,
+		&event.Kind,
+		&event.Summary,
+		&eventPayload,
+		&createdAt,
+	)
+	if err != nil {
+		return IssueEvent{}, err
+	}
+	event.Payload = json.RawMessage(eventPayload)
+	event.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+
+	recipients, err := resolveIssueEventRecipients(dbctx, tx, input)
+	if err != nil {
+		return IssueEvent{}, err
+	}
+	if input.ActorUserID != "" {
+		delete(recipients, input.ActorUserID)
+	}
+	recipientIDs := make([]string, 0, len(recipients))
+	for userID := range recipients {
+		recipientIDs = append(recipientIDs, userID)
+	}
+	sort.Strings(recipientIDs)
+	for _, userID := range recipientIDs {
+		if _, err := tx.Exec(dbctx, `
+			INSERT INTO issue_event_receipts (event_id, workspace_id, issue_id, user_id)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (event_id, user_id) DO NOTHING
+		`, event.ID, input.WorkspaceID, input.IssueID, userID); err != nil {
+			return IssueEvent{}, err
+		}
+	}
+
+	if err := tx.Commit(dbctx); err != nil {
+		return IssueEvent{}, err
+	}
+	return event, nil
+}
+
+func (s *PostgresStore) MarkIssueEventRead(ctx Context, userID, workspaceID, eventID string) error {
+	dbctx := asContext(ctx)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return err
+	}
+	_, err := s.pool.Exec(dbctx, `
+		UPDATE issue_event_receipts
+		SET state = 'read', read_at = COALESCE(read_at, now()), updated_at = now()
+		WHERE workspace_id = $1 AND event_id = $2 AND user_id = $3 AND state = 'unread'
+	`, workspaceID, eventID, userID)
+	return err
+}
+
+func (s *PostgresStore) MarkIssueReadThrough(ctx Context, userID, workspaceID, issueID, throughEventID string) (int, error) {
+	dbctx := asContext(ctx)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return 0, err
+	}
+	issueID = strings.TrimSpace(issueID)
+	throughEventID = strings.TrimSpace(throughEventID)
+	if issueID == "" {
+		return 0, errors.New("issueId is required")
+	}
+
+	var count int
+	if throughEventID == "" {
+		err := s.pool.QueryRow(dbctx, `
+			WITH updated AS (
+				UPDATE issue_event_receipts
+				SET state = 'read', read_at = COALESCE(read_at, now()), updated_at = now()
+				WHERE workspace_id = $1 AND issue_id = $2 AND user_id = $3 AND state = 'unread'
+				RETURNING 1
+			)
+			SELECT COUNT(*) FROM updated
+		`, workspaceID, issueID, userID).Scan(&count)
+		return count, err
+	}
+
+	var boundary time.Time
+	if err := s.pool.QueryRow(dbctx, `
+		SELECT created_at
+		FROM issue_events
+		WHERE id = $1 AND workspace_id = $2 AND issue_id = $3
+	`, throughEventID, workspaceID, issueID).Scan(&boundary); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrNotFound
+		}
+		return 0, err
+	}
+	err := s.pool.QueryRow(dbctx, `
+		WITH updated AS (
+			UPDATE issue_event_receipts r
+			SET state = 'read', read_at = COALESCE(read_at, now()), updated_at = now()
+			FROM issue_events e
+			WHERE r.event_id = e.id
+				AND r.workspace_id = $1
+				AND r.issue_id = $2
+				AND r.user_id = $3
+				AND r.state = 'unread'
+				AND e.created_at <= $4
+			RETURNING 1
+		)
+		SELECT COUNT(*) FROM updated
+	`, workspaceID, issueID, userID, boundary).Scan(&count)
+	return count, err
+}
+
 type queryer interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -377,6 +574,82 @@ func listWorkspaces(ctx context.Context, q queryer, userID string) ([]Workspace,
 		return nil, err
 	}
 	return workspaces, nil
+}
+
+func ensureWorkspaceMember(ctx context.Context, q queryer, workspaceID, userID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	if workspaceID == "" || userID == "" {
+		return ErrNotFound
+	}
+	var exists bool
+	err := q.QueryRow(ctx, `
+		SELECT true
+		FROM workspace_members
+		WHERE workspace_id = $1 AND user_id = $2
+	`, workspaceID, userID).Scan(&exists)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
+func resolveIssueEventRecipients(ctx context.Context, q queryer, input CreateIssueEventInput) (map[string]bool, error) {
+	recipients := map[string]bool{}
+	watcherRows, err := q.Query(ctx, `
+		SELECT user_id::text
+		FROM issue_watchers
+		WHERE workspace_id = $1 AND issue_id = $2 AND muted = false
+	`, input.WorkspaceID, input.IssueID)
+	if err != nil {
+		return nil, err
+	}
+	for watcherRows.Next() {
+		var userID string
+		if err := watcherRows.Scan(&userID); err != nil {
+			watcherRows.Close()
+			return nil, err
+		}
+		recipients[userID] = true
+	}
+	if err := watcherRows.Err(); err != nil {
+		watcherRows.Close()
+		return nil, err
+	}
+	watcherRows.Close()
+
+	for _, recipientID := range input.RecipientUserIDs {
+		recipientID = strings.TrimSpace(recipientID)
+		if recipientID == "" {
+			continue
+		}
+		if err := ensureWorkspaceMember(ctx, q, input.WorkspaceID, recipientID); err != nil {
+			return nil, err
+		}
+		recipients[recipientID] = true
+	}
+
+	if len(recipients) > 0 {
+		return recipients, nil
+	}
+
+	memberRows, err := q.Query(ctx, `
+		SELECT user_id::text
+		FROM workspace_members
+		WHERE workspace_id = $1
+	`, input.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer memberRows.Close()
+	for memberRows.Next() {
+		var userID string
+		if err := memberRows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		recipients[userID] = true
+	}
+	return recipients, memberRows.Err()
 }
 
 func asContext(ctx Context) context.Context {

@@ -1,6 +1,6 @@
 # mspace Local API Integration Guide
 
-> Status: local MVP API guide, updated 2026-05-09
+> Status: local MVP API guide, updated 2026-05-10
 
 This guide is for local tools or future desktop integrations that need to call the mspace runner directly. The API is local-first and currently served by the Go runner, normally on `http://127.0.0.1:7788`.
 
@@ -16,6 +16,8 @@ curl "$MSPACE_API_BASE/health"
 The Electron preload exposes the same base URL to the renderer through `window.mspaceDesktop.apiBaseUrl`.
 
 Agent sessions also receive `MSPACE_API_BASE_URL` so they can update issue task state from the prepared worktree when needed.
+
+Normal source-code agent sessions are captured as issue change nodes when they finish with git changes. The runner commits the session worktree changes, excludes `.mspace` artifacts, and exposes the commit metadata and diff preview from `GET /api/issues/{issueID}` as `changeNodes`.
 
 ## Issue Writing APIs
 
@@ -34,6 +36,38 @@ The desktop API client injects the current display identity from `localStorage["
 - `authorName` and `authorAvatarUrl` on `POST /api/issues/{issueID}/comments`.
 
 These fields are for local UI rendering only. They are not authentication, authorization, or the durable account model; authoritative users and workspaces belong to the server control plane.
+
+## Inbox APIs
+
+The local runner still exposes a fallback unread Inbox, while signed-in team Inbox state belongs to the server control plane. External local tools should treat runner unread as local-only and use the control-plane APIs for team read state.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/control-plane/session` | Give the runner the current server base URL, token, and workspace id so it can report reviewable issue events. |
+| `GET` | `/api/inbox` | List local fallback unread inbox items. |
+| `POST` | `/api/inbox/issues/{issueID}/read` | Mark one local fallback inbox item read. |
+| `GET` | `/api/inbox/stream` | Stream local fallback inbox invalidation events. |
+
+Configure the runner to report reviewable events to the control plane:
+
+```bash
+curl -X POST "$MSPACE_API_BASE/api/control-plane/session" \
+  -H 'Content-Type: application/json' \
+  -d '{"serverBaseUrl":"http://127.0.0.1:8787","token":"<msp-token>","workspaceId":"<workspace-id>"}'
+```
+
+The team Inbox endpoints live on the server base URL and require `Authorization: Bearer <msp-token>`:
+
+```bash
+curl -H "Authorization: Bearer <msp-token>" \
+  "http://127.0.0.1:8787/api/workspaces/<workspace-id>/inbox"
+
+curl -X POST \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  "http://127.0.0.1:8787/api/workspaces/<workspace-id>/issues/<issue-id>/read-through" \
+  -d '{"throughEventId":"<event-id>"}'
+```
 
 Create an issue with a creator display snapshot:
 
@@ -69,12 +103,12 @@ curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/tasks" \
   -d '{"title":"Add regression coverage"}'
 ```
 
-Mark a task complete:
+Mark a task closed:
 
 ```bash
 curl -X PUT "$MSPACE_API_BASE/api/issues/<task-id>" \
   -H 'Content-Type: application/json' \
-  -d '{"status":"completed"}'
+  -d '{"status":"closed"}'
 ```
 
 Delete a task:
@@ -159,7 +193,7 @@ Queue a NodePort deploy/test turn:
 ```bash
 curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/test-deploy" \
   -H 'Content-Type: application/json' \
-  -d '{"clusterId":"<cluster-id>","exposureMode":"nodeport","nodeHost":"test-node.example.com"}'
+  -d '{"clusterId":"<cluster-id>","sourceCommitSha":"<commit-sha>","sourceSessionId":"<session-id>","exposureMode":"nodeport","nodeHost":"test-node.example.com"}'
 ```
 
 Queue an Ingress deploy/test turn:
@@ -167,10 +201,10 @@ Queue an Ingress deploy/test turn:
 ```bash
 curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/test-deploy" \
   -H 'Content-Type: application/json' \
-  -d '{"clusterId":"<cluster-id>","exposureMode":"ingress","previewDomain":"preview.example.com","ingressClass":"nginx"}'
+  -d '{"clusterId":"<cluster-id>","sourceCommitSha":"<commit-sha>","sourceSessionId":"<session-id>","exposureMode":"ingress","previewDomain":"preview.example.com","ingressClass":"nginx"}'
 ```
 
-The deploy/test session receives the selected kubeconfig, context, issue namespace, registry prefix, exposure mode, and preview routing values through environment variables. If the agent writes `$MSPACE_SESSION_ARTIFACT_DIR/test-environment.json` with `previewUrl`, the runner copies that URL back to the issue test environment.
+The deploy/test session receives the selected source commit, source session, kubeconfig, context, issue namespace, registry prefix, exposure mode, and preview routing values through environment variables. The runner prepares the deploy worktree at the selected commit so the agent deploys the selected change node instead of implicitly using the latest session. If the agent writes `$MSPACE_SESSION_ARTIFACT_DIR/test-environment.json` with `previewUrl`, the runner copies that URL back to the issue test environment.
 
 ## Error Notes
 

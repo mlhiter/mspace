@@ -43,7 +43,7 @@ The interaction model is closer to a shared engineering document than a terminal
 ## Features
 
 - Electron desktop app with Inbox, Issues, Agents, Clusters, Projects, Issue Detail, and Session Detail screens.
-- Go server control plane with GitHub OAuth entrypoints, state-bound desktop login polling, Postgres migrations, mspace session tokens, users, workspaces, and workspace membership.
+- Go server control plane with GitHub OAuth entrypoints, state-bound desktop login polling, Postgres migrations, mspace session tokens, users, workspaces, workspace membership, and per-user issue-event Inbox receipts.
 - GitHub-authenticated sidebar account/workspace state, plus local issue creator and comment actor display snapshots with human and Codex avatars.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, and real shadcn/ui source components in `@mspace/ui`.
 - Sidebar global search with a `Command+K` palette for jumping to issues and projects.
@@ -53,7 +53,7 @@ The interaction model is closer to a shared engineering document than a terminal
 - Agent mentions from issue comments, with turn queueing, profile instructions, status updates, and issue timeline updates.
 - Markdown-backed TipTap writing surfaces for issue creation and human issue comments, including checklist input that becomes child tasks.
 - Per-session git worktrees, workspace inspection, changed file lists, diff previews, commits, and comparison against the project default branch.
-- Type and priority labels, child issue task lists with create/toggle/delete controls, asynchronous type triage, unread Inbox updates, running-session stop controls, and manual worktree cleanup after completion or cancellation.
+- Type and priority labels, child issue task lists with create/toggle/delete controls, asynchronous type triage, server-backed unread Inbox updates with a sidebar badge, running-session stop controls, and manual worktree cleanup after completion or cancellation.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Project default cluster selection.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and record evidence.

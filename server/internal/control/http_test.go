@@ -101,6 +101,60 @@ func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 		t.Fatalf("me status=%d body=%s", meRecorder.Code, meRecorder.Body.String())
 	}
 
+	workspaceID := auth.Workspaces[0].ID
+	eventBody := `{"issueId":"issue-1","kind":"agent_completed","summary":"Agent completed issue work.","payload":{"title":"Fix inbox","status":"closed","projectName":"mspace"}}`
+	createEventRecorder := httptest.NewRecorder()
+	createEventReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issue-events", strings.NewReader(eventBody))
+	createEventReq.Header.Set("Authorization", "Bearer "+auth.Token)
+	router.ServeHTTP(createEventRecorder, createEventReq)
+	if createEventRecorder.Code != http.StatusCreated {
+		t.Fatalf("create event status=%d body=%s", createEventRecorder.Code, createEventRecorder.Body.String())
+	}
+	var event IssueEvent
+	if err := json.Unmarshal(createEventRecorder.Body.Bytes(), &event); err != nil {
+		t.Fatalf("parse event response: %v", err)
+	}
+	if event.ID == "" || event.WorkspaceID != workspaceID || event.IssueID != "issue-1" {
+		t.Fatalf("unexpected event: %+v", event)
+	}
+
+	inboxRecorder := httptest.NewRecorder()
+	inboxReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/inbox", nil)
+	inboxReq.Header.Set("Authorization", "Bearer "+auth.Token)
+	router.ServeHTTP(inboxRecorder, inboxReq)
+	if inboxRecorder.Code != http.StatusOK {
+		t.Fatalf("inbox status=%d body=%s", inboxRecorder.Code, inboxRecorder.Body.String())
+	}
+	var inbox []InboxEntry
+	if err := json.Unmarshal(inboxRecorder.Body.Bytes(), &inbox); err != nil {
+		t.Fatalf("parse inbox response: %v", err)
+	}
+	if len(inbox) != 1 || inbox[0].EventID != event.ID || inbox[0].UnreadCount != 1 {
+		t.Fatalf("unexpected inbox: %+v", inbox)
+	}
+
+	readRecorder := httptest.NewRecorder()
+	readReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/issue-1/read-through", strings.NewReader(`{"throughEventId":"`+event.ID+`"}`))
+	readReq.Header.Set("Authorization", "Bearer "+auth.Token)
+	router.ServeHTTP(readRecorder, readReq)
+	if readRecorder.Code != http.StatusOK {
+		t.Fatalf("read-through status=%d body=%s", readRecorder.Code, readRecorder.Body.String())
+	}
+
+	emptyInboxRecorder := httptest.NewRecorder()
+	emptyInboxReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/inbox", nil)
+	emptyInboxReq.Header.Set("Authorization", "Bearer "+auth.Token)
+	router.ServeHTTP(emptyInboxRecorder, emptyInboxReq)
+	if emptyInboxRecorder.Code != http.StatusOK {
+		t.Fatalf("empty inbox status=%d body=%s", emptyInboxRecorder.Code, emptyInboxRecorder.Body.String())
+	}
+	if err := json.Unmarshal(emptyInboxRecorder.Body.Bytes(), &inbox); err != nil {
+		t.Fatalf("parse empty inbox response: %v", err)
+	}
+	if len(inbox) != 0 {
+		t.Fatalf("expected empty inbox after read-through, got %+v", inbox)
+	}
+
 	reusedResultRecorder := httptest.NewRecorder()
 	router.ServeHTTP(reusedResultRecorder, httptest.NewRequest(http.MethodGet, "/api/auth/github/result?state="+start.State, nil))
 	if reusedResultRecorder.Code != http.StatusBadRequest {

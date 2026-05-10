@@ -165,6 +165,7 @@ export function AppShell(
   props: {
     brandLogoSrc?: string;
     activeWorkItems?: ShellActiveWorkItem[];
+    inboxUnreadCount?: number;
     searchItems?: ShellSearchItem[];
     searchLoading?: boolean;
     account?: ShellAccount;
@@ -217,7 +218,12 @@ export function AppShell(
 
         <nav className="flex flex-col gap-1">
           {sidebarItems.map((item) => (
-            <SidebarLink key={item.to} to={item.to} icon={item.icon}>
+            <SidebarLink
+              key={item.to}
+              to={item.to}
+              icon={item.icon}
+              badgeCount={item.to === "/inbox" ? props.inboxUnreadCount : undefined}
+            >
               {item.label}
             </SidebarLink>
           ))}
@@ -576,23 +582,33 @@ function UserAvatar(props: { name?: string; avatarUrl?: string }) {
   );
 }
 
-export function SidebarLink(props: PropsWithChildren<{ to: string; icon: LucideIcon }>) {
+export function SidebarLink(props: PropsWithChildren<{ to: string; icon: LucideIcon; badgeCount?: number }>) {
   const Icon = props.icon;
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isActive = pathname === props.to || pathname.startsWith(`${props.to}/`);
+  const badgeCount = Math.max(0, Math.trunc(props.badgeCount || 0));
+  const badgeLabel = badgeCount > 99 ? "99+" : String(badgeCount);
 
   return (
     <Link
       to={props.to}
       className={cn(
-        "group flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-[13px] font-medium transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.98]",
+        "group relative flex items-center gap-2 rounded-[7px] px-2 py-1.5 pr-8 text-[13px] font-medium transition-[background-color,color,transform] duration-150 ease-out active:scale-[0.98]",
         isActive
           ? "bg-[color:var(--selection)] text-[color:var(--text)]"
           : "text-[color:var(--muted)] hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
       )}
     >
       <Icon data-icon />
-      <span>{props.children}</span>
+      <span className="min-w-0 flex-1 truncate">{props.children}</span>
+      {badgeCount > 0 ? (
+        <span
+          aria-label={`${badgeCount} unread Inbox update${badgeCount === 1 ? "" : "s"}`}
+          className="absolute right-2 top-1/2 grid h-4 min-w-4 -translate-y-1/2 place-items-center rounded-full bg-[color:var(--inbox-badge)] px-1 text-[10px] font-semibold leading-4 text-[color:var(--inbox-badge-text)] tabular-nums"
+        >
+          {badgeLabel}
+        </span>
+      ) : null}
     </Link>
   );
 }
@@ -625,8 +641,8 @@ function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
           "size-2 rounded-full",
           status === "running" || status === "deploying" ? "bg-[color:var(--accent-blue)]" : null,
           status === "queued" || status === "cleanup_requested" ? "bg-[color:var(--warning)]" : null,
-          status === "completed" || status === "retained" ? "bg-[color:var(--muted)]" : null,
-          !["running", "deploying", "queued", "cleanup_requested", "completed", "retained"].includes(status) ? "bg-[color:var(--faint)]" : null,
+          status === "closed" || status === "completed" || status === "retained" ? "bg-[color:var(--muted)]" : null,
+          !["running", "deploying", "queued", "cleanup_requested", "closed", "completed", "retained"].includes(status) ? "bg-[color:var(--faint)]" : null,
         )}
       />
       <span className="min-w-0 flex-1">
@@ -862,7 +878,7 @@ export function Field(props: PropsWithChildren<{ label: string; hint?: string }>
 
 export function StatusBadge(props: { value: string }) {
   const tone =
-    props.value === "completed"
+    props.value === "closed" || props.value === "completed"
       ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
       : props.value === "failed"
         ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]"

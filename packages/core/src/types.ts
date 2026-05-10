@@ -69,6 +69,28 @@ export interface InboxItem {
   updatedAt: string;
 }
 
+export interface TeamInboxItem {
+  eventId: string;
+  workspaceId: string;
+  issueId: string;
+  actorUserId: string;
+  kind: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  state: string;
+  unreadCount: number;
+  createdAt: string;
+}
+
+export interface CreateTeamIssueEventInput {
+  issueId: string;
+  actorUserId?: string;
+  kind: string;
+  summary?: string;
+  payload?: Record<string, unknown>;
+  recipientUserIds?: string[];
+}
+
 export interface IssueListItem {
   id: string;
   projectId: string;
@@ -170,6 +192,8 @@ export interface AgentSession {
   codexTurnId: string;
   agentStatus: string;
   artifactDir: string;
+  sourceSessionId: string;
+  sourceCommitSha: string;
   cleanupStatus: string;
   cleanedAt: string;
   createdAt: string;
@@ -231,6 +255,22 @@ export interface DeploymentEvidence {
   createdAt: string;
 }
 
+export interface IssueChangeNode {
+  id: string;
+  issueId: string;
+  sessionId: string;
+  commitSha: string;
+  shortCommitSha: string;
+  branch: string;
+  subject: string;
+  filesChanged: number;
+  changes: WorkspaceChange[];
+  diffPreview: string;
+  diffTruncated: boolean;
+  error: string;
+  createdAt: string;
+}
+
 export interface IssueTestEnvironment {
   issueId: string;
   clusterId: string;
@@ -247,6 +287,8 @@ export interface IssueTestEnvironment {
   nodeHost: string;
   lastDeploySessionId: string;
   lastCleanupSessionId: string;
+  sourceSessionId: string;
+  sourceCommitSha: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -260,6 +302,7 @@ export interface IssueDetail {
   comments: Comment[];
   sessions: AgentSession[];
   evidence: DeploymentEvidence[];
+  changeNodes: IssueChangeNode[];
 }
 
 export interface SessionDetail {
@@ -332,6 +375,8 @@ export interface CreateSessionInput {
   agentProfile?: string;
   command?: string;
   branch?: string;
+  sourceSessionId?: string;
+  sourceCommitSha?: string;
 }
 
 export interface UpdateIssueLabelsInput {
@@ -388,6 +433,8 @@ export interface StartTestDeployInput {
   previewDomain?: string;
   ingressClass?: string;
   nodeHost?: string;
+  sourceSessionId?: string;
+  sourceCommitSha?: string;
 }
 
 export interface SessionStreamEvent {

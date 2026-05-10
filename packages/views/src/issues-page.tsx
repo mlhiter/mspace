@@ -27,7 +27,7 @@ import {
 import { IssueLabelBadge, IssueLabelOptionLabel, IssueLabelSelectValue } from "./issue-label-chip";
 import { RelativeTime } from "./time";
 
-const statusOptions = ["open", "in_progress", "blocked", "review", "completed", "cancelled"];
+const statusOptions = ["open", "in_progress", "blocked", "review", "closed", "cancelled"];
 const sortOptions = [
   { value: "updated", label: "Updated" },
   { value: "created", label: "Created" },
@@ -45,6 +45,16 @@ function issueAssigneeName(issue: IssueListItem): string {
   const stored = getStoredAuthIdentity();
   const assignee = issue.assignee.trim();
   return !assignee || assignee === "me" ? stored.name || "mlhiter" : assignee;
+}
+
+function issueMatchesStatusFilter(issue: IssueListItem, statusFilter: string) {
+  if (statusFilter === "all") return true;
+  if (statusFilter === "closed") return issue.status === "closed" || issue.status === "completed";
+  return issue.status === statusFilter;
+}
+
+function displayIssueStatus(status: string) {
+  return status === "completed" ? "closed" : status;
 }
 
 function IssueAssigneeMeta(props: { issue: IssueListItem }) {
@@ -107,7 +117,7 @@ export function IssuesPage() {
     const normalizedQuery = query.trim().toLowerCase();
     return issues
       .filter((issue) => {
-        if (statusFilter !== "all" && issue.status !== statusFilter) return false;
+        if (!issueMatchesStatusFilter(issue, statusFilter)) return false;
         if (typeFilter !== "all" && labelKey(issue, "type") !== typeFilter) return false;
         if (priorityFilter !== "all" && labelKey(issue, "priority") !== priorityFilter) return false;
         if (normalizedQuery === "") return true;
@@ -115,7 +125,7 @@ export function IssuesPage() {
           issue.title,
           issue.body,
           issue.projectName,
-          issue.status,
+          displayIssueStatus(issue.status),
           issue.labels.map((label) => label.name).join(" "),
         ].join(" ").toLowerCase();
         return haystack.includes(normalizedQuery);
@@ -292,7 +302,7 @@ function IssueRow(props: { issue: IssueListItem }) {
       </div>
 
       <div className="flex items-center justify-end gap-2">
-        <StatusBadge value={issue.status} />
+        <StatusBadge value={displayIssueStatus(issue.status)} />
         <ArrowRight
           data-icon
           className="text-[color:var(--faint)] opacity-0 transition-[opacity,transform] duration-150 ease-out group-hover:translate-x-0.5 group-hover:opacity-100"

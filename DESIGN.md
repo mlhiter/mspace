@@ -1,6 +1,6 @@
 # mspace Design System
 
-> Status: design system baseline, updated 2026-05-07
+> Status: design system baseline, updated 2026-05-10
 
 ## Visual Thesis
 
@@ -79,6 +79,9 @@ The palette is a Notion-style black-and-white light system. It should read as cl
 | `--faint` | `#a1a1a1` | Hints, section labels, quiet icons. |
 | `--accent` | `#1f1f1f` | Focus and primary interaction accent. |
 | `--accent-blue` | `#3f6ea8` | Informational runtime signal only. |
+| `--inbox-badge` | `#e5f0ff` | Sidebar Inbox unread-count badge background. |
+| `--inbox-badge-text` | `#2f5f9e` | Sidebar Inbox unread-count badge text. |
+| `--inbox-unread-dot` | `#5f98d1` | Inbox row unread dot. |
 | `--success` | `#2f6f4e` | Healthy or completed state only. |
 | `--warning` | `#8a6500` | Blocked or needs attention only. |
 | `--danger` | `#b3261e` | Destructive or failed state only. |
@@ -89,6 +92,7 @@ Color rules:
 
 - Keep almost all UI weight in white, black, and neutral gray.
 - Use accent colors for state and action, not decoration.
+- Inbox unread indicators use the dedicated light-blue token set above. The sidebar count badge should not have a border or outer ring.
 - Sidebar icons and namespace markers stay monochrome; do not color navigation chrome.
 - Do not introduce purple-to-blue AI gradients.
 - Do not reintroduce warm beige, cream, parchment, or yellow-tinted surfaces.

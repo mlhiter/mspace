@@ -24,7 +24,7 @@ The product should stay narrow:
 - The renderer stores the mspace session token under `localStorage["mspace.authToken"]` and a lightweight display identity under `localStorage["mspace.authIdentity"]`; the latter is used only to populate local runner `creator*` and `author*` fields until collaboration state moves fully behind the control plane.
 - The Electron main process auto-starts the local runner with `go run .` unless `GET /health` is already healthy.
 - Sidebar navigation currently exposes Inbox, Issues, Agents, Clusters, and Projects, plus a global search / Command+K palette for issues and projects, a quick link that opens issue creation from the left rail, and an Active work block for recent issue/session/test-environment activity.
-- Inbox is a review-only unread feed; issue creation and management live in the Issues route.
+- Inbox is a review-only feed for per-user team issue events. The server control plane stores `issue_events`, `issue_event_receipts`, and `issue_watchers`; the local runner `inbox_items.unread` path remains a fallback until issue collaboration fully moves behind `server/`.
 - The issue creation modal and Issue Detail reply composer use `IssueDocumentEditor`, a TipTap-backed Markdown editor in `packages/views/src/issue-document-editor.tsx`, so checklist task input and comments remain document-like while the runner still receives Markdown. Issue creation does not expose a project selector; mspace infers the project from the note.
 - Issue task lists are modeled as child issues via `issues.parent_issue_id`, then rendered inline on the parent Issue Detail page. Markdown checklist lines typed during issue creation are converted into child issues so the checkbox text is not a second source of truth.
 - Local runner issues store denormalized display fields `creator_name` and `creator_avatar_url`; comments store `author_name` and `author_avatar_url`. Existing anonymous human rows are backfilled to `mlhiter`; system comments display as `mspace`.
@@ -37,12 +37,13 @@ The product should stay narrow:
 - Codex sessions start `codex app-server --listen stdio://` in the prepared worktree instead of shelling out through `codex exec`.
 - The runner sends `initialize`, `thread/start`, and `turn/start` over newline-delimited JSON-RPC on stdio, then maps app-server notifications into `session_logs`.
 - The runner persists `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at` on `agent_sessions`.
+- Normal source-code agent sessions are captured as `issue_change_nodes` when they finish with git changes. The runner creates one commit from the session worktree, excludes `.mspace` artifacts, and exposes commit metadata plus diff preview from Issue Detail.
 - Agent definitions live in `agent_profiles`; defaults are seeded for internal `@triage` plus user-facing `@codex`, `@bugfix`, and `@design`, but the Issue composer and runner resolve profiles from SQLite instead of hardcoded frontend constants.
 - `POST /api/sessions/{sessionID}/cleanup` removes retained, non-active local session worktrees after validating the path stays under `~/.mspace/workdirs`; session logs, comments, evidence, and metadata remain in SQLite.
 - Session branches default to `mspace/<issue-short-id>/<session-short-id>`.
 - Project creation supports either a desktop folder picker for local repositories or a GitHub repository URL that is cloned into the local cache.
 - Local project imports auto-detect remote metadata when a git remote exists and persist `source_type`, `remote_url`, `git_provider`, `git_owner`, and `git_repo`.
-- Inbox invalidation is driven by `GET /api/inbox/stream`, and the issue detail screen starts Codex by saving an agent-mention comment before calling `POST /api/issues/{issueID}/assign-agent`.
+- Inbox invalidation still listens to the local runner `GET /api/inbox/stream` for fallback data, while the signed-in team Inbox polls server receipt state. The renderer passes the current server token/workspace to the runner through `POST /api/control-plane/session`, and the runner reports reviewable issue events to the server when configured. Issue detail starts Codex by saving an agent-mention comment before calling `POST /api/issues/{issueID}/assign-agent`.
 - Supported Codex-backed agents are managed from the Agents route. They share the app-server runtime and differ by stored `agent_profile` prompt instructions.
 - Issue labels use the built-in `issue_label_definitions` taxonomy and `issue_labels` links. The current dimensions are `type` and `priority`.
 - New issues start with `triage_status=pending` unless a type is set manually. A background `@triage` Codex classifier assigns exactly one Conventional Commit type label asynchronously.
@@ -51,9 +52,9 @@ The product should stay narrow:
 - The Clusters route imports kubeconfig files through the desktop file picker. On first empty-state entry, it discovers regular files under `~/.kube`, lists candidates and contexts, and lets the user choose which files to import.
 - Kubeconfig import creates one cluster per context and marks it `ready` or `unreachable` after a read-only `kubectl get --raw=/version` check. Unreachable clusters remain editable.
 - Projects store `default_cluster_id`; issue test deployments can override cluster and exposure mode per run.
-- Each issue can have one `issue_test_environments` record with cluster id, issue namespace, namespace state, cleanup state, preview URL, deploy/cleanup session ids, registry, kubeconfig, context, exposure mode, domain, ingress class, and NodePort host.
+- Each issue can have one `issue_test_environments` record with cluster id, issue namespace, namespace state, cleanup state, preview URL, deploy/cleanup session ids, selected source session/commit, registry, kubeconfig, context, exposure mode, domain, ingress class, and NodePort host.
 - Deploy/test sessions receive resolved Kubernetes and preview values through `KUBECONFIG`, `MSPACE_KUBECONFIG`, `MSPACE_CLUSTER_ID`, `MSPACE_KUBE_CONTEXT`, `MSPACE_KUBE_NAMESPACE`, `MSPACE_TEST_NAMESPACE`, `MSPACE_IMAGE_REGISTRY_PREFIX`, `MSPACE_EXPOSURE_MODE`, `MSPACE_PREVIEW_DOMAIN`, `MSPACE_INGRESS_CLASS`, and `MSPACE_NODE_HOST`.
-- Sessions also receive `MSPACE_API_BASE_URL`, `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, and `MSPACE_SESSION_ARTIFACT_DIR`.
+- Sessions also receive `MSPACE_API_BASE_URL`, `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SOURCE_SESSION_ID`, `MSPACE_SOURCE_COMMIT_SHA`, `MSPACE_SESSION_CONTEXT`, and `MSPACE_SESSION_ARTIFACT_DIR`.
 - Tailwind CSS 4 scans monorepo UI packages through `@source` entries in `apps/desktop/src/renderer/src/globals.css`.
 - shadcn/ui semantic tokens are mapped to the Notion-like mspace palette through `@theme inline` in `apps/desktop/src/renderer/src/globals.css`.
 - Vite resolves shadcn aliases through `apps/desktop/electron.vite.config.ts`: `@mspace/ui/components`, `@mspace/ui/lib`, and `@mspace/ui`.
@@ -61,6 +62,7 @@ The product should stay narrow:
 ## Working Rules
 
 - Keep Inbox and Issue objects as first-class product objects.
+- Keep Inbox read state per-user and event-based. Do not add new product behavior that depends on a global issue-level unread boolean.
 - Keep task lists as inline child issue views, not Markdown checkbox state. Agents should create tasks through `POST /api/issues/{issueID}/tasks`, update task status through `PUT /api/issues/{taskID}`, and remove obsolete tasks through `DELETE /api/issues/{issueID}/tasks/{taskID}` when the local API base URL is available.
 - Keep Inbox review-only. New issue creation belongs in the Issues flow, not in Inbox.
 - Keep issue creation minimal: note only. Project routing is inferred from the issue text, type is classified asynchronously after creation, and priority is set manually from Issue Detail.
@@ -147,7 +149,8 @@ pnpm test:server
 Use these terms consistently:
 
 - Workspace: the team boundary for members, issues, agents, and runtime policy.
-- Inbox Item: triage unit for incoming work.
+- Inbox Event: server-side review fact for issue activity; per-user receipts determine unread state.
+- Inbox Item: local runner fallback triage row for incoming work.
 - Project: a repository plus runtime policy.
 - Issue: the durable collaboration document for one unit of work.
 - Agent Session: one agent run attached to one issue.

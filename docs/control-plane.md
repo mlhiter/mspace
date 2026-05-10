@@ -1,6 +1,6 @@
 # mspace Control Plane
 
-> Status: architecture direction and first server skeleton, updated 2026-05-09
+> Status: architecture direction and first server skeleton, updated 2026-05-10
 
 ## Decision
 
@@ -74,11 +74,15 @@ The initial `server/` module provides:
 - `GET /api/auth/github/result`;
 - `GET /api/auth/me`;
 - `GET /api/workspaces`;
-- Postgres migrations for `users`, `user_identities`, `workspaces`, `workspace_members`, `oauth_states`, `oauth_results`, and `auth_sessions`;
+- `GET /api/workspaces/{workspaceID}/inbox`;
+- `POST /api/workspaces/{workspaceID}/issue-events`;
+- `POST /api/workspaces/{workspaceID}/issue-events/{eventID}/read`;
+- `POST /api/workspaces/{workspaceID}/issues/{issueID}/read-through`;
+- Postgres migrations for `users`, `user_identities`, `workspaces`, `workspace_members`, `oauth_states`, `oauth_results`, `auth_sessions`, `issue_events`, `issue_event_receipts`, and `issue_watchers`;
 - mspace session tokens with `msp_` prefix;
 - a memory-backed store used only by tests.
 
-The desktop now has a lightweight GitHub sign-in entrypoint in the sidebar. Product issue/session data still talks to the local runner for the local MVP, and the renderer uses the signed-in user's display name/avatar only to populate local runner issue/comment snapshots. The next integration step is to let the runner register as a runtime client and gradually move shared issue/collaboration state behind the control plane.
+The desktop now has a lightweight GitHub sign-in entrypoint in the sidebar. Product issue/session data still talks to the local runner for the local MVP, but Inbox read state now has a server-backed team model. After sign-in, the renderer sends the current token and workspace id to the local runner so reviewable issue events can be reported to the control plane. The next integration step is replacing this desktop-provided session handoff with first-class runtime registration tokens.
 
 ## Migration Rule
 

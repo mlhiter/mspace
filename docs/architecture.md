@@ -24,7 +24,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Finished local session worktrees can be cleaned through `POST /api/sessions/{sessionID}/cleanup`; active sessions are rejected, the stored workdir must stay under the mspace workdir root, and session records remain for review.
 - Session branch defaults to `mspace/<issue-short-id>/<session-short-id>` when the user does not provide one.
 - Project import supports existing local folders and GitHub repository URLs. Local repositories auto-detect git remote metadata when available.
-- Inbox is an unread review feed powered by server-sent events from `/api/inbox/stream`.
+- Inbox is an unread review feed. Signed-in team state is built from server `issue_events` and per-user `issue_event_receipts`; the local runner `inbox_items.unread` plus `/api/inbox/stream` remains a fallback and invalidation path.
 - Issue comments that mention an enabled agent are saved first, then the desktop calls `POST /api/issues/{issueID}/assign-agent` with the mention-stripped comment as the current turn request and the selected Codex profile.
 - Local runner issues and comments keep denormalized display identity snapshots: issue creator name/avatar and comment author name/avatar. Existing anonymous local human rows are backfilled to `mlhiter`; system comments display as `mspace`.
 - The desktop shell exposes a global search / Command+K palette backed by the existing issues and projects queries. Active work remains a separate sidebar block because it is an issue subset, not an additional global search source.
@@ -72,13 +72,19 @@ Implemented server control-plane API:
 | `GET` | `/api/auth/github/result` | Desktop polling endpoint for the state-bound auth result. Returns `202` while pending and consumes the short-lived result once ready. |
 | `GET` | `/api/auth/me` | Load the authenticated user and workspaces from `Authorization: Bearer msp_...`. |
 | `GET` | `/api/workspaces` | List workspaces for the authenticated user. |
+| `GET` | `/api/workspaces/{workspaceID}/inbox` | List unread issue-event receipts for the authenticated user. |
+| `POST` | `/api/workspaces/{workspaceID}/issue-events` | Append a reviewable issue event and create per-user receipts. |
+| `POST` | `/api/workspaces/{workspaceID}/issue-events/{eventID}/read` | Mark one event receipt read for the authenticated user. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/read-through` | Mark unread receipts for one issue read through an optional event boundary. |
 
 Implemented runner API:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Runner health and version. |
+| `POST` | `/api/control-plane/session` | Cache the current server base URL, bearer token, and workspace id so the runner can report reviewable issue events to the control plane. |
 | `GET` | `/api/inbox` | List inbox items. |
+| `POST` | `/api/inbox/issues/{issueID}/read` | Mark the local fallback inbox item for one issue read. Does not mutate server receipts. |
 | `GET` | `/api/inbox/stream` | Stream inbox update events over server-sent events. |
 | `GET` | `/api/active-work` | List recent issue work for the shell sidebar. |
 | `GET` | `/api/agents` | List managed agent profiles. |
@@ -163,19 +169,27 @@ Required fields:
 
 The control plane implements `workspaces` and `workspace_members`. The local runner still behaves as a single local workspace for issue/session data until those collaboration APIs move behind the server.
 
-### Inbox Item
+### Inbox Event
 
-An Inbox Item is the unread review unit for issue activity.
+An Inbox Event is the append-only review fact for issue activity. A user's Inbox is built from `issue_event_receipts`, not from a global issue-level unread flag.
 
 Required fields:
 
+- linked workspace;
 - linked issue;
-- linked project;
-- title;
-- status snapshot;
-- assignee snapshot;
-- read state;
-- last update time.
+- actor user when the event was created by a human;
+- event kind;
+- summary;
+- structured payload snapshot;
+- created time.
+
+Receipt fields:
+
+- linked event;
+- linked workspace and issue;
+- recipient user;
+- state (`unread`, `read`, or `archived`);
+- read/archive timestamps.
 
 ### Project
 
@@ -393,7 +407,8 @@ User creates an issue in /issues or opens an existing one
   -> runner stores codex_thread_id and codex_turn_id
   -> runner maps app-server notifications into session_logs and agent_status
   -> desktop watches GET /api/sessions/{sessionID}/stream
-  -> desktop refreshes Inbox, Issues, and Issue Detail through GET /api/inbox/stream
+  -> desktop refreshes Issues and Issue Detail from runner state
+  -> Inbox refreshes server receipts when signed in, with GET /api/inbox/stream as local fallback invalidation
   -> session detail reads git status, commits, diff, and base comparison from workdir
 ```
 
@@ -598,17 +613,36 @@ workspaces
   slug
   runtime_policy
 
-inbox_items
+issue_events
   id
   workspace_id
-  source_type
-  title
-  details
-  recipient_type
-  recipient_id
   issue_id
-  read
+  actor_user_id
+  kind
+  summary
+  payload
   created_at
+
+issue_event_receipts
+  event_id
+  workspace_id
+  issue_id
+  user_id
+  state
+  read_at
+  archived_at
+  created_at
+  updated_at
+
+issue_watchers
+  id
+  workspace_id
+  issue_id
+  user_id
+  reason
+  muted
+  created_at
+  updated_at
 
 projects
   id
@@ -693,7 +727,7 @@ session_events
 
 ### Inbox
 
-Shows incoming and active work across the workspace.
+Shows unread review events for the current user. When signed in, the list comes from control-plane issue-event receipts and is marked read through the server read-through endpoint. Local runner inbox rows remain as a fallback for unsigned-in or not-yet-reported issue updates.
 
 ### Issues
 

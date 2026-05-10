@@ -136,6 +136,8 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   codex_turn_id TEXT NOT NULL DEFAULT '',
   agent_status TEXT NOT NULL DEFAULT '',
   artifact_dir TEXT NOT NULL DEFAULT '',
+  source_session_id TEXT NOT NULL DEFAULT '',
+  source_commit_sha TEXT NOT NULL DEFAULT '',
   cleanup_status TEXT NOT NULL DEFAULT 'retained',
   cleaned_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
@@ -161,6 +163,21 @@ CREATE TABLE IF NOT EXISTS deployment_evidence (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS issue_change_nodes (
+  id TEXT PRIMARY KEY,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  commit_sha TEXT NOT NULL,
+  branch TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL DEFAULT '',
+  files_changed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE(session_id),
+  UNIQUE(issue_id, commit_sha)
+);
+
+CREATE INDEX IF NOT EXISTS idx_issue_change_nodes_issue_created ON issue_change_nodes(issue_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS issue_test_environments (
   issue_id TEXT PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
   namespace TEXT NOT NULL,
@@ -177,6 +194,8 @@ CREATE TABLE IF NOT EXISTS issue_test_environments (
   node_host TEXT NOT NULL DEFAULT '',
   last_deploy_session_id TEXT NOT NULL DEFAULT '',
   last_cleanup_session_id TEXT NOT NULL DEFAULT '',
+  source_session_id TEXT NOT NULL DEFAULT '',
+  source_commit_sha TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
