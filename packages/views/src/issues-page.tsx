@@ -25,9 +25,9 @@ import {
   selectedIssueLabelKey,
 } from "./issue-labels";
 import { IssueLabelBadge, IssueLabelOptionLabel, IssueLabelSelectValue } from "./issue-label-chip";
+import { displayIssueStatus, issueStatusLabel, issueStatusOptions } from "./issue-status";
 import { RelativeTime } from "./time";
 
-const statusOptions = ["open", "in_progress", "blocked", "review", "closed", "cancelled"];
 const sortOptions = [
   { value: "updated", label: "Updated" },
   { value: "created", label: "Created" },
@@ -49,12 +49,7 @@ function issueAssigneeName(issue: IssueListItem): string {
 
 function issueMatchesStatusFilter(issue: IssueListItem, statusFilter: string) {
   if (statusFilter === "all") return true;
-  if (statusFilter === "closed") return issue.status === "closed" || issue.status === "completed";
-  return issue.status === statusFilter;
-}
-
-function displayIssueStatus(status: string) {
-  return status === "completed" ? "closed" : status;
+  return displayIssueStatus(issue.status) === statusFilter;
 }
 
 function IssueAssigneeMeta(props: { issue: IssueListItem }) {
@@ -125,7 +120,7 @@ export function IssuesPage() {
           issue.title,
           issue.body,
           issue.projectName,
-          displayIssueStatus(issue.status),
+          issueStatusLabel(issue.status),
           issue.labels.map((label) => label.name).join(" "),
         ].join(" ").toLowerCase();
         return haystack.includes(normalizedQuery);
@@ -184,9 +179,9 @@ export function IssuesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All status</SelectItem>
-                  {statusOptions.map((status) => (
+                  {issueStatusOptions.map((status) => (
                     <SelectItem key={status} value={status}>
-                      {status}
+                      {issueStatusLabel(status)}
                     </SelectItem>
                   ))}
                 </SelectContent>

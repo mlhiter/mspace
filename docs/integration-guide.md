@@ -19,9 +19,14 @@ Agent sessions also receive `MSPACE_API_BASE_URL` so they can update issue task 
 
 Normal source-code agent sessions are captured as issue change nodes when they finish with git changes. The runner commits the session worktree changes, excludes `.mspace` artifacts, and exposes the commit metadata and diff preview from `GET /api/issues/{issueID}` as `changeNodes`.
 
+Review evidence is exposed from the same issue detail response as `reviewEvidence`. This is not a diff surface: code changes stay in `changeNodes` and the Commits tab. `reviewEvidence` is the durable session snapshot for commands run, tests, build result, deployment result, preview URL, Kubernetes namespace state, agent summary, risks/follow-ups, and cleanup/retain state. Agents can improve the snapshot by writing `${MSPACE_SESSION_ARTIFACT_DIR}/review-evidence.json` with `commandsRun`, `tests`, `buildResult`, `deploymentResult`, `agentSummary`, `risks`, and `followUps`; the runner falls back to session logs, test-environment state, and Kubernetes evidence when the artifact is missing.
+
 ## Issue Writing APIs
 
-The desktop uses a rich TipTap editor for issue creation and human comments, but the runner API stores Markdown text.
+The desktop uses a rich TipTap editor for issue creation and human comments, but the runner API stores Markdown text. Issue write APIs require a bearer token:
+
+- human requests use the mspace session token from GitHub sign-in, verified by the control plane through `GET /api/auth/me`;
+- agent requests use the scoped `MSPACE_AGENT_TOKEN` injected into the session environment.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -30,7 +35,7 @@ The desktop uses a rich TipTap editor for issue creation and human comments, but
 
 When `projectId` is omitted, the runner infers the best matching existing project from the title, body, and task text. If no project exists, issue creation returns `400 Bad Request`.
 
-The desktop API client injects the current display identity from `localStorage["mspace.authIdentity"]` into local runner writes. External local integrations may pass the same display snapshots directly:
+The desktop API client attaches `Authorization: Bearer <msp-token>` and injects the current display identity from `localStorage["mspace.authIdentity"]` into local runner writes. External local integrations may pass the same display snapshots directly:
 
 - `creatorName` and `creatorAvatarUrl` on `POST /api/issues`;
 - `authorName` and `authorAvatarUrl` on `POST /api/issues/{issueID}/comments`.
@@ -73,6 +78,7 @@ Create an issue with a creator display snapshot:
 
 ```bash
 curl -X POST "$MSPACE_API_BASE/api/issues" \
+  -H "Authorization: Bearer <msp-token>" \
   -H 'Content-Type: application/json' \
   -d '{"body":"Investigate login avatar rendering","creatorName":"mlhiter","creatorAvatarUrl":"https://avatars.githubusercontent.com/u/<github-id>?v=4"}'
 ```
@@ -81,6 +87,7 @@ Add a comment with an author display snapshot:
 
 ```bash
 curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/comments" \
+  -H "Authorization: Bearer <msp-token>" \
   -H 'Content-Type: application/json' \
   -d '{"body":"Avatar fallback is fixed locally.","authorName":"mlhiter","authorAvatarUrl":"https://avatars.githubusercontent.com/u/<github-id>?v=4"}'
 ```
@@ -88,6 +95,10 @@ curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/comments" \
 ## Issue Task APIs
 
 Task lists are stored as child issues. Markdown checklist lines submitted in `POST /api/issues` are converted into child issue tasks and removed from the parent body.
+
+Issue status values are explicit workflow states: `open`, `in_progress`, `needs_review`, `changes_requested`, `ready_for_test`, `test_in_progress`, `test_passed`, `test_failed`, `blocked`, `failed`, `cancelled`, and `closed`. Legacy inputs such as `completed`, `review`, and `testing` are normalized for compatibility. Only human requests may set a top-level issue to `closed`; scoped agent tokens may set review/test/progress/failure states and may close child tasks under their assigned issue.
+
+Every accepted status transition is appended to the parent issue timeline as a comment authored by the actor that made the change. Human token transitions use the signed-in mspace/GitHub user returned by control-plane `GET /api/auth/me`; agent token transitions use the scoped session actor. The stored comment body includes the raw transition sentence plus an optional reason for compatibility, while the desktop renders status-transition comments as a compact one-line event with readable status badges.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -99,6 +110,7 @@ Create a task:
 
 ```bash
 curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/tasks" \
+  -H "Authorization: Bearer ${MSPACE_AGENT_TOKEN:-<msp-token>}" \
   -H 'Content-Type: application/json' \
   -d '{"title":"Add regression coverage"}'
 ```
@@ -107,6 +119,7 @@ Mark a task closed:
 
 ```bash
 curl -X PUT "$MSPACE_API_BASE/api/issues/<task-id>" \
+  -H "Authorization: Bearer ${MSPACE_AGENT_TOKEN:-<msp-token>}" \
   -H 'Content-Type: application/json' \
   -d '{"status":"closed"}'
 ```
@@ -114,7 +127,8 @@ curl -X PUT "$MSPACE_API_BASE/api/issues/<task-id>" \
 Delete a task:
 
 ```bash
-curl -X DELETE "$MSPACE_API_BASE/api/issues/<issue-id>/tasks/<task-id>"
+curl -X DELETE "$MSPACE_API_BASE/api/issues/<issue-id>/tasks/<task-id>" \
+  -H "Authorization: Bearer ${MSPACE_AGENT_TOKEN:-<msp-token>}"
 ```
 
 ## Issue Label APIs

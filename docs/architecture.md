@@ -19,14 +19,17 @@ The repository currently contains a runnable local-first desktop MVP:
 - The runner stores the session worktree path in `agent_sessions.workdir`.
 - Each session creates or attaches a git worktree before starting the runtime provider.
 - The Codex provider starts `codex app-server --listen stdio://` in the session worktree and talks to it over newline-delimited JSON-RPC.
-- The runner persists Codex agent profile, thread id, turn id, agent status, artifact directory, cleanup status, and cleaned timestamp on `agent_sessions`.
+- The runner persists Codex agent profile, thread id, turn id, agent status, artifact directory, scoped agent token, cleanup status, and cleaned timestamp on `agent_sessions`.
 - Agent profiles live in `agent_profiles` and are exposed through the Agents module. Default Codex-backed agents are seeded, but new sessions resolve profile instructions from SQLite rather than hardcoded profile switches.
 - Finished local session worktrees can be cleaned through `POST /api/sessions/{sessionID}/cleanup`; active sessions are rejected, the stored workdir must stay under the mspace workdir root, and session records remain for review.
+- Source changes and review evidence are split deliberately. `issue_change_nodes` backs the Commits tab for commit metadata and diffs; `session_review_evidence` backs the Evidence tab for commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state. Changed-file UI uses Material Icon Theme file icons and filters directory-only placeholder paths while preserving concrete file paths under those directories.
 - Session branch defaults to `mspace/<issue-short-id>/<session-short-id>` when the user does not provide one.
 - Project import supports existing local folders and GitHub repository URLs. Local repositories auto-detect git remote metadata when available.
 - Inbox is an unread review feed. Signed-in team state is built from server `issue_events` and per-user `issue_event_receipts`; the local runner `inbox_items.unread` plus `/api/inbox/stream` remains a fallback and invalidation path.
 - Issue comments that mention an enabled agent are saved first, then the desktop calls `POST /api/issues/{issueID}/assign-agent` with the mention-stripped comment as the current turn request and the selected Codex profile.
-- Local runner issues and comments keep denormalized display identity snapshots: issue creator name/avatar and comment author name/avatar. Existing anonymous local human rows are backfilled to `mlhiter`; system comments display as `mspace`.
+- Local runner issues and comments keep denormalized display identity snapshots: issue creator name/avatar and comment author name/avatar. Existing anonymous local human rows are backfilled to `mlhiter`; ordinary system comments display as `mspace`. Status-transition comments are authored by the actor that performed the change, so human changes render as that signed-in user and scoped agent changes render as the agent.
+- Local runner issue writes are authenticated. Human write requests carry a mspace session token and are verified against control-plane `GET /api/auth/me`; agent write requests carry the session-scoped `MSPACE_AGENT_TOKEN`.
+- Issue workflow status values are `open`, `in_progress`, `needs_review`, `changes_requested`, `ready_for_test`, `test_in_progress`, `test_passed`, `test_failed`, `blocked`, `failed`, `cancelled`, and `closed`. Only humans can close top-level issues; agent sessions move issues into review/test/progress/failure states and may close child tasks under their assigned issue. Every transition is mirrored to the issue timeline and rendered as a compact actor-authored status event with readable badges.
 - The desktop shell exposes a global search / Command+K palette backed by the existing issues and projects queries. Active work remains a separate sidebar block because it is an issue subset, not an additional global search source.
 - Issue task lists are child issues stored on `issues.parent_issue_id`. Checklist lines submitted during issue creation are extracted into child rows, and Issue Detail renders those children inline with checkbox-style status controls.
 - Issue labels use a built-in taxonomy in `issue_label_definitions` and issue links in `issue_labels`. The current dimensions are `type` and `priority`; type is classified asynchronously by the internal `@triage` Codex profile, while priority remains human-selected from Issue Detail.
@@ -35,7 +38,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Each issue can have one `issue_test_environments` record. It stores the selected cluster id, reserved issue namespace, namespace state, cleanup state, preview URL, deployment session id, cleanup session id, and the resolved registry/kubeconfig/routing values used for that issue.
 - Test deployment is a manual Issue Detail action. It queues a Codex deploy/test turn; the agent creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when configured, probes the preview URL, and writes `test-environment.json` into the session artifact directory when it has a URL to record.
 - Scoped kubeconfig and ServiceAccount generation are still future work. The MVP trusts the kubeconfig path stored in the selected cluster.
-- Sessions also receive `MSPACE_API_BASE_URL`, `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, `MSPACE_SESSION_ARTIFACT_DIR`, and resolved cluster/test-environment variables when the issue has a test environment.
+- Sessions also receive `MSPACE_API_BASE_URL`, `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_TOKEN`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, `MSPACE_SESSION_ARTIFACT_DIR`, and resolved cluster/test-environment variables when the issue has a test environment.
 - Current desktop visual language is a Notion-like paper workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, and restrained icon actions.
 
 Current shadcn/ui component source:
@@ -105,7 +108,7 @@ Implemented runner API:
 | `GET` | `/api/issues` | List issues across the local workspace. |
 | `POST` | `/api/issues` | Create an issue and inbox item, optionally including creator display name and avatar snapshots. |
 | `GET` | `/api/issues/{issueID}` | Load issue detail, comments, sessions, and evidence. |
-| `PUT` | `/api/issues/{issueID}` | Update issue title, body, or status. Child task completion uses this status update. |
+| `PUT` | `/api/issues/{issueID}` | Update issue title, body, or status. Human auth is required for title/body and top-level `closed`; scoped agent auth may update allowed workflow states and child task completion. |
 | `POST` | `/api/issues/{issueID}/tasks` | Create a child issue task under a parent issue. |
 | `DELETE` | `/api/issues/{issueID}/tasks/{taskID}` | Delete a child issue task after verifying it belongs to the parent issue. |
 | `PUT` | `/api/issues/{issueID}/labels` | Replace issue-local labels. |
@@ -562,6 +565,9 @@ agent_sessions
   codex_turn_id
   agent_status
   artifact_dir
+  source_session_id
+  source_commit_sha
+  agent_token
   cleanup_status
   cleaned_at
   created_at
@@ -583,6 +589,38 @@ deployment_evidence
   summary
   details
   created_at
+
+issue_change_nodes
+  id
+  issue_id
+  session_id
+  commit_sha
+  branch
+  subject
+  files_changed
+  created_at
+
+session_review_evidence
+  id
+  issue_id
+  session_id
+  source_session_id
+  source_commit_sha
+  branch
+  agent_summary
+  commands_json
+  tests_json
+  build_result_json
+  deployment_result_json
+  risks_json
+  follow_ups_json
+  preview_url
+  cluster
+  namespace
+  namespace_status
+  cleanup_status
+  created_at
+  updated_at
 
 issue_test_environments
   issue_id

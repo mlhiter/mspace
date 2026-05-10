@@ -628,7 +628,7 @@ export function SidebarActionLink(props: PropsWithChildren<{ to: string; search?
 }
 
 function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
-  const status = props.item.sessionStatus || props.item.namespaceStatus || props.item.status;
+  const status = normalizeStatusValue(props.item.sessionStatus || props.item.namespaceStatus || props.item.status);
   const secondary = props.item.namespace || props.item.projectName;
   return (
     <Link
@@ -639,10 +639,14 @@ function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
       <span
         className={cn(
           "size-2 rounded-full",
-          status === "running" || status === "deploying" ? "bg-[color:var(--accent-blue)]" : null,
+          status === "running" || status === "in_progress" || status === "deploying" || status === "test_in_progress" ? "bg-[color:var(--accent-blue)]" : null,
           status === "queued" || status === "cleanup_requested" ? "bg-[color:var(--warning)]" : null,
-          status === "closed" || status === "completed" || status === "retained" ? "bg-[color:var(--muted)]" : null,
-          !["running", "deploying", "queued", "cleanup_requested", "closed", "completed", "retained"].includes(status) ? "bg-[color:var(--faint)]" : null,
+          status === "open" || status === "completed" || status === "test_passed" ? "bg-[color:var(--success)]" : null,
+          status === "closed" ? "bg-[color:var(--done)]" : null,
+          status === "retained" ? "bg-[color:var(--muted)]" : null,
+          status === "needs_review" || status === "ready_for_test" || status === "changes_requested" ? "bg-[color:var(--warning)]" : null,
+          status === "test_failed" || status === "failed" ? "bg-[color:var(--danger)]" : null,
+          !["running", "in_progress", "deploying", "queued", "cleanup_requested", "open", "closed", "completed", "retained", "needs_review", "ready_for_test", "changes_requested", "test_in_progress", "test_passed", "test_failed", "failed"].includes(status) ? "bg-[color:var(--faint)]" : null,
         )}
       />
       <span className="min-w-0 flex-1">
@@ -738,7 +742,7 @@ function BreadcrumbTrail(props: { items: BreadcrumbItem[] }) {
   );
 }
 
-export function PageFrame(props: PropsWithChildren<{ title: string; subtitle?: string; actions?: ReactNode; breadcrumbs?: BreadcrumbItem[] }>) {
+export function PageFrame(props: PropsWithChildren<{ title: string; subtitle?: ReactNode; actions?: ReactNode; breadcrumbs?: BreadcrumbItem[] }>) {
   const breadcrumbs = props.breadcrumbs || [
     { label: "mspace", to: "/inbox" },
     { label: props.title },
@@ -755,10 +759,14 @@ export function PageFrame(props: PropsWithChildren<{ title: string; subtitle?: s
           <h1 className="page-title text-[32px] font-semibold leading-[1.1] text-[color:var(--text)]">
             {props.title}
           </h1>
-          {props.subtitle ? (
+          {typeof props.subtitle === "string" ? (
             <p className="mt-3 max-w-[72ch] text-[14px] leading-6 text-[color:var(--muted)] text-pretty">
               {props.subtitle}
             </p>
+          ) : props.subtitle ? (
+            <div className="mt-4">
+              {props.subtitle}
+            </div>
           ) : null}
         </div>
         {props.actions ? <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{props.actions}</div> : null}
@@ -876,24 +884,66 @@ export function Field(props: PropsWithChildren<{ label: string; hint?: string }>
   );
 }
 
-export function StatusBadge(props: { value: string }) {
+export function StatusBadge(props: { value: string; className?: string; label?: string }) {
+  const normalizedValue = normalizeStatusValue(props.value);
   const tone =
-    props.value === "closed" || props.value === "completed"
+    normalizedValue === "open" || normalizedValue === "completed" || normalizedValue === "test_passed"
       ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
-      : props.value === "failed"
+      : normalizedValue === "closed"
+        ? "bg-[color:var(--done-soft)] text-[color:var(--done)]"
+        : normalizedValue === "failed" || normalizedValue === "test_failed"
         ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
-        : props.value === "running"
+        : normalizedValue === "running" || normalizedValue === "in_progress" || normalizedValue === "test_in_progress" || normalizedValue === "deploying"
           ? "bg-[color:var(--blue-soft)] text-[color:var(--accent-blue)]"
-          : props.value === "blocked"
+          : normalizedValue === "blocked" || normalizedValue === "needs_review" || normalizedValue === "ready_for_test" || normalizedValue === "changes_requested" || normalizedValue === "cleanup_requested"
             ? "bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
-            : "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
+            : normalizedValue === "cancelled" || normalizedValue === "retained"
+              ? "bg-[color:var(--block)] text-[color:var(--muted)]"
+              : "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
+  const isRunning = normalizedValue === "running" || normalizedValue === "in_progress" || normalizedValue === "test_in_progress" || normalizedValue === "deploying";
 
   return (
-    <Badge variant="outline" className={cn("h-auto gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium", tone)}>
-      {props.value === "running" ? <LoaderCircle data-icon className="animate-spin" /> : <Circle data-icon />}
-      {props.value}
+    <Badge variant="outline" className={cn("h-auto max-w-full gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium", tone, props.className)}>
+      {props.label ? <span className="shrink-0 text-[color:var(--faint)]">{props.label}</span> : null}
+      {isRunning ? <LoaderCircle data-icon className="animate-spin" /> : <Circle data-icon />}
+      <span className="truncate">{statusLabel(normalizedValue)}</span>
     </Badge>
   );
+}
+
+function normalizeStatusValue(value: string) {
+  const status = value.trim().toLowerCase();
+  if (status === "review" || status === "in_review") return "needs_review";
+  if (status === "testing") return "test_in_progress";
+  if (status === "queued") return "in_progress";
+  if (status === "done") return "closed";
+  return status;
+}
+
+function statusLabel(value: string) {
+  const labels: Record<string, string> = {
+    open: "Open",
+    in_progress: "In progress",
+    running: "Running",
+    needs_review: "Needs review",
+    changes_requested: "Changes requested",
+    ready_for_test: "Ready for test",
+    test_in_progress: "Test in progress",
+    test_passed: "Test passed",
+    test_failed: "Test failed",
+    blocked: "Blocked",
+    failed: "Failed",
+    cancelled: "Cancelled",
+    closed: "Closed",
+    completed: "Completed",
+    deploying: "Deploying",
+    cleanup_requested: "Cleanup requested",
+    retained: "Retained",
+  };
+  if (labels[value]) return labels[value];
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function EmptyState(props: { title: string; body: string; icon?: LucideIcon }) {

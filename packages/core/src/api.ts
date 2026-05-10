@@ -89,6 +89,14 @@ export function getStoredAuthIdentity(): StoredAuthIdentity {
   }
 }
 
+function getStoredAuthToken(): string {
+  try {
+    return browserStorage()?.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
 export function setStoredAuthIdentity(user: MspaceUser | null | undefined): void {
   try {
     if (!user) {
@@ -148,13 +156,24 @@ async function readErrorMessage(response: Response): Promise<string> {
   return message || fallback;
 }
 
+function mergeHeaders(...values: Array<HeadersInit | undefined>): HeadersInit {
+  const merged: Record<string, string> = {};
+  for (const value of values) {
+    if (!value) continue;
+    new Headers(value).forEach((headerValue, key) => {
+      merged[key] = headerValue;
+    });
+  }
+  return merged;
+}
+
 async function requestURL<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
+    ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(init?.headers || {}),
+      ...Object.fromEntries(new Headers(init?.headers || {}).entries()),
     },
-    ...init,
   });
 
   if (!response.ok) {
@@ -165,7 +184,11 @@ async function requestURL<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  return requestURL<T>(buildApiUrl(path), init);
+  const token = getStoredAuthToken();
+  return requestURL<T>(buildApiUrl(path), {
+    ...init,
+    headers: mergeHeaders(token ? authHeaders(token) : undefined, init?.headers),
+  });
 }
 
 async function requestControlPlane<T>(path: string, init?: RequestInit): Promise<T> {

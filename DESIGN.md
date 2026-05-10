@@ -83,6 +83,7 @@ The palette is a Notion-style black-and-white light system. It should read as cl
 | `--inbox-badge-text` | `#2f5f9e` | Sidebar Inbox unread-count badge text. |
 | `--inbox-unread-dot` | `#5f98d1` | Inbox row unread dot. |
 | `--success` | `#2f6f4e` | Healthy or completed state only. |
+| `--done` | `#8250df` | GitHub-style closed issue state only. |
 | `--warning` | `#8a6500` | Blocked or needs attention only. |
 | `--danger` | `#b3261e` | Destructive or failed state only. |
 | `--focus` | `rgba(0, 0, 0, 0.24)` | Focus ring. |
@@ -189,6 +190,9 @@ Screen priorities:
 
 - Use `Badge` for status, branch/runtime labels, and namespace hints.
 - Status values remain English unless the product explicitly changes locale.
+- Status badges must use readable labels, not storage values: `In progress`, `Needs review`, `Ready for test`, `Test in progress`, and `Closed` are acceptable; `in_progress`, `needs_review`, `ready_for_test`, and `test_in_progress` are not.
+- Use GitHub-adjacent status semantics for issues: `Open` is green and `Closed` is purple. Other workflow states should use restrained semantic colors that help scanning without turning the issue header or timeline into a dashboard.
+- Status-change timeline rows should be one-line actor events with from/to badges. Hide compatibility prose from the stored comment body unless the user is inspecting raw data.
 - Avoid decorative badges that do not change behavior or scanning.
 
 ### Alerts And Empty States

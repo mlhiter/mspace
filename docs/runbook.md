@@ -159,6 +159,14 @@ sqlite3 ~/.mspace/mspace.db "select id,title,creator_name,creator_avatar_url fro
 sqlite3 ~/.mspace/mspace.db "select issue_id,author_type,author_name,author_avatar_url,created_at from comments order by created_at desc limit 10;"
 ```
 
+Status-transition author checks:
+
+```bash
+sqlite3 ~/.mspace/mspace.db "select issue_id,author_type,author_name,body,created_at from comments where body like 'Issue status changed from%' or body like 'Task `% status changed from%' order by created_at desc limit 10;"
+```
+
+Status-change rows should be authored by the actor that made the change. Human UI/API status updates should show `author_type='human'` and the signed-in user name from control-plane `GET /api/auth/me`; scoped agent token updates should show `author_type='agent'` and the agent name.
+
 Recent sessions:
 
 ```bash

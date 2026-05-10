@@ -38,7 +38,11 @@ import {
   type IssueLabelDefinition,
   type IssueListItem,
   type IssueTestEnvironment,
+  type ReviewEvidenceCheck,
+  type ReviewEvidenceCommand,
+  type ReviewEvidenceResult,
   type SessionLog,
+  type SessionReviewEvidence,
   type SessionStreamEvent,
   type StartTestDeployInput,
   type WorkspaceChange,
@@ -63,12 +67,14 @@ import { IssueDocumentEditor } from "./issue-document-editor";
 import { codexAvatarDataUrl } from "./agent-avatar";
 import {
   buildIssueLabelSelectionInput,
+  issueLabelMatchesDimension,
   issueLabelOptionsByDimension,
   issueLabelOptionsForUI,
   nextIssueLabelSelection,
   selectedIssueLabelKey,
 } from "./issue-labels";
-import { IssueLabelOptionLabel, IssueLabelSelectValue } from "./issue-label-chip";
+import { IssueLabelBadge, IssueLabelOptionLabel, IssueLabelSelectValue } from "./issue-label-chip";
+import { displayIssueStatus, issueStatusOptions } from "./issue-status";
 import { formatAbsoluteTime, formatRelativeTime } from "./time";
 import { visibleWorkspaceFileChanges, workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
@@ -126,10 +132,6 @@ type ParsedEvidence = {
 
 function isClosedIssueStatus(status: string) {
   return status === "closed" || status === "completed";
-}
-
-function displayIssueStatus(status: string) {
-  return status === "completed" ? "closed" : status;
 }
 
 function useSessionStream(sessionId: string | undefined, onEvent: (event: SessionStreamEvent) => void) {
@@ -980,19 +982,249 @@ function IssueSessionsTab(props: { sessions: AgentSession[]; agents: AgentProfil
   );
 }
 
-function IssueEvidenceTab(props: { evidence: DeploymentEvidence[] }) {
+function ReviewStatusPill(props: { status: string }) {
+  const status = props.status || "not_reported";
+  const tone =
+    status === "passed" || status === "completed"
+      ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
+      : status === "failed"
+        ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+        : status === "running"
+          ? "bg-[color:var(--blue-soft)] text-[color:var(--accent-blue)]"
+          : "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
+  return (
+    <span className={cn("inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[12px] font-medium leading-5", tone)}>
+      {status.replace(/[_-]+/g, " ")}
+    </span>
+  );
+}
+
+function EvidenceSection(props: { title: string; children: React.ReactNode; aside?: React.ReactNode }) {
+  return (
+    <section className="grid gap-3 border-t border-[color:var(--line)] pt-4">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <h3 className="text-[13px] font-semibold leading-5 text-[color:var(--muted-strong)]">{props.title}</h3>
+        {props.aside}
+      </div>
+      {props.children}
+    </section>
+  );
+}
+
+function ReviewMetaGrid(props: { rows: Array<{ label: string; value: string; mono?: boolean }> }) {
+  const rows = props.rows.filter((row) => row.value);
+  if (rows.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">Not reported.</div>;
+  return (
+    <div className="grid gap-2 md:grid-cols-2">
+      {rows.map((row) => (
+        <div key={row.label} className="min-w-0 rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="text-[11px] leading-4 text-[color:var(--faint)]">{row.label}</div>
+          <div className={cn("mt-0.5 min-w-0 break-all text-[12px] leading-5 text-[color:var(--muted-strong)]", row.mono && "font-mono")}>{row.value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReviewResultBlock(props: { result: ReviewEvidenceResult; empty: string }) {
+  const result = props.result || { status: "not_reported", summary: props.empty, details: "" };
+  const status = result.status || "not_reported";
+  const summary = result.summary || props.empty;
+  return (
+    <div className="grid gap-2">
+      <ReviewStatusPill status={status} />
+      <div className="text-[13px] leading-6 text-[color:var(--muted-strong)]">{summary}</div>
+      {result.details ? (
+        <pre className="max-h-56 overflow-auto rounded-[8px] bg-[color:var(--code-bg)] px-3 py-2 font-mono text-[12px] leading-6 text-[color:var(--code-text)] whitespace-pre-wrap">
+          {result.details}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
+function CommandEvidenceList(props: { commands: ReviewEvidenceCommand[] }) {
+  const commands = listOrEmpty(props.commands);
+  if (commands.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">No commands were reported.</div>;
+  return (
+    <div className="grid gap-2">
+      {commands.map((command, index) => (
+        <div key={`${command.command}-${index}`} className="grid gap-2 rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <ReviewStatusPill status={command.status} />
+            <span className="rounded-full bg-[color:var(--surface)] px-2 py-0.5 text-[11px] leading-4 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">{command.category || "command"}</span>
+            {command.createdAt ? <span className="text-[11px] leading-4 text-[color:var(--faint)]">{formatRelativeTime(command.createdAt)}</span> : null}
+          </div>
+          <code className="break-all font-mono text-[12px] leading-5 text-[color:var(--text)]">{command.command}</code>
+          {command.summary ? <div className="text-[12px] leading-5 text-[color:var(--muted)] whitespace-pre-wrap">{command.summary}</div> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CheckEvidenceList(props: { checks: ReviewEvidenceCheck[] }) {
+  const checks = listOrEmpty(props.checks);
+  if (checks.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">No test result was reported.</div>;
+  return (
+    <div className="grid gap-2">
+      {checks.map((check, index) => (
+        <div key={`${check.name}-${index}`} className="grid gap-1 rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="flex min-w-0 items-center gap-2">
+            <ReviewStatusPill status={check.status} />
+            <span className="min-w-0 break-all font-mono text-[12px] leading-5 text-[color:var(--text)]">{check.name}</span>
+          </div>
+          {check.summary ? <div className="text-[12px] leading-5 text-[color:var(--muted)] whitespace-pre-wrap">{check.summary}</div> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReviewStringList(props: { items: string[]; empty: string }) {
+  const items = listOrEmpty(props.items);
+  if (items.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">{props.empty}</div>;
+  return (
+    <ul className="grid gap-1.5">
+      {items.map((item, index) => (
+        <li key={`${index}-${item}`} className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-6 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function IssueEvidenceTab(props: {
+  reviewEvidence: SessionReviewEvidence[];
+  evidence: DeploymentEvidence[];
+  testEnvironment: IssueTestEnvironment | null;
+  sessions: AgentSession[];
+  changeNodes: IssueChangeNode[];
+  onOpenCommits: () => void;
+  onOpenSessions: () => void;
+}) {
+  const reviews = listOrEmpty(props.reviewEvidence);
   const evidence = listOrEmpty(props.evidence);
-  if (evidence.length === 0) {
-    return <Notice>No deployment evidence has been captured for this issue yet.</Notice>;
+  if (reviews.length === 0 && evidence.length === 0 && !props.testEnvironment) {
+    return <Notice>No review evidence has been captured for this issue yet.</Notice>;
   }
   return (
-    <section className="relative">
-      <div className="absolute bottom-0 left-4 top-0 w-px bg-[color:var(--line)]" aria-hidden="true" />
-      <div className="relative">
-        {evidence.map((item) => (
-          <EvidenceTimelineItem key={item.id} evidence={item} />
-        ))}
-      </div>
+    <section className="grid gap-5">
+      {reviews.map((review) => {
+        const sourceCommit = review.sourceCommitSha.trim();
+        const sourceNode = sourceCommit ? props.changeNodes.find((node) => node.commitSha === sourceCommit || node.commitSha.startsWith(sourceCommit)) : undefined;
+        const sourceSession = props.sessions.find((session) => session.id === review.sourceSessionId || session.id === review.sessionId);
+        return (
+          <article key={review.id || review.sessionId} className="grid gap-4 rounded-[12px] bg-[color:var(--block-subtle)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
+            <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">Review evidence</div>
+                <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
+                  <span>Session {review.sessionId.slice(0, 8)}</span>
+                  {review.sourceCommitSha ? <span>Source {review.sourceCommitSha.slice(0, 12)}</span> : null}
+                  {review.updatedAt ? <span title={formatAbsoluteTime(review.updatedAt)}>{formatRelativeTime(review.updatedAt)}</span> : null}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {sourceNode ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={props.onOpenCommits}>
+                    <GitCommit data-icon />
+                    Commit
+                  </Button>
+                ) : null}
+                {sourceSession ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={props.onOpenSessions}>
+                    <History data-icon />
+                    Session
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+
+            <EvidenceSection title="Source">
+              <ReviewMetaGrid
+                rows={[
+                  { label: "Source commit", value: review.sourceCommitSha, mono: true },
+                  { label: "Source session", value: review.sourceSessionId, mono: true },
+                  { label: "Branch", value: review.branch || sourceSession?.branch || "", mono: true },
+                  { label: "Captured by session", value: review.sessionId, mono: true },
+                ]}
+              />
+            </EvidenceSection>
+
+            <EvidenceSection title="Commands run">
+              <CommandEvidenceList commands={review.commandsRun} />
+            </EvidenceSection>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <EvidenceSection title="Tests">
+                <CheckEvidenceList checks={review.tests} />
+              </EvidenceSection>
+              <EvidenceSection title="Build result">
+                <ReviewResultBlock result={review.buildResult} empty="No build result was reported." />
+              </EvidenceSection>
+            </div>
+
+            <EvidenceSection title="Deployment result">
+              <div className="grid gap-4">
+                <ReviewResultBlock result={review.deploymentResult} empty="No deployment result was reported." />
+                <ReviewMetaGrid
+                  rows={[
+                    { label: "Preview URL", value: review.previewUrl || props.testEnvironment?.previewUrl || "" },
+                    { label: "Cluster", value: review.cluster || props.testEnvironment?.clusterId || "" },
+                    { label: "Namespace", value: review.namespace || props.testEnvironment?.namespace || "", mono: true },
+                    { label: "Namespace status", value: review.namespaceStatus || props.testEnvironment?.namespaceStatus || "" },
+                    { label: "Cleanup / retain", value: review.cleanupStatus || props.testEnvironment?.cleanupStatus || "" },
+                  ]}
+                />
+                {(review.previewUrl || props.testEnvironment?.previewUrl) ? (
+                  <Button type="button" variant="secondary" size="sm" className="w-fit" onClick={() => void openRichLink(review.previewUrl || props.testEnvironment!.previewUrl)}>
+                    <Globe2 data-icon />
+                    Open preview
+                  </Button>
+                ) : null}
+              </div>
+            </EvidenceSection>
+
+            <EvidenceSection title="Agent summary">
+              {review.agentSummary ? (
+                <RichText className="text-[13px] leading-6">{review.agentSummary}</RichText>
+              ) : (
+                <div className="text-[13px] leading-6 text-[color:var(--muted)]">No agent summary was captured.</div>
+              )}
+            </EvidenceSection>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <EvidenceSection title="Risks / follow-ups">
+                <ReviewStringList items={[...listOrEmpty(review.risks), ...listOrEmpty(review.followUps)]} empty="No risks or follow-ups were reported." />
+              </EvidenceSection>
+              <EvidenceSection title="Cleanup / retain state">
+                <ReviewMetaGrid
+                  rows={[
+                    { label: "Session worktree", value: sourceSession?.cleanupStatus || "" },
+                    { label: "Cleaned at", value: sourceSession?.cleanedAt || "" },
+                    { label: "Issue namespace", value: review.cleanupStatus || props.testEnvironment?.cleanupStatus || "" },
+                  ]}
+                />
+              </EvidenceSection>
+            </div>
+          </article>
+        );
+      })}
+
+      {evidence.length > 0 ? (
+        <EvidenceSection title="Kubernetes resources">
+          <div className="relative">
+            <div className="absolute bottom-0 left-4 top-0 w-px bg-[color:var(--line)]" aria-hidden="true" />
+            <div className="relative">
+              {evidence.map((item) => (
+                <EvidenceTimelineItem key={item.id} evidence={item} />
+              ))}
+            </div>
+          </div>
+        </EvidenceSection>
+      ) : null}
     </section>
   );
 }
@@ -1091,7 +1323,7 @@ function ActorMark(props: { actor: ActorIdentity; size?: "sm" | "md" }) {
 
 function TimelineShell(props: {
   actor: ActorIdentity;
-  title: string;
+  title: React.ReactNode;
   time: string;
   children?: React.ReactNode;
 }) {
@@ -1111,6 +1343,18 @@ function TimelineShell(props: {
 
 function CommentTimelineItem(props: { comment: Comment }) {
   const actor = actorForComment(props.comment);
+  const statusTransition = parseStatusTransitionComment(props.comment.body);
+  if (statusTransition) {
+    const eventActor = actorForStatusTransitionComment(actor, statusTransition);
+    return (
+      <TimelineShell
+        actor={eventActor}
+        title={<StatusTransitionTitle actorName={eventActor.name || statusTransition.actorName} transition={statusTransition} />}
+        time={props.comment.createdAt}
+      />
+    );
+  }
+
   const title =
     actor.kind === "human" || actor.kind === "codex"
       ? `${actor.name} commented`
@@ -1119,6 +1363,49 @@ function CommentTimelineItem(props: { comment: Comment }) {
     <TimelineShell actor={actor} title={title} time={props.comment.createdAt}>
       <RichText>{props.comment.body}</RichText>
     </TimelineShell>
+  );
+}
+
+type StatusTransition = {
+  target: "issue" | "task";
+  taskTitle?: string;
+  from: string;
+  to: string;
+  actorName: string;
+};
+
+function parseStatusTransitionComment(body: string): StatusTransition | null {
+  const firstLine = body.trim().split(/\r?\n/, 1)[0] || "";
+  const match = firstLine.match(/^(Issue|Task `(.+)`) status changed from `([^`]+)` to `([^`]+)` by (.+)\.$/);
+  if (!match) return null;
+  return {
+    target: match[1].startsWith("Task") ? "task" : "issue",
+    taskTitle: match[2],
+    from: match[3],
+    to: match[4],
+    actorName: match[5],
+  };
+}
+
+function actorForStatusTransitionComment(actor: ActorIdentity, transition: StatusTransition): ActorIdentity {
+  if (actor.kind !== "system") return actor;
+  const actorName = transition.actorName.trim();
+  if (!actorName || actorName === actor.name) return actor;
+  if (actorName.toLowerCase() === "codex") return codexActor(actorName);
+  return { kind: "human", name: actorName };
+}
+
+function StatusTransitionTitle(props: { actorName: string; transition: StatusTransition }) {
+  return (
+    <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className="font-semibold text-[color:var(--text)]">{props.actorName}</span>
+      <span className="font-normal text-[color:var(--muted)]">
+        changed {props.transition.target === "task" ? "task status" : "status"} from
+      </span>
+      <StatusBadge value={displayIssueStatus(props.transition.from)} className="h-5 px-2 py-0 text-[11px]" />
+      <span className="font-normal text-[color:var(--muted)]">to</span>
+      <StatusBadge value={displayIssueStatus(props.transition.to)} className="h-5 px-2 py-0 text-[11px]" />
+    </span>
   );
 }
 
@@ -1499,6 +1786,58 @@ function labelSelectClass(hasValue: boolean) {
   return cn(
     "h-7 min-h-7 w-full rounded-[6px] bg-transparent px-1 py-1 text-[12px] leading-4 shadow-none hover:bg-[color:var(--hover)] focus:bg-[color:var(--hover)] focus:shadow-[inset_0_0_0_1px_var(--line)] data-[state=open]:bg-[color:var(--hover)] data-[state=open]:shadow-[inset_0_0_0_1px_var(--line)] [&_svg]:size-3.5",
     hasValue ? "font-medium text-[color:var(--muted-strong)]" : "font-normal text-[color:var(--faint)]",
+  );
+}
+
+function IssueHeaderMeta(props: {
+  projectName: string;
+  status: string;
+  typeLabel?: IssueLabel;
+  priorityLabel?: IssueLabel;
+  triageStatus: string;
+  assignee: ActorIdentity;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <HeaderMetaBadge label="Project" value={props.projectName} />
+      <StatusBadge value={displayIssueStatus(props.status)} label="Status" className="h-6 px-2.5 text-[12px]" />
+      {props.typeLabel ? (
+        <IssueLabelBadge label={props.typeLabel} prefix="Type" className="h-6 px-2.5 text-[12px]" />
+      ) : (
+        <HeaderMetaBadge value={props.triageStatus === "pending" ? "Classifying type" : "No type"} muted />
+      )}
+      {props.priorityLabel ? (
+        <IssueLabelBadge label={props.priorityLabel} prefix="Priority" className="h-6 px-2.5 text-[12px]" />
+      ) : (
+        <HeaderMetaBadge value="No priority" muted />
+      )}
+      <HeaderMetaBadge label="Assignee" value={props.assignee.name || "Unassigned"} />
+    </div>
+  );
+}
+
+function HeaderMetaBadge(props: { label?: string; value: string; muted?: boolean }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-6 max-w-full items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium leading-4 shadow-[inset_0_0_0_1px_var(--line)]",
+        props.muted
+          ? "bg-[color:var(--block)] text-[color:var(--muted)]"
+          : "bg-[color:var(--surface)] text-[color:var(--muted-strong)]",
+      )}
+      title={props.label ? `${props.label}: ${props.value}` : props.value}
+    >
+      {props.label ? <span className="shrink-0 text-[color:var(--faint)]">{props.label}</span> : null}
+      <span className="truncate">{props.value}</span>
+    </span>
+  );
+}
+
+function IssueStatusOptionLabel(props: { status: string }) {
+  return (
+    <span className="flex min-w-0 items-center">
+      <StatusBadge value={props.status} className="pointer-events-none" />
+    </span>
   );
 }
 
@@ -1969,6 +2308,18 @@ export function IssueDetailPage() {
     },
   });
 
+  const updateIssueStatus = useMutation({
+    mutationFn: (status: string) => api.updateIssue(issueId, { status }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
+      ]);
+    },
+  });
+
   const stopSession = useMutation({
     mutationFn: (sessionId: string) => api.cancelSession(sessionId),
     onSuccess: async (_data, sessionId) => {
@@ -2054,11 +2405,23 @@ export function IssueDetailPage() {
   const assigneeActor = actorForAssignee(detail.issue.assigneeType, detail.issue.assignee);
   const projectCluster = clusters.find((cluster) => cluster.id === detail.project.defaultClusterId);
   const testCluster = clusters.find((cluster) => cluster.id === detail.testEnvironment?.clusterId);
+  const issueLabels = listOrEmpty(detail.labels);
+  const selectedTypeLabel = issueLabels.find((label) => issueLabelMatchesDimension(label, "type"));
+  const selectedPriorityLabel = issueLabels.find((label) => issueLabelMatchesDimension(label, "priority"));
 
   return (
     <PageFrame
       title={detail.issue.title}
-      subtitle={`${detail.project.name} · ${displayIssueStatus(detail.issue.status)}`}
+      subtitle={
+        <IssueHeaderMeta
+          projectName={detail.project.name}
+          status={detail.issue.status}
+          typeLabel={selectedTypeLabel}
+          priorityLabel={selectedPriorityLabel}
+          triageStatus={detail.issue.triageStatus}
+          assignee={assigneeActor}
+        />
+      }
       breadcrumbs={[
         { label: "mspace", to: "/inbox" },
         { label: "Issues", to: "/issues" },
@@ -2220,7 +2583,15 @@ export function IssueDetailPage() {
           ) : issueTab === "sessions" ? (
             <IssueSessionsTab sessions={listOrEmpty(detail.sessions)} agents={agents} />
           ) : (
-            <IssueEvidenceTab evidence={listOrEmpty(detail.evidence)} />
+            <IssueEvidenceTab
+              reviewEvidence={listOrEmpty(detail.reviewEvidence)}
+              evidence={listOrEmpty(detail.evidence)}
+              testEnvironment={detail.testEnvironment}
+              sessions={listOrEmpty(detail.sessions)}
+              changeNodes={changeNodes}
+              onOpenCommits={() => setIssueTab("commits")}
+              onOpenSessions={() => setIssueTab("sessions")}
+            />
           )}
         </main>
 
@@ -2230,12 +2601,28 @@ export function IssueDetailPage() {
               <div className="grid gap-2">
                 <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-2">
                   <span className="text-[12px] leading-5 text-[color:var(--muted)]">Status</span>
-                  <StatusBadge value={displayIssueStatus(detail.issue.status)} />
+                  <Select
+                    value={displayIssueStatus(detail.issue.status)}
+                    onValueChange={(status) => updateIssueStatus.mutate(status)}
+                    disabled={updateIssueStatus.isPending}
+                  >
+                    <SelectTrigger className="h-7 min-h-7 rounded-[6px] bg-transparent px-1.5 py-1 text-[12px] leading-4 shadow-none hover:bg-[color:var(--hover)] focus:bg-[color:var(--hover)] focus:shadow-[inset_0_0_0_1px_var(--line)] data-[state=open]:bg-[color:var(--hover)] data-[state=open]:shadow-[inset_0_0_0_1px_var(--line)] [&_svg]:size-3.5">
+                      <StatusBadge value={displayIssueStatus(detail.issue.status)} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {issueStatusOptions.map((status) => (
+                        <SelectItem key={status} value={status}>
+                          <IssueStatusOptionLabel status={status} />
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
+                {updateIssueStatus.error ? <Notice tone="danger">{updateIssueStatus.error.message}</Notice> : null}
                 <MetaIdentityLine label="Assignee" actor={assigneeActor} />
                 <MetaLine label="Updated" value={formatRelativeTime(detail.issue.updatedAt)} />
                 <LabelEditor
-                  labels={listOrEmpty(detail.labels)}
+                  labels={issueLabels}
                   options={labelOptions}
                   triageStatus={detail.issue.triageStatus}
                   isPending={updateLabels.isPending}

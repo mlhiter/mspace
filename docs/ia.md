@@ -236,6 +236,8 @@ The activity thread should mix:
 
 System events should be visually quieter than human and agent messages. Raw thread ids, turn ids, worktree paths, logs, and artifact paths should stay collapsed behind execution details unless the user is debugging.
 
+Status changes are timeline events, not long comments. Render them in one line as the actor changing status from one readable badge to another. Do not expose stored raw values such as `in_progress` or `ready_for_test` in the user-facing event text.
+
 ### Reply composer
 
 The composer is the main interaction control:
@@ -293,7 +295,8 @@ Current implementation:
 - streams session logs and status while a session is running, but keeps debug output collapsed by default;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
-- renders the issue creator, human comments, system comments, and Codex-backed agent turns with their current display names and avatar sources;
+- renders the issue creator, human comments, system comments, Codex-backed agent turns, and actor-authored status changes with their current display names and avatar sources;
+- renders status changes as compact one-line events with `from` and `to` badges instead of showing the full stored status-change comment body;
 - links into full session detail for deep inspection.
 
 ### Layout

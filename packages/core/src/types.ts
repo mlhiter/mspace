@@ -255,6 +255,49 @@ export interface DeploymentEvidence {
   createdAt: string;
 }
 
+export interface ReviewEvidenceCommand {
+  command: string;
+  status: string;
+  category: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface ReviewEvidenceCheck {
+  name: string;
+  status: string;
+  summary: string;
+}
+
+export interface ReviewEvidenceResult {
+  status: string;
+  summary: string;
+  details: string;
+}
+
+export interface SessionReviewEvidence {
+  id: string;
+  issueId: string;
+  sessionId: string;
+  sourceSessionId: string;
+  sourceCommitSha: string;
+  branch: string;
+  agentSummary: string;
+  commandsRun: ReviewEvidenceCommand[];
+  tests: ReviewEvidenceCheck[];
+  buildResult: ReviewEvidenceResult;
+  deploymentResult: ReviewEvidenceResult;
+  risks: string[];
+  followUps: string[];
+  previewUrl: string;
+  cluster: string;
+  namespace: string;
+  namespaceStatus: string;
+  cleanupStatus: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface IssueChangeNode {
   id: string;
   issueId: string;
@@ -303,6 +346,7 @@ export interface IssueDetail {
   sessions: AgentSession[];
   evidence: DeploymentEvidence[];
   changeNodes: IssueChangeNode[];
+  reviewEvidence: SessionReviewEvidence[];
 }
 
 export interface SessionDetail {

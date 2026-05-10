@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -309,6 +310,7 @@ func TestDeleteIssueTaskRemovesChildIssueOnly(t *testing.T) {
 	if err := application.migrate(); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
+	humanToken := configureTestHumanAuth(t, application)
 
 	now := nowString()
 	if _, err := db.Exec(`
@@ -344,13 +346,13 @@ func TestDeleteIssueTaskRemovesChildIssueOnly(t *testing.T) {
 	router.Delete("/api/issues/{issueID}/tasks/{taskID}", application.handleDeleteIssueTask)
 
 	wrongParent := httptest.NewRecorder()
-	router.ServeHTTP(wrongParent, httptest.NewRequest(http.MethodDelete, "/api/issues/issue-2/tasks/task-1", nil))
+	router.ServeHTTP(wrongParent, authRequest(http.MethodDelete, "/api/issues/issue-2/tasks/task-1", "", humanToken))
 	if wrongParent.Code != http.StatusNotFound {
 		t.Fatalf("expected wrong parent delete to return 404, got %d body=%s", wrongParent.Code, wrongParent.Body.String())
 	}
 
 	correctParent := httptest.NewRecorder()
-	router.ServeHTTP(correctParent, httptest.NewRequest(http.MethodDelete, "/api/issues/issue-1/tasks/task-1", nil))
+	router.ServeHTTP(correctParent, authRequest(http.MethodDelete, "/api/issues/issue-1/tasks/task-1", "", humanToken))
 	if correctParent.Code != http.StatusOK {
 		t.Fatalf("expected delete to return 200, got %d body=%s", correctParent.Code, correctParent.Body.String())
 	}
@@ -435,6 +437,91 @@ func TestGetIssueDoesNotClearInboxUnread(t *testing.T) {
 	if unread != 1 {
 		t.Fatalf("expected GET issue to leave inbox unread, got %d", unread)
 	}
+}
+
+func TestTopLevelIssueCloseRequiresHumanAuth(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Top issue", "open")
+	agentToken := insertAuthTestAgentSession(t, db, "session-1", "issue-1")
+
+	router := chi.NewRouter()
+	router.Put("/api/issues/{issueID}", application.handleUpdateIssue)
+	body := `{"status":"closed"}`
+
+	unauthenticated := httptest.NewRecorder()
+	router.ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodPut, "/api/issues/issue-1", strings.NewReader(body)))
+	if unauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthenticated close to return 401, got %d body=%s", unauthenticated.Code, unauthenticated.Body.String())
+	}
+
+	agent := httptest.NewRecorder()
+	router.ServeHTTP(agent, authRequest(http.MethodPut, "/api/issues/issue-1", body, agentToken))
+	if agent.Code != http.StatusForbidden {
+		t.Fatalf("expected agent top-level close to return 403, got %d body=%s", agent.Code, agent.Body.String())
+	}
+
+	var status string
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'issue-1'`).Scan(&status); err != nil {
+		t.Fatalf("query issue status: %v", err)
+	}
+	if status != "open" {
+		t.Fatalf("expected unauthorized close attempts to leave issue open, got %q", status)
+	}
+
+	human := httptest.NewRecorder()
+	router.ServeHTTP(human, authRequest(http.MethodPut, "/api/issues/issue-1", body, humanToken))
+	if human.Code != http.StatusOK {
+		t.Fatalf("expected human close to return 200, got %d body=%s", human.Code, human.Body.String())
+	}
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'issue-1'`).Scan(&status); err != nil {
+		t.Fatalf("query issue status after human close: %v", err)
+	}
+	if status != "closed" {
+		t.Fatalf("expected human close to set closed, got %q", status)
+	}
+	assertCommentContains(t, db, "issue-1", "Issue status changed from `open` to `closed` by Test Human.")
+	assertCommentAuthorContains(t, db, "issue-1", "Issue status changed from `open` to `closed` by Test Human.", "human", "Test Human")
+}
+
+func TestAgentStatusChangeIsScopedAndRecorded(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	insertAuthTestIssue(t, db, "issue-1", "", "Top issue", "open")
+	insertAuthTestIssue(t, db, "task-1", "issue-1", "Task issue", "open")
+	agentToken := insertAuthTestAgentSession(t, db, "session-1", "issue-1")
+
+	router := chi.NewRouter()
+	router.Put("/api/issues/{issueID}", application.handleUpdateIssue)
+
+	review := httptest.NewRecorder()
+	router.ServeHTTP(review, authRequest(http.MethodPut, "/api/issues/issue-1", `{"status":"needs_review"}`, agentToken))
+	if review.Code != http.StatusOK {
+		t.Fatalf("expected scoped agent review transition to return 200, got %d body=%s", review.Code, review.Body.String())
+	}
+	var issueStatus string
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'issue-1'`).Scan(&issueStatus); err != nil {
+		t.Fatalf("query issue status: %v", err)
+	}
+	if issueStatus != "needs_review" {
+		t.Fatalf("expected issue status needs_review, got %q", issueStatus)
+	}
+	assertCommentContains(t, db, "issue-1", "Issue status changed from `open` to `needs_review` by Codex.")
+	assertCommentAuthorContains(t, db, "issue-1", "Issue status changed from `open` to `needs_review` by Codex.", "agent", "Codex")
+
+	closeTask := httptest.NewRecorder()
+	router.ServeHTTP(closeTask, authRequest(http.MethodPut, "/api/issues/task-1", `{"status":"closed"}`, agentToken))
+	if closeTask.Code != http.StatusOK {
+		t.Fatalf("expected scoped agent child-task close to return 200, got %d body=%s", closeTask.Code, closeTask.Body.String())
+	}
+	var taskStatus string
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'task-1'`).Scan(&taskStatus); err != nil {
+		t.Fatalf("query task status: %v", err)
+	}
+	if taskStatus != "closed" {
+		t.Fatalf("expected child task to close, got %q", taskStatus)
+	}
+	assertCommentContains(t, db, "issue-1", "Task `Task issue` status changed from `open` to `closed` by Codex.")
+	assertCommentAuthorContains(t, db, "issue-1", "Task `Task issue` status changed from `open` to `closed` by Codex.", "agent", "Codex")
 }
 
 func TestMigrateClosedIssueStatusesKeepsSessionCompletion(t *testing.T) {
@@ -529,7 +616,7 @@ func TestEnsureSessionColumnsAddsCodexFields(t *testing.T) {
 		t.Fatalf("ensure session columns should be idempotent: %v", err)
 	}
 
-	for _, column := range []string{"codex_thread_id", "codex_turn_id", "agent_status", "artifact_dir", "agent_profile", "source_session_id", "source_commit_sha", "cleanup_status", "cleaned_at"} {
+	for _, column := range []string{"codex_thread_id", "codex_turn_id", "agent_status", "artifact_dir", "agent_profile", "source_session_id", "source_commit_sha", "agent_token", "cleanup_status", "cleaned_at"} {
 		if !tableColumnExists(t, db, "agent_sessions", column) {
 			t.Fatalf("expected agent_sessions.%s to exist", column)
 		}
@@ -647,6 +734,30 @@ func TestEnsureIssueChangeNodeTablesCreatesTable(t *testing.T) {
 	}
 	if !tableIndexExists(t, db, "issue_change_nodes", "idx_issue_change_nodes_issue_created") {
 		t.Fatal("expected issue change node issue index to exist")
+	}
+}
+
+func TestEnsureSessionReviewEvidenceTablesCreatesTable(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db}
+	if err := application.ensureSessionReviewEvidenceTables(); err != nil {
+		t.Fatalf("ensure session review evidence tables failed: %v", err)
+	}
+	if err := application.ensureSessionReviewEvidenceTables(); err != nil {
+		t.Fatalf("ensure session review evidence tables should be idempotent: %v", err)
+	}
+	for _, column := range []string{"id", "issue_id", "session_id", "source_session_id", "source_commit_sha", "branch", "agent_summary", "commands_json", "tests_json", "build_result_json", "deployment_result_json", "risks_json", "follow_ups_json", "preview_url", "cluster", "namespace", "namespace_status", "cleanup_status", "created_at", "updated_at"} {
+		if !tableColumnExists(t, db, "session_review_evidence", column) {
+			t.Fatalf("expected session_review_evidence.%s to exist", column)
+		}
+	}
+	if !tableIndexExists(t, db, "session_review_evidence", "idx_session_review_evidence_issue_created") {
+		t.Fatal("expected session review evidence issue index to exist")
 	}
 }
 
@@ -947,6 +1058,91 @@ func TestRecordSourceChangeNodeCommitsWorkspace(t *testing.T) {
 	}
 }
 
+func TestBuildSessionReviewEvidenceUsesArtifactAndEnvironment(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db, broker: newEventBroker(), workdir: t.TempDir(), repoRoot: t.TempDir()}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES ('project-1', 'Demo', ?, 'local', '', '', '', '', 'main', '', '', 'ctx', 'ns-demo', ?, ?)
+	`, t.TempDir(), now, now); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES ('issue-1', 'project-1', 'Evidence issue', '', 'test_in_progress', 'codex', 'agent', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	writeFile(t, filepath.Join(artifactDir, "review-evidence.json"), `{
+		"agentSummary":"Implemented and deployed the change.",
+		"commandsRun":[{"command":"pnpm build","status":"passed","category":"build","summary":"build ok"}],
+		"tests":[{"name":"pnpm test","status":"passed","summary":"all tests passed"}],
+		"buildResult":{"status":"passed","summary":"build passed"},
+		"deploymentResult":{"status":"passed","summary":"deployment passed"},
+		"risks":["manual cache refresh may still be needed"],
+		"followUps":["add e2e coverage"]
+	}`)
+	session := agentSession{
+		ID:              "session-1",
+		IssueID:         "issue-1",
+		RuntimeMode:     "codex-app-server",
+		Status:          "completed",
+		Branch:          "mspace/issue/session-1",
+		ArtifactDir:     artifactDir,
+		SourceSessionID: "source-session",
+		SourceCommitSHA: "abcdef1234567890",
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES (?, ?, 'codex', 'codex', ?, '', ?, ?, '', '', '', 'completed', ?, ?, ?, 'retained', '', ?, ?)
+	`, session.ID, session.IssueID, session.RuntimeMode, session.Status, session.Branch, session.ArtifactDir, session.SourceSessionID, session.SourceCommitSHA, now, now); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issue_test_environments (issue_id, cluster_id, namespace, namespace_status, cleanup_status, preview_url, kube_context, last_deploy_session_id, source_session_id, source_commit_sha, created_at, updated_at)
+		VALUES ('issue-1', 'cluster-1', 'ns-demo', 'active', 'retained', 'http://preview.example', 'ctx', 'session-1', 'source-session', 'abcdef1234567890', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert test environment: %v", err)
+	}
+
+	review, err := application.buildSessionReviewEvidence(session, project{ID: "project-1", Name: "Demo"}, nil, true)
+	if err != nil {
+		t.Fatalf("build session review evidence failed: %v", err)
+	}
+	if review.AgentSummary != "Implemented and deployed the change." {
+		t.Fatalf("expected artifact summary, got %q", review.AgentSummary)
+	}
+	if review.PreviewURL != "http://preview.example" || review.Namespace != "ns-demo" || review.Cluster != "ctx" {
+		t.Fatalf("expected environment metadata, got %+v", review)
+	}
+	if len(review.CommandsRun) != 1 || review.BuildResult.Status != "passed" || len(review.Tests) != 1 {
+		t.Fatalf("expected artifact evidence sections, got %+v", review)
+	}
+	if err := application.storeSessionReviewEvidence(review); err != nil {
+		t.Fatalf("store session review evidence failed: %v", err)
+	}
+	loaded, err := application.listSessionReviewEvidence("issue-1")
+	if err != nil {
+		t.Fatalf("list session review evidence failed: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].SourceCommitSHA != "abcdef1234567890" || loaded[0].Risks[0] == "" {
+		t.Fatalf("unexpected loaded review evidence: %+v", loaded)
+	}
+}
+
 func TestPrepareSessionWorkspaceChecksOutSourceCommit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is required for source checkout test")
@@ -1228,6 +1424,137 @@ func TestBuildCodexSessionPromptIncludesRuntimeContext(t *testing.T) {
 	}
 	if strings.Contains(prompt, "Implement the issue as far as practical") {
 		t.Fatalf("expected prompt to avoid unconditional fresh implementation wording, got:\n%s", prompt)
+	}
+}
+
+func newAuthTestApp(t *testing.T) (*app, *sql.DB) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+	application := &app{
+		db:         db,
+		broker:     newEventBroker(),
+		workdir:    t.TempDir(),
+		repoRoot:   t.TempDir(),
+		cancellers: map[string]context.CancelFunc{},
+	}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return application, db
+}
+
+func configureTestHumanAuth(t *testing.T, application *app) string {
+	t.Helper()
+	token := "human-token"
+	workspaceID := "workspace-1"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/me" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			writeError(w, http.StatusUnauthorized, errUnauthorized)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"user": map[string]string{
+				"id":        "user-1",
+				"name":      "Test Human",
+				"email":     "test@example.com",
+				"avatarUrl": "https://example.com/avatar.png",
+			},
+			"workspaces": []map[string]string{{"id": workspaceID}},
+		})
+	}))
+	t.Cleanup(server.Close)
+	application.controlPlaneBaseURL = server.URL
+	application.controlPlaneWorkspaceID = workspaceID
+	return token
+}
+
+func authRequest(method, target, body, token string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if strings.TrimSpace(body) != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req
+}
+
+func insertAuthTestIssue(t *testing.T, db *sql.DB, issueID, parentIssueID, title, status string) {
+	t.Helper()
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT OR IGNORE INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES ('project-1', 'Demo', '/tmp/demo', 'local', '', '', '', '', 'main', '', '', '', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert auth test project: %v", err)
+	}
+	var parent any
+	if parentIssueID != "" {
+		parent = parentIssueID
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES (?, 'project-1', ?, 0, ?, '', ?, 'pending', 'me', 'human', '', ?, ?)
+	`, issueID, parent, title, status, now, now); err != nil {
+		t.Fatalf("insert auth test issue: %v", err)
+	}
+	if parentIssueID == "" {
+		if _, err := db.Exec(`
+			INSERT INTO inbox_items (id, issue_id, project_id, title, status, unread, created_at, updated_at)
+			VALUES (?, ?, 'project-1', ?, ?, 0, ?, ?)
+		`, "inbox-"+issueID, issueID, title, status, now, now); err != nil {
+			t.Fatalf("insert auth test inbox item: %v", err)
+		}
+	}
+}
+
+func insertAuthTestAgentSession(t *testing.T, db *sql.DB, sessionID, issueID string) string {
+	t.Helper()
+	now := nowString()
+	token := agentTokenPrefix + strings.ReplaceAll(sessionID, "-", "") + "token"
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, agent_token, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES (?, ?, 'codex', 'codex', 'local', 'Implement the issue.', 'running', 'mspace/issue/session', '/tmp/workdir', '', '', 'running', '', '', '', ?, 'retained', '', ?, ?)
+	`, sessionID, issueID, token, now, now); err != nil {
+		t.Fatalf("insert auth test agent session: %v", err)
+	}
+	return token
+}
+
+func assertCommentContains(t *testing.T, db *sql.DB, issueID, expected string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM comments WHERE issue_id = ? AND body LIKE ?`, issueID, "%"+expected+"%").Scan(&count); err != nil {
+		t.Fatalf("query comments: %v", err)
+	}
+	if count == 0 {
+		t.Fatalf("expected comment on %s containing %q", issueID, expected)
+	}
+}
+
+func assertCommentAuthorContains(t *testing.T, db *sql.DB, issueID, expectedBody, authorType, authorName string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM comments
+		WHERE issue_id = ? AND body LIKE ? AND author_type = ? AND author_name = ?
+	`, issueID, "%"+expectedBody+"%", authorType, authorName).Scan(&count); err != nil {
+		t.Fatalf("query comments by author: %v", err)
+	}
+	if count == 0 {
+		t.Fatalf("expected comment on %s containing %q from %s/%s", issueID, expectedBody, authorType, authorName)
 	}
 }
 

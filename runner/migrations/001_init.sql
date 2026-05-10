@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   artifact_dir TEXT NOT NULL DEFAULT '',
   source_session_id TEXT NOT NULL DEFAULT '',
   source_commit_sha TEXT NOT NULL DEFAULT '',
+  agent_token TEXT NOT NULL DEFAULT '',
   cleanup_status TEXT NOT NULL DEFAULT 'retained',
   cleaned_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
@@ -177,6 +178,32 @@ CREATE TABLE IF NOT EXISTS issue_change_nodes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_issue_change_nodes_issue_created ON issue_change_nodes(issue_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS session_review_evidence (
+  id TEXT PRIMARY KEY,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  source_session_id TEXT NOT NULL DEFAULT '',
+  source_commit_sha TEXT NOT NULL DEFAULT '',
+  branch TEXT NOT NULL DEFAULT '',
+  agent_summary TEXT NOT NULL DEFAULT '',
+  commands_json TEXT NOT NULL DEFAULT '[]',
+  tests_json TEXT NOT NULL DEFAULT '[]',
+  build_result_json TEXT NOT NULL DEFAULT '{}',
+  deployment_result_json TEXT NOT NULL DEFAULT '{}',
+  risks_json TEXT NOT NULL DEFAULT '[]',
+  follow_ups_json TEXT NOT NULL DEFAULT '[]',
+  preview_url TEXT NOT NULL DEFAULT '',
+  cluster TEXT NOT NULL DEFAULT '',
+  namespace TEXT NOT NULL DEFAULT '',
+  namespace_status TEXT NOT NULL DEFAULT '',
+  cleanup_status TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_review_evidence_issue_created ON session_review_evidence(issue_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS issue_test_environments (
   issue_id TEXT PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,

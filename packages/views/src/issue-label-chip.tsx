@@ -5,11 +5,13 @@ import { cn } from "@mspace/ui";
 export function IssueLabelBadge(props: {
   label: IssueLabelLike;
   className?: string;
+  prefix?: string;
 }) {
   const presentation = issueLabelPresentation(props.label);
 
   return (
     <span className={cn(issueLabelBadgeClass(props.label), props.className)} title={presentation.name}>
+      {props.prefix ? <span className="shrink-0 text-[color:var(--faint)]">{props.prefix}</span> : null}
       {presentation.isPriority ? null : <span className={issueLabelDotClass(props.label)} />}
       <span className="truncate">{presentation.name}</span>
     </span>
