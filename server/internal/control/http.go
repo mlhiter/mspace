@@ -18,6 +18,8 @@ type Server struct {
 	github GitHubClient
 }
 
+const serverProtocolVersion = 1
+
 func NewServer(config Config, store Store, github GitHubClient) *Server {
 	config = config.withDefaults()
 	return &Server{config: config, store: store, github: github}
@@ -40,7 +42,15 @@ func (s *Server) Routes() http.Handler {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "mspace-server"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":             true,
+		"service":        "mspace-server",
+		"version":        "0.1.0",
+		"serverProtocol": serverProtocolVersion,
+		"capabilities": map[string]bool{
+			"teamInboxIssueGrouping": true,
+		},
+	})
 }
 
 func (s *Server) handleGitHubStart(w http.ResponseWriter, r *http.Request) {

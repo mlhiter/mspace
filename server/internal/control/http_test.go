@@ -34,6 +34,33 @@ func (fakeGitHubClient) FetchUser(_ context.Context, accessToken string) (Identi
 	}, nil
 }
 
+func TestHealthAdvertisesServerProtocol(t *testing.T) {
+	server := NewServer(Config{}, NewMemoryStore(), fakeGitHubClient{})
+	router := server.Routes()
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		OK             bool            `json:"ok"`
+		Service        string          `json:"service"`
+		ServerProtocol int             `json:"serverProtocol"`
+		Capabilities   map[string]bool `json:"capabilities"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("parse health response: %v", err)
+	}
+	if !payload.OK || payload.Service != "mspace-server" || payload.ServerProtocol != serverProtocolVersion {
+		t.Fatalf("unexpected health payload: %+v", payload)
+	}
+	if payload.Capabilities["teamInboxIssueGrouping"] != true {
+		t.Fatalf("expected team inbox grouping capability, got %+v", payload.Capabilities)
+	}
+}
+
 func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 	store := NewMemoryStore()
 	server := NewServer(Config{
