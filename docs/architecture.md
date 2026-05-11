@@ -20,6 +20,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Each session creates or attaches a git worktree before starting the runtime provider.
 - The Codex provider starts `codex app-server --listen stdio://` in the session worktree and talks to it over newline-delimited JSON-RPC.
 - The runner persists Codex agent profile, thread id, turn id, agent status, artifact directory, scoped agent token, cleanup status, and cleaned timestamp on `agent_sessions`.
+- Runner startup reconciles persisted `queued` or `running` sessions left behind by a previous runner process. Because the Codex app-server process and in-memory cancellation handle cannot be recovered, these sessions become `failed` with `agent_status='interrupted'`, get a system log and issue comment, move the issue to `blocked`, and move any linked issue test environment out of active progress.
 - Agent profiles live in `agent_profiles` and are exposed through the Agents module. Default Codex-backed agents are seeded, but new sessions resolve profile instructions from SQLite rather than hardcoded profile switches.
 - Finished local session worktrees can be cleaned through `POST /api/sessions/{sessionID}/cleanup`; active sessions are rejected, the stored workdir must stay under the mspace workdir root, and session records remain for review.
 - Source changes and review evidence are split deliberately. `issue_change_nodes` backs the Commits tab for commit metadata and diffs; source capture records an existing ahead-of-base session HEAD commit when the agent has already committed, or stages the worktree, excludes `.mspace`, retries transient `.git/index.lock` conflicts, and creates a captured source commit when the worktree still has uncommitted changes. `session_review_evidence` backs the Evidence tab for compact commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state. The runner stores only evidence-worthy commands in `commands_json`; raw command trails and exploratory output remain in `session_logs`. Changed-file UI uses Material Icon Theme file icons and filters directory-only placeholder paths while preserving concrete file paths under those directories.
@@ -124,7 +125,7 @@ Implemented runner API:
 | `POST` | `/api/issues/{issueID}/test-environment/cleanup` | Manually queue an agent turn to clean the issue test namespace. |
 | `POST` | `/api/issues/{issueID}/test-environment/retain` | Record that the issue test namespace should be retained. |
 | `GET` | `/api/sessions/{sessionID}` | Load session detail, logs, evidence, and workspace snapshot. |
-| `POST` | `/api/sessions/{sessionID}/cancel` | Cancel a running session. |
+| `POST` | `/api/sessions/{sessionID}/cancel` | Cancel a queued or running session. If a persisted running session no longer has an in-memory runner handle, mark it cancelled instead of returning a false active state. |
 | `POST` | `/api/sessions/{sessionID}/cleanup` | Remove a retained, non-active local session worktree. |
 | `GET` | `/api/sessions/{sessionID}/stream` | Server-sent events for session logs and status changes. |
 
@@ -424,6 +425,8 @@ User creates an issue in /issues or opens an existing one
 Codex sessions receive the selected managed agent profile first, then the current turn request, followed by the issue, comments, prior sessions, project metadata, project runbook, branch, worktree, Kubernetes context, namespace, and the generated context markdown path in the turn prompt. The current turn request is treated like a Multica-style triggering comment so Codex does not confuse a follow-up question with the original issue body. Non-Codex providers can still use the older shell-command path as a compatibility adapter.
 
 The local Codex thread currently uses `approvalPolicy: never` and `sandbox: danger-full-access`. This matches the unattended local-session shape and avoids hidden approval hangs while mspace lacks an approval UI. The tradeoff is that sessions should only be launched for trusted local repositories and reviewed through the retained worktree and logs.
+
+If the desktop or runner exits while a session is active, mspace does not try to resume the old turn. On the next runner startup, `reconcileInterruptedSessionsOnStartup()` scans active session rows, records the interruption, and clears active state so the issue can be retried from the preserved logs and worktree. The Stop API has the same orphaned-session fallback for a `running` row that no longer has a current-process canceller.
 
 ### Target Product Flow
 

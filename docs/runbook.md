@@ -33,7 +33,7 @@ Start desktop:
 pnpm dev:desktop
 ```
 
-Electron starts the local Go runner and local server control plane automatically if their `GET /health` checks are not already healthy on the configured ports. The runner health response must also advertise the expected protocol capabilities; in dev, a stale local runner on `7788` is terminated and replaced with the current source tree.
+Electron starts the local Go runner and local server control plane automatically if their `GET /health` checks are not already healthy on the configured ports. The runner health response must also advertise the expected protocol capabilities; in dev, a stale local runner on `7788` is terminated and replaced with the current source tree. On runner startup, any persisted `queued` or `running` sessions from a previous runner process are treated as interrupted rather than resumable, because the old Codex app-server process and in-memory cancellation handle are gone.
 
 Run the runner separately for API debugging:
 
@@ -477,6 +477,29 @@ Projects can only be deleted before any issues or sessions are attached. Check:
 ```bash
 sqlite3 ~/.mspace/mspace.db "select id,name,issue_count,session_count from (select p.id,p.name,count(distinct i.id) as issue_count,count(distinct s.id) as session_count from projects p left join issues i on i.project_id = p.id left join agent_sessions s on s.issue_id = i.id group by p.id) order by name;"
 ```
+
+### Session Shows Working But Stop Says `session is not running`
+
+This means SQLite still has an active session row, but the current runner process does not have the in-memory canceller for that session. The usual cause is closing or restarting Electron while a Codex app-server deploy/test turn was still active. The old turn cannot be resumed; the useful state is the preserved session logs, worktree, source commit, and test-environment record.
+
+Check the persisted state:
+
+```bash
+sqlite3 ~/.mspace/mspace.db "select id,issue_id,status,agent_status,codex_thread_id,codex_turn_id,updated_at from agent_sessions where status in ('queued','running') order by updated_at desc;"
+sqlite3 ~/.mspace/mspace.db "select issue_id,namespace,namespace_status,cleanup_status,last_deploy_session_id,last_cleanup_session_id,preview_url from issue_test_environments order by updated_at desc limit 10;"
+ps -axo pid,ppid,stat,etime,command | rg -i 'codex app-server|mspace|runner' | rg -v 'rg -i'
+```
+
+Current runner startup reconciles orphaned active rows automatically: source/deploy sessions become `failed` with `agent_status='interrupted'`, the issue moves to `blocked`, and a linked deploy or cleanup environment moves from `deploying`/`cleanup_requested` to `deploy_failed`/`cleanup_failed`. If the UI was loaded before that reconciliation, restart the runner or the desktop app and refresh Issue Detail:
+
+```bash
+curl http://127.0.0.1:7788/health
+lsof -nP -iTCP:7788 -sTCP:LISTEN
+kill <runner-pid>
+cd runner && MSPACE_PORT=7788 go run .
+```
+
+If a stale active row is still shown while the current runner is serving, the Stop button should now succeed. It marks only the session `cancelled`, appends a system log explaining that the in-memory runner handle was lost, and leaves the top-level issue status unchanged so the issue can be retried.
 
 ### Session Fails Before Starting Runtime
 

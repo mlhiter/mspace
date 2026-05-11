@@ -687,6 +687,10 @@ func main() {
 		logger.Error("failed to run migrations", "error", err)
 		os.Exit(1)
 	}
+	if err := application.reconcileInterruptedSessionsOnStartup(); err != nil {
+		logger.Error("failed to reconcile interrupted sessions", "error", err)
+		os.Exit(1)
+	}
 
 	router := chi.NewRouter()
 	router.Use(jsonMiddleware)
@@ -805,6 +809,46 @@ func (a *app) migrate() error {
 		return err
 	}
 	return nil
+}
+
+func (a *app) reconcileInterruptedSessionsOnStartup() error {
+	rows, err := a.db.Query(`
+		SELECT id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at
+		FROM agent_sessions
+		WHERE status IN ('queued', 'running')
+		ORDER BY updated_at ASC
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	sessions := make([]agentSession, 0)
+	for rows.Next() {
+		var session agentSession
+		if err := rows.Scan(&session.ID, &session.IssueID, &session.Provider, &session.AgentProfile, &session.RuntimeMode, &session.Command, &session.Status, &session.Branch, &session.Workdir, &session.CodexThreadID, &session.CodexTurnID, &session.AgentStatus, &session.ArtifactDir, &session.SourceSessionID, &session.SourceCommitSHA, &session.TriggerCommentID, &session.AgentToken, &session.CleanupStatus, &session.CleanedAt, &session.CreatedAt, &session.UpdatedAt); err != nil {
+			return err
+		}
+		sessions = append(sessions, session)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, session := range sessions {
+		a.markSessionInterruptedByRunnerRestart(session)
+	}
+	return nil
+}
+
+func (a *app) markSessionInterruptedByRunnerRestart(session agentSession) {
+	reason := "The local runner restarted before this session completed, so the attached Codex app-server process is no longer running. Start a new session to continue from the last recorded log."
+	a.updateSessionStatus(session.ID, "failed")
+	a.updateSessionAgentStatus(session.ID, "interrupted")
+	a.appendSessionLog(session.ID, "system", reason)
+	a.updateIssueStatus(session.IssueID, "blocked")
+	a.markIssueTestEnvironmentSessionInterrupted(session)
+	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` was interrupted.\n\n%s", shortID(session.ID), reason))
 }
 
 func (a *app) ensureClusterTables() error {
@@ -3958,9 +4002,13 @@ func (a *app) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 			writeError(w, status, err)
 			return
 		}
-		if detail.Session.Status == "queued" {
+		if detail.Session.Status == "queued" || detail.Session.Status == "running" {
 			a.updateSessionStatus(sessionID, "cancelled")
 			a.updateSessionAgentStatus(sessionID, "cancelled")
+			if detail.Session.Status == "running" {
+				a.appendSessionLog(sessionID, "system", "Stop requested after the runner lost its in-memory handle for this session. No live process was attached in the current runner.")
+			}
+			a.markIssueTestEnvironmentSessionInterrupted(detail.Session)
 			a.addSystemComment(detail.Session.IssueID, fmt.Sprintf("Stopped session `%s` by %s.", shortID(sessionID), commentActorName(actor)))
 			writeJSON(w, map[string]bool{"ok": true})
 			return
@@ -4082,6 +4130,7 @@ func (a *app) runSession(session agentSession, project project) {
 		a.updateSessionStatus(session.ID, "cancelled")
 		a.updateSessionAgentStatus(session.ID, "cancelled")
 		a.appendSessionLog(session.ID, "system", "Session cancelled.")
+		a.markIssueTestEnvironmentSessionInterrupted(session)
 		a.addSystemComment(session.IssueID, fmt.Sprintf("Stopped session `%s` by %s.", shortID(session.ID), commentActorName(cancelActor)))
 		return
 	}
@@ -4550,6 +4599,30 @@ func (a *app) updateIssueTestEnvironmentForSession(session agentSession, success
 			environment.NamespaceStatus = "cleanup_failed"
 			environment.CleanupStatus = "cleanup_failed"
 		}
+	}
+	if !changed {
+		return
+	}
+	if err := a.saveIssueTestEnvironment(*environment); err == nil {
+		a.publishInboxEvent(session.IssueID, "test-environment")
+	}
+}
+
+func (a *app) markIssueTestEnvironmentSessionInterrupted(session agentSession) {
+	environment, err := a.loadIssueTestEnvironment(session.IssueID)
+	if err != nil || environment == nil {
+		return
+	}
+
+	changed := false
+	switch {
+	case environment.LastDeploySessionID == session.ID:
+		environment.NamespaceStatus = "deploy_failed"
+		changed = true
+	case environment.LastCleanupSessionID == session.ID:
+		environment.NamespaceStatus = "cleanup_failed"
+		environment.CleanupStatus = "cleanup_failed"
+		changed = true
 	}
 	if !changed {
 		return

@@ -979,6 +979,103 @@ func TestCancelQueuedSessionKeepsIssueStatusForRetry(t *testing.T) {
 	assertCommentAuthorContains(t, db, "issue-1", "Stopped session `session-` by Test Human.", "system", "mspace")
 }
 
+func TestCancelOrphanedRunningSessionAllowsStop(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Deploy issue", "open")
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, agent_status, created_at, updated_at)
+		VALUES ('session-1', 'issue-1', 'codex', 'codex', 'local', 'deploy', 'running', 'mspace/issue/session', '/tmp/workdir', 'reasoning', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert running session: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issue_test_environments (issue_id, namespace, namespace_status, cleanup_status, last_deploy_session_id, created_at, updated_at)
+		VALUES ('issue-1', 'ns-demo', 'deploying', 'retained', 'session-1', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert test environment: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Post("/api/sessions/{sessionID}/cancel", application.handleCancelSession)
+
+	cancel := httptest.NewRecorder()
+	router.ServeHTTP(cancel, authRequest(http.MethodPost, "/api/sessions/session-1/cancel", "", humanToken))
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("expected cancel to return 200, got %d body=%s", cancel.Code, cancel.Body.String())
+	}
+
+	var sessionStatus, agentStatus, issueStatus, namespaceStatus string
+	if err := db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = 'session-1'`).Scan(&sessionStatus, &agentStatus); err != nil {
+		t.Fatalf("query session status: %v", err)
+	}
+	if sessionStatus != "cancelled" || agentStatus != "cancelled" {
+		t.Fatalf("expected cancelled session, got status=%q agent_status=%q", sessionStatus, agentStatus)
+	}
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'issue-1'`).Scan(&issueStatus); err != nil {
+		t.Fatalf("query issue status: %v", err)
+	}
+	if issueStatus != "open" {
+		t.Fatalf("expected stop to leave issue open, got %q", issueStatus)
+	}
+	if err := db.QueryRow(`SELECT namespace_status FROM issue_test_environments WHERE issue_id = 'issue-1'`).Scan(&namespaceStatus); err != nil {
+		t.Fatalf("query namespace status: %v", err)
+	}
+	if namespaceStatus != "deploy_failed" {
+		t.Fatalf("expected interrupted deploy environment to fail, got %q", namespaceStatus)
+	}
+	assertCommentAuthorContains(t, db, "issue-1", "Stopped session `session-` by Test Human.", "system", "mspace")
+	assertSessionLogContains(t, db, "session-1", "lost its in-memory handle")
+}
+
+func TestStartupReconcilesInterruptedActiveSessions(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	insertAuthTestIssue(t, db, "issue-1", "", "Restarted runner issue", "open")
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, agent_status, created_at, updated_at)
+		VALUES ('session-1', 'issue-1', 'codex', 'codex', 'local', 'deploy', 'running', 'mspace/issue/session', '/tmp/workdir', 'reasoning', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert running session: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issue_test_environments (issue_id, namespace, namespace_status, cleanup_status, last_deploy_session_id, created_at, updated_at)
+		VALUES ('issue-1', 'ns-demo', 'deploying', 'retained', 'session-1', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert test environment: %v", err)
+	}
+
+	if err := application.reconcileInterruptedSessionsOnStartup(); err != nil {
+		t.Fatalf("reconcile interrupted sessions: %v", err)
+	}
+
+	var sessionStatus, agentStatus, issueStatus, namespaceStatus string
+	if err := db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = 'session-1'`).Scan(&sessionStatus, &agentStatus); err != nil {
+		t.Fatalf("query session status: %v", err)
+	}
+	if sessionStatus != "failed" || agentStatus != "interrupted" {
+		t.Fatalf("expected interrupted session to fail, got status=%q agent_status=%q", sessionStatus, agentStatus)
+	}
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'issue-1'`).Scan(&issueStatus); err != nil {
+		t.Fatalf("query issue status: %v", err)
+	}
+	if issueStatus != "blocked" {
+		t.Fatalf("expected interrupted session to block issue, got %q", issueStatus)
+	}
+	if err := db.QueryRow(`SELECT namespace_status FROM issue_test_environments WHERE issue_id = 'issue-1'`).Scan(&namespaceStatus); err != nil {
+		t.Fatalf("query namespace status: %v", err)
+	}
+	if namespaceStatus != "deploy_failed" {
+		t.Fatalf("expected interrupted deploy environment to fail, got %q", namespaceStatus)
+	}
+	if application.issueHasActiveSession("issue-1") {
+		t.Fatal("expected startup reconciliation to clear active session state")
+	}
+	assertCommentAuthorContains(t, db, "issue-1", "Session `session-` was interrupted.", "system", "mspace")
+	assertSessionLogContains(t, db, "session-1", "runner restarted before this session completed")
+}
+
 func TestMigrateClosedIssueStatusesKeepsSessionCompletion(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
 	if err != nil {
@@ -2337,6 +2434,21 @@ func assertCommentAuthorContains(t *testing.T, db *sql.DB, issueID, expectedBody
 	}
 	if count == 0 {
 		t.Fatalf("expected comment on %s containing %q from %s/%s", issueID, expectedBody, authorType, authorName)
+	}
+}
+
+func assertSessionLogContains(t *testing.T, db *sql.DB, sessionID, expected string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`
+		SELECT COUNT(*)
+		FROM session_logs
+		WHERE session_id = ? AND message LIKE ?
+	`, sessionID, "%"+expected+"%").Scan(&count); err != nil {
+		t.Fatalf("query session logs: %v", err)
+	}
+	if count == 0 {
+		t.Fatalf("expected session log on %s containing %q", sessionID, expected)
 	}
 }
 
