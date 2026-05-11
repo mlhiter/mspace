@@ -17,8 +17,10 @@ import {
   Globe2,
   History,
   ListChecks,
+  Pencil,
   Plus,
   Rocket,
+  Save,
   Send,
   Trash2,
   X,
@@ -74,7 +76,7 @@ import {
   selectedIssueLabelKey,
 } from "./issue-labels";
 import { IssueLabelBadge, IssueLabelOptionLabel, IssueLabelSelectValue } from "./issue-label-chip";
-import { displayIssueStatus, issueStatusOptions } from "./issue-status";
+import { displayIssueStatus, issueStatusLabel, issueStatusOptions } from "./issue-status";
 import { formatAbsoluteTime, formatRelativeTime } from "./time";
 import { visibleWorkspaceFileChanges, workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
@@ -350,28 +352,44 @@ function TimeMeta(props: { value: string }) {
   );
 }
 
-function RichText(props: { children: string; basePath?: string; className?: string }) {
+type MarkdownNode = {
+  type?: string;
+  value?: string;
+  url?: string;
+  title?: string | null;
+  children?: MarkdownNode[];
+};
+
+function RichText(props: { children: string; basePath?: string; className?: string; agents?: AgentProfile[] }) {
   const text = stringsOrEmpty(props.children);
+  const mentionPlugin = useMemo(() => createAgentMentionRemarkPlugin(props.agents || []), [props.agents]);
   if (!text) return null;
 
   return (
     <div className={cn("rich-text text-[14px] leading-7 text-[color:var(--text)] text-pretty", props.className)}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, mentionPlugin]}
         components={{
-          a: ({ href = "", children }) => (
-            <a
-              href={href}
-              className="font-medium text-[color:var(--accent-blue)] underline underline-offset-2 transition-colors hover:text-[color:var(--text)]"
-              onClick={(event) => {
-                event.preventDefault();
-                void openRichLink(href, props.basePath);
-              }}
-            >
-              {children}
-              {isHttpUrl(href) ? <ExternalLink data-icon className="ml-1 inline-block align-[-2px]" /> : null}
-            </a>
-          ),
+          a: ({ href = "", children }) => {
+            const agentID = agentMentionHrefID(href);
+            const agent = agentID ? findAgent(props.agents || [], agentID) : undefined;
+            if (agent) {
+              return <AgentMentionPill agent={agent} label={plainText(children) || agentMentionText(agent)} />;
+            }
+            return (
+              <a
+                href={href}
+                className="font-medium text-[color:var(--accent-blue)] underline underline-offset-2 transition-colors hover:text-[color:var(--text)]"
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openRichLink(href, props.basePath);
+                }}
+              >
+                {children}
+                {isHttpUrl(href) ? <ExternalLink data-icon className="ml-1 inline-block align-[-2px]" /> : null}
+              </a>
+            );
+          },
           img: ({ src = "", alt = "" }) => (
             <img
               src={attachmentImageSrc(String(src))}
@@ -409,6 +427,88 @@ function RichText(props: { children: string; basePath?: string; className?: stri
         {text}
       </ReactMarkdown>
     </div>
+  );
+}
+
+function createAgentMentionRemarkPlugin(agents: AgentProfile[]) {
+  const mentionLookup = new Map<string, AgentProfile>();
+  for (const agent of agents) {
+    mentionLookup.set(mentionKey(agent.id), agent);
+    mentionLookup.set(mentionKey(agent.mention), agent);
+  }
+  return function agentMentionRemarkPlugin() {
+    return function transformAgentMentions(tree: MarkdownNode) {
+      transformMentionTextNodes(tree, mentionLookup);
+    };
+  };
+}
+
+function transformMentionTextNodes(node: MarkdownNode | undefined, mentionLookup: Map<string, AgentProfile>) {
+  if (!node) return;
+  if (mentionLookup.size === 0 || !node.children || node.type === "link") return;
+  node.children = node.children.flatMap((child) => {
+    if (child.type !== "text" || typeof child.value !== "string") {
+      transformMentionTextNodes(child, mentionLookup);
+      return [child];
+    }
+    return splitAgentMentionText(child.value, mentionLookup);
+  });
+}
+
+function splitAgentMentionText(value: string, mentionLookup: Map<string, AgentProfile>): MarkdownNode[] {
+  const pieces: MarkdownNode[] = [];
+  const mentionPattern = /(^|[^\w])@([a-z][\w-]*)/gi;
+  let cursor = 0;
+  for (let match = mentionPattern.exec(value); match; match = mentionPattern.exec(value)) {
+    const prefix = match[1] || "";
+    const key = mentionKey(match[2] || "");
+    const agent = mentionLookup.get(key);
+    if (!agent || match.index === undefined) continue;
+
+    const mentionStart = match.index + prefix.length;
+    const mentionText = `@${match[2]}`;
+    if (mentionStart > cursor) {
+      pieces.push({ type: "text", value: value.slice(cursor, mentionStart) });
+    }
+    pieces.push({
+      type: "link",
+      url: `#mspace-agent:${encodeURIComponent(agent.id)}`,
+      title: null,
+      children: [{ type: "text", value: mentionText }],
+    });
+    cursor = mentionStart + mentionText.length;
+  }
+  if (cursor === 0) return [{ type: "text", value }];
+  if (cursor < value.length) {
+    pieces.push({ type: "text", value: value.slice(cursor) });
+  }
+  return pieces;
+}
+
+function agentMentionHrefID(href: string) {
+  const prefix = "#mspace-agent:";
+  if (!href.startsWith(prefix)) return "";
+  return decodeURIComponent(href.slice(prefix.length));
+}
+
+function plainText(value: React.ReactNode): string {
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) return value.map(plainText).join("");
+  return "";
+}
+
+function AgentMentionPill(props: { agent: AgentProfile; label: string }) {
+  const isCodex = props.agent.provider === "codex" || mentionKey(props.agent.id) === "codex";
+  return (
+    <span
+      title={props.agent.name}
+      className="mx-0.5 inline-flex h-6 max-w-full items-center gap-1.5 rounded-full bg-[color:var(--block)] px-1.5 pr-2 align-[-5px] text-[12px] font-semibold leading-none text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--line)]"
+    >
+      <span className="grid size-4 shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--paper)] text-[color:var(--accent-blue)] shadow-[inset_0_0_0_1px_var(--line)]">
+        {isCodex ? <img src={codexAvatarDataUrl} alt="" className="size-full p-0.5" /> : <Bot data-icon className="size-3" />}
+      </span>
+      <span className="truncate">{props.label}</span>
+    </span>
   );
 }
 
@@ -1263,6 +1363,13 @@ function storedHumanActor(): ActorIdentity {
   };
 }
 
+function commentMatchesStoredIdentity(comment: Comment): boolean {
+  if (comment.authorType !== "human") return false;
+  const stored = getStoredAuthIdentity();
+  if (comment.authorUserId && stored.id) return comment.authorUserId === stored.id;
+  return (comment.authorName || "").trim().toLowerCase() === (stored.name || "mlhiter").trim().toLowerCase();
+}
+
 function humanActor(name?: string, avatarUrl?: string): ActorIdentity {
   const stored = storedHumanActor();
   const normalizedName = name?.trim();
@@ -1357,8 +1464,50 @@ function TimelineShell(props: {
   );
 }
 
-function CommentTimelineItem(props: { comment: Comment }) {
+function CommentTimelineItem(props: {
+  comment: Comment;
+  agents?: AgentProfile[];
+  sessions?: AgentSession[];
+  canEdit?: boolean;
+  isEditing?: boolean;
+  editBody?: string;
+  isSaving?: boolean;
+  editError?: Error | null;
+  onStartEdit?: () => void;
+  onCancelEdit?: () => void;
+  onEditBodyChange?: (value: string) => void;
+  onEditReady?: (editor: Editor | null) => void;
+  onEditEditorStateChange?: (editor: Editor) => void;
+  onEditFocus?: (editor: Editor) => void;
+  onEditBlur?: (editor: Editor) => void;
+  onEditKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>, editor: Editor) => void;
+  onEditImageUpload?: (file: File) => Promise<{ id: string; url: string; filename: string }>;
+  onSaveEdit?: () => void;
+  mentionMenu?: React.ReactNode;
+  helperText?: string;
+  saveLabel?: string;
+  canSave?: boolean;
+}) {
   const actor = actorForComment(props.comment);
+  const sessionAction = parseSessionActionComment(props.comment.body);
+  if (sessionAction) {
+    const eventActor = actorForSessionActionComment(actor, sessionAction);
+    const actionSession = props.sessions?.find((session) => sessionActionMatchesSession(sessionAction.sessionID, session.id));
+    const actionAgent = actionSession ? sessionAgent(actionSession, props.agents || []) : null;
+    return (
+      <TimelineShell
+        actor={eventActor}
+        title={
+          <SessionActionTitle
+            actorName={eventActor.name || sessionAction.actorName || "Someone"}
+            action={sessionAction}
+            agentName={actionAgent?.name || "agent work"}
+          />
+        }
+        time={props.comment.createdAt}
+      />
+    );
+  }
   const statusTransition = parseStatusTransitionComment(props.comment.body);
   if (statusTransition) {
     const eventActor = actorForStatusTransitionComment(actor, statusTransition);
@@ -1377,7 +1526,70 @@ function CommentTimelineItem(props: { comment: Comment }) {
       : `${actor.name || "mspace"} updated the issue`;
   return (
     <TimelineShell actor={actor} title={title} time={props.comment.createdAt}>
-      <RichText>{props.comment.body}</RichText>
+      {props.isEditing ? (
+        <div className="rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
+          {props.editError ? <Notice tone="danger">{props.editError.message}</Notice> : null}
+          <div className="relative" data-comment-composer="true">
+            <IssueDocumentEditor
+              variant="comment"
+              ariaLabel="Edit issue comment"
+              value={props.editBody || ""}
+              placeholder="Edit comment"
+              autoFocus
+              onChange={(value) => props.onEditBodyChange?.(value)}
+              onReady={props.onEditReady}
+              onEditorStateChange={props.onEditEditorStateChange}
+              onFocus={props.onEditFocus}
+              onBlur={props.onEditBlur}
+              onKeyDown={props.onEditKeyDown}
+              onImageUpload={props.onEditImageUpload}
+            />
+            {props.mentionMenu}
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[color:var(--line)] px-3 py-2">
+            <div className="min-w-0 flex-1 text-[12px] leading-5 text-[color:var(--muted)]">{props.helperText}</div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button type="button" variant="ghost" size="sm" onClick={props.onCancelEdit} disabled={props.isSaving}>
+                <X data-icon />
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={props.onSaveEdit}
+                disabled={props.isSaving || !props.editBody?.trim() || props.canSave === false}
+              >
+                <Save data-icon />
+                {props.isSaving ? "Saving..." : props.saveLabel || "Save edit"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="group/comment flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <RichText agents={props.agents}>{props.comment.body}</RichText>
+            {props.comment.editedAt ? (
+              <div className="mt-2 text-[12px] leading-5 text-[color:var(--muted)]" title={formatAbsoluteTime(props.comment.editedAt)}>
+                Edited {formatRelativeTime(props.comment.editedAt)}
+              </div>
+            ) : null}
+          </div>
+          {props.canEdit ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 opacity-70 hover:opacity-100"
+              onClick={props.onStartEdit}
+              aria-label="Edit comment"
+            >
+              <Pencil data-icon />
+            </Button>
+          ) : null}
+        </div>
+      )}
     </TimelineShell>
   );
 }
@@ -1388,6 +1600,13 @@ type StatusTransition = {
   from: string;
   to: string;
   actorName: string;
+};
+
+type SessionAction = {
+  kind: "stopped";
+  sessionID: string;
+  actorName: string;
+  beforeStart: boolean;
 };
 
 function parseStatusTransitionComment(body: string): StatusTransition | null {
@@ -1403,11 +1622,46 @@ function parseStatusTransitionComment(body: string): StatusTransition | null {
   };
 }
 
+function parseSessionActionComment(body: string): SessionAction | null {
+  const firstLine = body.trim().split(/\r?\n/, 1)[0] || "";
+  const stoppedByMatch = firstLine.match(/^Stopped session `([^`]+)` by (.+)\.$/);
+  if (stoppedByMatch) {
+    return {
+      kind: "stopped",
+      sessionID: stoppedByMatch[1],
+      actorName: stoppedByMatch[2].trim(),
+      beforeStart: false,
+    };
+  }
+  const legacyStoppedMatch = firstLine.match(/^Stopped session `([^`]+)`( before it started)?\.$/);
+  if (!legacyStoppedMatch) return null;
+  return {
+    kind: "stopped",
+    sessionID: legacyStoppedMatch[1],
+    actorName: "",
+    beforeStart: Boolean(legacyStoppedMatch[2]),
+  };
+}
+
+function sessionActionMatchesSession(actionSessionID: string, sessionID: string): boolean {
+  const actionID = actionSessionID.trim();
+  const fullID = sessionID.trim();
+  if (!actionID || !fullID) return false;
+  return actionID === fullID || (actionID.length >= 8 && fullID.startsWith(actionID));
+}
+
 function actorForStatusTransitionComment(actor: ActorIdentity, transition: StatusTransition): ActorIdentity {
   if (actor.kind !== "system") return actor;
   const actorName = transition.actorName.trim();
   if (!actorName || actorName === actor.name) return actor;
   if (actorName.toLowerCase() === "codex") return codexActor(actorName);
+  return { kind: "human", name: actorName };
+}
+
+function actorForSessionActionComment(actor: ActorIdentity, action: SessionAction): ActorIdentity {
+  if (actor.kind !== "system") return actor;
+  const actorName = action.actorName.trim();
+  if (!actorName || actorName === actor.name) return actor;
   return { kind: "human", name: actorName };
 }
 
@@ -1418,9 +1672,28 @@ function StatusTransitionTitle(props: { actorName: string; transition: StatusTra
       <span className="font-normal text-[color:var(--muted)]">
         changed {props.transition.target === "task" ? "task status" : "status"} from
       </span>
-      <StatusBadge value={displayIssueStatus(props.transition.from)} className="h-5 px-2 py-0 text-[11px]" />
+      <StatusBadge
+        value={displayIssueStatus(props.transition.from)}
+        valueLabel={issueStatusLabel(props.transition.from)}
+        className="h-5 px-2 py-0 text-[11px]"
+      />
       <span className="font-normal text-[color:var(--muted)]">to</span>
-      <StatusBadge value={displayIssueStatus(props.transition.to)} className="h-5 px-2 py-0 text-[11px]" />
+      <StatusBadge
+        value={displayIssueStatus(props.transition.to)}
+        valueLabel={issueStatusLabel(props.transition.to)}
+        className="h-5 px-2 py-0 text-[11px]"
+      />
+    </span>
+  );
+}
+
+function SessionActionTitle(props: { actorName: string; action: SessionAction; agentName: string }) {
+  return (
+    <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5" title={`Session ${props.action.sessionID}`}>
+      <span className="font-semibold text-[color:var(--text)]">{props.actorName}</span>
+      <span className="font-normal text-[color:var(--muted)]">stopped</span>
+      <span className="font-semibold text-[color:var(--text)]">{props.agentName}</span>
+      {props.action.beforeStart ? <span className="font-normal text-[color:var(--muted)]">before it started</span> : null}
     </span>
   );
 }
@@ -1431,6 +1704,7 @@ function SessionTimelineItem(props: {
   changes: WorkspaceChange[];
   agents: AgentProfile[];
   isSnapshotPending?: boolean;
+  hasStopAction?: boolean;
   isStopping?: boolean;
   stopError?: Error | null;
   onStop?: () => void;
@@ -1439,6 +1713,25 @@ function SessionTimelineItem(props: {
   const agent = sessionAgent(session, props.agents);
   const agentMessage = latestAgentMessage(logs);
   const isActive = ["queued", "running"].includes(session.status);
+  const isEmptyCancelledSession = session.status === "cancelled" && !agentMessage && props.changes.length === 0;
+  if (isEmptyCancelledSession && props.hasStopAction) {
+    return null;
+  }
+  if (isEmptyCancelledSession && !props.isSnapshotPending) {
+    return (
+      <TimelineShell
+        actor={codexActor(agent.name)}
+        title={
+          <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+            <span className="font-semibold text-[color:var(--text)]">{agent.name}</span>
+            <span className="font-normal text-[color:var(--muted)]">run was cancelled</span>
+            <StatusBadge value="cancelled" className="h-5 px-2 py-0 text-[11px]" />
+          </span>
+        }
+        time={session.updatedAt || session.createdAt}
+      />
+    );
+  }
 
   return (
     <TimelineShell
@@ -1454,7 +1747,7 @@ function SessionTimelineItem(props: {
           </div>
           {props.stopError ? <div className="mt-1 text-[12px] leading-5 text-[color:var(--danger)]">{props.stopError.message}</div> : null}
           {agentMessage ? (
-            <RichText basePath={session.workdir} className="mt-3 rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+            <RichText agents={props.agents} basePath={session.workdir} className="mt-3 rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
               {agentMessage}
             </RichText>
           ) : null}
@@ -1467,7 +1760,7 @@ function SessionTimelineItem(props: {
           </div>
 
           {agentMessage ? (
-            <RichText basePath={session.workdir} className="mt-2">
+            <RichText agents={props.agents} basePath={session.workdir} className="mt-2">
               {agentMessage}
             </RichText>
           ) : props.isSnapshotPending ? (
@@ -1595,7 +1888,7 @@ function IssueTaskList(props: {
                   </div>
                   {task.body ? <div className="line-clamp-1 text-[12px] leading-5 text-[color:var(--muted)]">{task.body}</div> : null}
                 </div>
-                <StatusBadge value={displayIssueStatus(task.status)} />
+                <StatusBadge value={displayIssueStatus(task.status)} valueLabel={issueStatusLabel(task.status)} />
                 <button
                   type="button"
                   aria-label="Delete task"
@@ -1816,7 +2109,12 @@ function IssueHeaderMeta(props: {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <HeaderMetaBadge label="Project" value={props.projectName} />
-      <StatusBadge value={displayIssueStatus(props.status)} label="Status" className="h-6 px-2.5 text-[12px]" />
+      <StatusBadge
+        value={displayIssueStatus(props.status)}
+        valueLabel={issueStatusLabel(props.status)}
+        label="Status"
+        className="h-6 px-2.5 text-[12px]"
+      />
       {props.typeLabel ? (
         <IssueLabelBadge label={props.typeLabel} prefix="Type" className="h-6 px-2.5 text-[12px]" />
       ) : (
@@ -1852,7 +2150,7 @@ function HeaderMetaBadge(props: { label?: string; value: string; muted?: boolean
 function IssueStatusOptionLabel(props: { status: string }) {
   return (
     <span className="flex min-w-0 items-center">
-      <StatusBadge value={props.status} className="pointer-events-none" />
+      <StatusBadge value={props.status} valueLabel={issueStatusLabel(props.status)} className="pointer-events-none" />
     </span>
   );
 }
@@ -2065,10 +2363,19 @@ export function IssueDetailPage() {
   const [composerBody, setComposerBody] = useState("");
   const [composerAttachmentIds, setComposerAttachmentIds] = useState<string[]>([]);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentBody, setEditingCommentBody] = useState("");
+  const [editingCommentAttachmentIds, setEditingCommentAttachmentIds] = useState<string[]>([]);
+  const [editingCommentEditor, setEditingCommentEditor] = useState<Editor | null>(null);
+  const [editingCommentFocused, setEditingCommentFocused] = useState(false);
   const [composerMentionMatch, setComposerMentionMatch] = useState<EditorMentionMatch | null>(null);
+  const [editingCommentMentionMatch, setEditingCommentMentionMatch] = useState<EditorMentionMatch | null>(null);
   const [mentionMenuDismissed, setMentionMenuDismissed] = useState(false);
+  const [editingMentionMenuDismissed, setEditingMentionMenuDismissed] = useState(false);
   const [mentionMenuPosition, setMentionMenuPosition] = useState<MentionMenuPosition>({ top: 38, left: 10, width: 384 });
+  const [editingMentionMenuPosition, setEditingMentionMenuPosition] = useState<MentionMenuPosition>({ top: 38, left: 10, width: 384 });
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const [activeEditingMentionIndex, setActiveEditingMentionIndex] = useState(0);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [sessionSnapshotsById, setSessionSnapshotsById] = useState<Record<string, SessionSnapshot>>({});
   const [issueTab, setIssueTab] = useState<IssueTab>("overview");
@@ -2125,6 +2432,60 @@ export function IssueDetailPage() {
       : enabledAgents.filter((agent) => mentionKey(agent.mention).startsWith(mentionQuery) || agent.name.toLowerCase().startsWith(mentionQuery));
   const selectedMentionIndex = agentSuggestions.length === 0 ? 0 : Math.min(activeMentionIndex, agentSuggestions.length - 1);
   const mentionMenuOpen = composerFocused && !mentionMenuDismissed && agentSuggestions.length > 0;
+  const editingMentionedAgent = extractAgentMention(editingCommentBody);
+  const editingMentionedAgentConfig = editingMentionedAgent ? findAgent(enabledAgents, editingMentionedAgent) : undefined;
+  const isSupportedEditingAgentMention = Boolean(editingMentionedAgentConfig);
+  const isUnsupportedEditingAgentMention = Boolean(editingMentionedAgent && !editingMentionedAgentConfig);
+  const editingMentionQuery = editingCommentMentionMatch?.query ?? null;
+  const editingAgentSuggestions =
+    editingMentionQuery === null
+      ? []
+      : enabledAgents.filter((agent) => mentionKey(agent.mention).startsWith(editingMentionQuery) || agent.name.toLowerCase().startsWith(editingMentionQuery));
+  const selectedEditingMentionIndex = editingAgentSuggestions.length === 0 ? 0 : Math.min(activeEditingMentionIndex, editingAgentSuggestions.length - 1);
+  const editingMentionMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingMentionMenuDismissed && editingAgentSuggestions.length > 0;
+  const canSaveEditingComment =
+    Boolean(editingCommentId) &&
+    Boolean(editingCommentBody.trim()) &&
+    !isUnsupportedEditingAgentMention &&
+    !(isSupportedEditingAgentMention && hasActiveSession);
+  const editHelperText = isSupportedEditingAgentMention
+    ? hasActiveSession
+      ? `${editingMentionedAgentConfig?.name} is already working.`
+      : `This edit will be saved and sent to ${editingMentionedAgentConfig?.name}.`
+    : isUnsupportedEditingAgentMention
+      ? `@${editingMentionedAgent} is not available yet.`
+      : "Edit the latest comment before it starts work.";
+  const editSaveLabel = isSupportedEditingAgentMention
+    ? hasActiveSession
+      ? "Agent is working"
+      : `Save & send to ${editingMentionedAgentConfig?.name}`
+    : "Save edit";
+  const syncEditingCommentEditorSnapshot = useCallback((editor: Editor) => {
+    const match = mentionMatchInEditor(editor);
+    setEditingCommentMentionMatch(match);
+    if (match) {
+      setEditingMentionMenuPosition(mentionMenuPositionForEditor(editor, match));
+    }
+  }, []);
+  const handleEditingCommentReady = useCallback(
+    (editor: Editor | null) => {
+      setEditingCommentEditor(editor);
+      if (editor) {
+        syncEditingCommentEditorSnapshot(editor);
+      }
+    },
+    [syncEditingCommentEditorSnapshot],
+  );
+  const handleEditingCommentFocus = useCallback(
+    (editor: Editor) => {
+      setEditingCommentFocused(true);
+      syncEditingCommentEditorSnapshot(editor);
+    },
+    [syncEditingCommentEditorSnapshot],
+  );
+  const handleEditingCommentBlur = useCallback(() => {
+    setEditingCommentFocused(false);
+  }, []);
 
   useEffect(() => {
     const sessions = detail?.sessions || [];
@@ -2184,6 +2545,11 @@ export function IssueDetailPage() {
     setMentionMenuDismissed(false);
   }, [mentionQuery]);
 
+  useEffect(() => {
+    setActiveEditingMentionIndex(0);
+    setEditingMentionMenuDismissed(false);
+  }, [editingMentionQuery]);
+
   const sendComposer = useMutation({
     mutationFn: async (body: string) => {
       const trimmedBody = body.trim();
@@ -2193,7 +2559,7 @@ export function IssueDetailPage() {
       if (agent && !agentConfig) {
         throw new Error(`@${agent} is not available.`);
       }
-      await api.addComment(issueId, {
+      const comment = await api.addComment(issueId, {
         body: trimmedBody,
         attachmentIds: attachmentIdsReferencedBy(trimmedBody, composerAttachmentIds),
       });
@@ -2203,6 +2569,7 @@ export function IssueDetailPage() {
           provider: agentConfig.provider,
           agentProfile: agentConfig.id,
           command: command || trimmedBody,
+          triggerCommentId: comment.commentId,
         });
       }
     },
@@ -2223,6 +2590,33 @@ export function IssueDetailPage() {
     !isUnsupportedAgentMention &&
     !(isSupportedAgentMention && hasActiveSession);
 
+  const updateComment = useMutation({
+    mutationFn: async (input: { commentId: string; body: string; attachmentIds: string[]; agentConfig?: AgentProfile }) => {
+      const trimmedBody = input.body.trim();
+      const result = await api.updateComment(issueId, input.commentId, {
+        body: trimmedBody,
+        attachmentIds: input.attachmentIds,
+      });
+      if (input.agentConfig) {
+        const command = stripAgentMention(trimmedBody, mentionKey(input.agentConfig.mention));
+        await api.assignAgent(issueId, {
+          provider: input.agentConfig.provider,
+          agentProfile: input.agentConfig.id,
+          command: command || trimmedBody,
+          triggerCommentId: input.commentId,
+        });
+      }
+      return result;
+    },
+    onSuccess: async () => {
+      resetEditingCommentState();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+      ]);
+    },
+  });
+
   async function uploadComposerImage(file: File) {
     const attachment = await api.uploadAttachment(file);
     setComposerAttachmentIds((current) => current.includes(attachment.id) ? current : [...current, attachment.id]);
@@ -2231,6 +2625,28 @@ export function IssueDetailPage() {
       url: attachment.url,
       filename: attachment.filename,
     };
+  }
+
+  async function uploadEditedCommentImage(file: File) {
+    const attachment = await api.uploadAttachment(file);
+    setEditingCommentAttachmentIds((current) => current.includes(attachment.id) ? current : [...current, attachment.id]);
+    return {
+      id: attachment.id,
+      url: attachment.url,
+      filename: attachment.filename,
+    };
+  }
+
+  function resetEditingCommentState() {
+    setEditingCommentId(null);
+    setEditingCommentBody("");
+    setEditingCommentAttachmentIds([]);
+    setEditingCommentEditor(null);
+    setEditingCommentFocused(false);
+    setEditingCommentMentionMatch(null);
+    setEditingMentionMenuDismissed(false);
+    setEditingMentionMenuPosition({ top: 38, left: 10, width: 384 });
+    setActiveEditingMentionIndex(0);
   }
 
   function syncComposerEditorState(editor: Editor) {
@@ -2257,6 +2673,28 @@ export function IssueDetailPage() {
     }
     setActiveMentionIndex(0);
     setMentionMenuDismissed(false);
+  }
+
+  function syncEditingCommentEditorState(editor: Editor) {
+    syncEditingCommentEditorSnapshot(editor);
+  }
+
+  function selectEditingAgentSuggestion(agent: AgentProfile) {
+    const mention = agentMentionText(agent);
+    const match = editingCommentEditor ? mentionMatchInEditor(editingCommentEditor) || editingCommentMentionMatch : null;
+    if (editingCommentEditor) {
+      if (match) {
+        editingCommentEditor.chain().focus().insertContentAt({ from: match.from, to: match.to }, `${mention} `).run();
+      } else {
+        const separator = editingCommentBody === "" || editingCommentBody.endsWith(" ") || editingCommentBody.endsWith("\n") ? "" : " ";
+        editingCommentEditor.chain().focus().insertContent(`${separator}${mention} `).run();
+      }
+      window.requestAnimationFrame(() => syncEditingCommentEditorState(editingCommentEditor));
+    } else {
+      setEditingCommentBody(insertAgentMention(editingCommentBody, agent));
+    }
+    setActiveEditingMentionIndex(0);
+    setEditingMentionMenuDismissed(false);
   }
 
   function handleComposerKeyDown(event: React.KeyboardEvent<HTMLDivElement>, editor: Editor) {
@@ -2292,6 +2730,47 @@ export function IssueDetailPage() {
     if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
     event.preventDefault();
     (editor.view.dom.closest("form") as HTMLFormElement | null)?.requestSubmit();
+  }
+
+  function handleEditingCommentKeyDown(event: React.KeyboardEvent<HTMLDivElement>, _editor: Editor) {
+    const isComposing = event.nativeEvent.isComposing || event.keyCode === 229;
+    if (isComposing) return;
+
+    if (editingMentionMenuOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setActiveEditingMentionIndex((index) => (index + 1) % editingAgentSuggestions.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveEditingMentionIndex((index) => (index - 1 + editingAgentSuggestions.length) % editingAgentSuggestions.length);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setEditingMentionMenuDismissed(true);
+        return;
+      }
+      if ((event.key === "Enter" && !event.shiftKey && !event.altKey) || (event.key === "Tab" && !event.shiftKey)) {
+        const agent = editingAgentSuggestions[selectedEditingMentionIndex];
+        if (agent) {
+          event.preventDefault();
+          selectEditingAgentSuggestion(agent);
+          return;
+        }
+      }
+    }
+
+    if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
+    event.preventDefault();
+    if (!editingCommentId || !canSaveEditingComment || updateComment.isPending) return;
+    updateComment.mutate({
+      commentId: editingCommentId,
+      body: editingCommentBody,
+      attachmentIds: attachmentIdsReferencedBy(editingCommentBody, editingCommentAttachmentIds),
+      agentConfig: editingMentionedAgentConfig,
+    });
   }
 
   const updateLabels = useMutation({
@@ -2404,6 +2883,14 @@ export function IssueDetailPage() {
     !hasActiveSession &&
     !startTestDeploy.isPending;
   const canCreateTask = Boolean(newTaskTitle.trim()) && !createTask.isPending;
+  const stoppedSessionActionRefs = useMemo(
+    () =>
+      listOrEmpty(detail?.comments)
+        .map((comment) => parseSessionActionComment(comment.body))
+        .filter((action): action is SessionAction => action?.kind === "stopped")
+        .map((action) => action.sessionID),
+    [detail?.comments],
+  );
 
   function openTestDeployModal() {
     if (!detail) return;
@@ -2437,6 +2924,18 @@ export function IssueDetailPage() {
   const projectCluster = clusters.find((cluster) => cluster.id === detail.project.defaultClusterId);
   const testCluster = clusters.find((cluster) => cluster.id === detail.testEnvironment?.clusterId);
   const issueLabels = listOrEmpty(detail.labels);
+  const rawComments = listOrEmpty(detail.comments);
+  const latestRawComment = rawComments[0];
+  const editableCommentId =
+    latestRawComment &&
+    latestRawComment.authorType === "human" &&
+    commentMatchesStoredIdentity(latestRawComment) &&
+    !parseSessionActionComment(latestRawComment.body) &&
+    !parseStatusTransitionComment(latestRawComment.body) &&
+    !hasActiveSession &&
+    !listOrEmpty(detail.sessions).some((session) => session.triggerCommentId === latestRawComment.id)
+      ? latestRawComment.id
+      : "";
   const selectedTypeLabel = issueLabels.find((label) => issueLabelMatchesDimension(label, "type"));
   const selectedPriorityLabel = issueLabels.find((label) => issueLabelMatchesDimension(label, "priority"));
 
@@ -2469,7 +2968,7 @@ export function IssueDetailPage() {
             <>
               <section className="border-b border-[color:var(--line)] pb-8">
                 {detail.issue.body ? (
-                  <RichText className="text-[15px] leading-8">{detail.issue.body}</RichText>
+                  <RichText agents={agents} className="text-[15px] leading-8">{detail.issue.body}</RichText>
                 ) : (
                   <div className="text-[15px] leading-8 text-[color:var(--muted)]">No issue body yet.</div>
                 )}
@@ -2517,7 +3016,69 @@ export function IssueDetailPage() {
                       );
                     }
                     if (item.kind === "comment") {
-                      return <CommentTimelineItem key={`comment-${item.comment.id}`} comment={item.comment} />;
+                      const isEditing = editingCommentId === item.comment.id;
+                      return (
+                        <CommentTimelineItem
+                          key={`comment-${item.comment.id}`}
+                          comment={item.comment}
+                          agents={agents}
+                          sessions={listOrEmpty(detail.sessions)}
+                          canEdit={item.comment.id === editableCommentId}
+                          isEditing={isEditing}
+                          editBody={isEditing ? editingCommentBody : item.comment.body}
+                          isSaving={updateComment.isPending && updateComment.variables?.commentId === item.comment.id}
+                          editError={isEditing ? updateComment.error : null}
+                          helperText={isEditing ? editHelperText : undefined}
+                          saveLabel={isEditing ? editSaveLabel : undefined}
+                          canSave={isEditing ? canSaveEditingComment : undefined}
+                          mentionMenu={
+                            isEditing && editingMentionMenuOpen ? (
+                              <AgentMentionMenu
+                                agents={editingAgentSuggestions}
+                                activeIndex={selectedEditingMentionIndex}
+                                position={editingMentionMenuPosition}
+                                onActiveIndexChange={setActiveEditingMentionIndex}
+                                onSelect={selectEditingAgentSuggestion}
+                              />
+                            ) : null
+                          }
+                          onStartEdit={() => {
+                            updateComment.reset();
+                            setEditingCommentId(item.comment.id);
+                            setEditingCommentBody(item.comment.body);
+                            setEditingCommentAttachmentIds([]);
+                            setEditingCommentEditor(null);
+                            setEditingCommentFocused(false);
+                            setEditingCommentMentionMatch(null);
+                            setEditingMentionMenuDismissed(false);
+                            setEditingMentionMenuPosition({ top: 38, left: 10, width: 384 });
+                            setActiveEditingMentionIndex(0);
+                          }}
+                          onCancelEdit={() => {
+                            updateComment.reset();
+                            resetEditingCommentState();
+                          }}
+                          onEditBodyChange={(value) => {
+                            setEditingCommentBody(value);
+                            setEditingMentionMenuDismissed(false);
+                          }}
+                          onEditReady={handleEditingCommentReady}
+                          onEditEditorStateChange={syncEditingCommentEditorState}
+                          onEditFocus={handleEditingCommentFocus}
+                          onEditBlur={handleEditingCommentBlur}
+                          onEditKeyDown={handleEditingCommentKeyDown}
+                          onEditImageUpload={uploadEditedCommentImage}
+                          onSaveEdit={() => {
+                            if (!canSaveEditingComment) return;
+                            updateComment.mutate({
+                              commentId: item.comment.id,
+                              body: editingCommentBody,
+                              attachmentIds: attachmentIdsReferencedBy(editingCommentBody, editingCommentAttachmentIds),
+                              agentConfig: editingMentionedAgentConfig,
+                            });
+                          }}
+                        />
+                      );
                     }
                     if (item.kind === "session") {
                       const sessionSnapshot = sessionSnapshotsById[item.session.id];
@@ -2529,6 +3090,7 @@ export function IssueDetailPage() {
                           changes={sessionSnapshot?.changes || []}
                           agents={agents}
                           isSnapshotPending={!sessionSnapshot}
+                          hasStopAction={stoppedSessionActionRefs.some((sessionRef) => sessionActionMatchesSession(sessionRef, item.session.id))}
                           isStopping={stopSession.isPending && stopSession.variables === item.session.id}
                           stopError={stopSession.error && stopSession.variables === item.session.id ? stopSession.error : null}
                           onStop={["queued", "running"].includes(item.session.status) ? () => stopSession.mutate(item.session.id) : undefined}
@@ -2639,7 +3201,7 @@ export function IssueDetailPage() {
                     disabled={updateIssueStatus.isPending}
                   >
                     <SelectTrigger className="h-7 min-h-7 rounded-[6px] bg-transparent px-1.5 py-1 text-[12px] leading-4 shadow-none hover:bg-[color:var(--hover)] focus:bg-[color:var(--hover)] focus:shadow-[inset_0_0_0_1px_var(--line)] data-[state=open]:bg-[color:var(--hover)] data-[state=open]:shadow-[inset_0_0_0_1px_var(--line)] [&_svg]:size-3.5">
-                      <StatusBadge value={displayIssueStatus(detail.issue.status)} />
+                      <StatusBadge value={displayIssueStatus(detail.issue.status)} valueLabel={issueStatusLabel(detail.issue.status)} />
                     </SelectTrigger>
                     <SelectContent>
                       {issueStatusOptions.map((status) => (
@@ -2740,11 +3302,11 @@ export function IssueDetailPage() {
             <SidebarSection title="Workflow">
               <details>
                 <summary className="cursor-pointer select-none text-[13px] font-medium text-[color:var(--muted-strong)]">
-                  Project commands
+                  Project runbook
                 </summary>
                 <div className="mt-2 grid gap-2">
-                  <MetaLine label="Deploy" value={detail.project.deployCommand || "not configured"} />
-                  <MetaLine label="Validate" value={detail.project.validationCommand || "not configured"} />
+                  <MetaLine label="Status" value={detail.project.runbookStatus === "learned" ? "learned" : detail.project.runbookStatus === "stale" ? "stale" : "not learned"} />
+                  <MetaLine label="Updated" value={detail.project.runbookUpdatedAt || "not available"} />
                 </div>
               </details>
             </SidebarSection>

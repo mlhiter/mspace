@@ -29,7 +29,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Issue comments that mention an enabled agent are saved first, then the desktop calls `POST /api/issues/{issueID}/assign-agent` with the mention-stripped comment as the current turn request and the selected Codex profile.
 - Local runner issues and comments keep denormalized display identity snapshots: issue creator name/avatar and comment author name/avatar. Existing anonymous local human rows are backfilled to `mlhiter`; ordinary system comments display as `mspace`. Status-transition comments are authored by the actor that performed the change, so human changes render as that signed-in user and scoped agent changes render as the agent.
 - Local runner issue writes are authenticated. Human write requests carry a mspace session token and are verified against control-plane `GET /api/auth/me`; agent write requests carry the session-scoped `MSPACE_AGENT_TOKEN`.
-- Issue workflow status values are `open`, `in_progress`, `needs_review`, `changes_requested`, `ready_for_test`, `test_in_progress`, `test_passed`, `test_failed`, `blocked`, `failed`, `cancelled`, and `closed`. Only humans can close top-level issues; agent sessions move issues into review/test/progress/failure states and may close child tasks under their assigned issue. Every transition is mirrored to the issue timeline and rendered as a compact actor-authored status event with readable badges.
+- Issue workflow status values are `open`, `in_progress`, `needs_review`, `changes_requested`, `ready_for_test`, `test_in_progress`, `blocked`, `cancelled`, and `closed`. `cancelled` is the issue-level "closed as not planned" outcome, not a stopped-session state. Only humans can close or cancel top-level issues; agent sessions move issues into review/test/progress states, use `blocked` when they cannot proceed, and may close child tasks under their assigned issue. Every transition is mirrored to the issue timeline and rendered as a compact actor-authored status event with readable badges.
 - The desktop shell exposes a global search / Command+K palette backed by the existing issues and projects queries. Active work remains a separate sidebar block because it is an issue subset, not an additional global search source.
 - Issue task lists are child issues stored on `issues.parent_issue_id`. Checklist lines submitted during issue creation are extracted into child rows, and Issue Detail renders those children inline with checkbox-style status controls.
 - Issue labels use a built-in taxonomy in `issue_label_definitions` and issue links in `issue_labels`. The current dimensions are `type` and `priority`; type is classified asynchronously by the internal `@triage` Codex profile, while priority remains human-selected from Issue Detail.
@@ -211,8 +211,8 @@ Current implemented fields:
 - git repo;
 - default branch;
 - default cluster id;
-- deploy command;
-- validation command.
+- runbook status, source, source session id, and updated time through `project_runbooks`;
+- legacy deploy and validation command columns remain in SQLite for compatibility, but they are no longer user-facing configuration fields;
 - legacy Kubernetes context, kubeconfig path, namespace, registry, preview domain, ingress class, and node host fields for compatibility.
 
 ### Cluster
@@ -301,7 +301,7 @@ There are three policies in the product model:
 - issue namespace: one test namespace per issue;
 - session namespace: one temporary namespace per agent runtime session.
 
-The current local MVP uses one issue test namespace when the user manually triggers deployment. Session namespace becomes relevant later for Kubernetes-hosted agent runtimes. Project namespace remains a compatibility fallback for older project validation commands.
+The current local MVP uses one issue test namespace when the user manually triggers deployment. Session namespace becomes relevant later for Kubernetes-hosted agent runtimes. Project namespace remains a compatibility fallback for older project-level validation fields; current project operation knowledge belongs in the mspace runbook.
 
 ### Runtime Provider
 
@@ -407,6 +407,7 @@ User creates an issue in /issues or opens an existing one
   -> runner creates a git worktree from the project's default branch
   -> runner checks out the session branch
   -> runner writes ~/.mspace/workdirs/_contexts/<session-id>.md
+  -> runner injects the current project runbook from project_runbooks when one exists
   -> runner starts codex app-server --listen stdio:// inside the session worktree
   -> runner sends initialize, thread/start, and turn/start
   -> runner stores codex_thread_id and codex_turn_id
@@ -417,7 +418,7 @@ User creates an issue in /issues or opens an existing one
   -> session detail reads git status, commits, diff, and base comparison from workdir
 ```
 
-Codex sessions receive the selected managed agent profile first, then the current turn request, followed by the issue, comments, prior sessions, project metadata, branch, worktree, Kubernetes context, namespace, deploy command, validation command, and the generated context markdown path in the turn prompt. The current turn request is treated like a Multica-style triggering comment so Codex does not confuse a follow-up question with the original issue body. Non-Codex providers can still use the older shell-command path as a compatibility adapter.
+Codex sessions receive the selected managed agent profile first, then the current turn request, followed by the issue, comments, prior sessions, project metadata, project runbook, branch, worktree, Kubernetes context, namespace, and the generated context markdown path in the turn prompt. The current turn request is treated like a Multica-style triggering comment so Codex does not confuse a follow-up question with the original issue body. Non-Codex providers can still use the older shell-command path as a compatibility adapter.
 
 The local Codex thread currently uses `approvalPolicy: never` and `sandbox: danger-full-access`. This matches the unattended local-session shape and avoids hidden approval hangs while mspace lacks an approval UI. The tradeoff is that sessions should only be launched for trusted local repositories and reviewed through the retained worktree and logs.
 
@@ -484,6 +485,27 @@ projects
   default_cluster_id
   created_at
   updated_at
+
+project_runbooks
+  project_id
+  content
+  status
+  source
+  source_session_id
+  content_hash
+  created_at
+  updated_at
+
+project_runbook_revisions
+  id
+  project_id
+  session_id
+  author_type
+  author_name
+  content
+  content_hash
+  status
+  created_at
 
 issues
   id
@@ -706,9 +728,7 @@ projects
   default_branch
   cluster_ref
   namespace_policy
-  bootstrap_command
-  deploy_command
-  validation_command
+  runbook_ref
 
 issues
   id
@@ -789,19 +809,17 @@ Shows document-style issue pages with discussion, session history, and evidence.
 
 ### Projects
 
-Shows configured repositories and their active issue and session count.
+Shows configured repositories, runbook status, active issue and session count, and a quiet icon-only settings action.
 
-### Project Detail
+### Project Settings
 
 Shows:
 
-- repository;
-- default branch;
-- namespace policy;
-- active and historical issues;
-- active and historical sessions;
-- environment links;
-- recent failures or blockers.
+- project name;
+- repository metadata;
+- default cluster;
+- mspace-owned runbook edited as Markdown;
+- delete action, disabled once issues or sessions exist.
 
 ### Issue Detail
 

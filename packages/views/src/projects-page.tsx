@@ -1,14 +1,17 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowLeft,
   Boxes,
+  BookOpenText,
   Clock3,
   FolderOpen,
   GitBranch,
   HardDrive,
   Link,
   Plus,
-  Settings2,
+  Save,
+  Settings,
   Trash2,
   X,
 } from "lucide-react";
@@ -27,9 +30,9 @@ import {
   SelectTrigger,
   SelectValue,
   StatusBadge,
-  Textarea,
   cn,
 } from "@mspace/ui";
+import { IssueDocumentEditor } from "./issue-document-editor";
 import { RelativeTime } from "./time";
 
 const emptyProjectForm: CreateProjectInput = {
@@ -38,8 +41,6 @@ const emptyProjectForm: CreateProjectInput = {
   repoPath: "",
   repoUrl: "",
   defaultBranch: "",
-  deployCommand: "",
-  validationCommand: "",
   kubeContext: "",
   kubeconfigPath: "",
   namespace: "",
@@ -61,8 +62,6 @@ function projectToForm(project: Project): CreateProjectInput {
     repoPath: project.repoPath,
     repoUrl: project.sourceType === "github" ? project.remoteUrl : "",
     defaultBranch: project.defaultBranch,
-    deployCommand: project.deployCommand,
-    validationCommand: project.validationCommand,
     kubeContext: project.kubeContext,
     kubeconfigPath: project.kubeconfigPath,
     namespace: project.namespace,
@@ -88,6 +87,7 @@ export function ProjectsPage() {
   const [createForm, setCreateForm] = useState<CreateProjectInput>(emptyProjectForm);
   const [settingsProject, setSettingsProject] = useState<Project | null>(null);
   const [settingsForm, setSettingsForm] = useState<CreateProjectInput>(emptyProjectForm);
+  const [runbookDraft, setRunbookDraft] = useState("");
   const [folderPickerError, setFolderPickerError] = useState("");
 
   const createProject = useMutation({
@@ -101,14 +101,32 @@ export function ProjectsPage() {
       ]);
     },
   });
-  const updateProject = useMutation({
-    mutationFn: api.updateProject,
-    onSuccess: async () => {
-      setSettingsProject(null);
-      setSettingsForm(emptyProjectForm);
+  const settingsRunbookQuery = useQuery({
+    queryKey: settingsProject ? queryKeys.projectRunbook(settingsProject.id) : queryKeys.projectRunbook("__none"),
+    queryFn: ({ queryKey }) => api.getProjectRunbook(queryKey[1]),
+    enabled: Boolean(settingsProject),
+  });
+  const saveProjectSettings = useMutation({
+    mutationFn: async () => {
+      if (!settingsProject) throw new Error("Project settings are not open.");
+      const updatedProject = await api.updateProject({
+        id: settingsProject.id,
+        ...settingsForm,
+      });
+      await api.updateProjectRunbook(settingsProject.id, {
+        content: runbookDraft,
+        status: runbookDraft.trim() ? "learned" : "empty",
+      });
+      return updatedProject;
+    },
+    onSuccess: async (updatedProject) => {
+      const projectID = settingsProject?.id;
+      setSettingsProject(updatedProject);
+      setSettingsForm(projectToForm(updatedProject));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
         queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
+        projectID ? queryClient.invalidateQueries({ queryKey: queryKeys.projectRunbook(projectID) }) : Promise.resolve(),
       ]);
     },
   });
@@ -127,6 +145,7 @@ export function ProjectsPage() {
   const projects = projectsQuery.data || [];
   const clusters = clustersQuery.data || [];
   const canCreate = createForm.repoPath.trim().length > 0 || createForm.repoUrl.trim().length > 0;
+  const settingsSaveDisabled = saveProjectSettings.isPending || settingsRunbookQuery.isLoading;
   const settingsProjectHasWork = Boolean(
     settingsProject && (settingsProject.issueCount > 0 || settingsProject.sessionCount > 0),
   );
@@ -160,7 +179,16 @@ export function ProjectsPage() {
   function openSettings(project: Project) {
     setSettingsProject(project);
     setSettingsForm(projectToForm(project));
-    updateProject.reset();
+    setRunbookDraft("");
+    saveProjectSettings.reset();
+    deleteProject.reset();
+  }
+
+  function closeSettings() {
+    setSettingsProject(null);
+    setSettingsForm(emptyProjectForm);
+    setRunbookDraft("");
+    saveProjectSettings.reset();
     deleteProject.reset();
   }
 
@@ -178,10 +206,123 @@ export function ProjectsPage() {
     event.preventDefault();
     if (!settingsProject) return;
 
-    updateProject.mutate({
-      id: settingsProject.id,
-      ...settingsForm,
-    });
+    saveProjectSettings.mutate();
+  }
+
+  useEffect(() => {
+    if (!settingsProject) return;
+    if (settingsRunbookQuery.data) {
+      setRunbookDraft(settingsRunbookQuery.data.content);
+    }
+  }, [settingsProject, settingsRunbookQuery.data]);
+
+  if (settingsProject) {
+    const repositoryLabel = settingsProject.sourceType === "github" ? settingsProject.remoteUrl : settingsProject.repoPath;
+    const runbookMeta = settingsRunbookQuery.data;
+    const defaultCluster = clusters.find((cluster) => cluster.id === settingsForm.defaultClusterId);
+
+    return (
+      <PageFrame
+        title={settingsForm.name || settingsProject.name}
+        subtitle="Project settings"
+        actions={
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={closeSettings} disabled={saveProjectSettings.isPending}>
+              <ArrowLeft data-icon />
+              Projects
+            </Button>
+            <Button type="button" onClick={() => saveProjectSettings.mutate()} disabled={settingsSaveDisabled}>
+              <Save data-icon />
+              {saveProjectSettings.isPending ? "Saving..." : settingsRunbookQuery.isLoading ? "Loading..." : "Save"}
+            </Button>
+          </div>
+        }
+      >
+        <form className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]" onSubmit={submitSettings}>
+          <section className="min-w-0 rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
+            <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-[color:var(--line)] pb-3">
+              <StatusBadge value={runbookStatusLabel(settingsProject)} />
+              {runbookMeta?.updatedAt ? (
+                <InlineMeta icon={Clock3}>
+                  <RelativeTime value={runbookMeta.updatedAt} />
+                </InlineMeta>
+              ) : null}
+              {runbookMeta?.sourceSessionId ? (
+                <InlineMeta icon={BookOpenText}>session {runbookMeta.sourceSessionId.slice(0, 8)}</InlineMeta>
+              ) : null}
+            </div>
+            <Field label="Runbook" hint={runbookHint(settingsProject, runbookMeta?.updatedAt || "")}>
+              <IssueDocumentEditor
+                variant="runbook"
+                ariaLabel="Project runbook"
+                value={runbookDraft}
+                editable={!settingsRunbookQuery.isLoading}
+                onChange={setRunbookDraft}
+                placeholder={runbookPlaceholder()}
+              />
+            </Field>
+          </section>
+
+          <aside className="grid gap-4">
+            {(saveProjectSettings.error || deleteProject.error) ? (
+              <Notice tone="danger">{saveProjectSettings.error?.message || deleteProject.error?.message}</Notice>
+            ) : null}
+
+            {settingsProjectHasWork ? (
+              <Notice>
+                This project has {settingsProject.issueCount} issue{settingsProject.issueCount === 1 ? "" : "s"} and{" "}
+                {settingsProject.sessionCount} session{settingsProject.sessionCount === 1 ? "" : "s"}.
+              </Notice>
+            ) : null}
+
+            <section className="rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="mb-3 text-[14px] font-semibold leading-5 text-[color:var(--text)]">Project</div>
+              <div className="grid gap-3">
+                <Field label="Name">
+                  <Input
+                    value={settingsForm.name}
+                    onChange={(event) => setSettingsForm({ ...settingsForm, name: event.target.value })}
+                  />
+                </Field>
+                <div className="grid gap-1.5 rounded-[8px] bg-[color:var(--block)] p-3 text-[13px] shadow-[inset_0_0_0_1px_var(--line)]">
+                  <div className="flex items-center gap-2 text-[color:var(--muted-strong)]">
+                    {settingsProject.sourceType === "github" ? <GitBranch data-icon /> : <HardDrive data-icon />}
+                    <span className="font-medium">{settingsProject.sourceType === "github" ? "GitHub repository" : "Local repository"}</span>
+                  </div>
+                  <div className="break-all font-mono text-[12px] leading-4 text-[color:var(--muted)]">
+                    {repositoryLabel}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="mb-3 text-[14px] font-semibold leading-5 text-[color:var(--text)]">Runtime</div>
+              <ClusterSelectField
+                clusters={clusters}
+                value={settingsForm.defaultClusterId}
+                onChange={(defaultClusterId) => setSettingsForm({ ...settingsForm, defaultClusterId })}
+                hint={defaultCluster ? `${defaultCluster.kubeContext || defaultCluster.name}` : "No default cluster selected."}
+              />
+            </section>
+
+            <section className="rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="mb-3 text-[14px] font-semibold leading-5 text-[color:var(--text)]">Danger zone</div>
+              <Button
+                type="button"
+                variant="danger"
+                disabled={settingsProjectHasWork || deleteProject.isPending || settingsSaveDisabled}
+                title={settingsProjectHasWork ? "Projects with issues or sessions cannot be deleted yet." : undefined}
+                onClick={() => deleteProject.mutate(settingsProject.id)}
+              >
+                <Trash2 data-icon />
+                {deleteProject.isPending ? "Deleting..." : "Delete project"}
+              </Button>
+            </section>
+          </aside>
+        </form>
+      </PageFrame>
+    );
   }
 
   return (
@@ -209,7 +350,7 @@ export function ProjectsPage() {
         />
       ) : (
         <div className="rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
-          <div className="grid grid-cols-[minmax(180px,1.1fr)_minmax(220px,1.5fr)_150px_116px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
+          <div className="grid grid-cols-[minmax(180px,1.1fr)_minmax(220px,1.5fr)_150px_56px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
             <span>Project</span>
             <span>Repository</span>
             <span>Work</span>
@@ -294,87 +435,6 @@ export function ProjectsPage() {
           </form>
         </Modal>
       ) : null}
-
-      {settingsProject ? (
-        <Modal
-          compact
-          title="Project settings"
-          description="Set the default test cluster and optional command hints for this project."
-          onClose={() => setSettingsProject(null)}
-        >
-          <form className="flex flex-col gap-3" onSubmit={submitSettings}>
-            {updateProject.error ? <Notice tone="danger">{updateProject.error.message}</Notice> : null}
-            {deleteProject.error ? <Notice tone="danger">{deleteProject.error.message}</Notice> : null}
-            {settingsProjectHasWork && settingsProject ? (
-              <Notice>
-                This project has {settingsProject.issueCount} issue{settingsProject.issueCount === 1 ? "" : "s"} and{" "}
-                {settingsProject.sessionCount} session{settingsProject.sessionCount === 1 ? "" : "s"}. Delete is disabled to keep
-                history and evidence attached.
-              </Notice>
-            ) : null}
-
-            <Field label="Project name">
-              <Input
-                value={settingsForm.name}
-                onChange={(event) => setSettingsForm({ ...settingsForm, name: event.target.value })}
-              />
-            </Field>
-            <div className="grid gap-1.5 rounded-[10px] bg-[color:var(--block)] p-2.5 text-[13px] shadow-[inset_0_0_0_1px_var(--line)]">
-              <div className="flex items-center gap-2 text-[color:var(--muted-strong)]">
-                {settingsProject.sourceType === "github" ? <GitBranch data-icon /> : <HardDrive data-icon />}
-                <span className="font-medium">{settingsProject.sourceType === "github" ? "GitHub repository" : "Local repository"}</span>
-              </div>
-              <div className="break-all font-mono text-[12px] leading-4 text-[color:var(--muted)]">
-                {settingsProject.sourceType === "github" ? settingsProject.remoteUrl : settingsProject.repoPath}
-              </div>
-            </div>
-
-            <ClusterSelectField
-              clusters={clusters}
-              value={settingsForm.defaultClusterId}
-              onChange={(defaultClusterId) => setSettingsForm({ ...settingsForm, defaultClusterId })}
-              hint="Used as the default for issue test deployments. Deployment runs can still choose a different cluster."
-            />
-            <Field label="Deploy command" hint="Optional. Agents can still inspect the repo and decide from issue context.">
-              <Textarea
-                className="h-[64px] !min-h-[64px] resize-none leading-5"
-                value={settingsForm.deployCommand}
-                onChange={(event) => setSettingsForm({ ...settingsForm, deployCommand: event.target.value })}
-                placeholder="Leave empty unless this project has a stable command"
-              />
-            </Field>
-            <Field label="Validation command">
-              <Textarea
-                className="h-[64px] !min-h-[64px] resize-none leading-5"
-                value={settingsForm.validationCommand}
-                onChange={(event) => setSettingsForm({ ...settingsForm, validationCommand: event.target.value })}
-                placeholder="Leave empty for agent-led validation"
-              />
-            </Field>
-
-            <div className="mt-1 flex flex-wrap justify-between gap-2">
-              <Button
-                type="button"
-                variant="danger"
-                disabled={settingsProjectHasWork || deleteProject.isPending || updateProject.isPending}
-                title={settingsProjectHasWork ? "Projects with issues or sessions cannot be deleted yet." : undefined}
-                onClick={() => settingsProject && deleteProject.mutate(settingsProject.id)}
-              >
-                <Trash2 data-icon />
-                {deleteProject.isPending ? "Deleting..." : "Delete project"}
-              </Button>
-              <div className="flex gap-2">
-                <Button type="button" variant="secondary" onClick={() => setSettingsProject(null)} disabled={updateProject.isPending}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={updateProject.isPending}>
-                  {updateProject.isPending ? "Saving..." : "Save settings"}
-                </Button>
-              </div>
-            </div>
-          </form>
-        </Modal>
-      ) : null}
     </PageFrame>
   );
 }
@@ -389,7 +449,7 @@ function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: 
   const updatedAt = project.latestIssueUpdatedAt || project.updatedAt;
 
   return (
-    <article className="grid grid-cols-[minmax(180px,1.1fr)_minmax(220px,1.5fr)_150px_116px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
+    <article className="grid grid-cols-[minmax(180px,1.1fr)_minmax(220px,1.5fr)_150px_56px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           <h3 className="truncate text-[15px] font-semibold leading-6">{project.name}</h3>
@@ -397,6 +457,7 @@ function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: 
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <InlineMeta icon={Clock3}><RelativeTime value={updatedAt} /></InlineMeta>
+          <InlineMeta icon={BookOpenText}>{runbookStatusLabel(project)}</InlineMeta>
         </div>
       </div>
 
@@ -417,13 +478,50 @@ function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: 
       </div>
 
       <div className="flex justify-end">
-        <Button variant="secondary" size="sm" onClick={props.onSettings}>
-          <Settings2 data-icon />
-          Settings
+        <Button
+          variant="ghost"
+          size="icon"
+          className="text-[color:var(--muted)] hover:text-[color:var(--text)]"
+          aria-label={`Project settings for ${project.name}`}
+          title="Project settings"
+          onClick={props.onSettings}
+        >
+          <Settings data-icon />
         </Button>
       </div>
     </article>
   );
+}
+
+function runbookStatusLabel(project: Project): string {
+  if (project.runbookStatus === "stale") return "Runbook stale";
+  if (project.runbookStatus === "learned") return "Runbook learned";
+  return "No runbook yet";
+}
+
+function runbookHint(project: Project, runbookUpdatedAt: string): string {
+  if (project.runbookStatus === "stale") {
+    return "Marked stale. Edit the Markdown or let the next agent session replace it from a session artifact.";
+  }
+  if (runbookUpdatedAt || project.runbookUpdatedAt) {
+    return `Last updated ${runbookUpdatedAt || project.runbookUpdatedAt}. Agents receive this as advisory project memory.`;
+  }
+  return "Agents can create this automatically. Human edits should stay as Markdown notes, not command-form fields.";
+}
+
+function runbookPlaceholder(): string {
+  return [
+    "# Runbook",
+    "",
+    "## Dependencies",
+    "## Local Start",
+    "## Tests",
+    "## Build",
+    "## Image Build",
+    "## Deploy",
+    "## Health Check",
+    "## Common Failures",
+  ].join("\n");
 }
 
 function ClusterSelectField(props: {

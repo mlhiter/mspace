@@ -243,6 +243,7 @@ Status changes are timeline events, not long comments. Render them in one line a
 The composer is the main interaction control:
 
 - Markdown comments stay on the issue through the same TipTap-backed document editor used for issue creation, including image upload, paste, drop, and thumbnail previews;
+- the latest human-authored comment can be edited inline only while it is still unconsumed by an agent session, including adding a supported agent mention and then saving that edit to queue the turn;
 - supported agent mentions save the comment and start a Codex app-server turn with the selected managed profile;
 - unsupported agent mentions should be visible but not queued;
 - when an agent is already working, a second agent turn should be disabled until the current turn finishes or is stopped.
@@ -291,7 +292,7 @@ Current implementation:
 - saves the comment before queuing the Codex app-server session, so the current turn is visible in the issue history;
 - sends the mention-stripped comment as the current turn request, ahead of the original issue context;
 - shows Type and Priority controls in the quiet metadata sidebar, with a `Classifying...` state while the triage agent is assigning type;
-- exposes a Stop action for queued or running sessions;
+- exposes a Stop action for queued or running sessions, cancelling only that session and rendering the stop as a compact, non-editable event while leaving the issue status unchanged;
 - streams session logs and status while a session is running, but keeps debug output collapsed by default;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
@@ -332,21 +333,24 @@ Projects hold repository and runtime policy, not daily conversation.
 Each row should show:
 
 - project name;
-- default branch;
+- default cluster or local fallback;
+- runbook status;
 - local repository path;
 - active issues;
 - active sessions;
-- default cluster, deploy command, validation command, and repository metadata.
+- repository metadata;
+- an icon-only settings action.
 
-### Project Detail
+### Project Settings
 
-Project Detail should show:
+Project Settings should show:
 
+- mspace-owned runbook, edited as Markdown in the document editor;
+- runbook status and learned source metadata;
+- project name;
 - repository settings;
-- runtime defaults;
-- linked issues;
-- linked sessions;
-- recent environment failures.
+- default cluster/runtime defaults;
+- guarded delete action.
 
 The Project view should help operators configure the system without turning it into the primary working surface.
 
@@ -355,9 +359,10 @@ Current implementation:
 - lists projects;
 - creates projects in a modal from either a local folder picker or a GitHub repository URL;
 - auto-detects GitHub metadata for local repositories when a remote exists;
-- edits project name, default cluster, deploy command, and validation command in a separate settings modal;
+- opens Project settings as a full page, not a modal;
+- edits project name, default cluster, and the mspace-owned Markdown runbook from that page;
 - only allows deletion before issues or sessions exist;
-- stores deploy and validation commands plus the default reusable cluster id.
+- stores runbook history in `project_runbooks` and `project_runbook_revisions`, plus the default reusable cluster id.
 
 ## Sessions
 
@@ -410,11 +415,8 @@ Issue states:
 - changes_requested
 - ready_for_test
 - test_in_progress
-- test_passed
-- test_failed
 - blocked
-- failed
-- cancelled
+- cancelled (closed as not planned)
 - closed
 
 Session states:

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -220,6 +219,51 @@ func TestEnsureProjectColumnsAddsMetadataFields(t *testing.T) {
 		if !projectColumnExists(t, db, column) {
 			t.Fatalf("expected projects.%s to exist", column)
 		}
+	}
+}
+
+func TestProjectRunbookArtifactUpdatesCurrentRunbook(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	insertAuthTestIssue(t, db, "issue-1", "", "Learn project", "open")
+
+	artifactDir := filepath.Join(t.TempDir(), ".mspace", "session")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	runbookContent := strings.Join([]string{
+		"# Runbook",
+		"",
+		"## Dependencies",
+		"pnpm install",
+		"",
+		"## Tests",
+		"pnpm typecheck",
+	}, "\n")
+	writeFile(t, filepath.Join(artifactDir, projectRunbookArtifactName), runbookContent)
+
+	application.importProjectRunbookArtifact(agentSession{
+		ID:           "session-1",
+		IssueID:      "issue-1",
+		AgentProfile: "codex",
+		ArtifactDir:  artifactDir,
+	}, project{ID: "project-1"})
+
+	runbook, err := application.loadProjectRunbook("project-1")
+	if err != nil {
+		t.Fatalf("load project runbook: %v", err)
+	}
+	if runbook.Content != runbookContent {
+		t.Fatalf("expected runbook content to be stored, got %q", runbook.Content)
+	}
+	if runbook.Status != "learned" || runbook.Source != "agent" || runbook.SourceSessionID != "session-1" {
+		t.Fatalf("unexpected runbook metadata: %+v", runbook)
+	}
+	var revisionCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM project_runbook_revisions WHERE project_id = 'project-1'`).Scan(&revisionCount); err != nil {
+		t.Fatalf("count revisions: %v", err)
+	}
+	if revisionCount != 1 {
+		t.Fatalf("expected one revision, got %d", revisionCount)
 	}
 }
 
@@ -531,6 +575,83 @@ func TestIssueAttachmentUploadServeAndCommentBinding(t *testing.T) {
 	}
 }
 
+func TestUpdateLatestHumanComment(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Editable issue", "open")
+
+	router := chi.NewRouter()
+	router.Post("/api/issues/{issueID}/comments", application.handleCreateComment)
+	router.Put("/api/issues/{issueID}/comments/{commentID}", application.handleUpdateComment)
+
+	create := httptest.NewRecorder()
+	router.ServeHTTP(create, authRequest(http.MethodPost, "/api/issues/issue-1/comments", `{"body":"@codex please do the wrong thing"}`, humanToken))
+	if create.Code != http.StatusOK {
+		t.Fatalf("expected comment create to return 200, got %d body=%s", create.Code, create.Body.String())
+	}
+	var createResponse struct {
+		CommentID string `json:"commentId"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode create comment response: %v", err)
+	}
+
+	update := httptest.NewRecorder()
+	router.ServeHTTP(update, authRequest(http.MethodPut, "/api/issues/issue-1/comments/"+createResponse.CommentID, `{"body":"@codex please do the corrected thing"}`, humanToken))
+	if update.Code != http.StatusOK {
+		t.Fatalf("expected comment update to return 200, got %d body=%s", update.Code, update.Body.String())
+	}
+
+	var body, authorUserID, editedAt string
+	if err := db.QueryRow(`SELECT body, author_user_id, edited_at FROM comments WHERE id = ?`, createResponse.CommentID).Scan(&body, &authorUserID, &editedAt); err != nil {
+		t.Fatalf("query updated comment: %v", err)
+	}
+	if body != "@codex please do the corrected thing" {
+		t.Fatalf("expected updated body, got %q", body)
+	}
+	if authorUserID != "user-1" {
+		t.Fatalf("expected comment author user id to be stored, got %q", authorUserID)
+	}
+	if editedAt == "" {
+		t.Fatalf("expected edited_at to be set")
+	}
+}
+
+func TestUpdateCommentRejectsSessionTrigger(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Consumed comment issue", "open")
+
+	router := chi.NewRouter()
+	router.Post("/api/issues/{issueID}/comments", application.handleCreateComment)
+	router.Put("/api/issues/{issueID}/comments/{commentID}", application.handleUpdateComment)
+
+	create := httptest.NewRecorder()
+	router.ServeHTTP(create, authRequest(http.MethodPost, "/api/issues/issue-1/comments", `{"body":"@codex original turn"}`, humanToken))
+	if create.Code != http.StatusOK {
+		t.Fatalf("expected comment create to return 200, got %d body=%s", create.Code, create.Body.String())
+	}
+	var createResponse struct {
+		CommentID string `json:"commentId"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode create comment response: %v", err)
+	}
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, trigger_comment_id, created_at, updated_at)
+		VALUES ('session-1', 'issue-1', 'codex', 'codex', 'local', 'original turn', 'completed', 'mspace/issue/session', '/tmp/workdir', ?, ?, ?)
+	`, createResponse.CommentID, now, now); err != nil {
+		t.Fatalf("insert consumed session: %v", err)
+	}
+
+	update := httptest.NewRecorder()
+	router.ServeHTTP(update, authRequest(http.MethodPut, "/api/issues/issue-1/comments/"+createResponse.CommentID, `{"body":"@codex edited turn"}`, humanToken))
+	if update.Code != http.StatusConflict {
+		t.Fatalf("expected consumed comment update to return 409, got %d body=%s", update.Code, update.Body.String())
+	}
+}
+
 func TestCreateIssueBindsUploadedAttachments(t *testing.T) {
 	application, db := newAuthTestApp(t)
 	humanToken := configureTestHumanAuth(t, application)
@@ -689,6 +810,43 @@ func TestAgentStatusChangeIsScopedAndRecorded(t *testing.T) {
 	}
 	assertCommentContains(t, db, "issue-1", "Task `Task issue` status changed from `open` to `closed` by Codex.")
 	assertCommentAuthorContains(t, db, "issue-1", "Task `Task issue` status changed from `open` to `closed` by Codex.", "agent", "Codex")
+}
+
+func TestCancelQueuedSessionKeepsIssueStatusForRetry(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Retryable issue", "in_progress")
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, created_at, updated_at)
+		VALUES ('session-1', 'issue-1', 'codex', 'codex', 'local', 'bad prompt', 'queued', 'mspace/issue/session', '/tmp/workdir', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert queued session: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Post("/api/sessions/{sessionID}/cancel", application.handleCancelSession)
+
+	cancel := httptest.NewRecorder()
+	router.ServeHTTP(cancel, authRequest(http.MethodPost, "/api/sessions/session-1/cancel", "", humanToken))
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("expected cancel to return 200, got %d body=%s", cancel.Code, cancel.Body.String())
+	}
+
+	var sessionStatus, issueStatus string
+	if err := db.QueryRow(`SELECT status FROM agent_sessions WHERE id = 'session-1'`).Scan(&sessionStatus); err != nil {
+		t.Fatalf("query session status: %v", err)
+	}
+	if sessionStatus != "cancelled" {
+		t.Fatalf("expected session to be cancelled, got %q", sessionStatus)
+	}
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'issue-1'`).Scan(&issueStatus); err != nil {
+		t.Fatalf("query issue status: %v", err)
+	}
+	if issueStatus != "in_progress" {
+		t.Fatalf("expected issue status to stay in_progress after session cancel, got %q", issueStatus)
+	}
+	assertCommentAuthorContains(t, db, "issue-1", "Stopped session `session-` by Test Human.", "system", "mspace")
 }
 
 func TestMigrateClosedIssueStatusesKeepsSessionCompletion(t *testing.T) {
@@ -1541,6 +1699,17 @@ func TestBuildCodexSessionPromptIncludesRuntimeContext(t *testing.T) {
 	`, now); err != nil {
 		t.Fatalf("insert prior session log: %v", err)
 	}
+	if _, err := application.saveProjectRunbook(project.ID, strings.Join([]string{
+		"# Runbook",
+		"",
+		"## Dependencies",
+		"pnpm install",
+		"",
+		"## Tests",
+		"pnpm test",
+	}, "\n"), "learned", "human", "mlhiter", "", true); err != nil {
+		t.Fatalf("save project runbook: %v", err)
+	}
 
 	prompt, err := application.buildCodexSessionPrompt(agentSession{
 		ID:           "session-1",
@@ -1576,14 +1745,24 @@ func TestBuildCodexSessionPromptIncludesRuntimeContext(t *testing.T) {
 		"Created login fix and verified the smoke test.",
 		"Do not introduce yourself",
 		"Do not say you saw the current comment, Issue history, or prior sessions",
+		"Project Runbook",
+		"pnpm install",
+		"Use this as advisory project memory",
 		"Project fallback namespace: demo-ns",
-		"Deploy command: pnpm deploy",
-		"Validation command: pnpm test",
 		"Session context file: /tmp/context.md",
 		"Artifact directory: /tmp/artifacts",
+		"project-runbook.md",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("expected prompt to contain %q, got:\n%s", expected, prompt)
+		}
+	}
+	for _, unexpected := range []string{
+		"Deploy command: pnpm deploy",
+		"Validation command: pnpm test",
+	} {
+		if strings.Contains(prompt, unexpected) {
+			t.Fatalf("expected prompt not to contain %q, got:\n%s", unexpected, prompt)
 		}
 	}
 	if strings.Index(prompt, "你好，codex。你之前做过这个任务了吗？") > strings.Index(prompt, "## Issue") {
@@ -1609,7 +1788,7 @@ func newAuthTestApp(t *testing.T) (*app, *sql.DB) {
 		broker:     newEventBroker(),
 		workdir:    t.TempDir(),
 		repoRoot:   t.TempDir(),
-		cancellers: map[string]context.CancelFunc{},
+		cancellers: map[string]sessionCanceller{},
 	}
 	if err := application.migrate(); err != nil {
 		t.Fatalf("migrate: %v", err)

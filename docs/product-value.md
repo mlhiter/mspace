@@ -145,7 +145,9 @@ Agent explores the project
   -> the agent updates it when the project changes
 ```
 
-The runbook should preserve agent flexibility while giving future sessions memory. It should store successful commands, deployment patterns, health checks, common failures, and fixes. Humans can inspect and edit it, but the primary path should be learning from real sessions.
+The runbook should preserve agent flexibility while giving future sessions memory. It should store successful commands, deployment patterns, health checks, common failures, and fixes. Humans can inspect and edit the Markdown runbook, but the primary path should be learning from real sessions.
+
+The runbook is mspace product data, not a user-filled command form and not a file mspace silently commits into the target repository. The live source of truth belongs in mspace storage with revision history; a repository doc export can exist later only as an explicit user action.
 
 This is an important product advantage. A single Codex conversation can learn a project for one task. mspace can let the team keep that learning across issues.
 

@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS issues (
   title TEXT NOT NULL,
   body TEXT NOT NULL,
   status TEXT NOT NULL,
+  close_reason TEXT NOT NULL DEFAULT '',
   triage_status TEXT NOT NULL DEFAULT 'none',
   assignee TEXT NOT NULL,
   assignee_type TEXT NOT NULL DEFAULT 'human',
@@ -73,10 +74,13 @@ CREATE TABLE IF NOT EXISTS comments (
   id TEXT PRIMARY KEY,
   issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
   author_type TEXT NOT NULL,
+  author_user_id TEXT NOT NULL DEFAULT '',
   author_name TEXT NOT NULL DEFAULT '',
   author_avatar_url TEXT NOT NULL DEFAULT '',
   body TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT '',
+  edited_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS issue_attachments (
@@ -157,6 +161,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   artifact_dir TEXT NOT NULL DEFAULT '',
   source_session_id TEXT NOT NULL DEFAULT '',
   source_commit_sha TEXT NOT NULL DEFAULT '',
+  trigger_comment_id TEXT NOT NULL DEFAULT '',
   agent_token TEXT NOT NULL DEFAULT '',
   cleanup_status TEXT NOT NULL DEFAULT 'retained',
   cleaned_at TEXT NOT NULL DEFAULT '',
@@ -171,6 +176,31 @@ CREATE TABLE IF NOT EXISTS session_logs (
   message TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS project_runbooks (
+  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  content TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'empty',
+  source TEXT NOT NULL DEFAULT '',
+  source_session_id TEXT NOT NULL DEFAULT '',
+  content_hash TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS project_runbook_revisions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL DEFAULT '',
+  author_type TEXT NOT NULL,
+  author_name TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  content_hash TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'learned',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_runbook_revisions_project_created ON project_runbook_revisions(project_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS deployment_evidence (
   id TEXT PRIMARY KEY,

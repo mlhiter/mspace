@@ -23,7 +23,7 @@ Review evidence is exposed from the same issue detail response as `reviewEvidenc
 
 ## Issue Writing APIs
 
-The desktop uses a rich TipTap editor for issue creation and human comments, but the runner API stores Markdown text. Image uploads are stored as attachment records and inserted into Markdown as stable `/api/attachments/<id>` image URLs, so future storage backends can change without rewriting issue bodies. Issue write APIs require a bearer token:
+The desktop uses a rich TipTap editor for issue creation, human comments, and project runbook editing, but the runner API stores Markdown text. Image uploads are stored as attachment records and inserted into Markdown as stable `/api/attachments/<id>` image URLs, so future storage backends can change without rewriting issue bodies. Issue write APIs require a bearer token:
 
 - human requests use the mspace session token from GitHub sign-in, verified by the control plane through `GET /api/auth/me`;
 - agent requests use the scoped `MSPACE_AGENT_TOKEN` injected into the session environment.
@@ -32,8 +32,11 @@ The desktop uses a rich TipTap editor for issue creation and human comments, but
 | --- | --- | --- |
 | `POST` | `/api/attachments` | Upload one image as multipart form field `file`; returns a stable attachment URL. |
 | `GET` | `/api/attachments/{attachmentID}` | Read an uploaded image attachment by id. |
+| `GET` | `/api/projects/{projectID}/runbook` | Read the current Markdown project runbook and metadata. |
+| `PUT` | `/api/projects/{projectID}/runbook` | Replace the current Markdown project runbook from the Projects UI. |
 | `POST` | `/api/issues` | Create an issue from `title`, `body` or `prompt`, optional `projectId`, optional labels, and optional child task drafts. |
 | `POST` | `/api/issues/{issueID}/comments` | Add a Markdown human comment. |
+| `PUT` | `/api/issues/{issueID}/comments/{commentID}` | Edit the latest human comment before it has triggered an agent session. |
 
 When `projectId` is omitted, the runner infers the best matching existing project from the title, body, and task text. If no project exists, issue creation returns `400 Bad Request`.
 
@@ -42,7 +45,9 @@ The desktop API client attaches `Authorization: Bearer <msp-token>` and injects 
 - `creatorName` and `creatorAvatarUrl` on `POST /api/issues`;
 - `authorName` and `authorAvatarUrl` on `POST /api/issues/{issueID}/comments`.
 
-These fields are for local UI rendering only. They are not authentication, authorization, or the durable account model; authoritative users and workspaces belong to the server control plane.
+These fields are for local UI rendering only. They are not authentication, authorization, or the durable account model; authoritative users and workspaces belong to the server control plane. The runner stores the verified control-plane user id on new human comments as `author_user_id` and uses it to authorize comment edits.
+
+Agent-triggering sessions store the comment id that created the turn. An eligible unconsumed comment edit may add a supported agent mention, then call `POST /api/issues/{issueID}/assign-agent` with that same comment id as `triggerCommentId`. Once a comment has been used as `trigger_comment_id`, it cannot be edited; stop that session and add a corrected comment instead.
 
 Image upload constraints:
 
@@ -50,6 +55,8 @@ Image upload constraints:
 - maximum image size is 10 MB;
 - upload responses include `id`, `url`, `filename`, `contentType`, `sizeBytes`, and `storageBackend`;
 - pass referenced attachment ids as `attachmentIds` on `POST /api/issues` or `POST /api/issues/{issueID}/comments` so the runner binds them to the issue/comment in the same transaction.
+
+Project runbooks are stored by mspace, not committed into the target repository by default. Codex sessions receive the current runbook as advisory context and may update it by writing Markdown to `${MSPACE_SESSION_ARTIFACT_DIR}/project-runbook.md`; the runner imports that artifact after a successful session and records a revision.
 
 Upload and bind an image to a comment:
 
@@ -120,7 +127,7 @@ curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/comments" \
 
 Task lists are stored as child issues. Markdown checklist lines submitted in `POST /api/issues` are converted into child issue tasks and removed from the parent body.
 
-Issue status values are explicit workflow states: `open`, `in_progress`, `needs_review`, `changes_requested`, `ready_for_test`, `test_in_progress`, `test_passed`, `test_failed`, `blocked`, `failed`, `cancelled`, and `closed`. Legacy inputs such as `completed`, `review`, and `testing` are normalized for compatibility. Only human requests may set a top-level issue to `closed`; scoped agent tokens may set review/test/progress/failure states and may close child tasks under their assigned issue.
+Issue status values are explicit workflow states: `open`, `in_progress`, `needs_review`, `changes_requested`, `ready_for_test`, `test_in_progress`, `blocked`, `cancelled`, and `closed`. `cancelled` means the issue was closed as not planned; it is not a session-stop result. Legacy inputs such as `completed`, `review`, and `testing` are normalized for compatibility. Existing local test-data outcome statuses such as `test_passed`, `test_failed`, and `failed` are reset to `open` during the close-reason schema upgrade. Only human requests may set a top-level issue to `closed` or `cancelled`; scoped agent tokens may set review/test/progress states, use `blocked` when they cannot proceed, and may close child tasks under their assigned issue. Cancelling a queued or running session cancels that session, records a compact non-editable timeline event, and leaves the issue status unchanged.
 
 Every accepted status transition is appended to the parent issue timeline as a comment authored by the actor that made the change. Human token transitions use the signed-in mspace/GitHub user returned by control-plane `GET /api/auth/me`; agent token transitions use the scoped session actor. The stored comment body includes the raw transition sentence plus an optional reason for compatibility, while the desktop renders status-transition comments as a compact one-line event with readable status badges.
 

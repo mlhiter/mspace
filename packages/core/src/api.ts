@@ -6,6 +6,7 @@ import type {
   AuthPollResult,
   AuthStartResult,
   Cluster,
+  Comment,
   ClusterInput,
   CreateCommentInput,
   CreateIssueInput,
@@ -25,12 +26,15 @@ import type {
   KubeconfigImportResult,
   MspaceUser,
   Project,
+  ProjectRunbook,
   SessionDetail,
   StartTestDeployInput,
   TeamInboxItem,
+  UpdateCommentInput,
   UpdateIssueLabelsInput,
   UpdateIssueInput,
   UpdateProjectInput,
+  UpdateProjectRunbookInput,
 } from "./types";
 
 export const AUTH_TOKEN_STORAGE_KEY = "mspace.authToken";
@@ -55,6 +59,7 @@ export const queryKeys = {
   issueLabelDefinitions: ["issue-label-definitions"] as const,
   issues: ["issues"] as const,
   projects: ["projects"] as const,
+  projectRunbook: (projectId: string) => ["project-runbook", projectId] as const,
   issue: (issueId: string) => ["issue", issueId] as const,
   session: (sessionId: string) => ["session", sessionId] as const,
 };
@@ -274,6 +279,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(input),
     }),
+  getProjectRunbook: (projectId: string) =>
+    request<ProjectRunbook>(`/api/projects/${projectId}/runbook`),
+  updateProjectRunbook: (projectId: string, input: UpdateProjectRunbookInput) =>
+    request<ProjectRunbook>(`/api/projects/${projectId}/runbook`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
   deleteProject: (projectId: string) =>
     request<{ ok: boolean }>(`/api/projects/${projectId}`, {
       method: "DELETE",
@@ -319,6 +331,11 @@ export const api = {
     request<{ ok: boolean; commentId: string }>(`/api/issues/${issueId}/comments`, {
       method: "POST",
       body: JSON.stringify(withCommentAuthor(input)),
+    }),
+  updateComment: (issueId: string, commentId: string, input: UpdateCommentInput) =>
+    request<{ ok: boolean; comment: Comment }>(`/api/issues/${issueId}/comments/${commentId}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
     }),
   assignAgent: (issueId: string, input: CreateSessionInput) =>
     request<{ sessionId: string }>(`/api/issues/${issueId}/assign-agent`, {

@@ -177,8 +177,8 @@ Screen priorities:
 - Use `Field`, `FieldLabel`, `FieldDescription`, `Input`, and `Textarea`.
 - Keep labels short and specific.
 - Validation states use `data-invalid` on the field and `aria-invalid` on the control.
-- Project configuration forms should expose local repo path, default branch, deploy command, validation command, and default cluster plainly. Cluster settings own kubeconfig, context, registry, and preview exposure defaults.
-- The issue creation and comment document editor is a local TipTap view component, not a shared shadcn primitive. Keep its `.mspace-doc-editor` styling quiet, document-like, and Markdown-compatible. Image attachment nodes should render as restrained thumbnails with a stable loading/error fallback; never expose browser-default broken-image text as the primary UI.
+- Project configuration should keep creation light, then expose project name, repository metadata, default cluster, and the project runbook from a full settings page. Do not add separate install, test, build, deploy, or validation command fields; the runbook is the user-facing operation knowledge surface. Cluster settings own kubeconfig, context, registry, and preview exposure defaults.
+- The issue creation, comment, and project runbook editors use a local TipTap view component, not a shared shadcn primitive. Keep `.mspace-doc-editor` styling quiet, document-like, and Markdown-compatible. Image attachment nodes should render as restrained thumbnails with a stable loading/error fallback; never expose browser-default broken-image text as the primary UI.
 
 ### Cards And Panels
 

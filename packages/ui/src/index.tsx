@@ -884,7 +884,7 @@ export function Field(props: PropsWithChildren<{ label: string; hint?: string }>
   );
 }
 
-export function StatusBadge(props: { value: string; className?: string; label?: string }) {
+export function StatusBadge(props: { value: string; className?: string; label?: string; valueLabel?: string }) {
   const normalizedValue = normalizeStatusValue(props.value);
   const tone =
     normalizedValue === "open" || normalizedValue === "completed" || normalizedValue === "test_passed"
@@ -906,7 +906,7 @@ export function StatusBadge(props: { value: string; className?: string; label?: 
     <Badge variant="outline" className={cn("h-auto max-w-full gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium", tone, props.className)}>
       {props.label ? <span className="shrink-0 text-[color:var(--faint)]">{props.label}</span> : null}
       {isRunning ? <LoaderCircle data-icon className="animate-spin" /> : <Circle data-icon />}
-      <span className="truncate">{statusLabel(normalizedValue)}</span>
+      <span className="truncate">{props.valueLabel || statusLabel(normalizedValue)}</span>
     </Badge>
   );
 }

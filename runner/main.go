@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -48,6 +49,9 @@ const systemActorName = "mspace"
 const agentTokenPrefix = "mspace-agent-"
 const maxIssueAttachmentBytes = 10 * 1024 * 1024
 const runnerProtocolVersion = 1
+const projectRunbookArtifactName = "project-runbook.md"
+const projectRunbookMaxBytes = 128 * 1024
+const projectRunbookPromptLimit = 24 * 1024
 
 var checklistItemPattern = regexp.MustCompile(`^\s*(?:[-*+]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
 
@@ -81,30 +85,45 @@ type cluster struct {
 }
 
 type project struct {
-	ID                   string `json:"id"`
-	Name                 string `json:"name"`
-	RepoPath             string `json:"repoPath"`
-	SourceType           string `json:"sourceType"`
-	RemoteURL            string `json:"remoteUrl"`
-	GitProvider          string `json:"gitProvider"`
-	GitOwner             string `json:"gitOwner"`
-	GitRepo              string `json:"gitRepo"`
-	DefaultBranch        string `json:"defaultBranch"`
-	DeployCommand        string `json:"deployCommand"`
-	ValidationCommand    string `json:"validationCommand"`
-	KubeContext          string `json:"kubeContext"`
-	KubeconfigPath       string `json:"kubeconfigPath"`
-	Namespace            string `json:"namespace"`
-	ImageRegistryPrefix  string `json:"imageRegistryPrefix"`
-	PreviewDomain        string `json:"previewDomain"`
-	IngressClass         string `json:"ingressClass"`
-	NodeHost             string `json:"nodeHost"`
-	DefaultClusterID     string `json:"defaultClusterId"`
-	IssueCount           int    `json:"issueCount"`
-	SessionCount         int    `json:"sessionCount"`
-	LatestIssueUpdatedAt string `json:"latestIssueUpdatedAt"`
-	CreatedAt            string `json:"createdAt"`
-	UpdatedAt            string `json:"updatedAt"`
+	ID                     string `json:"id"`
+	Name                   string `json:"name"`
+	RepoPath               string `json:"repoPath"`
+	SourceType             string `json:"sourceType"`
+	RemoteURL              string `json:"remoteUrl"`
+	GitProvider            string `json:"gitProvider"`
+	GitOwner               string `json:"gitOwner"`
+	GitRepo                string `json:"gitRepo"`
+	DefaultBranch          string `json:"defaultBranch"`
+	DeployCommand          string `json:"deployCommand"`
+	ValidationCommand      string `json:"validationCommand"`
+	KubeContext            string `json:"kubeContext"`
+	KubeconfigPath         string `json:"kubeconfigPath"`
+	Namespace              string `json:"namespace"`
+	ImageRegistryPrefix    string `json:"imageRegistryPrefix"`
+	PreviewDomain          string `json:"previewDomain"`
+	IngressClass           string `json:"ingressClass"`
+	NodeHost               string `json:"nodeHost"`
+	DefaultClusterID       string `json:"defaultClusterId"`
+	RunbookStatus          string `json:"runbookStatus"`
+	RunbookUpdatedAt       string `json:"runbookUpdatedAt"`
+	RunbookSource          string `json:"runbookSource"`
+	RunbookSourceSessionID string `json:"runbookSourceSessionId"`
+	IssueCount             int    `json:"issueCount"`
+	SessionCount           int    `json:"sessionCount"`
+	LatestIssueUpdatedAt   string `json:"latestIssueUpdatedAt"`
+	CreatedAt              string `json:"createdAt"`
+	UpdatedAt              string `json:"updatedAt"`
+}
+
+type projectRunbook struct {
+	ProjectID       string `json:"projectId"`
+	Content         string `json:"content"`
+	Status          string `json:"status"`
+	Source          string `json:"source"`
+	SourceSessionID string `json:"sourceSessionId"`
+	ContentHash     string `json:"contentHash"`
+	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt"`
 }
 
 type issue struct {
@@ -115,6 +134,7 @@ type issue struct {
 	Title          string `json:"title"`
 	Body           string `json:"body"`
 	Status         string `json:"status"`
+	CloseReason    string `json:"closeReason"`
 	TriageStatus   string `json:"triageStatus"`
 	Assignee       string `json:"assignee"`
 	AssigneeType   string `json:"assigneeType"`
@@ -156,6 +176,7 @@ type issueListItem struct {
 	Title                    string       `json:"title"`
 	Body                     string       `json:"body"`
 	Status                   string       `json:"status"`
+	CloseReason              string       `json:"closeReason"`
 	TriageStatus             string       `json:"triageStatus"`
 	Assignee                 string       `json:"assignee"`
 	AssigneeType             string       `json:"assigneeType"`
@@ -172,10 +193,13 @@ type comment struct {
 	ID           string `json:"id"`
 	IssueID      string `json:"issueId"`
 	AuthorType   string `json:"authorType"`
+	AuthorUserID string `json:"authorUserId"`
 	AuthorName   string `json:"authorName"`
 	AuthorAvatar string `json:"authorAvatarUrl"`
 	Body         string `json:"body"`
 	CreatedAt    string `json:"createdAt"`
+	UpdatedAt    string `json:"updatedAt"`
+	EditedAt     string `json:"editedAt"`
 }
 
 type issueAttachment struct {
@@ -230,26 +254,27 @@ type agentProfile struct {
 }
 
 type agentSession struct {
-	ID              string `json:"id"`
-	IssueID         string `json:"issueId"`
-	Provider        string `json:"provider"`
-	AgentProfile    string `json:"agentProfile"`
-	RuntimeMode     string `json:"runtimeMode"`
-	Command         string `json:"command"`
-	Status          string `json:"status"`
-	Branch          string `json:"branch"`
-	Workdir         string `json:"workdir"`
-	CodexThreadID   string `json:"codexThreadId"`
-	CodexTurnID     string `json:"codexTurnId"`
-	AgentStatus     string `json:"agentStatus"`
-	ArtifactDir     string `json:"artifactDir"`
-	SourceSessionID string `json:"sourceSessionId"`
-	SourceCommitSHA string `json:"sourceCommitSha"`
-	AgentToken      string `json:"-"`
-	CleanupStatus   string `json:"cleanupStatus"`
-	CleanedAt       string `json:"cleanedAt"`
-	CreatedAt       string `json:"createdAt"`
-	UpdatedAt       string `json:"updatedAt"`
+	ID               string `json:"id"`
+	IssueID          string `json:"issueId"`
+	Provider         string `json:"provider"`
+	AgentProfile     string `json:"agentProfile"`
+	RuntimeMode      string `json:"runtimeMode"`
+	Command          string `json:"command"`
+	Status           string `json:"status"`
+	Branch           string `json:"branch"`
+	Workdir          string `json:"workdir"`
+	CodexThreadID    string `json:"codexThreadId"`
+	CodexTurnID      string `json:"codexTurnId"`
+	AgentStatus      string `json:"agentStatus"`
+	ArtifactDir      string `json:"artifactDir"`
+	SourceSessionID  string `json:"sourceSessionId"`
+	SourceCommitSHA  string `json:"sourceCommitSha"`
+	TriggerCommentID string `json:"triggerCommentId"`
+	AgentToken       string `json:"-"`
+	CleanupStatus    string `json:"cleanupStatus"`
+	CleanedAt        string `json:"cleanedAt"`
+	CreatedAt        string `json:"createdAt"`
+	UpdatedAt        string `json:"updatedAt"`
 }
 
 type sessionLog struct {
@@ -475,10 +500,15 @@ type app struct {
 	repoRoot                string
 	broker                  *eventBroker
 	mu                      sync.Mutex
-	cancellers              map[string]context.CancelFunc
+	cancellers              map[string]sessionCanceller
 	controlPlaneBaseURL     string
 	controlPlaneToken       string
 	controlPlaneWorkspaceID string
+}
+
+type sessionCanceller struct {
+	cancel context.CancelFunc
+	actor  issueActor
 }
 
 type projectInput struct {
@@ -497,6 +527,11 @@ type projectInput struct {
 	IngressClass        string `json:"ingressClass"`
 	NodeHost            string `json:"nodeHost"`
 	DefaultClusterID    string `json:"defaultClusterId"`
+}
+
+type projectRunbookInput struct {
+	Content string `json:"content"`
+	Status  string `json:"status"`
 }
 
 type clusterInput struct {
@@ -538,12 +573,13 @@ type kubeconfigImportSkip struct {
 }
 
 type sessionRequest struct {
-	Provider        string `json:"provider"`
-	AgentProfile    string `json:"agentProfile"`
-	Command         string `json:"command"`
-	Branch          string `json:"branch"`
-	SourceSessionID string `json:"sourceSessionId"`
-	SourceCommitSHA string `json:"sourceCommitSha"`
+	Provider         string `json:"provider"`
+	AgentProfile     string `json:"agentProfile"`
+	Command          string `json:"command"`
+	Branch           string `json:"branch"`
+	SourceSessionID  string `json:"sourceSessionId"`
+	SourceCommitSHA  string `json:"sourceCommitSha"`
+	TriggerCommentID string `json:"triggerCommentId"`
 }
 
 type issueTaskInput struct {
@@ -615,7 +651,7 @@ func main() {
 		workdir:    filepath.Join(rootDir, "workdirs"),
 		repoRoot:   filepath.Join(rootDir, "repos"),
 		broker:     newEventBroker(),
-		cancellers: map[string]context.CancelFunc{},
+		cancellers: map[string]sessionCanceller{},
 	}
 
 	if err := os.MkdirAll(application.workdir, 0o755); err != nil {
@@ -657,6 +693,8 @@ func main() {
 	router.Get("/api/projects", application.handleListProjects)
 	router.Post("/api/projects", application.handleCreateProject)
 	router.Put("/api/projects/{projectID}", application.handleUpdateProject)
+	router.Get("/api/projects/{projectID}/runbook", application.handleGetProjectRunbook)
+	router.Put("/api/projects/{projectID}/runbook", application.handleUpdateProjectRunbook)
 	router.Delete("/api/projects/{projectID}", application.handleDeleteProject)
 	router.Get("/api/issue-label-definitions", application.handleListIssueLabelDefinitions)
 	router.Get("/api/issues", application.handleListIssues)
@@ -667,6 +705,7 @@ func main() {
 	router.Delete("/api/issues/{issueID}/tasks/{taskID}", application.handleDeleteIssueTask)
 	router.Put("/api/issues/{issueID}/labels", application.handleUpdateIssueLabels)
 	router.Post("/api/issues/{issueID}/comments", application.handleCreateComment)
+	router.Put("/api/issues/{issueID}/comments/{commentID}", application.handleUpdateComment)
 	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
 	router.Post("/api/issues/{issueID}/sessions", application.handleCreateSession)
 	router.Post("/api/issues/{issueID}/test-deploy", application.handleStartIssueTestDeploy)
@@ -705,6 +744,9 @@ func (a *app) migrate() error {
 		return err
 	}
 	if err := a.ensureProjectColumns(); err != nil {
+		return err
+	}
+	if err := a.ensureProjectRunbookTables(); err != nil {
 		return err
 	}
 	if err := a.ensureIssueColumns(); err != nil {
@@ -828,6 +870,62 @@ func (a *app) ensureProjectColumns() error {
 	return nil
 }
 
+func (a *app) ensureProjectRunbookTables() error {
+	if _, err := a.db.Exec(`
+		CREATE TABLE IF NOT EXISTS project_runbooks (
+			project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+			content TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'empty',
+			source TEXT NOT NULL DEFAULT '',
+			source_session_id TEXT NOT NULL DEFAULT '',
+			content_hash TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("create project_runbooks: %w", err)
+	}
+	if err := a.ensureTableColumns("project_runbooks", map[string]string{
+		"content":           "TEXT NOT NULL DEFAULT ''",
+		"status":            "TEXT NOT NULL DEFAULT 'empty'",
+		"source":            "TEXT NOT NULL DEFAULT ''",
+		"source_session_id": "TEXT NOT NULL DEFAULT ''",
+		"content_hash":      "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if _, err := a.db.Exec(`
+		CREATE TABLE IF NOT EXISTS project_runbook_revisions (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+			session_id TEXT NOT NULL DEFAULT '',
+			author_type TEXT NOT NULL,
+			author_name TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL DEFAULT '',
+			content_hash TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'learned',
+			created_at TEXT NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("create project_runbook_revisions: %w", err)
+	}
+	if err := a.ensureTableColumns("project_runbook_revisions", map[string]string{
+		"session_id":   "TEXT NOT NULL DEFAULT ''",
+		"author_name":  "TEXT NOT NULL DEFAULT ''",
+		"content":      "TEXT NOT NULL DEFAULT ''",
+		"content_hash": "TEXT NOT NULL DEFAULT ''",
+		"status":       "TEXT NOT NULL DEFAULT 'learned'",
+	}); err != nil {
+		return err
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_project_runbook_revisions_project_created ON project_runbook_revisions(project_id, created_at DESC)
+	`); err != nil {
+		return fmt.Errorf("create project_runbook_revisions project index: %w", err)
+	}
+	return nil
+}
+
 func (a *app) ensureIssueColumns() error {
 	rows, err := a.db.Query(`PRAGMA table_info(issues)`)
 	if err != nil {
@@ -855,17 +953,24 @@ func (a *app) ensureIssueColumns() error {
 	requiredColumns := map[string]string{
 		"parent_issue_id":    "TEXT REFERENCES issues(id) ON DELETE CASCADE",
 		"sort_order":         "INTEGER NOT NULL DEFAULT 0",
+		"close_reason":       "TEXT NOT NULL DEFAULT ''",
 		"assignee_type":      "TEXT NOT NULL DEFAULT 'human'",
 		"triage_status":      "TEXT NOT NULL DEFAULT 'none'",
 		"creator_name":       "TEXT NOT NULL DEFAULT ''",
 		"creator_avatar_url": "TEXT NOT NULL DEFAULT ''",
 	}
+	hadCloseReason := existing["close_reason"]
 	for name, definition := range requiredColumns {
 		if existing[name] {
 			continue
 		}
 		if _, err := a.db.Exec(fmt.Sprintf("ALTER TABLE issues ADD COLUMN %s %s", name, definition)); err != nil {
 			return fmt.Errorf("add issues.%s: %w", name, err)
+		}
+	}
+	if !hadCloseReason {
+		if err := a.resetLegacyOutcomeIssueStatuses(); err != nil {
+			return err
 		}
 	}
 	if _, err := a.db.Exec(`
@@ -893,6 +998,34 @@ func (a *app) ensureIssueColumns() error {
 		return fmt.Errorf("backfill human assignees: %w", err)
 	}
 	return nil
+}
+
+func (a *app) resetLegacyOutcomeIssueStatuses() error {
+	legacyStatuses := "'test_passed', 'test_failed', 'failed', 'cancelled'"
+	if _, err := a.db.Exec(fmt.Sprintf(`
+		UPDATE issues
+		SET status = 'open', close_reason = '', updated_at = ?
+		WHERE status IN (%s)
+	`, legacyStatuses), nowString()); err != nil {
+		return fmt.Errorf("reset legacy issue outcome statuses: %w", err)
+	}
+	if !a.tableExists("inbox_items") {
+		return nil
+	}
+	if _, err := a.db.Exec(fmt.Sprintf(`
+		UPDATE inbox_items
+		SET status = 'open', updated_at = ?
+		WHERE status IN (%s)
+	`, legacyStatuses), nowString()); err != nil {
+		return fmt.Errorf("reset legacy inbox outcome statuses: %w", err)
+	}
+	return nil
+}
+
+func (a *app) tableExists(table string) bool {
+	var name string
+	err := a.db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
+	return err == nil
 }
 
 func (a *app) migrateClosedIssueStatuses() error {
@@ -931,8 +1064,11 @@ func (a *app) migrateClosedIssueStatuses() error {
 
 func (a *app) ensureCommentColumns() error {
 	if err := a.ensureTableColumns("comments", map[string]string{
+		"author_user_id":    "TEXT NOT NULL DEFAULT ''",
 		"author_name":       "TEXT NOT NULL DEFAULT ''",
 		"author_avatar_url": "TEXT NOT NULL DEFAULT ''",
+		"updated_at":        "TEXT NOT NULL DEFAULT ''",
+		"edited_at":         "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}
@@ -949,6 +1085,13 @@ func (a *app) ensureCommentColumns() error {
 		WHERE author_type = 'system' AND author_name = ''
 	`, systemActorName); err != nil {
 		return fmt.Errorf("backfill system comment authors: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		UPDATE comments
+		SET updated_at = created_at
+		WHERE updated_at = ''
+	`); err != nil {
+		return fmt.Errorf("backfill comment updated_at: %w", err)
 	}
 	return nil
 }
@@ -1204,16 +1347,17 @@ func (a *app) ensureSessionColumns() error {
 	}
 
 	requiredColumns := map[string]string{
-		"codex_thread_id":   "TEXT NOT NULL DEFAULT ''",
-		"codex_turn_id":     "TEXT NOT NULL DEFAULT ''",
-		"agent_status":      "TEXT NOT NULL DEFAULT ''",
-		"artifact_dir":      "TEXT NOT NULL DEFAULT ''",
-		"agent_profile":     "TEXT NOT NULL DEFAULT ''",
-		"source_session_id": "TEXT NOT NULL DEFAULT ''",
-		"source_commit_sha": "TEXT NOT NULL DEFAULT ''",
-		"agent_token":       "TEXT NOT NULL DEFAULT ''",
-		"cleanup_status":    "TEXT NOT NULL DEFAULT 'retained'",
-		"cleaned_at":        "TEXT NOT NULL DEFAULT ''",
+		"codex_thread_id":    "TEXT NOT NULL DEFAULT ''",
+		"codex_turn_id":      "TEXT NOT NULL DEFAULT ''",
+		"agent_status":       "TEXT NOT NULL DEFAULT ''",
+		"artifact_dir":       "TEXT NOT NULL DEFAULT ''",
+		"agent_profile":      "TEXT NOT NULL DEFAULT ''",
+		"source_session_id":  "TEXT NOT NULL DEFAULT ''",
+		"source_commit_sha":  "TEXT NOT NULL DEFAULT ''",
+		"trigger_comment_id": "TEXT NOT NULL DEFAULT ''",
+		"agent_token":        "TEXT NOT NULL DEFAULT ''",
+		"cleanup_status":     "TEXT NOT NULL DEFAULT 'retained'",
+		"cleaned_at":         "TEXT NOT NULL DEFAULT ''",
 	}
 	for name, definition := range requiredColumns {
 		if existing[name] {
@@ -1444,6 +1588,7 @@ func (a *app) handleListIssues(w http.ResponseWriter, _ *http.Request) {
 			i.title,
 			i.body,
 			i.status,
+			i.close_reason,
 			i.triage_status,
 			i.assignee,
 			i.assignee_type,
@@ -1471,7 +1616,7 @@ func (a *app) handleListIssues(w http.ResponseWriter, _ *http.Request) {
 	for rows.Next() {
 		var item issueListItem
 		var unread int
-		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &unread, &item.SessionCount, &item.ChildIssueCount, &item.CompletedChildIssueCount, &item.UpdatedAt, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.CloseReason, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &unread, &item.SessionCount, &item.ChildIssueCount, &item.CompletedChildIssueCount, &item.UpdatedAt, &item.CreatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -1735,12 +1880,17 @@ func (a *app) handleListProjects(w http.ResponseWriter, _ *http.Request) {
 			p.ingress_class,
 			p.node_host,
 			p.default_cluster_id,
+			COALESCE(r.status, 'empty') AS runbook_status,
+			COALESCE(r.source, '') AS runbook_source,
+			COALESCE(r.source_session_id, '') AS runbook_source_session_id,
+			COALESCE(r.updated_at, '') AS runbook_updated_at,
 			COUNT(DISTINCT i.id) AS issue_count,
 			COUNT(DISTINCT s.id) AS session_count,
 			MAX(i.updated_at) AS latest_issue_updated_at,
 			p.created_at,
 			p.updated_at
 		FROM projects p
+		LEFT JOIN project_runbooks r ON r.project_id = p.id
 		LEFT JOIN issues i ON i.project_id = p.id AND COALESCE(i.parent_issue_id, '') = ''
 		LEFT JOIN agent_sessions s ON s.issue_id = i.id
 		GROUP BY p.id
@@ -1755,7 +1905,7 @@ func (a *app) handleListProjects(w http.ResponseWriter, _ *http.Request) {
 	for rows.Next() {
 		var p project
 		var latestIssueUpdatedAt sql.NullString
-		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.SourceType, &p.RemoteURL, &p.GitProvider, &p.GitOwner, &p.GitRepo, &p.DefaultBranch, &p.DeployCommand, &p.ValidationCommand, &p.KubeContext, &p.KubeconfigPath, &p.Namespace, &p.ImageRegistryPrefix, &p.PreviewDomain, &p.IngressClass, &p.NodeHost, &p.DefaultClusterID, &p.IssueCount, &p.SessionCount, &latestIssueUpdatedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.RepoPath, &p.SourceType, &p.RemoteURL, &p.GitProvider, &p.GitOwner, &p.GitRepo, &p.DefaultBranch, &p.DeployCommand, &p.ValidationCommand, &p.KubeContext, &p.KubeconfigPath, &p.Namespace, &p.ImageRegistryPrefix, &p.PreviewDomain, &p.IngressClass, &p.NodeHost, &p.DefaultClusterID, &p.RunbookStatus, &p.RunbookSource, &p.RunbookSourceSessionID, &p.RunbookUpdatedAt, &p.IssueCount, &p.SessionCount, &latestIssueUpdatedAt, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -1824,6 +1974,8 @@ func (a *app) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	normalizedProject.ID = existingProject.ID
+	normalizedProject.DeployCommand = existingProject.DeployCommand
+	normalizedProject.ValidationCommand = existingProject.ValidationCommand
 	normalizedProject.CreatedAt = existingProject.CreatedAt
 	normalizedProject.UpdatedAt = nowString()
 
@@ -1844,6 +1996,64 @@ func (a *app) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, updatedProject)
+}
+
+func (a *app) handleGetProjectRunbook(w http.ResponseWriter, r *http.Request) {
+	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("projectID is required"))
+		return
+	}
+	if _, err := a.loadProject(projectID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errProjectNotFound
+		}
+		writeError(w, status, err)
+		return
+	}
+	runbook, err := a.loadProjectRunbook(projectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, runbook)
+}
+
+func (a *app) handleUpdateProjectRunbook(w http.ResponseWriter, r *http.Request) {
+	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
+	if projectID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("projectID is required"))
+		return
+	}
+	if _, err := a.loadProject(projectID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errProjectNotFound
+		}
+		writeError(w, status, err)
+		return
+	}
+
+	var input projectRunbookInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	actor := issueActor{Kind: "human", Name: defaultHumanActorName}
+	if token := requestBearerToken(r); token != "" {
+		if authenticatedActor, err := a.authenticateActor(r); err == nil && authenticatedActor.Kind == "human" {
+			actor = authenticatedActor
+		}
+	}
+	runbook, err := a.saveProjectRunbook(projectID, input.Content, normalizeRunbookStatus(input.Status, input.Content), "human", actor.Name, "", true)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, runbook)
 }
 
 func (a *app) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
@@ -2113,9 +2323,9 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := tx.Exec(`
-		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, uuid.NewString(), issueID, "system", systemActorName, "", "Issue created and ready for a local-first agent session.", now); err != nil {
+		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, uuid.NewString(), issueID, "system", systemActorName, "", "Issue created and ready for a local-first agent session.", now, now); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -2238,7 +2448,7 @@ func formatIssueTaskDraftTitles(tasks []issueTaskDraft) string {
 func normalizeIssueStatus(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	switch value {
-	case "", "open", "in_progress", "needs_review", "changes_requested", "ready_for_test", "test_in_progress", "test_passed", "test_failed", "blocked", "closed", "cancelled", "failed":
+	case "", "open", "in_progress", "needs_review", "changes_requested", "ready_for_test", "test_in_progress", "blocked", "closed", "cancelled":
 		return value
 	case "review", "in_review":
 		return "needs_review"
@@ -2246,8 +2456,6 @@ func normalizeIssueStatus(value string) string {
 		return "ready_for_test"
 	case "testing":
 		return "test_in_progress"
-	case "passed":
-		return "test_passed"
 	case "todo":
 		return "open"
 	case "done", "completed":
@@ -2261,7 +2469,7 @@ func normalizeIssueStatus(value string) string {
 
 func validateIssueStatus(value string) error {
 	switch normalizeIssueStatus(value) {
-	case "open", "in_progress", "needs_review", "changes_requested", "ready_for_test", "test_in_progress", "test_passed", "test_failed", "blocked", "closed", "cancelled", "failed":
+	case "open", "in_progress", "needs_review", "changes_requested", "ready_for_test", "test_in_progress", "blocked", "closed", "cancelled":
 		return nil
 	default:
 		return fmt.Errorf("unsupported issue status %q", value)
@@ -2769,9 +2977,9 @@ func (a *app) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	if _, err := tx.Exec(`
-		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, commentID, issueID, "human", input.AuthorName, input.AuthorAvatar, input.Body, now); err != nil {
+		INSERT INTO comments (id, issue_id, author_type, author_user_id, author_name, author_avatar_url, body, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, commentID, issueID, "human", actor.UserID, input.AuthorName, input.AuthorAvatar, input.Body, now, now); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -2793,6 +3001,96 @@ func (a *app) handleCreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 	a.publishInboxEvent(issueID, "updated")
 	writeJSON(w, map[string]any{"ok": true, "commentId": commentID})
+}
+
+func (a *app) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	commentID := chi.URLParam(r, "commentID")
+	actor, ok := a.requireHumanActor(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		Body          string   `json:"body"`
+		AttachmentIDs []string `json:"attachmentIds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	input.Body = strings.TrimSpace(input.Body)
+	if input.Body == "" {
+		writeError(w, http.StatusBadRequest, errors.New("comment body cannot be empty"))
+		return
+	}
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+
+	existing, err := loadCommentTx(tx, issueID, commentID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("comment not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if existing.AuthorType != "human" || !commentBelongsToActor(existing, actor) {
+		writeAuthError(w, errForbidden)
+		return
+	}
+	if a.issueHasActiveSession(issueID) {
+		writeError(w, http.StatusConflict, errors.New("stop the active session before editing comments"))
+		return
+	}
+	if err := ensureLastIssueCommentTx(tx, issueID, commentID); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+	if err := ensureCommentNotSessionTriggerTx(tx, commentID); err != nil {
+		writeError(w, http.StatusConflict, err)
+		return
+	}
+
+	now := nowString()
+	if _, err := tx.Exec(`
+		UPDATE comments
+		SET body = ?, author_name = ?, author_avatar_url = ?, updated_at = ?, edited_at = ?
+		WHERE id = ? AND issue_id = ?
+	`, input.Body, commentActorName(actor), actor.AvatarURL, now, now, commentID, issueID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := bindIssueAttachmentsTx(tx, input.AttachmentIDs, issueID, commentID, now); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if _, err := tx.Exec(`UPDATE issues SET updated_at = ? WHERE id = ?`, now, issueID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := tx.Exec(`UPDATE inbox_items SET updated_at = ?, unread = 1 WHERE issue_id = ?`, now, issueID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	a.publishInboxEvent(issueID, "updated")
+	updated, err := a.loadComment(issueID, commentID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "comment": updated})
 }
 
 func (a *app) handleAssignIssueToAgent(w http.ResponseWriter, r *http.Request) {
@@ -3045,6 +3343,7 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 	input.Branch = strings.TrimSpace(input.Branch)
 	input.SourceSessionID = strings.TrimSpace(input.SourceSessionID)
 	input.SourceCommitSHA = strings.TrimSpace(input.SourceCommitSHA)
+	input.TriggerCommentID = strings.TrimSpace(input.TriggerCommentID)
 	if input.Provider != "" && !strings.EqualFold(input.Provider, "codex") && input.AgentProfile == "" {
 		if profile, err := a.resolveEnabledAgentProfile(input.Provider); err == nil {
 			input.AgentProfile = profile.ID
@@ -3083,28 +3382,29 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 	workdir := plannedSessionWorkdir(a.workdir, detail.Project.ID, sessionID)
 
 	session := agentSession{
-		ID:              sessionID,
-		IssueID:         issueID,
-		Provider:        input.Provider,
-		AgentProfile:    input.AgentProfile,
-		RuntimeMode:     "local",
-		Command:         command,
-		Status:          "queued",
-		Branch:          branch,
-		Workdir:         workdir,
-		AgentStatus:     "queued",
-		SourceSessionID: input.SourceSessionID,
-		SourceCommitSHA: input.SourceCommitSHA,
-		AgentToken:      agentToken,
-		CleanupStatus:   "retained",
-		CreatedAt:       nowString(),
-		UpdatedAt:       nowString(),
+		ID:               sessionID,
+		IssueID:          issueID,
+		Provider:         input.Provider,
+		AgentProfile:     input.AgentProfile,
+		RuntimeMode:      "local",
+		Command:          command,
+		Status:           "queued",
+		Branch:           branch,
+		Workdir:          workdir,
+		AgentStatus:      "queued",
+		SourceSessionID:  input.SourceSessionID,
+		SourceCommitSHA:  input.SourceCommitSHA,
+		TriggerCommentID: input.TriggerCommentID,
+		AgentToken:       agentToken,
+		CleanupStatus:    "retained",
+		CreatedAt:        nowString(),
+		UpdatedAt:        nowString(),
 	}
 
 	if _, err := a.db.Exec(`
-		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, agent_token, cleanup_status, cleaned_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, session.ID, session.IssueID, session.Provider, session.AgentProfile, session.RuntimeMode, session.Command, session.Status, session.Branch, session.Workdir, session.CodexThreadID, session.CodexTurnID, session.AgentStatus, session.ArtifactDir, session.SourceSessionID, session.SourceCommitSHA, session.AgentToken, session.CleanupStatus, session.CleanedAt, session.CreatedAt, session.UpdatedAt); err != nil {
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, session.ID, session.IssueID, session.Provider, session.AgentProfile, session.RuntimeMode, session.Command, session.Status, session.Branch, session.Workdir, session.CodexThreadID, session.CodexTurnID, session.AgentStatus, session.ArtifactDir, session.SourceSessionID, session.SourceCommitSHA, session.TriggerCommentID, session.AgentToken, session.CleanupStatus, session.CleanedAt, session.CreatedAt, session.UpdatedAt); err != nil {
 		return agentSession{}, err
 	}
 
@@ -3465,10 +3765,18 @@ func (a *app) handleGetSession(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 	sessionID := chi.URLParam(r, "sessionID")
+	actor, ok := a.requireHumanActor(w, r)
+	if !ok {
+		return
+	}
 	a.mu.Lock()
-	cancel := a.cancellers[sessionID]
+	canceller := a.cancellers[sessionID]
+	if canceller.cancel != nil {
+		canceller.actor = actor
+		a.cancellers[sessionID] = canceller
+	}
 	a.mu.Unlock()
-	if cancel == nil {
+	if canceller.cancel == nil {
 		detail, err := a.loadSessionDetail(sessionID)
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -3482,15 +3790,14 @@ func (a *app) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 		if detail.Session.Status == "queued" {
 			a.updateSessionStatus(sessionID, "cancelled")
 			a.updateSessionAgentStatus(sessionID, "cancelled")
-			a.updateIssueStatus(detail.Session.IssueID, "cancelled")
-			a.addSystemComment(detail.Session.IssueID, fmt.Sprintf("Session `%s` was cancelled before it started.", shortID(sessionID)))
+			a.addSystemComment(detail.Session.IssueID, fmt.Sprintf("Stopped session `%s` by %s.", shortID(sessionID), commentActorName(actor)))
 			writeJSON(w, map[string]bool{"ok": true})
 			return
 		}
 		writeError(w, http.StatusConflict, errors.New("session is not running"))
 		return
 	}
-	cancel()
+	canceller.cancel()
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -3549,7 +3856,7 @@ func (a *app) streamEvents(w http.ResponseWriter, r *http.Request, channelID str
 func (a *app) runSession(session agentSession, project project) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.mu.Lock()
-	a.cancellers[session.ID] = cancel
+	a.cancellers[session.ID] = sessionCanceller{cancel: cancel}
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
@@ -3601,17 +3908,19 @@ func (a *app) runSession(session agentSession, project project) {
 	}
 
 	if ctx.Err() == context.Canceled || errors.Is(err, context.Canceled) {
+		cancelActor := a.sessionCancelActor(session.ID)
 		a.updateSessionStatus(session.ID, "cancelled")
 		a.updateSessionAgentStatus(session.ID, "cancelled")
-		a.updateIssueStatus(session.IssueID, "cancelled")
 		a.appendSessionLog(session.ID, "system", "Session cancelled.")
-		a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` was cancelled.", shortID(session.ID)))
+		a.addSystemComment(session.IssueID, fmt.Sprintf("Stopped session `%s` by %s.", shortID(session.ID), commentActorName(cancelActor)))
 		return
 	}
 	if err != nil {
 		a.failSession(session, &project, err)
 		return
 	}
+
+	a.importProjectRunbookArtifact(session, project)
 
 	changeNode, err := a.recordSourceChangeNode(session, project)
 	if err != nil {
@@ -3810,11 +4119,7 @@ func (a *app) captureStream(wg *sync.WaitGroup, sessionID, stream string, reader
 func (a *app) failSession(session agentSession, project *project, err error) {
 	a.updateSessionStatus(session.ID, "failed")
 	a.updateSessionAgentStatus(session.ID, "failed")
-	if a.isIssueTestDeploySession(session) {
-		a.updateIssueStatus(session.IssueID, "test_failed")
-	} else {
-		a.updateIssueStatus(session.IssueID, "failed")
-	}
+	a.updateIssueStatus(session.IssueID, "blocked")
 	a.appendSessionLog(session.ID, "system", err.Error())
 	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` failed.\n\n%s", shortID(session.ID), err.Error()))
 	if project != nil && a.evidenceTargetProject(session, *project).Namespace != "" {
@@ -3871,6 +4176,10 @@ func (a *app) writeSessionContext(session agentSession, project project) (string
 	builder.WriteString(fmt.Sprintf("- Node host: %s\n", valueOrUnset(project.NodeHost)))
 	builder.WriteString(fmt.Sprintf("- Default cluster ID: %s\n", valueOrUnset(project.DefaultClusterID)))
 	builder.WriteString("\n")
+
+	if runbook, err := a.loadProjectRunbook(project.ID); err == nil {
+		writeProjectRunbookPromptSection(&builder, runbook)
+	}
 
 	if detail.TestEnvironment != nil {
 		builder.WriteString("## Issue Test Environment\n\n")
@@ -4007,10 +4316,10 @@ func (a *app) updateIssueTestEnvironmentForSession(session agentSession, success
 			}
 			environment.NamespaceStatus = "active"
 			environment.CleanupStatus = "retained"
-			a.updateIssueStatus(session.IssueID, "test_passed")
+			a.updateIssueStatus(session.IssueID, "ready_for_test")
 		} else {
 			environment.NamespaceStatus = "deploy_failed"
-			a.updateIssueStatus(session.IssueID, "test_failed")
+			a.updateIssueStatus(session.IssueID, "blocked")
 		}
 	case environment.LastCleanupSessionID == session.ID:
 		changed = true
@@ -4367,11 +4676,11 @@ func (a *app) latestDeploymentEvidenceForSession(sessionID string) (*deploymentE
 func (a *app) loadIssue(issueID string) (issue, error) {
 	var item issue
 	row := a.db.QueryRow(`
-		SELECT id, project_id, COALESCE(parent_issue_id, ''), sort_order, title, body, status, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at
+		SELECT id, project_id, COALESCE(parent_issue_id, ''), sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at
 		FROM issues
 		WHERE id = ?
 	`, issueID)
-	err := row.Scan(&item.ID, &item.ProjectID, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &item.CreatorName, &item.CreatorAvatar, &item.EnvironmentURL, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.ProjectID, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.CloseReason, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &item.CreatorName, &item.CreatorAvatar, &item.EnvironmentURL, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
 
@@ -4387,6 +4696,7 @@ func (a *app) loadIssueListItem(issueID string) (issueListItem, error) {
 			i.title,
 			i.body,
 			i.status,
+			i.close_reason,
 			i.triage_status,
 			i.assignee,
 			i.assignee_type,
@@ -4405,7 +4715,7 @@ func (a *app) loadIssueListItem(issueID string) (issueListItem, error) {
 		GROUP BY i.id
 	`, issueID)
 	var unread int
-	if err := row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &unread, &item.SessionCount, &item.ChildIssueCount, &item.CompletedChildIssueCount, &item.UpdatedAt, &item.CreatedAt); err != nil {
+	if err := row.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.CloseReason, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &unread, &item.SessionCount, &item.ChildIssueCount, &item.CompletedChildIssueCount, &item.UpdatedAt, &item.CreatedAt); err != nil {
 		return item, err
 	}
 	item.Unread = unread == 1
@@ -4428,6 +4738,7 @@ func (a *app) listChildIssues(parentIssueID string) ([]issueListItem, error) {
 			i.title,
 			i.body,
 			i.status,
+			i.close_reason,
 			i.triage_status,
 			i.assignee,
 			i.assignee_type,
@@ -4455,7 +4766,7 @@ func (a *app) listChildIssues(parentIssueID string) ([]issueListItem, error) {
 	for rows.Next() {
 		var item issueListItem
 		var unread int
-		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &unread, &item.SessionCount, &item.ChildIssueCount, &item.CompletedChildIssueCount, &item.UpdatedAt, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ProjectID, &item.ProjectName, &item.ParentIssueID, &item.SortOrder, &item.Title, &item.Body, &item.Status, &item.CloseReason, &item.TriageStatus, &item.Assignee, &item.AssigneeType, &unread, &item.SessionCount, &item.ChildIssueCount, &item.CompletedChildIssueCount, &item.UpdatedAt, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		item.Unread = unread == 1
@@ -4472,15 +4783,18 @@ func (a *app) listChildIssues(parentIssueID string) ([]issueListItem, error) {
 func (a *app) loadIssueDetail(issueID string) (issueDetail, error) {
 	var detail issueDetail
 	row := a.db.QueryRow(`
-		SELECT i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.triage_status, i.assignee, i.assignee_type, i.creator_name, i.creator_avatar_url, i.environment_url, i.created_at, i.updated_at,
-		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id, p.created_at, p.updated_at
+		SELECT i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.close_reason, i.triage_status, i.assignee, i.assignee_type, i.creator_name, i.creator_avatar_url, i.environment_url, i.created_at, i.updated_at,
+		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id,
+		       COALESCE(r.status, 'empty'), COALESCE(r.source, ''), COALESCE(r.source_session_id, ''), COALESCE(r.updated_at, ''),
+		       p.created_at, p.updated_at
 		FROM issues i
 		JOIN projects p ON p.id = i.project_id
+		LEFT JOIN project_runbooks r ON r.project_id = p.id
 		WHERE i.id = ?
 	`, issueID)
 	if err := row.Scan(
-		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.CreatorName, &detail.Issue.CreatorAvatar, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
-		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
+		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.CloseReason, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.CreatorName, &detail.Issue.CreatorAvatar, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
+		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.RunbookStatus, &detail.Project.RunbookSource, &detail.Project.RunbookSourceSessionID, &detail.Project.RunbookUpdatedAt, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
 	); err != nil {
 		return detail, err
 	}
@@ -4559,12 +4873,17 @@ func (a *app) loadProject(projectID string) (project, error) {
 			p.ingress_class,
 			p.node_host,
 			p.default_cluster_id,
+			COALESCE(r.status, 'empty') AS runbook_status,
+			COALESCE(r.source, '') AS runbook_source,
+			COALESCE(r.source_session_id, '') AS runbook_source_session_id,
+			COALESCE(r.updated_at, '') AS runbook_updated_at,
 			COUNT(DISTINCT i.id) AS issue_count,
 			COUNT(DISTINCT s.id) AS session_count,
 			MAX(i.updated_at) AS latest_issue_updated_at,
 			p.created_at,
 			p.updated_at
 		FROM projects p
+		LEFT JOIN project_runbooks r ON r.project_id = p.id
 		LEFT JOIN issues i ON i.project_id = p.id AND COALESCE(i.parent_issue_id, '') = ''
 		LEFT JOIN agent_sessions s ON s.issue_id = i.id
 		WHERE p.id = ?
@@ -4591,6 +4910,10 @@ func (a *app) loadProject(projectID string) (project, error) {
 		&project.IngressClass,
 		&project.NodeHost,
 		&project.DefaultClusterID,
+		&project.RunbookStatus,
+		&project.RunbookSource,
+		&project.RunbookSourceSessionID,
+		&project.RunbookUpdatedAt,
 		&project.IssueCount,
 		&project.SessionCount,
 		&latestIssueUpdatedAt,
@@ -4601,6 +4924,161 @@ func (a *app) loadProject(projectID string) (project, error) {
 		project.LatestIssueUpdatedAt = latestIssueUpdatedAt.String
 	}
 	return project, err
+}
+
+func (a *app) loadProjectRunbook(projectID string) (projectRunbook, error) {
+	var runbook projectRunbook
+	err := a.db.QueryRow(`
+		SELECT project_id, content, status, source, source_session_id, content_hash, created_at, updated_at
+		FROM project_runbooks
+		WHERE project_id = ?
+	`, projectID).Scan(&runbook.ProjectID, &runbook.Content, &runbook.Status, &runbook.Source, &runbook.SourceSessionID, &runbook.ContentHash, &runbook.CreatedAt, &runbook.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return projectRunbook{ProjectID: projectID, Status: "empty"}, nil
+	}
+	if runbook.Status == "" {
+		runbook.Status = normalizeRunbookStatus("", runbook.Content)
+	}
+	return runbook, err
+}
+
+func (a *app) saveProjectRunbook(projectID, content, status, source, authorName, sourceSessionID string, createRevision bool) (projectRunbook, error) {
+	content = normalizeProjectRunbookContent(content)
+	if len([]byte(content)) > projectRunbookMaxBytes {
+		return projectRunbook{}, fmt.Errorf("project runbook is too large; limit is %d bytes", projectRunbookMaxBytes)
+	}
+	status = normalizeRunbookStatus(status, content)
+	source = strings.TrimSpace(source)
+	sourceSessionID = strings.TrimSpace(sourceSessionID)
+	contentHash := projectRunbookContentHash(content)
+	now := nowString()
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		return projectRunbook{}, err
+	}
+	defer tx.Rollback()
+
+	var createdAt string
+	err = tx.QueryRow(`SELECT created_at FROM project_runbooks WHERE project_id = ?`, projectID).Scan(&createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		createdAt = now
+	} else if err != nil {
+		return projectRunbook{}, err
+	}
+
+	if _, err := tx.Exec(`
+		INSERT INTO project_runbooks (project_id, content, status, source, source_session_id, content_hash, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(project_id) DO UPDATE SET
+			content = excluded.content,
+			status = excluded.status,
+			source = excluded.source,
+			source_session_id = excluded.source_session_id,
+			content_hash = excluded.content_hash,
+			updated_at = excluded.updated_at
+	`, projectID, content, status, source, sourceSessionID, contentHash, createdAt, now); err != nil {
+		return projectRunbook{}, err
+	}
+
+	if createRevision {
+		if _, err := tx.Exec(`
+			INSERT INTO project_runbook_revisions (id, project_id, session_id, author_type, author_name, content, content_hash, status, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, uuid.NewString(), projectID, sourceSessionID, firstNonEmpty(source, "human"), strings.TrimSpace(authorName), content, contentHash, status, now); err != nil {
+			return projectRunbook{}, err
+		}
+	}
+
+	if _, err := tx.Exec(`UPDATE projects SET updated_at = ? WHERE id = ?`, now, projectID); err != nil {
+		return projectRunbook{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return projectRunbook{}, err
+	}
+	return a.loadProjectRunbook(projectID)
+}
+
+func (a *app) importProjectRunbookArtifact(session agentSession, project project) {
+	artifactDir := strings.TrimSpace(session.ArtifactDir)
+	if artifactDir == "" {
+		artifactDir = filepath.Join(session.Workdir, ".mspace", "session")
+	}
+	artifactPath := filepath.Join(artifactDir, projectRunbookArtifactName)
+	info, err := os.Stat(artifactPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		a.appendSessionLog(session.ID, "system", fmt.Sprintf("Project runbook artifact could not be inspected: %v", err))
+		return
+	}
+	if info.Size() > projectRunbookMaxBytes {
+		a.appendSessionLog(session.ID, "system", fmt.Sprintf("Project runbook artifact was ignored because it exceeds %d bytes.", projectRunbookMaxBytes))
+		return
+	}
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		a.appendSessionLog(session.ID, "system", fmt.Sprintf("Project runbook artifact could not be read: %v", err))
+		return
+	}
+	content := normalizeProjectRunbookContent(string(data))
+	if content == "" {
+		return
+	}
+	existing, err := a.loadProjectRunbook(project.ID)
+	if err == nil && existing.ContentHash != "" && existing.ContentHash == projectRunbookContentHash(content) {
+		a.appendSessionLog(session.ID, "system", "Project runbook artifact matched the current runbook; no update recorded.")
+		return
+	}
+	if _, err := a.saveProjectRunbook(project.ID, content, "learned", "agent", session.AgentProfile, session.ID, true); err != nil {
+		a.appendSessionLog(session.ID, "system", fmt.Sprintf("Project runbook artifact could not be saved: %v", err))
+		return
+	}
+	a.appendSessionLog(session.ID, "system", "Project runbook updated from session artifact.")
+}
+
+func writeProjectRunbookPromptSection(builder *strings.Builder, runbook projectRunbook) {
+	builder.WriteString("## Project Runbook\n\n")
+	if strings.TrimSpace(runbook.Content) == "" {
+		builder.WriteString("No runbook has been learned for this project yet. Inspect the repository and run commands as needed. If this session discovers a durable install, start, test, build, image, deploy, health-check, or troubleshooting path, write it to `${MSPACE_SESSION_ARTIFACT_DIR}/project-runbook.md` before finishing.\n\n")
+		return
+	}
+	builder.WriteString(fmt.Sprintf("- Status: %s\n", valueOrUnset(runbook.Status)))
+	builder.WriteString(fmt.Sprintf("- Last source: %s\n", valueOrUnset(runbook.Source)))
+	builder.WriteString(fmt.Sprintf("- Source session: %s\n", valueOrUnset(runbook.SourceSessionID)))
+	builder.WriteString(fmt.Sprintf("- Updated: %s\n\n", valueOrUnset(runbook.UpdatedAt)))
+	builder.WriteString("Use this as advisory project memory, not as a guaranteed truth. Verify against the current repository before relying on it. If it is stale or incomplete, write a corrected Markdown runbook to `${MSPACE_SESSION_ARTIFACT_DIR}/project-runbook.md`.\n\n")
+	builder.WriteString("```markdown\n")
+	builder.WriteString(truncate(runbook.Content, projectRunbookPromptLimit))
+	builder.WriteString("\n```\n\n")
+}
+
+func normalizeProjectRunbookContent(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
+	return strings.TrimSpace(content)
+}
+
+func normalizeRunbookStatus(status, content string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case "learned", "stale", "empty":
+		if normalizeProjectRunbookContent(content) == "" {
+			return "empty"
+		}
+		return status
+	default:
+		if normalizeProjectRunbookContent(content) == "" {
+			return "empty"
+		}
+		return "learned"
+	}
+}
+
+func projectRunbookContentHash(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func (a *app) listClusters() ([]cluster, error) {
@@ -4856,18 +5334,21 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 		},
 	}
 	row := a.db.QueryRow(`
-		SELECT s.id, s.issue_id, s.provider, s.agent_profile, s.runtime_mode, s.command, s.status, s.branch, s.workdir, s.codex_thread_id, s.codex_turn_id, s.agent_status, s.artifact_dir, s.source_session_id, s.source_commit_sha, s.agent_token, s.cleanup_status, s.cleaned_at, s.created_at, s.updated_at,
-		       i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.triage_status, i.assignee, i.assignee_type, i.creator_name, i.creator_avatar_url, i.environment_url, i.created_at, i.updated_at,
-		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id, p.created_at, p.updated_at
+		SELECT s.id, s.issue_id, s.provider, s.agent_profile, s.runtime_mode, s.command, s.status, s.branch, s.workdir, s.codex_thread_id, s.codex_turn_id, s.agent_status, s.artifact_dir, s.source_session_id, s.source_commit_sha, s.trigger_comment_id, s.agent_token, s.cleanup_status, s.cleaned_at, s.created_at, s.updated_at,
+		       i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.close_reason, i.triage_status, i.assignee, i.assignee_type, i.creator_name, i.creator_avatar_url, i.environment_url, i.created_at, i.updated_at,
+		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id,
+		       COALESCE(r.status, 'empty'), COALESCE(r.source, ''), COALESCE(r.source_session_id, ''), COALESCE(r.updated_at, ''),
+		       p.created_at, p.updated_at
 		FROM agent_sessions s
 		JOIN issues i ON i.id = s.issue_id
 		JOIN projects p ON p.id = i.project_id
+		LEFT JOIN project_runbooks r ON r.project_id = p.id
 		WHERE s.id = ?
 	`, sessionID)
 	if err := row.Scan(
-		&detail.Session.ID, &detail.Session.IssueID, &detail.Session.Provider, &detail.Session.AgentProfile, &detail.Session.RuntimeMode, &detail.Session.Command, &detail.Session.Status, &detail.Session.Branch, &detail.Session.Workdir, &detail.Session.CodexThreadID, &detail.Session.CodexTurnID, &detail.Session.AgentStatus, &detail.Session.ArtifactDir, &detail.Session.SourceSessionID, &detail.Session.SourceCommitSHA, &detail.Session.AgentToken, &detail.Session.CleanupStatus, &detail.Session.CleanedAt, &detail.Session.CreatedAt, &detail.Session.UpdatedAt,
-		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.CreatorName, &detail.Issue.CreatorAvatar, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
-		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
+		&detail.Session.ID, &detail.Session.IssueID, &detail.Session.Provider, &detail.Session.AgentProfile, &detail.Session.RuntimeMode, &detail.Session.Command, &detail.Session.Status, &detail.Session.Branch, &detail.Session.Workdir, &detail.Session.CodexThreadID, &detail.Session.CodexTurnID, &detail.Session.AgentStatus, &detail.Session.ArtifactDir, &detail.Session.SourceSessionID, &detail.Session.SourceCommitSHA, &detail.Session.TriggerCommentID, &detail.Session.AgentToken, &detail.Session.CleanupStatus, &detail.Session.CleanedAt, &detail.Session.CreatedAt, &detail.Session.UpdatedAt,
+		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.CloseReason, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.CreatorName, &detail.Issue.CreatorAvatar, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
+		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.RunbookStatus, &detail.Project.RunbookSource, &detail.Project.RunbookSourceSessionID, &detail.Project.RunbookUpdatedAt, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
 	); err != nil {
 		return detail, err
 	}
@@ -4980,10 +5461,10 @@ func (a *app) listSessionLogs(sessionID string) ([]sessionLog, error) {
 
 func (a *app) listComments(issueID string) ([]comment, error) {
 	rows, err := a.db.Query(`
-		SELECT id, issue_id, author_type, author_name, author_avatar_url, body, created_at
+		SELECT id, issue_id, author_type, author_user_id, author_name, author_avatar_url, body, created_at, updated_at, edited_at
 		FROM comments
 		WHERE issue_id = ?
-		ORDER BY created_at DESC
+		ORDER BY created_at DESC, id DESC
 	`, issueID)
 	if err != nil {
 		return nil, err
@@ -4992,12 +5473,71 @@ func (a *app) listComments(issueID string) ([]comment, error) {
 	comments := make([]comment, 0)
 	for rows.Next() {
 		var c comment
-		if err := rows.Scan(&c.ID, &c.IssueID, &c.AuthorType, &c.AuthorName, &c.AuthorAvatar, &c.Body, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.IssueID, &c.AuthorType, &c.AuthorUserID, &c.AuthorName, &c.AuthorAvatar, &c.Body, &c.CreatedAt, &c.UpdatedAt, &c.EditedAt); err != nil {
 			return nil, err
 		}
 		comments = append(comments, c)
 	}
 	return comments, nil
+}
+
+func (a *app) loadComment(issueID, commentID string) (comment, error) {
+	var c comment
+	err := a.db.QueryRow(`
+		SELECT id, issue_id, author_type, author_user_id, author_name, author_avatar_url, body, created_at, updated_at, edited_at
+		FROM comments
+		WHERE issue_id = ? AND id = ?
+	`, issueID, commentID).Scan(&c.ID, &c.IssueID, &c.AuthorType, &c.AuthorUserID, &c.AuthorName, &c.AuthorAvatar, &c.Body, &c.CreatedAt, &c.UpdatedAt, &c.EditedAt)
+	return c, err
+}
+
+func loadCommentTx(tx *sql.Tx, issueID, commentID string) (comment, error) {
+	var c comment
+	err := tx.QueryRow(`
+		SELECT id, issue_id, author_type, author_user_id, author_name, author_avatar_url, body, created_at, updated_at, edited_at
+		FROM comments
+		WHERE issue_id = ? AND id = ?
+	`, issueID, commentID).Scan(&c.ID, &c.IssueID, &c.AuthorType, &c.AuthorUserID, &c.AuthorName, &c.AuthorAvatar, &c.Body, &c.CreatedAt, &c.UpdatedAt, &c.EditedAt)
+	return c, err
+}
+
+func commentBelongsToActor(c comment, actor issueActor) bool {
+	if strings.TrimSpace(c.AuthorUserID) != "" && strings.TrimSpace(actor.UserID) != "" {
+		return c.AuthorUserID == actor.UserID
+	}
+	return strings.EqualFold(normalizeHumanActorName(c.AuthorName), normalizeHumanActorName(actor.Name))
+}
+
+func ensureLastIssueCommentTx(tx *sql.Tx, issueID, commentID string) error {
+	var lastCommentID string
+	if err := tx.QueryRow(`
+		SELECT id
+		FROM comments
+		WHERE issue_id = ?
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`, issueID).Scan(&lastCommentID); err != nil {
+		return err
+	}
+	if lastCommentID != commentID {
+		return errors.New("only the latest issue comment can be edited")
+	}
+	return nil
+}
+
+func ensureCommentNotSessionTriggerTx(tx *sql.Tx, commentID string) error {
+	var count int
+	if err := tx.QueryRow(`
+		SELECT COUNT(*)
+		FROM agent_sessions
+		WHERE trigger_comment_id = ?
+	`, commentID).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.New("comment already triggered an agent session")
+	}
+	return nil
 }
 
 func (a *app) listIssueLabels(issueID string) ([]issueLabel, error) {
@@ -5043,7 +5583,7 @@ func (a *app) listIssueLabels(issueID string) ([]issueLabel, error) {
 
 func (a *app) listSessions(issueID string) ([]agentSession, error) {
 	rows, err := a.db.Query(`
-		SELECT id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, agent_token, cleanup_status, cleaned_at, created_at, updated_at
+		SELECT id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at
 		FROM agent_sessions
 		WHERE issue_id = ?
 		ORDER BY created_at DESC
@@ -5055,7 +5595,7 @@ func (a *app) listSessions(issueID string) ([]agentSession, error) {
 	sessions := make([]agentSession, 0)
 	for rows.Next() {
 		var s agentSession
-		if err := rows.Scan(&s.ID, &s.IssueID, &s.Provider, &s.AgentProfile, &s.RuntimeMode, &s.Command, &s.Status, &s.Branch, &s.Workdir, &s.CodexThreadID, &s.CodexTurnID, &s.AgentStatus, &s.ArtifactDir, &s.SourceSessionID, &s.SourceCommitSHA, &s.AgentToken, &s.CleanupStatus, &s.CleanedAt, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.IssueID, &s.Provider, &s.AgentProfile, &s.RuntimeMode, &s.Command, &s.Status, &s.Branch, &s.Workdir, &s.CodexThreadID, &s.CodexTurnID, &s.AgentStatus, &s.ArtifactDir, &s.SourceSessionID, &s.SourceCommitSHA, &s.TriggerCommentID, &s.AgentToken, &s.CleanupStatus, &s.CleanedAt, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, s)
@@ -5328,15 +5868,19 @@ func (a *app) appendSessionLog(sessionID, stream, message string) {
 }
 
 func (a *app) addSystemComment(issueID, body string) {
+	a.addActorComment(issueID, issueActor{Kind: "system", Name: systemActorName}, body)
+}
+
+func (a *app) addActorComment(issueID string, actor issueActor, body string) {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return
 	}
 	createdAt := nowString()
 	_, _ = a.db.Exec(`
-		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, uuid.NewString(), issueID, "system", systemActorName, "", body, createdAt)
+		INSERT INTO comments (id, issue_id, author_type, author_user_id, author_name, author_avatar_url, body, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, uuid.NewString(), issueID, commentActorType(actor), actor.UserID, commentActorName(actor), actor.AvatarURL, body, createdAt, createdAt)
 	_, _ = a.db.Exec(`
 		UPDATE issues SET updated_at = ? WHERE id = ?
 	`, createdAt, issueID)
@@ -5359,6 +5903,16 @@ func (a *app) sessionWasCancelled(sessionID string) bool {
 		return false
 	}
 	return status == "cancelled"
+}
+
+func (a *app) sessionCancelActor(sessionID string) issueActor {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	canceller := a.cancellers[sessionID]
+	if canceller.actor.Kind != "" {
+		return canceller.actor
+	}
+	return issueActor{Kind: "system", Name: systemActorName}
 }
 
 func (a *app) updateSessionAgentStatus(sessionID, agentStatus string) {
@@ -5427,6 +5981,10 @@ func (a *app) transitionIssueStatus(issueID, status string, actor issueActor, re
 		return nil
 	}
 	updatedAt := nowString()
+	closeReason := ""
+	if nextStatus == "cancelled" {
+		closeReason = "not_planned"
+	}
 	topIssueID := issueID
 	if existing.ParentIssueID != "" {
 		topIssueID = existing.ParentIssueID
@@ -5439,8 +5997,8 @@ func (a *app) transitionIssueStatus(issueID, status string, actor issueActor, re
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(`
-		UPDATE issues SET status = ?, updated_at = ? WHERE id = ?
-	`, nextStatus, updatedAt, issueID); err != nil {
+		UPDATE issues SET status = ?, close_reason = ?, updated_at = ? WHERE id = ?
+	`, nextStatus, closeReason, updatedAt, issueID); err != nil {
 		return err
 	}
 	if existing.ParentIssueID == "" {
@@ -5460,9 +6018,9 @@ func (a *app) transitionIssueStatus(issueID, status string, actor issueActor, re
 	comment := issueStatusTransitionComment(existing, nextStatus, actor, reason)
 	if comment != "" {
 		if _, err := tx.Exec(`
-			INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, uuid.NewString(), topIssueID, commentActorType(actor), commentActorName(actor), actor.AvatarURL, comment, updatedAt); err != nil {
+			INSERT INTO comments (id, issue_id, author_type, author_user_id, author_name, author_avatar_url, body, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, uuid.NewString(), topIssueID, commentActorType(actor), actor.UserID, commentActorName(actor), actor.AvatarURL, comment, updatedAt, updatedAt); err != nil {
 			return err
 		}
 	}
@@ -5500,7 +6058,7 @@ func authorizeIssueStatusTransition(existing issue, nextStatus string, actor iss
 	if actor.Kind == "" {
 		return errUnauthorized
 	}
-	if nextStatus == "closed" && existing.ParentIssueID == "" && actor.Kind != "human" {
+	if (nextStatus == "closed" || nextStatus == "cancelled") && existing.ParentIssueID == "" && actor.Kind != "human" {
 		return errForbidden
 	}
 	if actor.Kind != "agent" {
@@ -5513,7 +6071,7 @@ func authorizeIssueStatusTransition(existing issue, nextStatus string, actor iss
 		return nil
 	}
 	switch nextStatus {
-	case "in_progress", "needs_review", "ready_for_test", "test_in_progress", "test_passed", "test_failed", "blocked", "failed", "cancelled":
+	case "in_progress", "needs_review", "ready_for_test", "test_in_progress", "blocked":
 		return nil
 	default:
 		return errForbidden

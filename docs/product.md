@@ -21,10 +21,12 @@ The repository now has a runnable local desktop MVP:
 - use Inbox as a review feed for unread issue and session updates;
 - open document-style issue detail pages with Markdown-backed rich comments, image attachment thumbnails, and linked sessions;
 - mention an enabled agent from issue detail and start local app-server agent sessions with the matching managed profile;
-- stop a queued or running session from Issue Detail or Session Detail;
+- edit the latest unconsumed human comment, then stop and retry a session when a bad prompt has already been consumed;
+- stop a queued or running session from Issue Detail or Session Detail without cancelling the whole issue;
 - run sessions in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`;
 - clean a completed or cancelled session worktree from Session Detail while preserving the issue timeline, logs, evidence, and session metadata;
 - cache imported GitHub repositories under `~/.mspace/repos/<owner>/<repo>`;
+- show a project runbook in Projects and update it either from direct Markdown edits or from successful agent session artifacts;
 - store session metadata, logs, comments, issues, projects, evidence, local creator/author display snapshots, and issue image attachment blobs in SQLite under `~/.mspace/mspace.db`;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
@@ -93,8 +95,7 @@ A project records:
 - remote URL and detected Git provider metadata;
 - default branch;
 - default test cluster;
-- deploy command;
-- validation command;
+- project runbook as mspace-owned Markdown with revision history;
 - allowed Kubernetes resource scope.
 
 A cluster records reusable deployment access:
@@ -198,7 +199,8 @@ MVP features:
 - issue comments and assignee field;
 - type and priority labels, with asynchronous type triage and manual priority selection from Issue Detail;
 - manage agent profiles and create a Codex session from an enabled agent mention in an issue comment;
-- cancel queued or running sessions;
+- edit the latest human comment before it has triggered a session;
+- cancel queued or running sessions while keeping the issue retryable;
 - local development runtime;
 - git worktree isolation per session;
 - manual session worktree cleanup controls;

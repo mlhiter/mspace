@@ -12,8 +12,9 @@
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Markdown session context included in the Codex app-server prompt. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory recorded in `agent_sessions.artifact_dir`. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional deploy/test artifact. When it includes `previewUrl`, the runner copies it back to the issue test environment. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-learned project runbook artifact. When present after a successful session, the runner stores it as the current project runbook. |
 
-Reusable cluster configs are stored in `clusters`. Issue test namespace records are stored in `issue_test_environments`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
+Reusable cluster configs are stored in `clusters`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
 
 The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
 
@@ -195,6 +196,31 @@ Managed agents:
 ```bash
 curl http://127.0.0.1:7788/api/agents
 sqlite3 ~/.mspace/mspace.db "select id,name,mention,provider,enabled,built_in,updated_at from agent_profiles order by sort_order,created_at;"
+```
+
+Project runbooks:
+
+```bash
+curl http://127.0.0.1:7788/api/projects/<project-id>/runbook
+sqlite3 ~/.mspace/mspace.db "select project_id,status,source,source_session_id,updated_at from project_runbooks order by updated_at desc;"
+sqlite3 ~/.mspace/mspace.db "select project_id,author_type,session_id,created_at from project_runbook_revisions order by created_at desc limit 10;"
+```
+
+Agents should not edit repository docs for runbook learning by default. To update the mspace runbook from a session, write Markdown to:
+
+```bash
+cat > "$MSPACE_SESSION_ARTIFACT_DIR/project-runbook.md" <<'EOF'
+# Runbook
+
+## Dependencies
+## Local Start
+## Tests
+## Build
+## Image Build
+## Deploy
+## Health Check
+## Common Failures
+EOF
 ```
 
 Reusable test clusters:

@@ -5,10 +5,7 @@ export const issueStatusOptions = [
   "changes_requested",
   "ready_for_test",
   "test_in_progress",
-  "test_passed",
-  "test_failed",
   "blocked",
-  "failed",
   "cancelled",
   "closed",
 ];
@@ -20,11 +17,8 @@ const issueStatusLabels: Record<string, string> = {
   changes_requested: "Changes requested",
   ready_for_test: "Ready for test",
   test_in_progress: "Test in progress",
-  test_passed: "Test passed",
-  test_failed: "Test failed",
   blocked: "Blocked",
-  failed: "Failed",
-  cancelled: "Cancelled",
+  cancelled: "Closed as not planned",
   closed: "Closed",
 };
 
@@ -33,6 +27,7 @@ export function displayIssueStatus(status: string) {
   if (normalized === "review" || normalized === "in_review") return "needs_review";
   if (normalized === "testing") return "test_in_progress";
   if (normalized === "queued" || normalized === "running") return "in_progress";
+  if (normalized === "test_passed" || normalized === "test_failed" || normalized === "failed") return "open";
   return normalized === "completed" || normalized === "done" ? "closed" : normalized;
 }
 

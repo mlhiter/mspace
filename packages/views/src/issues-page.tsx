@@ -296,7 +296,7 @@ function IssueRow(props: { issue: IssueListItem }) {
       </div>
 
       <div className="flex items-center justify-end gap-2">
-        <StatusBadge value={displayIssueStatus(issue.status)} />
+        <StatusBadge value={displayIssueStatus(issue.status)} valueLabel={issueStatusLabel(issue.status)} />
         <ArrowRight
           data-icon
           className="text-[color:var(--faint)] opacity-0 transition-[opacity,transform] duration-150 ease-out group-hover:translate-x-0.5 group-hover:opacity-100"

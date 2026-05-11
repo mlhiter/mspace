@@ -18,9 +18,24 @@ export interface Project {
   ingressClass: string;
   nodeHost: string;
   defaultClusterId: string;
+  runbookStatus: string;
+  runbookUpdatedAt: string;
+  runbookSource: string;
+  runbookSourceSessionId: string;
   issueCount: number;
   sessionCount: number;
   latestIssueUpdatedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectRunbook {
+  projectId: string;
+  content: string;
+  status: string;
+  source: string;
+  sourceSessionId: string;
+  contentHash: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -100,6 +115,7 @@ export interface IssueListItem {
   title: string;
   body: string;
   status: string;
+  closeReason: string;
   triageStatus: string;
   assignee: string;
   assigneeType: string;
@@ -120,6 +136,7 @@ export interface Issue {
   title: string;
   body: string;
   status: string;
+  closeReason: string;
   triageStatus: string;
   assignee: string;
   assigneeType: string;
@@ -134,10 +151,13 @@ export interface Comment {
   id: string;
   issueId: string;
   authorType: string;
+  authorUserId: string;
   authorName: string;
   authorAvatarUrl: string;
   body: string;
   createdAt: string;
+  updatedAt: string;
+  editedAt: string;
 }
 
 export interface IssueAttachment {
@@ -207,6 +227,7 @@ export interface AgentSession {
   artifactDir: string;
   sourceSessionId: string;
   sourceCommitSha: string;
+  triggerCommentId: string;
   cleanupStatus: string;
   cleanedAt: string;
   createdAt: string;
@@ -377,8 +398,6 @@ export interface CreateProjectInput {
   repoPath: string;
   repoUrl: string;
   defaultBranch: string;
-  deployCommand: string;
-  validationCommand: string;
   kubeContext: string;
   kubeconfigPath: string;
   namespace: string;
@@ -391,6 +410,11 @@ export interface CreateProjectInput {
 
 export interface UpdateProjectInput extends CreateProjectInput {
   id: string;
+}
+
+export interface UpdateProjectRunbookInput {
+  content: string;
+  status?: string;
 }
 
 export interface CreateIssueInput {
@@ -429,6 +453,11 @@ export interface CreateCommentInput {
   attachmentIds?: string[];
 }
 
+export interface UpdateCommentInput {
+  body: string;
+  attachmentIds?: string[];
+}
+
 export interface CreateSessionInput {
   provider: string;
   agentProfile?: string;
@@ -436,6 +465,7 @@ export interface CreateSessionInput {
   branch?: string;
   sourceSessionId?: string;
   sourceCommitSha?: string;
+  triggerCommentId?: string;
 }
 
 export interface UpdateIssueLabelsInput {

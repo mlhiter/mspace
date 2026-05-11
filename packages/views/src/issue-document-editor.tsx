@@ -109,7 +109,8 @@ export function IssueDocumentEditor(props: {
   value: string;
   placeholder: string;
   autoFocus?: boolean;
-  variant?: "document" | "comment";
+  variant?: "document" | "comment" | "runbook";
+  editable?: boolean;
   ariaLabel?: string;
   onReady?: (editor: Editor | null) => void;
   onChange: (value: string) => void;
@@ -120,10 +121,13 @@ export function IssueDocumentEditor(props: {
   onImageUpload?: (file: File) => Promise<UploadedIssueImage>;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const lastMarkdownRef = useRef(props.value);
   const [uploadingImages, setUploadingImages] = useState(0);
   const [uploadError, setUploadError] = useState("");
+  const isEditable = props.editable ?? true;
   const editor = useEditor({
     immediatelyRender: false,
+    editable: isEditable,
     extensions: [
       StarterKit,
       IssueImage.configure({
@@ -150,10 +154,13 @@ export function IssueDocumentEditor(props: {
     editorProps: {
       attributes: {
         "aria-label": props.ariaLabel || "Issue document",
+        "aria-disabled": String(!isEditable),
       },
     },
     onUpdate: ({ editor: activeEditor }) => {
-      props.onChange(activeEditor.getMarkdown());
+      const markdown = activeEditor.getMarkdown();
+      lastMarkdownRef.current = markdown;
+      props.onChange(markdown);
       props.onEditorStateChange?.(activeEditor);
     },
     onSelectionUpdate: ({ editor: activeEditor }) => {
@@ -211,11 +218,24 @@ export function IssueDocumentEditor(props: {
   }, [editor, props.onReady]);
 
   useEffect(() => {
-    if (!editor || props.value.trim() !== "") return;
-    if (editor.getMarkdown().trim() !== "") {
-      editor.commands.clearContent(false);
+    if (!editor) return;
+    const nextMarkdown = props.value || "";
+    const currentMarkdown = editor.getMarkdown();
+    if (nextMarkdown === currentMarkdown) {
+      lastMarkdownRef.current = nextMarkdown;
+      return;
     }
+    if (nextMarkdown === lastMarkdownRef.current) {
+      return;
+    }
+    editor.commands.setContent(nextMarkdown, { contentType: "markdown", emitUpdate: false });
+    lastMarkdownRef.current = nextMarkdown;
   }, [editor, props.value]);
+
+  useEffect(() => {
+    if (!editor) return;
+    editor.setEditable(isEditable);
+  }, [editor, isEditable]);
 
   useEffect(() => {
     if (!props.autoFocus || !editor) return;
@@ -226,10 +246,18 @@ export function IssueDocumentEditor(props: {
 
   const variant = props.variant || "document";
   const canUploadImages = Boolean(props.onImageUpload);
+  const editorClassName = [
+    "mspace-doc-editor",
+    variant === "comment" && "mspace-doc-editor--comment",
+    variant === "runbook" && "mspace-doc-editor--runbook",
+    !isEditable && "is-readonly",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div
-      className={variant === "comment" ? "mspace-doc-editor mspace-doc-editor--comment" : "mspace-doc-editor"}
+      className={editorClassName}
       onPasteCapture={handlePaste}
       onDrop={handleDrop}
       onDragOver={(event) => {

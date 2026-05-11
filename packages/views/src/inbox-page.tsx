@@ -11,7 +11,7 @@ import {
   StatusBadge,
 } from "@mspace/ui";
 import { useMspaceAuth } from "./auth-context";
-import { displayIssueStatus } from "./issue-status";
+import { displayIssueStatus, issueStatusLabel } from "./issue-status";
 import { RelativeTime } from "./time";
 
 type ReviewItem = {
@@ -134,7 +134,7 @@ export function InboxPage() {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <StatusBadge value={displayIssueStatus(item.status)} />
+                  <StatusBadge value={displayIssueStatus(item.status)} valueLabel={issueStatusLabel(item.status)} />
                   <ArrowRight
                     data-icon
                     className="text-[color:var(--faint)] opacity-0 transition-[opacity,transform] duration-150 ease-out group-hover:translate-x-0.5 group-hover:opacity-100"

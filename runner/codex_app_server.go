@@ -675,6 +675,10 @@ func (a *app) buildCodexSessionPrompt(session agentSession, project project, con
 	builder.WriteString(fmt.Sprintf("- Artifact directory: %s\n", artifactDir))
 	builder.WriteString("\n")
 
+	if runbook, err := a.loadProjectRunbook(project.ID); err == nil {
+		writeProjectRunbookPromptSection(&builder, runbook)
+	}
+
 	builder.WriteString("## Validation Context\n\n")
 	builder.WriteString(fmt.Sprintf("- Kubernetes context: %s\n", valueOrUnset(project.KubeContext)))
 	builder.WriteString(fmt.Sprintf("- Kubeconfig path: %s\n", valueOrUnset(project.KubeconfigPath)))
@@ -683,8 +687,6 @@ func (a *app) buildCodexSessionPrompt(session agentSession, project project, con
 	builder.WriteString(fmt.Sprintf("- Preview domain: %s\n", valueOrUnset(project.PreviewDomain)))
 	builder.WriteString(fmt.Sprintf("- Ingress class: %s\n", valueOrUnset(project.IngressClass)))
 	builder.WriteString(fmt.Sprintf("- Node host: %s\n", valueOrUnset(project.NodeHost)))
-	builder.WriteString(fmt.Sprintf("- Deploy command: %s\n", valueOrUnset(project.DeployCommand)))
-	builder.WriteString(fmt.Sprintf("- Validation command: %s\n", valueOrUnset(project.ValidationCommand)))
 	builder.WriteString("\n")
 
 	if detail.TestEnvironment != nil {
@@ -750,7 +752,8 @@ func (a *app) buildCodexSessionPrompt(session agentSession, project project, con
 	builder.WriteString("## Expected Output\n\n")
 	builder.WriteString("Respond to the current turn request in the context of the issue timeline. If code changes are requested, implement them as far as practical, run relevant validation, and finish with a concise summary. If the current turn is only a question, greeting, acknowledgement, or status check, answer it directly instead of re-running the original issue. Do not introduce yourself. Do not say you saw the current comment, Issue history, or prior sessions unless the user explicitly asks what context you received. Do not include a fresh agent mention in your final response unless the user explicitly asks you to trigger another agent turn. The mspace runner will keep this worktree, stream your app-server events, and collect Kubernetes evidence after the turn completes.\n\n")
 	builder.WriteString("Also write `${MSPACE_SESSION_ARTIFACT_DIR}/review-evidence.json` when practical. Use JSON with keys `commandsRun`, `tests`, `buildResult`, `deploymentResult`, `agentSummary`, `risks`, and `followUps`. Keep it factual; leave sections empty when not applicable.\n")
-	builder.WriteString("Issue status rules: only a human may close the top-level issue. Never set the top-level issue status to `closed`. When you need to report workflow readiness through the mspace API, use the scoped `MSPACE_AGENT_TOKEN` as a bearer token and choose one of `needs_review`, `ready_for_test`, `test_in_progress`, `test_passed`, `test_failed`, `blocked`, `failed`, or `cancelled`.\n")
+	builder.WriteString("When you discover or correct durable project operation knowledge, write `${MSPACE_SESSION_ARTIFACT_DIR}/project-runbook.md` as Markdown. Include useful sections such as Dependencies, Local Start, Tests, Build, Image Build, Deploy, Health Check, and Common Failures. Do not edit repository docs for this unless the user asks.\n")
+	builder.WriteString("Issue status rules: only a human may close or cancel the top-level issue. Never set the top-level issue status to `closed` or `cancelled`. When you need to report workflow readiness through the mspace API, use the scoped `MSPACE_AGENT_TOKEN` as a bearer token and choose one of `needs_review`, `ready_for_test`, `test_in_progress`, or `blocked`.\n")
 
 	return builder.String(), nil
 }
