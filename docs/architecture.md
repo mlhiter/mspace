@@ -7,7 +7,7 @@
 The repository currently contains a runnable local-first desktop MVP:
 
 - Electron desktop shell built with electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
-- Public website in `apps/website`, built with Vite, React 19, Tailwind CSS 4, and lucide-react, deployed as a static Vercel site from the root `vercel.json`.
+- Public website in `apps/website`, built with Vite, React 19, Tailwind CSS 4, and lucide-react, deployed as a static Vercel site from the root `vercel.json`. It has a homepage plus a static `Changelog` navigation view backed by `apps/website/src/changelog.ts`.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`. It owns users, workspaces, membership, GitHub identity, mspace auth sessions, and future GitHub App installation state.
 - Desktop GitHub sign-in uses the server OAuth flow, stores an `msp_...` session token, and caches a lightweight display identity for local runner writes while collaboration data still lives in SQLite.
@@ -136,7 +136,7 @@ mspace should separate the control plane, collaboration layer, runtime layer, an
 
 The control plane is the durable multiplayer authority: users, workspaces, members, auth sessions, GitHub identity, and future GitHub App installations. The collaboration layer is the product entry point: Inbox, Issue, comments, subscribers, agent sessions, and evidence. The runtime layer is where the agent edits and runs code. The validation environment layer is where the changed project gets deployed and inspected. In the MVP, the runtime should be local-first and the validation environment should be namespace-scoped Kubernetes.
 
-The public website is not part of the runtime path. It is a static brand surface for the issue-to-evidence story and should not own product state, auth, runner calls, or Kubernetes actions.
+The public website is not part of the runtime path. It is a static brand surface for the issue-to-evidence story and should not own product state, auth, runner calls, or Kubernetes actions. Its changelog is repository-authored static content, not a live audit log from the runner or control plane.
 
 Identity boundary:
 

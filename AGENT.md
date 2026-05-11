@@ -15,7 +15,7 @@ The product should stay narrow:
 ## Current Implementation
 
 - Desktop app: Electron, electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript.
-- Public website: Vite, React 19, Tailwind CSS 4, and lucide-react in `apps/website`, deployed through Vercel with the root `vercel.json`.
+- Public website: Vite, React 19, Tailwind CSS 4, and lucide-react in `apps/website`, deployed through Vercel with the root `vercel.json`. It has a homepage plus a static `Changelog` navigation view backed by `apps/website/src/changelog.ts`; the nav logo uses `apps/website/src/assets/mspace-mark-transparent.png` inside its own gray-white tile.
 - UI system: shadcn/ui source components in `packages/ui/src/components/ui`, Radix UI primitives, lucide-react icons, Material Icon Theme file icons for file surfaces, and shared exports through `@mspace/ui`.
 - Workspace tooling: pnpm workspaces and Turbo.
 - Server control plane: Go, chi, PostgreSQL through `pgx`, with embedded migrations under `server/internal/control/migrations`.
@@ -95,6 +95,7 @@ The product should stay narrow:
 - Every write-capable session must have an audit trail and a cleanup path.
 - Do not fork Multica; use it as a structural reference only.
 - Keep docs current when product decisions change.
+- Keep `apps/website/src/changelog.ts` current when a task ships meaningful product, engineering, documentation, or website progress. Group entries by calendar day and write public-facing bullets that explain what changed without exposing private environment details.
 - Keep the desktop product shell quiet and document-first. The public website may use a bolder forensic brand direction, but it must still avoid generic AI-platform claims and stay grounded in issues, sessions, diffs, Kubernetes preview namespaces, evidence, and cleanup.
 - Use the shadcn CLI for new shared UI primitives when an equivalent shadcn component exists, then wrap or re-export from `@mspace/ui` as needed.
 - Preserve the quiet Notion-like workspace style: document-first, low-contrast paper surfaces, compact rows, restrained icon buttons, and no decorative dashboard or marketing layout.

@@ -1,6 +1,7 @@
 import {
   ArrowUpRight,
   Box,
+  CalendarDays,
   CircleDot,
   ClipboardCheck,
   GitBranch,
@@ -8,10 +9,13 @@ import {
   ShieldCheck,
   TerminalSquare,
 } from "lucide-react";
-import type { CSSProperties } from "react";
-import brandMark from "../../desktop/assets/brand/mspace-icon.png";
+import { useEffect, useState, type CSSProperties } from "react";
 import issueDetailImage from "../../../docs/images/mspace-issue-detail.png";
 import issuesListImage from "../../../docs/images/mspace-issues-list.png";
+import brandMark from "./assets/mspace-mark-transparent.png";
+import { changelog } from "./changelog";
+
+type SiteView = "home" | "changelog";
 
 const workflow = [
   {
@@ -67,35 +71,44 @@ const controlPoints = [
 ];
 
 const quickStart = ["pnpm install", "pnpm dev:desktop", "pnpm dev:website"];
+const changelogItemCount = changelog.reduce((total, entry) => total + entry.items.length, 0);
+
+function getCurrentView(): SiteView {
+  if (typeof window === "undefined") {
+    return "home";
+  }
+
+  return window.location.hash === "#changelog" ? "changelog" : "home";
+}
 
 export function App() {
+  const [currentView, setCurrentView] = useState<SiteView>(getCurrentView);
   const heroStyle = {
     "--hero-image": `url(${issueDetailImage})`,
   } as CSSProperties;
 
+  useEffect(() => {
+    const syncViewFromHash = () => {
+      setCurrentView(getCurrentView());
+      window.scrollTo({ top: 0, behavior: "auto" });
+    };
+
+    window.addEventListener("hashchange", syncViewFromHash);
+    return () => window.removeEventListener("hashchange", syncViewFromHash);
+  }, []);
+
+  if (currentView === "changelog") {
+    return (
+      <main className="site-shell site-shell-changelog">
+        <ChangelogPage currentView={currentView} />
+      </main>
+    );
+  }
+
   return (
     <main className="site-shell">
       <section className="hero" style={heroStyle} aria-label="mspace overview">
-        <header className="nav-rail" aria-label="Primary">
-          <a className="brand-lockup" href="#top" aria-label="mspace home">
-            <img src={brandMark} alt="" width="32" height="32" />
-            <span>mspace</span>
-          </a>
-          <div className="case-strip" aria-label="Landing page case file">
-            <span>case mspace-001</span>
-            <span>issue to preview proof</span>
-            <span>local MVP</span>
-          </div>
-          <a
-            className="nav-action"
-            href="https://github.com/mlhiter/mspace"
-            target="_blank"
-            rel="noreferrer"
-          >
-            GitHub
-            <ArrowUpRight aria-hidden="true" size={16} strokeWidth={2} />
-          </a>
-        </header>
+        <SiteHeader currentView={currentView} />
 
         <div className="hero-grid" id="top">
           <p className="specimen-label">Kubernetes-native issue workspace</p>
@@ -296,5 +309,84 @@ export function App() {
         </div>
       </section>
     </main>
+  );
+}
+
+function SiteHeader({ currentView, page = false }: { currentView: SiteView; page?: boolean }) {
+  return (
+    <header className={page ? "nav-rail nav-rail-page" : "nav-rail"} aria-label="Primary">
+      <a className="brand-lockup" href="#top" aria-label="mspace home">
+        <span className="brand-mark">
+          <img src={brandMark} alt="" width="28" height="28" />
+        </span>
+        <span className="brand-type">
+          <span className="brand-name">mspace</span>
+          <span className="brand-caption">issue evidence workspace</span>
+        </span>
+      </a>
+      <nav className="nav-tabs" aria-label="Website sections">
+        <a href="#top" aria-current={currentView === "home" ? "page" : undefined}>
+          Home
+        </a>
+        <a href="#changelog" aria-current={currentView === "changelog" ? "page" : undefined}>
+          Changelog
+        </a>
+      </nav>
+      <a
+        className="nav-action"
+        href="https://github.com/mlhiter/mspace"
+        target="_blank"
+        rel="noreferrer"
+      >
+        GitHub
+        <ArrowUpRight aria-hidden="true" size={16} strokeWidth={2} />
+      </a>
+    </header>
+  );
+}
+
+function ChangelogPage({ currentView }: { currentView: SiteView }) {
+  return (
+    <section className="changelog-page" id="changelog" aria-label="mspace changelog">
+      <SiteHeader currentView={currentView} page />
+      <div className="changelog-section changelog-page-body">
+        <div className="changelog-head">
+          <div>
+            <div className="section-kicker">Daily build log</div>
+            <h1>Every task leaves a public trace.</h1>
+          </div>
+          <p>
+            The website mirrors the way mspace works: the product should keep evidence of what
+            changed, when it changed, and which part of the issue-to-runtime loop moved forward.
+          </p>
+        </div>
+
+        <div className="changelog-metrics" aria-label="Changelog coverage">
+          <span>
+            <CalendarDays aria-hidden="true" size={16} strokeWidth={2} />
+            {changelog.length} days logged
+          </span>
+          <span>{changelogItemCount} shipped updates</span>
+          <span>source: task history</span>
+        </div>
+
+        <div className="changelog-timeline" aria-label="mspace changelog entries">
+          {changelog.map((entry) => (
+            <article className="changelog-entry" key={entry.date}>
+              <div className="changelog-date">
+                <time dateTime={entry.date}>{entry.date}</time>
+                <h2>{entry.title}</h2>
+                <p>{entry.summary}</p>
+              </div>
+              <ul>
+                {entry.items.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }

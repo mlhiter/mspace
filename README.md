@@ -37,7 +37,7 @@ The interaction model is closer to a shared engineering document than a terminal
 
 Public site: [mspace-website-blue.vercel.app](https://mspace-website-blue.vercel.app)
 
-The website is a Vite/React/Tailwind brand surface in `apps/website`. It is intentionally bolder than the desktop product shell, but it should stay anchored to the same product story: issue workspace, local Codex sessions, source diffs, Kubernetes namespace previews, review evidence, and cleanup decisions.
+The website is a Vite/React/Tailwind brand surface in `apps/website`. It is intentionally bolder than the desktop product shell, but it should stay anchored to the same product story: issue workspace, local Codex sessions, source diffs, Kubernetes namespace previews, review evidence, and cleanup decisions. It also exposes a separate `Changelog` navigation view backed by `apps/website/src/changelog.ts`, so meaningful mspace tasks leave a public day-level progress log.
 
 Local website commands:
 
@@ -199,7 +199,7 @@ curl http://127.0.0.1:7788/health
 
 ```text
 apps/desktop/        Electron desktop shell and renderer entrypoint
-apps/website/        Public Vite/React brand site for the issue-to-evidence story
+apps/website/        Public Vite/React brand site and changelog for the issue-to-evidence story
 packages/core/       Shared API client and TypeScript types
 packages/ui/         Shared UI primitives and shadcn/ui source components
 packages/views/      Product routes for Inbox, Issues, Agents, Projects, Sessions

@@ -64,7 +64,9 @@ pnpm build:website
 pnpm preview:website
 ```
 
-The website app lives in `apps/website`. It reuses the desktop brand mark from `apps/desktop/assets/brand/mspace-icon.png` and product screenshots from `docs/images/`.
+The website app lives in `apps/website`. It uses product screenshots from `docs/images/`, keeps the full desktop app icon at `apps/desktop/assets/brand/mspace-icon.png`, and uses the transparent navigation mark at `apps/website/src/assets/mspace-mark-transparent.png` so the website logo can sit inside its own gray-white tile without a nested white background.
+
+The public changelog is a static website view, not product runtime state. Update `apps/website/src/changelog.ts` whenever a task ships meaningful product, engineering, documentation, or website progress. Entries are grouped by calendar day and should stay public-facing: describe what changed without exposing private cluster names, credentials, local paths beyond repository paths, or temporary debugging noise.
 
 Vercel deployment is configured from the repository root:
 
