@@ -1762,6 +1762,129 @@ func TestRecordSourceChangeNodeCapturesExistingSessionCommit(t *testing.T) {
 	}
 }
 
+func TestRecordSourceChangeNodeSkipsDuplicateExistingIssueCommit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for source change node test")
+	}
+
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init", "-b", "main")
+	runGit(t, repoDir, "config", "user.name", "mspace test")
+	runGit(t, repoDir, "config", "user.email", "mspace@example.com")
+	writeFile(t, filepath.Join(repoDir, "README.md"), "# demo\n")
+	runGit(t, repoDir, "add", "README.md")
+	runGit(t, repoDir, "commit", "-m", "base")
+
+	workdirRoot := filepath.Join(t.TempDir(), "workdirs")
+	firstWorkdir := filepath.Join(workdirRoot, "project-1", "session-1")
+	secondWorkdir := filepath.Join(workdirRoot, "project-1", "session-2")
+	if err := os.MkdirAll(filepath.Dir(firstWorkdir), 0o755); err != nil {
+		t.Fatalf("create worktree parent: %v", err)
+	}
+	runGit(t, repoDir, "worktree", "add", "-b", "mspace/issue/session-1", firstWorkdir, "HEAD")
+	writeFile(t, filepath.Join(firstWorkdir, "app.txt"), "hello\n")
+	runGit(t, firstWorkdir, "add", "app.txt")
+	runGit(t, firstWorkdir, "commit", "-m", "agent commit")
+	existingCommit := strings.TrimSpace(gitOutput(t, firstWorkdir, "rev-parse", "HEAD"))
+	runGit(t, repoDir, "worktree", "add", "--detach", secondWorkdir, existingCommit)
+
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db, broker: newEventBroker(), workdir: workdirRoot, repoRoot: t.TempDir()}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	now := nowString()
+	project := project{
+		ID:            "project-1",
+		Name:          "Demo",
+		RepoPath:      repoDir,
+		SourceType:    "local",
+		DefaultBranch: "main",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES (?, ?, ?, ?, '', '', '', '', ?, '', '', '', '', ?, ?)
+	`, project.ID, project.Name, project.RepoPath, project.SourceType, project.DefaultBranch, project.CreatedAt, project.UpdatedAt); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES ('issue-1', ?, 'Polish UI', '', 'running', 'codex', 'agent', '', ?, ?)
+	`, project.ID, now, now); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	for _, session := range []struct {
+		id      string
+		command string
+		workdir string
+	}{
+		{id: "session-1", command: "Implement the issue.", workdir: firstWorkdir},
+		{id: "session-2", command: "Continue deployment.", workdir: secondWorkdir},
+	} {
+		if _, err := db.Exec(`
+			INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, cleanup_status, cleaned_at, created_at, updated_at)
+			VALUES (?, 'issue-1', 'codex', 'codex', 'local', ?, 'running', ?, ?, '', '', 'running', '', 'retained', '', ?, ?)
+		`, session.id, session.command, "mspace/issue/"+session.id, session.workdir, now, now); err != nil {
+			t.Fatalf("insert session %s: %v", session.id, err)
+		}
+	}
+
+	firstNode, err := application.recordSourceChangeNode(agentSession{
+		ID:           "session-1",
+		IssueID:      "issue-1",
+		Provider:     "codex",
+		AgentProfile: "codex",
+		Command:      "Implement the issue.",
+		Status:       "running",
+		Branch:       "mspace/issue/session-1",
+		Workdir:      firstWorkdir,
+	}, project)
+	if err != nil {
+		t.Fatalf("record first source change node failed: %v", err)
+	}
+	if firstNode == nil || firstNode.CommitSHA != existingCommit {
+		t.Fatalf("expected first session to record %s, got %+v", existingCommit, firstNode)
+	}
+
+	duplicateNode, err := application.recordSourceChangeNode(agentSession{
+		ID:           "session-2",
+		IssueID:      "issue-1",
+		Provider:     "codex",
+		AgentProfile: "codex",
+		Command:      "Continue deployment.",
+		Status:       "running",
+		Branch:       "mspace/issue/session-2",
+		Workdir:      secondWorkdir,
+	}, project)
+	if err != nil {
+		t.Fatalf("record duplicate source change node should not fail: %v", err)
+	}
+	if duplicateNode != nil {
+		t.Fatalf("expected duplicate commit to be skipped, got %+v", duplicateNode)
+	}
+
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM issue_change_nodes WHERE issue_id = 'issue-1' AND commit_sha = ?`, existingCommit).Scan(&count); err != nil {
+		t.Fatalf("query issue change node count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one issue change node row for duplicate commit, got %d", count)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM issue_change_nodes WHERE session_id = 'session-2'`).Scan(&count); err != nil {
+		t.Fatalf("query duplicate session change node count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected duplicate session not to create a change node, got %d", count)
+	}
+}
+
 func TestBuildSessionReviewEvidenceUsesArtifactAndEnvironment(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
 	if err != nil {

@@ -4264,6 +4264,15 @@ func (a *app) recordExistingSourceHeadChangeNode(session agentSession, project p
 		return nil, nil
 	}
 
+	existingNode, err := a.loadIssueChangeNodeByCommit(session.IssueID, head, project)
+	if err != nil {
+		return nil, err
+	}
+	if existingNode != nil {
+		a.appendSessionLog(session.ID, "system", fmt.Sprintf("Source commit %s is already recorded for this issue; skipping duplicate source capture.", shortCommitSHA(head)))
+		return nil, nil
+	}
+
 	node, err := a.recordIssueChangeNodeForCommit(session, project, gitPath, head)
 	if err != nil {
 		return nil, err
@@ -6334,6 +6343,28 @@ func (a *app) listIssueChangeNodes(issueID string, project project) ([]issueChan
 		nodes = append(nodes, node)
 	}
 	return nodes, rows.Err()
+}
+
+func (a *app) loadIssueChangeNodeByCommit(issueID, commitSHA string, project project) (*issueChangeNode, error) {
+	commitSHA = strings.TrimSpace(commitSHA)
+	if commitSHA == "" {
+		return nil, nil
+	}
+	var node issueChangeNode
+	err := a.db.QueryRow(`
+		SELECT id, issue_id, session_id, commit_sha, branch, subject, files_changed, created_at
+		FROM issue_change_nodes
+		WHERE issue_id = ? AND commit_sha = ?
+		LIMIT 1
+	`, issueID, commitSHA).Scan(&node.ID, &node.IssueID, &node.SessionID, &node.CommitSHA, &node.Branch, &node.Subject, &node.FilesChanged, &node.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	hydrateIssueChangeNode(&node, project)
+	return &node, nil
 }
 
 func (a *app) loadIssueChangeNodeForDeploy(issueID, sourceCommitSHA, sourceSessionID string, project project) (issueChangeNode, error) {
