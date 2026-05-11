@@ -369,6 +369,10 @@ export const api = {
     request<IssueTestEnvironment>(`/api/issues/${issueId}/test-environment/retain`, {
       method: "POST",
     }),
+  probeTestEnvironment: (issueId: string) =>
+    request<IssueTestEnvironment>(`/api/issues/${issueId}/test-environment/probe`, {
+      method: "POST",
+    }),
   getSession: (sessionId: string) =>
     request<SessionDetail>(`/api/sessions/${sessionId}`),
   cancelSession: (sessionId: string) =>

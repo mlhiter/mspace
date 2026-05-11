@@ -47,7 +47,7 @@ The current high-leverage developer workflow is no longer just "ask Codex to edi
 3. Attach an agent session to the issue.
 4. Let the agent modify code in a local development runtime.
 5. Manually trigger PR generation or a test deployment when the local agent result is ready.
-6. For test deployment, let the agent create an issue namespace in the shared test cluster, deploy the app, and return a probed preview URL.
+6. For test deployment, let the agent create an issue namespace in the shared test cluster, deploy the app, and return a preview URL that mspace checks and records.
 7. Review the PR or preview URL together with logs, events, resources, and runtime evidence.
 
 This is already how advanced users work manually: Codex or Claude Code edits the code locally, the developer keeps notes in chat or docs, and then gives the agent access to a test cluster through `kubectl`. mspace turns that fragmented workflow into a repeatable team product with the issue as the center of gravity, local development as the first step, and Kubernetes as the validation environment.

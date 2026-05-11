@@ -21,6 +21,7 @@ export const changelog: ChangelogEntry[] = [
       "Added the Issue Detail runbook viewer and comment reactions.",
       "Refined issue status, session evidence, and review handoff behavior.",
       "Compacted review evidence commands so evidence stays readable.",
+      "Added commit-backed deploy source selection and automatic preview status checks.",
       "Limited manual issue lifecycle actions to the intended human workflow.",
       "Synced issue workflow guidance across project docs.",
       "Reconciled orphaned active sessions on runner startup.",

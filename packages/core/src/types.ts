@@ -534,8 +534,9 @@ export interface StartTestDeployInput {
 }
 
 export interface SessionStreamEvent {
-  type: "log" | "status";
+  type: "log" | "status" | "deploy-stage";
   payload: string;
+  stream?: string;
 }
 
 export interface MspaceUser {

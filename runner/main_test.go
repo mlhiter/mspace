@@ -1022,8 +1022,8 @@ func TestCancelOrphanedRunningSessionAllowsStop(t *testing.T) {
 	if err := db.QueryRow(`SELECT namespace_status FROM issue_test_environments WHERE issue_id = 'issue-1'`).Scan(&namespaceStatus); err != nil {
 		t.Fatalf("query namespace status: %v", err)
 	}
-	if namespaceStatus != "deploy_failed" {
-		t.Fatalf("expected interrupted deploy environment to fail, got %q", namespaceStatus)
+	if namespaceStatus != "deploy_interrupted" {
+		t.Fatalf("expected interrupted deploy environment to be marked interrupted, got %q", namespaceStatus)
 	}
 	assertCommentAuthorContains(t, db, "issue-1", "Stopped session `session-` by Test Human.", "system", "mspace")
 	assertSessionLogContains(t, db, "session-1", "lost its in-memory handle")
@@ -1066,14 +1066,101 @@ func TestStartupReconcilesInterruptedActiveSessions(t *testing.T) {
 	if err := db.QueryRow(`SELECT namespace_status FROM issue_test_environments WHERE issue_id = 'issue-1'`).Scan(&namespaceStatus); err != nil {
 		t.Fatalf("query namespace status: %v", err)
 	}
-	if namespaceStatus != "deploy_failed" {
-		t.Fatalf("expected interrupted deploy environment to fail, got %q", namespaceStatus)
+	if namespaceStatus != "deploy_interrupted" {
+		t.Fatalf("expected interrupted deploy environment to be marked interrupted, got %q", namespaceStatus)
 	}
 	if application.issueHasActiveSession("issue-1") {
 		t.Fatal("expected startup reconciliation to clear active session state")
 	}
 	assertCommentAuthorContains(t, db, "issue-1", "Session `session-` was interrupted.", "system", "mspace")
 	assertSessionLogContains(t, db, "session-1", "runner restarted before this session completed")
+}
+
+func TestProbePreviewCandidatesTreatsClientErrorsAsOpen(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "topic not found", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	result := probePreviewCandidates([]previewCandidate{{URL: server.URL, Source: "nodeport"}})
+	if !result.OK || result.URL != server.URL || result.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 preview to count as open, got %+v", result)
+	}
+}
+
+func TestProbePreviewCandidatesRejectsServerErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "booting", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	result := probePreviewCandidates([]previewCandidate{{URL: server.URL, Source: "nodeport"}})
+	if result.OK || !strings.Contains(result.Error, "HTTP 503") {
+		t.Fatalf("expected 503 preview to fail, got %+v", result)
+	}
+}
+
+func TestUpdateIssueTestEnvironmentAdoptsPreviewArtifactFromContinuationSession(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	insertAuthTestIssue(t, db, "issue-1", "", "Continue deployment", "blocked")
+	now := nowString()
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	writeFile(t, filepath.Join(artifactDir, "test-environment.json"), `{"previewUrl":"http://192.0.2.10:30080/"}`)
+
+	for _, session := range []struct {
+		id        string
+		status    string
+		artifact  string
+		agentStat string
+	}{
+		{id: "old-deploy-session", status: "failed", agentStat: "failed"},
+		{id: "continuation-session", status: "failed", artifact: artifactDir, agentStat: "failed"},
+	} {
+		if _, err := db.Exec(`
+			INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, cleanup_status, cleaned_at, created_at, updated_at)
+			VALUES (?, 'issue-1', 'codex', 'codex', 'local', 'continue deployment', ?, ?, ?, '', '', ?, ?, 'retained', '', ?, ?)
+		`, session.id, session.status, "mspace/issue/"+session.id, t.TempDir(), session.agentStat, session.artifact, now, now); err != nil {
+			t.Fatalf("insert session %s: %v", session.id, err)
+		}
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issue_test_environments (issue_id, namespace, namespace_status, cleanup_status, preview_url, last_deploy_session_id, source_session_id, source_commit_sha, created_at, updated_at)
+		VALUES ('issue-1', 'ns-demo', 'deploy_failed', 'retained', '', 'old-deploy-session', 'source-session', 'abcdef1234567890', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert test environment: %v", err)
+	}
+
+	application.updateIssueTestEnvironmentForSession(agentSession{
+		ID:          "continuation-session",
+		IssueID:     "issue-1",
+		Status:      "failed",
+		ArtifactDir: artifactDir,
+	}, false)
+
+	var namespaceStatus, cleanupStatus, previewURL, lastDeploySessionID, sourceSessionID, sourceCommitSHA, issueStatus string
+	if err := db.QueryRow(`
+		SELECT namespace_status, cleanup_status, preview_url, last_deploy_session_id, source_session_id, source_commit_sha
+		FROM issue_test_environments
+		WHERE issue_id = 'issue-1'
+	`).Scan(&namespaceStatus, &cleanupStatus, &previewURL, &lastDeploySessionID, &sourceSessionID, &sourceCommitSHA); err != nil {
+		t.Fatalf("query test environment: %v", err)
+	}
+	if namespaceStatus != "active" || cleanupStatus != "retained" || previewURL != "http://192.0.2.10:30080/" || lastDeploySessionID != "continuation-session" {
+		t.Fatalf("expected continuation session preview to activate environment, got status=%q cleanup=%q preview=%q last=%q", namespaceStatus, cleanupStatus, previewURL, lastDeploySessionID)
+	}
+	if sourceSessionID != "source-session" || sourceCommitSHA != "abcdef1234567890" {
+		t.Fatalf("expected existing source selection to be preserved, got source_session=%q source_commit=%q", sourceSessionID, sourceCommitSHA)
+	}
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'issue-1'`).Scan(&issueStatus); err != nil {
+		t.Fatalf("query issue status: %v", err)
+	}
+	if issueStatus != "ready_for_test" {
+		t.Fatalf("expected issue to return to ready_for_test, got %q", issueStatus)
+	}
+	assertSessionLogContains(t, db, "continuation-session", "Updated issue test environment from session preview artifact.")
 }
 
 func TestMigrateClosedIssueStatusesKeepsSessionCompletion(t *testing.T) {

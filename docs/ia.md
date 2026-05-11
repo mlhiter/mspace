@@ -287,7 +287,7 @@ The evidence panel should summarize:
 
 It should answer "where can the team test this?" without forcing the user into a separate ops view.
 
-In the default test path, the answer should be grounded in the issue namespace, image reference, preview URL probe, Kubernetes deployment state, and recent evidence rather than generic agent logs alone.
+In the default test path, the answer should be grounded in the issue namespace, image reference, preview URL check, Kubernetes deployment state, and recent evidence rather than generic agent logs alone.
 
 Current implementation:
 
@@ -302,6 +302,7 @@ Current implementation:
 - renders a compact failure callout with the last meaningful runner error when a session fails;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
+- automatically checks preview status in the background when Issue Detail opens or refreshes an existing test environment, instead of exposing a separate Probe button;
 - separates source review from execution evidence: Commits shows code changes and diffs, while Evidence shows compact commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state;
 - keeps raw command trails collapsed in session logs, with exploratory commands excluded from persisted review evidence;
 - shows a compact Project runbook entry in the Workflow sidebar; clicking it opens a read-only TipTap runbook modal;

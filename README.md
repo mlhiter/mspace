@@ -77,7 +77,7 @@ Production deployment uses the root `vercel.json`:
 - Type and priority labels, child issue task lists with create/toggle/delete controls, asynchronous type triage, server-backed unread Inbox updates with a sidebar badge, latest-comment editing before agent consumption, comment reactions, running-session stop controls, failed-session callouts, and manual worktree cleanup after completion or cancellation.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Project default cluster selection.
-- Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and record structured review evidence.
+- Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, reconcile Kubernetes evidence, and check preview status in the background.
 
 > [!IMPORTANT]
 > Generated scoped kubeconfigs, ServiceAccounts, automatic PR capture, and Kubernetes-hosted agent runtime are future work. The MVP trusts the kubeconfig path configured on the selected cluster.
@@ -170,7 +170,7 @@ Local data paths:
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree for one agent session. |
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Session context markdown included in Codex prompts. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory. |
-| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional agent-written deployment result; `previewUrl` is copied back to the issue test environment. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional agent-written deployment result; `previewUrl` is copied back to the issue test environment, including from continuation sessions that need to refresh the current preview. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional agent-written review snapshot for commands, tests, build/deploy result, summary, risks, and follow-ups. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-written project runbook update imported after a successful session. |
 

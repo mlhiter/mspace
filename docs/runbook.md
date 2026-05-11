@@ -11,7 +11,7 @@
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree created for one local agent session. |
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Markdown session context included in the Codex app-server prompt. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory recorded in `agent_sessions.artifact_dir`. |
-| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional deploy/test artifact. When it includes `previewUrl`, the runner copies it back to the issue test environment. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional deploy/test artifact. When it includes `previewUrl`, the runner copies it back to the issue test environment; completed continuation sessions can also refresh the current issue environment this way. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional session review artifact. The runner imports compact commands, tests, build/deploy results, agent summary, risks, and follow-ups into `session_review_evidence`. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-learned project runbook artifact. When present after a successful session, the runner stores it as the current project runbook. |
 
@@ -311,7 +311,15 @@ curl -X POST http://127.0.0.1:7788/api/issues/<issue-id>/test-deploy \
   -d "{\"clusterId\":\"${CLUSTER_ID}\",\"exposureMode\":\"nodeport\",\"nodeHost\":\"test-node.example.com\"}"
 ```
 
-The deploy/test agent uses the selected cluster config, creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when selected with a preview domain, probes the preview URL, and can write `previewUrl` to `$MSPACE_SESSION_ARTIFACT_DIR/test-environment.json`.
+The deploy/test agent uses the selected cluster config, creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when selected with a preview domain, and can write `previewUrl` to `$MSPACE_SESSION_ARTIFACT_DIR/test-environment.json`. The runner then captures Kubernetes evidence, discovers preview candidates, and checks whether the preview URL opens.
+
+Force the same preview status check that Issue Detail normally runs in the background:
+
+```bash
+curl -X POST http://127.0.0.1:7788/api/issues/<issue-id>/test-environment/probe
+```
+
+Use that route for debugging or automation only. In the product UI, users should open the preview link; mspace refreshes status without a separate Probe button.
 
 Record or trigger namespace cleanup:
 
@@ -516,7 +524,7 @@ sqlite3 ~/.mspace/mspace.db "select issue_id,namespace,namespace_status,cleanup_
 ps -axo pid,ppid,stat,etime,command | rg -i 'codex app-server|mspace|runner' | rg -v 'rg -i'
 ```
 
-Current runner startup reconciles orphaned active rows automatically: source/deploy sessions become `failed` with `agent_status='interrupted'`, the issue moves to `blocked`, and a linked deploy or cleanup environment moves from `deploying`/`cleanup_requested` to `deploy_failed`/`cleanup_failed`. If the UI was loaded before that reconciliation, restart the runner or the desktop app and refresh Issue Detail:
+Current runner startup reconciles orphaned active rows automatically: source/deploy sessions become `failed` with `agent_status='interrupted'`, the issue moves to `blocked`, and a linked deploy or cleanup environment moves from `deploying`/`cleanup_requested` to `deploy_interrupted`/`cleanup_failed`. If the UI was loaded before that reconciliation, restart the runner or the desktop app and refresh Issue Detail:
 
 ```bash
 curl http://127.0.0.1:7788/health

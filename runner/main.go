@@ -737,6 +737,7 @@ func main() {
 	router.Post("/api/issues/{issueID}/test-deploy", application.handleStartIssueTestDeploy)
 	router.Post("/api/issues/{issueID}/test-environment/cleanup", application.handleRequestIssueTestEnvironmentCleanup)
 	router.Post("/api/issues/{issueID}/test-environment/retain", application.handleRetainIssueTestEnvironment)
+	router.Post("/api/issues/{issueID}/test-environment/probe", application.handleProbeIssueTestEnvironment)
 	router.Get("/api/sessions/{sessionID}", application.handleGetSession)
 	router.Post("/api/sessions/{sessionID}/cancel", application.handleCancelSession)
 	router.Post("/api/sessions/{sessionID}/cleanup", application.handleCleanupSessionWorktree)
@@ -845,9 +846,16 @@ func (a *app) markSessionInterruptedByRunnerRestart(session agentSession) {
 	reason := "The local runner restarted before this session completed, so the attached Codex app-server process is no longer running. Start a new session to continue from the last recorded log."
 	a.updateSessionStatus(session.ID, "failed")
 	a.updateSessionAgentStatus(session.ID, "interrupted")
+	session.Status = "failed"
+	session.AgentStatus = "interrupted"
 	a.appendSessionLog(session.ID, "system", reason)
 	a.updateIssueStatus(session.IssueID, "blocked")
-	a.markIssueTestEnvironmentSessionInterrupted(session)
+	if detail, err := a.loadSessionDetail(session.ID); err == nil && a.isIssueTestDeploySession(session) {
+		a.reconcileIssueTestEnvironmentForSession(session, detail.Project, "interrupted")
+		a.recordSessionReviewEvidence(session, detail.Project, nil, false)
+	} else {
+		a.markIssueTestEnvironmentSessionInterrupted(session)
+	}
 	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` was interrupted.\n\n%s", shortID(session.ID), reason))
 }
 
@@ -3551,6 +3559,61 @@ func (a *app) handleRetainIssueTestEnvironment(w http.ResponseWriter, r *http.Re
 	writeJSON(w, environment)
 }
 
+func (a *app) handleProbeIssueTestEnvironment(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	if _, ok := a.requireHumanActor(w, r); !ok {
+		return
+	}
+	detail, err := a.loadIssueDetail(issueID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("issue not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if detail.TestEnvironment == nil || strings.TrimSpace(detail.TestEnvironment.Namespace) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("issue has no test namespace to check"))
+		return
+	}
+	deploySession := probeSessionForIssue(detail)
+	if deploySession == nil {
+		writeError(w, http.StatusNotFound, errors.New("deploy session or preview artifact not found"))
+		return
+	}
+	a.appendSessionLog(deploySession.ID, "system", "Preview status check requested from Issue Detail.")
+	a.reconcileIssueTestEnvironmentForSession(*deploySession, detail.Project, "probe")
+	a.recordSessionReviewEvidence(*deploySession, detail.Project, nil, deploySession.Status == "completed")
+	environment, err := a.loadIssueTestEnvironment(issueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if environment == nil {
+		writeError(w, http.StatusNotFound, errors.New("issue test environment not found"))
+		return
+	}
+	writeJSON(w, environment)
+}
+
+func probeSessionForIssue(detail issueDetail) *agentSession {
+	lastDeploySessionID := ""
+	if detail.TestEnvironment != nil {
+		lastDeploySessionID = strings.TrimSpace(detail.TestEnvironment.LastDeploySessionID)
+	}
+	for i := range detail.Sessions {
+		if readTestEnvironmentPreviewURL(detail.Sessions[i]) != "" {
+			return &detail.Sessions[i]
+		}
+		if lastDeploySessionID != "" && detail.Sessions[i].ID == lastDeploySessionID {
+			return &detail.Sessions[i]
+		}
+	}
+	return nil
+}
+
 func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issueActor) (agentSession, error) {
 	input.Provider = strings.TrimSpace(input.Provider)
 	input.AgentProfile = strings.TrimSpace(input.AgentProfile)
@@ -4129,8 +4192,15 @@ func (a *app) runSession(session agentSession, project project) {
 		cancelActor := a.sessionCancelActor(session.ID)
 		a.updateSessionStatus(session.ID, "cancelled")
 		a.updateSessionAgentStatus(session.ID, "cancelled")
+		session.Status = "cancelled"
+		session.AgentStatus = "cancelled"
 		a.appendSessionLog(session.ID, "system", "Session cancelled.")
-		a.markIssueTestEnvironmentSessionInterrupted(session)
+		if a.isIssueTestDeploySession(session) {
+			a.reconcileIssueTestEnvironmentForSession(session, project, "interrupted")
+			a.recordSessionReviewEvidence(session, project, nil, false)
+		} else {
+			a.reconcileIssueTestEnvironmentForSession(session, project, "interrupted")
+		}
 		a.addSystemComment(session.IssueID, fmt.Sprintf("Stopped session `%s` by %s.", shortID(session.ID), commentActorName(cancelActor)))
 		return
 	}
@@ -4164,6 +4234,12 @@ func (a *app) runSession(session agentSession, project project) {
 		a.appendSessionLog(session.ID, "system", "Session completed. Updating test namespace cleanup state.")
 		a.updateIssueTestEnvironmentForSession(session, true)
 		a.updateReviewEvidenceCleanupStatus(session.ID, "cleaned")
+		return
+	}
+	if a.isIssueTestDeploySession(session) {
+		a.appendSessionLog(session.ID, "system", "Session completed. Reconciling test deployment state.")
+		a.reconcileIssueTestEnvironmentForSession(session, project, "success")
+		a.recordSessionReviewEvidence(session, project, changeNode, true)
 		return
 	}
 	a.appendSessionLog(session.ID, "system", "Session completed. Collecting Kubernetes evidence.")
@@ -4397,14 +4473,21 @@ func (a *app) captureStream(wg *sync.WaitGroup, sessionID, stream string, reader
 func (a *app) failSession(session agentSession, project *project, err error) {
 	a.updateSessionStatus(session.ID, "failed")
 	a.updateSessionAgentStatus(session.ID, "failed")
+	session.Status = "failed"
+	session.AgentStatus = "failed"
 	a.updateIssueStatus(session.IssueID, "blocked")
 	a.appendSessionLog(session.ID, "system", err.Error())
 	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` failed.\n\n%s", shortID(session.ID), err.Error()))
-	if project != nil && a.evidenceTargetProject(session, *project).Namespace != "" {
+	if project != nil && a.isIssueTestDeploySession(session) {
+		a.appendSessionLog(session.ID, "system", "Reconciling test deployment state after failure.")
+		a.reconcileIssueTestEnvironmentForSession(session, *project, "failed")
+	} else if project != nil && a.evidenceTargetProject(session, *project).Namespace != "" {
 		a.appendSessionLog(session.ID, "system", "Collecting Kubernetes evidence after failure.")
 		a.collectEvidence(session, *project)
+		a.updateIssueTestEnvironmentForSession(session, false)
+	} else {
+		a.updateIssueTestEnvironmentForSession(session, false)
 	}
-	a.updateIssueTestEnvironmentForSession(session, false)
 	if project != nil {
 		a.recordSessionReviewEvidence(session, *project, nil, false)
 	}
@@ -4505,16 +4588,22 @@ func (a *app) writeSessionContext(session agentSession, project project) (string
 }
 
 func (a *app) collectEvidence(session agentSession, project project) {
+	if evidence := a.collectEvidenceSnapshot(session, project); evidence != nil {
+		a.storeEvidence(*evidence, true)
+	}
+}
+
+func (a *app) collectEvidenceSnapshot(session agentSession, project project) *deploymentEvidence {
 	project = a.evidenceTargetProject(session, project)
 	if project.Namespace == "" {
 		a.appendSessionLog(session.ID, "system", "Skipping Kubernetes evidence collection because no namespace is configured for this project.")
-		return
+		return nil
 	}
 
 	kubectlPath, err := exec.LookPath("kubectl")
 	if err != nil {
 		a.appendSessionLog(session.ID, "system", "kubectl is not available on PATH, so Kubernetes evidence could not be collected.")
-		a.storeEvidence(deploymentEvidence{
+		return &deploymentEvidence{
 			ID:        uuid.NewString(),
 			IssueID:   session.IssueID,
 			SessionID: session.ID,
@@ -4523,8 +4612,7 @@ func (a *app) collectEvidence(session agentSession, project project) {
 			Summary:   "Kubernetes evidence collection failed after session completion.",
 			Details:   "kubectl was not found on PATH.",
 			CreatedAt: nowString(),
-		})
-		return
+		}
 	}
 
 	summaryOutput, summaryErr := exec.Command(kubectlPath, buildKubectlArgs(project, "get", "pods,deploy,svc,ingress")...).CombinedOutput()
@@ -4548,7 +4636,7 @@ func (a *app) collectEvidence(session agentSession, project project) {
 		details += "\n\n--- events ---\n" + eventsErr.Error()
 	}
 
-	a.storeEvidence(deploymentEvidence{
+	return &deploymentEvidence{
 		ID:        uuid.NewString(),
 		IssueID:   session.IssueID,
 		SessionID: session.ID,
@@ -4557,7 +4645,7 @@ func (a *app) collectEvidence(session agentSession, project project) {
 		Summary:   summary,
 		Details:   truncate(details, 12000),
 		CreatedAt: nowString(),
-	})
+	}
 }
 
 func (a *app) evidenceTargetProject(session agentSession, project project) project {
@@ -4584,12 +4672,13 @@ func (a *app) updateIssueTestEnvironmentForSession(session agentSession, success
 	if err != nil || environment == nil {
 		return
 	}
+	previewURL := readTestEnvironmentPreviewURL(session)
 	changed := false
 	switch {
 	case environment.LastDeploySessionID == session.ID:
 		changed = true
 		if success {
-			if previewURL := readTestEnvironmentPreviewURL(session); previewURL != "" {
+			if previewURL != "" {
 				environment.PreviewURL = previewURL
 			}
 			environment.NamespaceStatus = "active"
@@ -4608,6 +4697,20 @@ func (a *app) updateIssueTestEnvironmentForSession(session agentSession, success
 			environment.NamespaceStatus = "cleanup_failed"
 			environment.CleanupStatus = "cleanup_failed"
 		}
+	case previewURL != "" && environment.LastCleanupSessionID != session.ID:
+		changed = true
+		environment.PreviewURL = previewURL
+		environment.NamespaceStatus = "active"
+		environment.CleanupStatus = "retained"
+		environment.LastDeploySessionID = session.ID
+		if strings.TrimSpace(session.SourceSessionID) != "" {
+			environment.SourceSessionID = session.SourceSessionID
+		}
+		if strings.TrimSpace(session.SourceCommitSHA) != "" {
+			environment.SourceCommitSHA = session.SourceCommitSHA
+		}
+		a.updateIssueStatus(session.IssueID, "ready_for_test")
+		a.appendSessionLog(session.ID, "system", "Updated issue test environment from session preview artifact.")
 	}
 	if !changed {
 		return
@@ -4626,7 +4729,7 @@ func (a *app) markIssueTestEnvironmentSessionInterrupted(session agentSession) {
 	changed := false
 	switch {
 	case environment.LastDeploySessionID == session.ID:
-		environment.NamespaceStatus = "deploy_failed"
+		environment.NamespaceStatus = "deploy_interrupted"
 		changed = true
 	case environment.LastCleanupSessionID == session.ID:
 		environment.NamespaceStatus = "cleanup_failed"
@@ -4658,20 +4761,526 @@ func (a *app) isIssueTestCleanupSession(session agentSession) bool {
 }
 
 func readTestEnvironmentPreviewURL(session agentSession) string {
-	resultPath := filepath.Join(session.Workdir, ".mspace", "session", "test-environment.json")
-	data, err := os.ReadFile(resultPath)
+	paths := []string{}
+	if strings.TrimSpace(session.ArtifactDir) != "" {
+		paths = append(paths, filepath.Join(session.ArtifactDir, "test-environment.json"))
+	}
+	if strings.TrimSpace(session.Workdir) != "" {
+		workdirPath := filepath.Join(session.Workdir, ".mspace", "session", "test-environment.json")
+		if len(paths) == 0 || paths[0] != workdirPath {
+			paths = append(paths, workdirPath)
+		}
+	}
+	for _, resultPath := range paths {
+		data, err := os.ReadFile(resultPath)
+		if err != nil {
+			continue
+		}
+		var result struct {
+			PreviewURL string `json:"previewUrl"`
+			PreviewUrl string `json:"preview_url"`
+			URL        string `json:"url"`
+		}
+		if err := json.Unmarshal(data, &result); err != nil {
+			continue
+		}
+		if previewURL := firstNonEmpty(result.PreviewURL, result.PreviewUrl, result.URL); previewURL != "" {
+			return previewURL
+		}
+	}
+	return ""
+}
+
+type deployStagePayload struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
+	Time    string `json:"time"`
+}
+
+type previewCandidate struct {
+	URL    string
+	Source string
+}
+
+type previewProbeResult struct {
+	URL        string
+	Source     string
+	OK         bool
+	StatusCode int
+	Error      string
+}
+
+func (a *app) appendDeployStage(sessionID, id, label, status, summary string) {
+	payload, err := json.Marshal(deployStagePayload{
+		ID:      id,
+		Label:   label,
+		Status:  status,
+		Summary: summary,
+		Time:    nowString(),
+	})
+	if err != nil {
+		return
+	}
+	a.appendSessionLog(sessionID, "deploy-stage", string(payload))
+}
+
+func (a *app) reconcileIssueTestEnvironmentForSession(session agentSession, project project, outcome string) {
+	environment, err := a.loadIssueTestEnvironment(session.IssueID)
+	artifactPreviewURL := readTestEnvironmentPreviewURL(session)
+	adoptPreviewSession := environment != nil && environment.LastDeploySessionID != session.ID && artifactPreviewURL != ""
+	if err != nil || environment == nil || (environment.LastDeploySessionID != session.ID && !adoptPreviewSession) {
+		return
+	}
+
+	targetProject := a.evidenceTargetProject(session, project)
+	a.appendDeployStage(session.ID, "capture-evidence", "Capture Kubernetes evidence", "running", "Reading namespace resources and recent events.")
+	evidence := a.collectEvidenceSnapshot(session, targetProject)
+	if evidence != nil {
+		a.appendDeployStage(session.ID, "capture-evidence", "Capture Kubernetes evidence", "passed", evidence.Summary)
+	} else {
+		a.appendDeployStage(session.ID, "capture-evidence", "Capture Kubernetes evidence", "skipped", "No namespace evidence was available.")
+	}
+
+	a.appendDeployStage(session.ID, "discover-preview", "Discover preview URL", "running", "Looking for artifact, ingress, HTTPRoute, and NodePort candidates.")
+	kubectlPath, kubectlErr := exec.LookPath("kubectl")
+	candidates := []previewCandidate{}
+	if existingURL := strings.TrimSpace(environment.PreviewURL); existingURL != "" {
+		candidates = append(candidates, previewCandidate{URL: existingURL, Source: "environment"})
+	}
+	if artifactPreviewURL != "" {
+		candidates = append(candidates, previewCandidate{URL: artifactPreviewURL, Source: "artifact"})
+	}
+	resourcesReady := false
+	discoverySummary := ""
+	if kubectlErr == nil {
+		if ready, summary := kubernetesResourcesReady(kubectlPath, targetProject); summary != "" {
+			resourcesReady = ready
+			discoverySummary = summary
+		}
+		candidates = append(candidates, discoverPreviewCandidates(kubectlPath, targetProject, *environment)...)
+	} else {
+		discoverySummary = "kubectl is not available on PATH."
+	}
+	candidates = uniquePreviewCandidates(candidates)
+	a.appendDeployStage(session.ID, "discover-preview", "Discover preview URL", "passed", fmt.Sprintf("Found %d preview candidate(s).", len(candidates)))
+
+	a.appendDeployStage(session.ID, "probe-preview", "Check preview", "running", "Checking whether a candidate URL is open.")
+	probe := probePreviewCandidates(candidates)
+	if probe.OK {
+		a.appendDeployStage(session.ID, "probe-preview", "Check preview", "passed", fmt.Sprintf("Preview opened with HTTP %d: %s", probe.StatusCode, probe.URL))
+	} else if probe.Error != "" {
+		a.appendDeployStage(session.ID, "probe-preview", "Check preview", "failed", probe.Error)
+	} else {
+		a.appendDeployStage(session.ID, "probe-preview", "Check preview", "skipped", "No preview candidates were available.")
+	}
+
+	if probe.OK {
+		environment.PreviewURL = probe.URL
+		environment.NamespaceStatus = "active"
+		environment.CleanupStatus = "retained"
+		if adoptPreviewSession {
+			environment.LastDeploySessionID = session.ID
+			if strings.TrimSpace(session.SourceSessionID) != "" {
+				environment.SourceSessionID = session.SourceSessionID
+			}
+			if strings.TrimSpace(session.SourceCommitSHA) != "" {
+				environment.SourceCommitSHA = session.SourceCommitSHA
+			}
+		}
+		a.updateIssueStatus(session.IssueID, "ready_for_test")
+	} else if resourcesReady {
+		environment.NamespaceStatus = "preview_unverified"
+		environment.CleanupStatus = "retained"
+		if adoptPreviewSession {
+			environment.LastDeploySessionID = session.ID
+		}
+		a.updateIssueStatus(session.IssueID, "blocked")
+	} else if outcome == "interrupted" {
+		environment.NamespaceStatus = "deploy_interrupted"
+		a.updateIssueStatus(session.IssueID, "blocked")
+	} else {
+		environment.NamespaceStatus = "deploy_failed"
+		a.updateIssueStatus(session.IssueID, "blocked")
+	}
+
+	if err := a.saveIssueTestEnvironment(*environment); err == nil {
+		a.publishInboxEvent(session.IssueID, "test-environment")
+	}
+
+	summary := deploymentReconcileSummary(*environment, resourcesReady, probe, outcome)
+	details := buildDeploymentReconcileDetails(discoverySummary, candidates, probe, evidence)
+	a.storeEvidence(deploymentEvidence{
+		ID:        uuid.NewString(),
+		IssueID:   session.IssueID,
+		SessionID: session.ID,
+		Cluster:   firstNonEmpty(environment.KubeContext, environment.ClusterID),
+		Namespace: environment.Namespace,
+		Summary:   summary,
+		Details:   truncate(details, 12000),
+		CreatedAt: nowString(),
+	}, outcome != "probe")
+	a.appendDeployStage(session.ID, "reconcile", "Finalize deployment state", deployStageStatusForNamespace(environment.NamespaceStatus), summary)
+}
+
+func deploymentReconcileSummary(environment issueTestEnvironment, resourcesReady bool, probe previewProbeResult, outcome string) string {
+	if probe.OK {
+		return fmt.Sprintf("Deployment is active. Preview URL opened with HTTP %d.", probe.StatusCode)
+	}
+	if resourcesReady {
+		return "Deployment resources look ready, but no preview URL could be verified."
+	}
+	if outcome == "interrupted" {
+		return "Deployment session was interrupted before mspace could verify readiness."
+	}
+	if environment.NamespaceStatus == "deploy_failed" {
+		return "Deployment could not be verified as ready."
+	}
+	return "Deployment state was reconciled."
+}
+
+func deployStageStatusForNamespace(namespaceStatus string) string {
+	switch namespaceStatus {
+	case "active":
+		return "passed"
+	case "preview_unverified":
+		return "warning"
+	case "deploy_failed", "deploy_interrupted":
+		return "failed"
+	default:
+		return "completed"
+	}
+}
+
+func buildDeploymentReconcileDetails(discoverySummary string, candidates []previewCandidate, probe previewProbeResult, evidence *deploymentEvidence) string {
+	var builder strings.Builder
+	if discoverySummary != "" {
+		builder.WriteString(discoverySummary)
+		builder.WriteString("\n\n")
+	}
+	builder.WriteString("Preview candidates:\n")
+	if len(candidates) == 0 {
+		builder.WriteString("- none\n")
+	} else {
+		for _, candidate := range candidates {
+			builder.WriteString(fmt.Sprintf("- %s (%s)\n", candidate.URL, candidate.Source))
+		}
+	}
+	builder.WriteString("\nPreview check result:\n")
+	if probe.OK {
+		builder.WriteString(fmt.Sprintf("- opened %s with HTTP %d\n", probe.URL, probe.StatusCode))
+	} else if probe.Error != "" {
+		builder.WriteString("- " + probe.Error + "\n")
+	} else {
+		builder.WriteString("- no preview check ran\n")
+	}
+	if evidence != nil && strings.TrimSpace(evidence.Details) != "" {
+		builder.WriteString("\nKubernetes snapshot:\n")
+		builder.WriteString(evidence.Details)
+	}
+	return builder.String()
+}
+
+func kubernetesResourcesReady(kubectlPath string, project project) (bool, string) {
+	deployments, deployErr := kubectlJSONItems(kubectlPath, project, "deploy")
+	pods, podErr := kubectlJSONItems(kubectlPath, project, "pods")
+	if deployErr != nil && podErr != nil {
+		return false, fmt.Sprintf("Could not inspect deployments or pods: %v; %v", deployErr, podErr)
+	}
+	if len(deployments) > 0 {
+		for _, item := range deployments {
+			spec := mapValue(item, "spec")
+			status := mapValue(item, "status")
+			desired := intValue(spec, "replicas")
+			if desired == 0 {
+				desired = 1
+			}
+			if intValue(status, "readyReplicas") < desired || intValue(status, "availableReplicas") < desired {
+				return false, "At least one deployment is not fully available."
+			}
+		}
+		return true, "All deployments report ready and available replicas."
+	}
+	if len(pods) > 0 {
+		for _, item := range pods {
+			status := mapValue(item, "status")
+			phase := stringValue(status, "phase")
+			if phase != "Running" && phase != "Succeeded" {
+				return false, "At least one pod is not running."
+			}
+			if phase == "Running" && !podReady(status) {
+				return false, "At least one running pod is not ready."
+			}
+		}
+		return true, "All pods are running or succeeded."
+	}
+	return false, "No deployments or pods were found in the namespace."
+}
+
+func discoverPreviewCandidates(kubectlPath string, project project, environment issueTestEnvironment) []previewCandidate {
+	candidates := []previewCandidate{}
+	candidates = append(candidates, ingressPreviewCandidates(kubectlPath, project)...)
+	candidates = append(candidates, httpRoutePreviewCandidates(kubectlPath, project)...)
+	candidates = append(candidates, nodePortPreviewCandidates(kubectlPath, project, environment)...)
+	return candidates
+}
+
+func ingressPreviewCandidates(kubectlPath string, project project) []previewCandidate {
+	items, err := kubectlJSONItems(kubectlPath, project, "ingress")
+	if err != nil {
+		return nil
+	}
+	candidates := []previewCandidate{}
+	for _, item := range items {
+		spec := mapValue(item, "spec")
+		tlsHosts := map[string]bool{}
+		for _, tls := range sliceValue(spec, "tls") {
+			for _, host := range stringSliceValue(mapAny(tls), "hosts") {
+				tlsHosts[host] = true
+			}
+		}
+		for _, rule := range sliceValue(spec, "rules") {
+			ruleMap := mapAny(rule)
+			host := stringValue(ruleMap, "host")
+			if host == "" {
+				continue
+			}
+			scheme := "http"
+			if tlsHosts[host] {
+				scheme = "https"
+			}
+			paths := sliceValue(mapValue(ruleMap, "http"), "paths")
+			if len(paths) == 0 {
+				candidates = append(candidates, previewCandidate{URL: scheme + "://" + host, Source: "ingress"})
+				continue
+			}
+			for _, pathItem := range paths {
+				path := stringValue(mapAny(pathItem), "path")
+				candidates = append(candidates, previewCandidate{URL: scheme + "://" + host + normalizeURLPath(path), Source: "ingress"})
+			}
+		}
+	}
+	return candidates
+}
+
+func httpRoutePreviewCandidates(kubectlPath string, project project) []previewCandidate {
+	items, err := kubectlJSONItems(kubectlPath, project, "httproute")
+	if err != nil {
+		return nil
+	}
+	candidates := []previewCandidate{}
+	for _, item := range items {
+		spec := mapValue(item, "spec")
+		hosts := stringSliceValue(spec, "hostnames")
+		for _, host := range hosts {
+			if host == "" {
+				continue
+			}
+			paths := []string{""}
+			for _, rule := range sliceValue(spec, "rules") {
+				for _, match := range sliceValue(mapAny(rule), "matches") {
+					path := stringValue(mapValue(mapAny(match), "path"), "value")
+					if path != "" {
+						paths = append(paths, path)
+					}
+				}
+			}
+			for _, path := range paths {
+				candidates = append(candidates, previewCandidate{URL: "http://" + host + normalizeURLPath(path), Source: "httproute"})
+			}
+		}
+	}
+	return candidates
+}
+
+func nodePortPreviewCandidates(kubectlPath string, project project, environment issueTestEnvironment) []previewCandidate {
+	items, err := kubectlJSONItems(kubectlPath, project, "svc")
+	if err != nil {
+		return nil
+	}
+	host := strings.TrimSpace(environment.NodeHost)
+	if host == "" {
+		host = discoverNodeHost(kubectlPath, project)
+	}
+	if host == "" {
+		return nil
+	}
+	candidates := []previewCandidate{}
+	for _, item := range items {
+		spec := mapValue(item, "spec")
+		if stringValue(spec, "type") != "NodePort" {
+			continue
+		}
+		for _, portItem := range sliceValue(spec, "ports") {
+			port := intValue(mapAny(portItem), "nodePort")
+			if port > 0 {
+				candidates = append(candidates, previewCandidate{URL: fmt.Sprintf("http://%s:%d", host, port), Source: "nodeport"})
+			}
+		}
+	}
+	return candidates
+}
+
+func discoverNodeHost(kubectlPath string, project project) string {
+	nodeProject := project
+	nodeProject.Namespace = ""
+	items, err := kubectlJSONItems(kubectlPath, nodeProject, "nodes")
 	if err != nil {
 		return ""
 	}
-	var result struct {
-		PreviewURL string `json:"previewUrl"`
-		PreviewUrl string `json:"preview_url"`
-		URL        string `json:"url"`
+	for _, preferredType := range []string{"ExternalIP", "InternalIP", "Hostname"} {
+		for _, item := range items {
+			for _, address := range sliceValue(mapValue(item, "status"), "addresses") {
+				addressMap := mapAny(address)
+				if stringValue(addressMap, "type") == preferredType {
+					if value := stringValue(addressMap, "address"); value != "" {
+						return value
+					}
+				}
+			}
+		}
 	}
-	if err := json.Unmarshal(data, &result); err != nil {
+	return ""
+}
+
+func probePreviewCandidates(candidates []previewCandidate) previewProbeResult {
+	if len(candidates) == 0 {
+		return previewProbeResult{}
+	}
+	client := http.Client{Timeout: 5 * time.Second}
+	lastErr := ""
+	for _, candidate := range candidates {
+		request, err := http.NewRequest(http.MethodGet, candidate.URL, nil)
+		if err != nil {
+			lastErr = fmt.Sprintf("%s: %v", candidate.URL, err)
+			continue
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			lastErr = fmt.Sprintf("%s: %v", candidate.URL, err)
+			continue
+		}
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4*1024))
+		_ = response.Body.Close()
+		if response.StatusCode >= 200 && response.StatusCode < 500 {
+			return previewProbeResult{URL: candidate.URL, Source: candidate.Source, OK: true, StatusCode: response.StatusCode}
+		}
+		lastErr = fmt.Sprintf("%s returned HTTP %d", candidate.URL, response.StatusCode)
+	}
+	return previewProbeResult{Error: firstNonEmpty(lastErr, "No preview candidate opened successfully.")}
+}
+
+func uniquePreviewCandidates(candidates []previewCandidate) []previewCandidate {
+	seen := map[string]bool{}
+	result := []previewCandidate{}
+	for _, candidate := range candidates {
+		candidate.URL = normalizePreviewURL(candidate.URL)
+		if candidate.URL == "" || seen[candidate.URL] {
+			continue
+		}
+		seen[candidate.URL] = true
+		result = append(result, candidate)
+	}
+	return result
+}
+
+func normalizePreviewURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return ""
 	}
-	return firstNonEmpty(result.PreviewURL, result.PreviewUrl, result.URL)
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return value
+	}
+	return "http://" + value
+}
+
+func normalizeURLPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "/" {
+		return ""
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "/" + path
+	}
+	return path
+}
+
+func kubectlJSONItems(kubectlPath string, project project, resource string) ([]map[string]any, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	args := buildKubectlArgs(project, "get", resource, "-o", "json")
+	output, err := exec.CommandContext(ctx, kubectlPath, args...).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("kubectl get %s: %s", resource, formatCommandFailure(err, output))
+	}
+	var list struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(output, &list); err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
+func podReady(status map[string]any) bool {
+	for _, condition := range sliceValue(status, "conditions") {
+		conditionMap := mapAny(condition)
+		if stringValue(conditionMap, "type") == "Ready" && stringValue(conditionMap, "status") == "True" {
+			return true
+		}
+	}
+	return false
+}
+
+func mapAny(value any) map[string]any {
+	if typed, ok := value.(map[string]any); ok {
+		return typed
+	}
+	return map[string]any{}
+}
+
+func mapValue(values map[string]any, key string) map[string]any {
+	return mapAny(values[key])
+}
+
+func sliceValue(values map[string]any, key string) []any {
+	if typed, ok := values[key].([]any); ok {
+		return typed
+	}
+	return nil
+}
+
+func stringValue(values map[string]any, key string) string {
+	if value, ok := values[key].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func stringSliceValue(values map[string]any, key string) []string {
+	result := []string{}
+	for _, item := range sliceValue(values, key) {
+		if value, ok := item.(string); ok && strings.TrimSpace(value) != "" {
+			result = append(result, strings.TrimSpace(value))
+		}
+	}
+	return result
+}
+
+func intValue(values map[string]any, key string) int {
+	switch value := values[key].(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	case json.Number:
+		parsed, _ := strconv.Atoi(value.String())
+		return parsed
+	default:
+		return 0
+	}
 }
 
 type reviewEvidenceArtifact struct {
@@ -5179,7 +5788,11 @@ func reviewResultFromCommands(commands []reviewEvidenceCommand, category, emptyS
 func (a *app) deploymentReviewResult(session agentSession, success bool) reviewEvidenceResult {
 	if evidence, err := a.latestDeploymentEvidenceForSession(session.ID); err == nil && evidence != nil {
 		status := "passed"
-		if strings.Contains(strings.ToLower(evidence.Summary), "failed") {
+		lowerSummary := strings.ToLower(evidence.Summary)
+		if strings.Contains(lowerSummary, "but no preview") || strings.Contains(lowerSummary, "unverified") {
+			status = "warning"
+		}
+		if strings.Contains(lowerSummary, "failed") || strings.Contains(lowerSummary, "could not") || strings.Contains(lowerSummary, "interrupted") {
 			status = "failed"
 		}
 		return reviewEvidenceResult{Status: status, Summary: evidence.Summary, Details: truncate(evidence.Details, 1200)}
@@ -6523,7 +7136,7 @@ func (a *app) appendSessionLog(sessionID, stream, message string) {
 		INSERT INTO session_logs (session_id, stream, message, created_at)
 		VALUES (?, ?, ?, ?)
 	`, sessionID, stream, message, createdAt)
-	a.broker.publish(sessionID, sessionEvent{Type: "log", Payload: message})
+	a.broker.publish(sessionID, sessionEvent{Type: "log", Payload: message, Stream: stream})
 }
 
 func (a *app) addSystemComment(issueID, body string) {
@@ -7087,18 +7700,20 @@ func inboxStatusToIssueEventSummary(status string) string {
 	}
 }
 
-func (a *app) storeEvidence(evidence deploymentEvidence) {
+func (a *app) storeEvidence(evidence deploymentEvidence, addComment bool) {
 	_, _ = a.db.Exec(`
 		INSERT INTO deployment_evidence (id, issue_id, session_id, cluster, namespace, summary, details, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`, evidence.ID, evidence.IssueID, evidence.SessionID, evidence.Cluster, evidence.Namespace, evidence.Summary, evidence.Details, evidence.CreatedAt)
-	a.addSystemComment(evidence.IssueID, fmt.Sprintf(
-		"Kubernetes evidence captured for session `%s` in `%s/%s`.\n\n%s",
-		shortID(evidence.SessionID),
-		clusterLabel(evidence.Cluster),
-		evidence.Namespace,
-		evidence.Summary,
-	))
+	if addComment {
+		a.addSystemComment(evidence.IssueID, fmt.Sprintf(
+			"Kubernetes evidence captured for session `%s` in `%s/%s`.\n\n%s",
+			shortID(evidence.SessionID),
+			clusterLabel(evidence.Cluster),
+			evidence.Namespace,
+			evidence.Summary,
+		))
+	}
 	a.broker.publish(evidence.SessionID, sessionEvent{Type: "status", Payload: "evidence"})
 }
 
@@ -7156,6 +7771,7 @@ func (a *app) updateReviewEvidenceCleanupStatus(sessionID, cleanupStatus string)
 type sessionEvent struct {
 	Type    string `json:"type"`
 	Payload string `json:"payload"`
+	Stream  string `json:"stream,omitempty"`
 }
 
 func jsonMiddleware(next http.Handler) http.Handler {

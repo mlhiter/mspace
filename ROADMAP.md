@@ -50,7 +50,7 @@ Build in order:
 - Progress comments: turn meaningful session lifecycle and status updates into issue activity, not just terminal logs.
 - Issue labels and session stop controls: keep type triage asynchronous, keep priority manual, and allow a human to interrupt queued or running work.
 - Manual test deployment: let the user select a saved cluster and optional exposure overrides before queueing a deploy/test agent turn.
-- Issue namespace lifecycle: each issue can reserve one test namespace; the deploy/test agent creates it, deploys resources, validates the preview URL, and writes the result back.
+- Issue namespace lifecycle: each issue can reserve one test namespace; the deploy/test agent creates it, deploys resources, mspace validates the preview URL, and writes the result back.
 - Branch and PR output: expose PR generation as a manual action after agent work, not as automatic session cleanup.
 - Cleanup controls: let the user retain or clean session worktrees now, and record retain/cleanup decisions for issue test namespaces.
 
@@ -163,7 +163,7 @@ Build:
 - Store project default cluster id.
 - Store one test environment record per issue: cluster id, namespace, preview URL, deploy session, cleanup session, namespace state, and cleanup state.
 - Add a manual "Deploy test env" action from Issue Detail.
-- Queue an agent deployment turn that creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default, uses Ingress when configured, probes the preview URL, and writes preview output back.
+- Queue an agent deployment turn that creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default, uses Ingress when configured, checks the preview URL, and writes preview output back.
 - Add manual retain/cleanup namespace decisions from Issue Detail.
 - Attach Kubernetes evidence to the issue and session.
 

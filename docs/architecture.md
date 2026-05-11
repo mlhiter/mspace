@@ -21,7 +21,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Each session creates or attaches a git worktree before starting the runtime provider.
 - The Codex provider starts `codex app-server --listen stdio://` in the session worktree and talks to it over newline-delimited JSON-RPC.
 - The runner persists Codex agent profile, thread id, turn id, agent status, artifact directory, scoped agent token, cleanup status, and cleaned timestamp on `agent_sessions`.
-- Runner startup reconciles persisted `queued` or `running` sessions left behind by a previous runner process. Because the Codex app-server process and in-memory cancellation handle cannot be recovered, these sessions become `failed` with `agent_status='interrupted'`, get a system log and issue comment, move the issue to `blocked`, and move any linked issue test environment out of active progress.
+- Runner startup reconciles persisted `queued` or `running` sessions left behind by a previous runner process. Because the Codex app-server process and in-memory cancellation handle cannot be recovered, these sessions become `failed` with `agent_status='interrupted'`, get a system log and issue comment, move the issue to `blocked`, and move any linked issue test environment out of active progress: deploy turns become `deploy_interrupted`, while cleanup turns become `cleanup_failed`.
 - Agent profiles live in `agent_profiles` and are exposed through the Agents module. Default Codex-backed agents are seeded, but new sessions resolve profile instructions from SQLite rather than hardcoded profile switches.
 - Finished local session worktrees can be cleaned through `POST /api/sessions/{sessionID}/cleanup`; active sessions are rejected, the stored workdir must stay under the mspace workdir root, and session records remain for review.
 - Source changes and review evidence are split deliberately. `issue_change_nodes` backs the Commits tab for commit metadata and diffs; source capture records an existing ahead-of-base session HEAD commit when the agent has already committed, or stages the worktree, excludes `.mspace`, retries transient `.git/index.lock` conflicts, and creates a captured source commit when the worktree still has uncommitted changes. `session_review_evidence` backs the Evidence tab for compact commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state. The runner stores only evidence-worthy commands in `commands_json`; raw command trails and exploratory output remain in `session_logs`. Changed-file UI uses Material Icon Theme file icons and filters directory-only placeholder paths while preserving concrete file paths under those directories.
@@ -38,7 +38,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Kubernetes is currently represented by reusable cluster configs plus issue-level test environment records. Clusters can be imported from selected kubeconfig files or discovered from regular files under `~/.kube`; each imported context stores `kubeconfig_path`, optional `kube_context`, `image_registry_prefix`, default `exposure_mode`, optional `preview_domain`, optional `ingress_class`, optional `node_host`, and a readiness status from a read-only API check.
 - Projects store `default_cluster_id` so issue deploys can use known test cluster access without asking for kubeconfig or registry values each time.
 - Each issue can have one `issue_test_environments` record. It stores the selected cluster id, reserved issue namespace, namespace state, cleanup state, preview URL, deployment session id, cleanup session id, and the resolved registry/kubeconfig/routing values used for that issue.
-- Test deployment is a manual Issue Detail action. It queues a Codex deploy/test turn; the agent creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when configured, probes the preview URL, and writes `test-environment.json` into the session artifact directory when it has a URL to record.
+- Test deployment is a manual Issue Detail action. It queues a Codex deploy/test turn; the agent creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when configured, and writes `test-environment.json` into the session artifact directory when it has a URL to record. The runner then reconciles Kubernetes evidence, discovers preview candidates, checks preview reachability, and updates the test environment to `active`, `preview_unverified`, `deploy_failed`, or `deploy_interrupted`. Issue Detail automatically refreshes preview status in the background instead of showing a manual Probe action.
 - Scoped kubeconfig and ServiceAccount generation are still future work. The MVP trusts the kubeconfig path stored in the selected cluster.
 - Sessions also receive `MSPACE_API_BASE_URL`, `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_TOKEN`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, `MSPACE_SESSION_ARTIFACT_DIR`, and resolved cluster/test-environment variables when the issue has a test environment.
 - Current desktop visual language is a Notion-like paper workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, and restrained icon actions.
@@ -125,6 +125,7 @@ Implemented runner API:
 | `POST` | `/api/issues/{issueID}/test-deploy` | Manually queue an issue-scoped test deployment agent turn. |
 | `POST` | `/api/issues/{issueID}/test-environment/cleanup` | Manually queue an agent turn to clean the issue test namespace. |
 | `POST` | `/api/issues/{issueID}/test-environment/retain` | Record that the issue test namespace should be retained. |
+| `POST` | `/api/issues/{issueID}/test-environment/probe` | Internal preview status check used by Issue Detail, debugging, and automation. |
 | `GET` | `/api/sessions/{sessionID}` | Load session detail, logs, evidence, and workspace snapshot. |
 | `POST` | `/api/sessions/{sessionID}/cancel` | Cancel a queued or running session. If a persisted running session no longer has an in-memory runner handle, mark it cancelled instead of returning a false active state. |
 | `POST` | `/api/sessions/{sessionID}/cleanup` | Remove a retained, non-active local session worktree. |
@@ -279,6 +280,8 @@ Current implemented fields:
 - preview domain;
 - ingress class;
 - NodePort host;
+- source session id;
+- source commit sha;
 - last deploy session id;
 - last cleanup session id.
 

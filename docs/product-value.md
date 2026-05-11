@@ -108,7 +108,7 @@ The issue page should let a teammate answer these questions without asking the o
 - Which commands and tests ran?
 - Where is the deployed test environment?
 - What Kubernetes resources were created?
-- Did the preview URL pass a real probe?
+- Did mspace confirm the preview URL opened?
 - What risks or follow-ups remain?
 - Should the team continue, merge, redeploy, retain, or clean up?
 
@@ -123,7 +123,7 @@ The user can already give Codex a kubeconfig and ask it to deploy. mspace should
 3. The agent builds and pushes the required image.
 4. The agent deploys the changed project into the namespace.
 5. The agent exposes the workload through NodePort or Ingress.
-6. The agent probes the preview URL.
+6. mspace checks the preview URL.
 7. mspace records the result and evidence on the issue.
 
 This gives mspace a sharper value than generic agent management. It lets the team review behavior in an environment closer to production than a local process.
@@ -139,7 +139,7 @@ Agent explores the project
   -> finds how to install dependencies
   -> finds how to run tests
   -> finds how to build images
-  -> finds how to deploy and probe
+  -> finds how to deploy and validate previews
   -> mspace stores the successful path
   -> later sessions receive the runbook as context
   -> the agent updates it when the project changes
@@ -165,7 +165,7 @@ The Evidence view should gather:
 - deployment result;
 - Kubernetes resources;
 - pod status, events, and logs;
-- preview URL and probe result;
+- preview URL and check result;
 - agent summary;
 - risks and follow-ups;
 - cleanup or retain state.

@@ -121,6 +121,10 @@ type EditorMentionMatch = {
   from: number;
   to: number;
 };
+
+const AUTO_PREVIEW_CHECK_INTERVAL_MS = 60_000;
+const autoPreviewCheckAtByIssue = new Map<string, number>();
+
 type EvidenceResource = {
   kind: string;
   name: string;
@@ -710,7 +714,9 @@ function parseEvidenceDetails(evidence: DeploymentEvidence): ParsedEvidence {
   const [resourceText = "", eventText = ""] = details.split(/\n\s*--- events ---\s*\n/);
   const resources = parseResourceTables(resourceText);
   const events = parseEvidenceEvents(eventText);
-  const failed = evidence.summary.toLowerCase().includes("failed");
+  const summary = evidence.summary.toLowerCase();
+  const failed = summary.includes("failed") || summary.includes("could not") || summary.includes("interrupted");
+  const warning = summary.includes("no preview") || summary.includes("unverified");
   const hasWarningEvent = events.some((event) => event.type.toLowerCase() === "warning");
   const hasFailedResource = resources.some((resource) => resource.tone === "failed");
   const hasWarningResource = resources.some((resource) => resource.tone === "warning");
@@ -718,7 +724,14 @@ function parseEvidenceDetails(evidence: DeploymentEvidence): ParsedEvidence {
   return {
     resources,
     events,
-    tone: failed || hasFailedResource ? "failed" : hasWarningEvent || hasWarningResource ? "warning" : resources.length > 0 ? "healthy" : "collected",
+    tone:
+      failed || hasFailedResource
+        ? "failed"
+        : warning || hasWarningEvent || hasWarningResource
+          ? "warning"
+          : resources.length > 0
+            ? "healthy"
+            : "collected",
   };
 }
 
@@ -1170,6 +1183,8 @@ function ReviewStatusPill(props: { status: string }) {
       ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
       : status === "failed"
         ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+        : status === "warning"
+          ? "bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
         : status === "running"
           ? "bg-[color:var(--blue-soft)] text-[color:var(--accent-blue)]"
           : "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
@@ -1981,14 +1996,24 @@ function SessionActionTitle(props: { actorName: string; action: SessionAction; a
 
 function SessionFailureCallout(props: { logs: LogLine[]; hasAgentMessage: boolean }) {
   const failureMessage = latestSessionFailureMessage(props.logs);
+  const isPostProcessingFailure =
+    props.hasAgentMessage &&
+    /record source commit|constraint failed|review evidence snapshot|kubernetes evidence|collecting kubernetes evidence/i.test(failureMessage);
+  const title = isPostProcessingFailure
+    ? "Runner post-processing failed after this agent message"
+    : props.hasAgentMessage
+      ? "Session failed after this agent message"
+      : "Session failed";
   return (
     <div className="mt-3 rounded-[8px] bg-[color:var(--danger-soft)] px-3 py-2.5 text-[12px] leading-5 text-[color:var(--danger)] shadow-[inset_0_0_0_1px_var(--line)]">
       <div className="flex min-w-0 items-center gap-2 font-semibold">
         <CircleAlert data-icon className="shrink-0" />
-        <span>{props.hasAgentMessage ? "Session failed after this agent message" : "Session failed"}</span>
+        <span>{title}</span>
       </div>
       <p className="mt-1 text-[color:var(--danger)]">
-        mspace did not finish the run successfully. Treat the agent summary as partial until this failure is resolved.
+        {isPostProcessingFailure
+          ? "The agent produced a final answer, but mspace failed while saving follow-up state. Check the runner error before trusting the issue status."
+          : "mspace did not finish the run successfully. Treat the agent summary as partial until this failure is resolved."}
       </p>
       {failureMessage ? (
         <div className="mt-2 grid gap-1 rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
@@ -1997,6 +2022,219 @@ function SessionFailureCallout(props: { logs: LogLine[]; hasAgentMessage: boolea
         </div>
       ) : null}
     </div>
+  );
+}
+
+function DeployAttentionCallout(props: {
+  environment: IssueTestEnvironment;
+  session: AgentSession;
+  logs: LogLine[];
+  hasAgentMessage: boolean;
+}) {
+  if (props.session.status === "failed") {
+    return <SessionFailureCallout logs={props.logs} hasAgentMessage={props.hasAgentMessage} />;
+  }
+
+  const namespaceStatus = props.environment.namespaceStatus || "";
+  const isFailed = namespaceStatus === "deploy_failed";
+  const failureMessage = latestSessionFailureMessage(props.logs);
+  const title =
+    namespaceStatus === "deploy_interrupted"
+      ? "Deployment interrupted"
+      : namespaceStatus === "preview_unverified"
+        ? "Preview not verified"
+        : "Deployment failed";
+  const body =
+    namespaceStatus === "deploy_interrupted"
+      ? "The deploy session stopped before mspace could finish verification. mspace will keep checking the preview in the background; retry deploy if the route stays wrong."
+      : namespaceStatus === "preview_unverified"
+        ? "Kubernetes resources look ready, but mspace could not confirm a reachable preview URL yet. Open the preview if it exists; mspace will refresh this status in the background."
+        : "mspace could not verify that the namespace became ready. Check the stage details, then retry deploy after fixing the blocker.";
+
+  return (
+    <div
+      className={cn(
+        "mt-3 rounded-[8px] px-3 py-2.5 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]",
+        isFailed
+          ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+          : "bg-[color:var(--warning-soft)] text-[color:var(--warning)]",
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-2 font-semibold">
+        <CircleAlert data-icon className="shrink-0" />
+        <span>{title}</span>
+      </div>
+      <p className={cn("mt-1", isFailed ? "text-[color:var(--danger)]" : "text-[color:var(--warning)]")}>
+        {body}
+      </p>
+      {failureMessage ? (
+        <div className="mt-2 grid gap-1 rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+          <span className={cn("text-[11px] font-medium", isFailed ? "text-[color:var(--danger)]" : "text-[color:var(--warning)]")}>
+            Last runner signal
+          </span>
+          <span className="break-words font-mono text-[11px] leading-5 text-[color:var(--text)]">{failureMessage}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type DeployStage = {
+  id: string;
+  label: string;
+  status: string;
+  summary: string;
+  time: string;
+};
+
+const defaultDeployStages: DeployStage[] = [
+  { id: "capture-evidence", label: "Capture Kubernetes evidence", status: "pending", summary: "", time: "" },
+  { id: "discover-preview", label: "Discover preview URL", status: "pending", summary: "", time: "" },
+  { id: "probe-preview", label: "Check preview", status: "pending", summary: "", time: "" },
+  { id: "reconcile", label: "Finalize deployment state", status: "pending", summary: "", time: "" },
+];
+
+function deployStagesFromLogs(logs: LogLine[]) {
+  const stagesById = new Map(defaultDeployStages.map((stage) => [stage.id, stage]));
+  for (const log of logs) {
+    if (log.stream !== "deploy-stage") continue;
+    try {
+      const parsed = JSON.parse(log.message) as Partial<DeployStage>;
+      if (!parsed.id) continue;
+      stagesById.set(parsed.id, {
+        id: parsed.id,
+        label: parsed.label || stagesById.get(parsed.id)?.label || parsed.id,
+        status: parsed.status || "completed",
+        summary: parsed.summary || "",
+        time: parsed.time || "",
+      });
+    } catch {
+      continue;
+    }
+  }
+  return Array.from(stagesById.values());
+}
+
+function deployStageIcon(status: string) {
+  if (status === "passed" || status === "completed") return CheckCircle2;
+  if (status === "failed" || status === "warning") return CircleAlert;
+  return CircleDot;
+}
+
+function deployStageTone(status: string) {
+  if (status === "passed" || status === "completed") return "text-[color:var(--success)]";
+  if (status === "failed") return "text-[color:var(--danger)]";
+  if (status === "warning") return "text-[color:var(--warning)]";
+  if (status === "running") return "text-[color:var(--accent-blue)]";
+  return "text-[color:var(--faint)]";
+}
+
+function deploymentNeedsAttention(environment: IssueTestEnvironment | null | undefined, session: AgentSession) {
+  const status = environment?.namespaceStatus || "";
+  return session.status === "failed" || ["deploy_failed", "deploy_interrupted", "preview_unverified"].includes(status);
+}
+
+function DeployTimelineItem(props: {
+  session: AgentSession;
+  logs: LogLine[];
+  changes: WorkspaceChange[];
+  agents: AgentProfile[];
+  testEnvironment: IssueTestEnvironment;
+  isSnapshotPending?: boolean;
+  onRetry?: () => void;
+  isRetrying?: boolean;
+  canRetry?: boolean;
+}) {
+  const agent = sessionAgent(props.session, props.agents);
+  const stages = deployStagesFromLogs(props.logs);
+  const isActive = ["queued", "running"].includes(props.session.status);
+  const needsAttention = deploymentNeedsAttention(props.testEnvironment, props.session);
+  const attentionTone =
+    props.session.status === "failed" || props.testEnvironment.namespaceStatus === "deploy_failed" ? "danger" : "warning";
+  const previewUrl = props.testEnvironment.previewUrl;
+  return (
+    <TimelineShell
+      actor={codexActor(agent.name)}
+      title={
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+          <span>{agent.name}</span>
+          <span className="font-normal text-[color:var(--muted)]">deployment</span>
+          <StatusBadge value={props.testEnvironment.namespaceStatus || props.session.status} className="h-5 px-2 py-0 text-[11px]" />
+        </span>
+      }
+      time={props.session.updatedAt || props.session.createdAt}
+    >
+      <div className="rounded-[10px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold leading-5 text-[color:var(--text)]">
+              {isActive ? (
+                <span className="relative flex size-2 shrink-0">
+                  <span className="absolute inline-flex size-full rounded-full bg-[color:var(--accent-blue)] opacity-25 motion-safe:animate-ping" />
+                  <span className="relative inline-flex size-2 rounded-full bg-[color:var(--accent-blue)]" />
+                </span>
+              ) : needsAttention ? (
+                <CircleAlert data-icon className={cn("shrink-0", attentionTone === "danger" ? "text-[color:var(--danger)]" : "text-[color:var(--warning)]")} />
+              ) : (
+                <CheckCircle2 data-icon className="shrink-0 text-[color:var(--success)]" />
+              )}
+              <span className="truncate">{isActive ? "Deploying test environment" : needsAttention ? "Deployment needs attention" : "Deployment ready"}</span>
+            </div>
+            <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
+              <span className="font-mono">{props.testEnvironment.namespace || "namespace pending"}</span>
+              {props.testEnvironment.sourceCommitSha ? <span>Source {props.testEnvironment.sourceCommitSha.slice(0, 12)}</span> : null}
+              <span>Session {props.session.id.slice(0, 8)}</span>
+            </div>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            {previewUrl ? (
+              <Button type="button" variant="ghost" size="sm" onClick={() => void openRichLink(previewUrl)}>
+                <Globe2 data-icon />
+                Preview
+              </Button>
+            ) : null}
+            {props.onRetry ? (
+              <Button type="button" variant="secondary" size="sm" disabled={!props.canRetry || props.isRetrying} onClick={props.onRetry}>
+                <Rocket data-icon />
+                {props.isRetrying ? "Queueing" : "Retry deploy"}
+              </Button>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-2">
+          {props.isSnapshotPending ? (
+            <SessionSummarySkeleton />
+          ) : (
+            stages.map((stage) => {
+              const Icon = deployStageIcon(stage.status);
+              return (
+                <div key={stage.id} className="grid grid-cols-[18px_minmax(0,1fr)] gap-2 text-[12px] leading-5">
+                  <Icon data-icon className={cn("mt-0.5 shrink-0", deployStageTone(stage.status))} />
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="font-medium text-[color:var(--muted-strong)]">{stage.label}</span>
+                      {stage.status !== "pending" ? <span className="text-[color:var(--faint)]">{stage.status}</span> : null}
+                    </div>
+                    {stage.summary ? <div className="mt-0.5 text-[color:var(--muted)] [overflow-wrap:anywhere]">{stage.summary}</div> : null}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {needsAttention ? (
+          <DeployAttentionCallout
+            environment={props.testEnvironment}
+            session={props.session}
+            logs={props.logs}
+            hasAgentMessage={Boolean(latestAgentMessage(props.logs))}
+          />
+        ) : null}
+        <SessionFileChanges changes={props.changes} workdir={props.session.workdir} />
+      </div>
+    </TimelineShell>
   );
 }
 
@@ -2988,7 +3226,7 @@ export function IssueDetailPage() {
         setSessionSnapshotsById((current) => ({
           ...current,
           [latestSession.id]: {
-            logs: [...(current[latestSession.id]?.logs || []), { stream: "live", message: event.payload }],
+            logs: [...(current[latestSession.id]?.logs || []), { stream: event.stream || "live", message: event.payload }],
             changes: current[latestSession.id]?.changes || [],
           },
         }));
@@ -3353,6 +3591,46 @@ export function IssueDetailPage() {
       ]);
     },
   });
+  const probeTestEnvironment = useMutation({
+    mutationFn: () => api.probeTestEnvironment(issueId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
+      ]);
+    },
+  });
+  const checkPreviewStatus = probeTestEnvironment.mutate;
+  const previewStatusCheckPending = probeTestEnvironment.isPending;
+  useEffect(() => {
+    const environment = detail?.testEnvironment;
+    if (!environment || hasActiveSession || previewStatusCheckPending) return;
+    const namespaceStatus = environment.namespaceStatus || "";
+    const shouldCheckPreview =
+      Boolean(environment.previewUrl) || ["deploy_failed", "deploy_interrupted", "preview_unverified"].includes(namespaceStatus);
+    if (!shouldCheckPreview) return;
+
+    const checkKey = [
+      issueId,
+      environment.lastDeploySessionId || "",
+      environment.previewUrl || "",
+      namespaceStatus,
+    ].join(":");
+    const now = Date.now();
+    const lastCheckedAt = autoPreviewCheckAtByIssue.get(checkKey) || 0;
+    if (now - lastCheckedAt < AUTO_PREVIEW_CHECK_INTERVAL_MS) return;
+    autoPreviewCheckAtByIssue.set(checkKey, now);
+    checkPreviewStatus();
+  }, [
+    checkPreviewStatus,
+    detail?.testEnvironment?.lastDeploySessionId,
+    detail?.testEnvironment?.namespaceStatus,
+    detail?.testEnvironment?.previewUrl,
+    hasActiveSession,
+    issueId,
+    previewStatusCheckPending,
+  ]);
   const canStartTestDeploy =
     Boolean(testDeployForm.clusterId.trim()) &&
     Boolean(testDeployForm.sourceCommitSha?.trim()) &&
@@ -3567,6 +3845,26 @@ export function IssueDetailPage() {
                     }
                     if (item.kind === "session") {
                       const sessionSnapshot = sessionSnapshotsById[item.session.id];
+                      const isDeploySession = detail.testEnvironment?.lastDeploySessionId === item.session.id;
+                      if (isDeploySession && detail.testEnvironment) {
+                        return (
+                          <DeployTimelineItem
+                            key={`session-${item.session.id}`}
+                            session={item.session}
+                            logs={sessionSnapshot?.logs || []}
+                            changes={sessionSnapshot?.changes || []}
+                            agents={agents}
+                            testEnvironment={detail.testEnvironment}
+                            isSnapshotPending={!sessionSnapshot}
+                            isRetrying={startTestDeploy.isPending}
+                            canRetry={!hasActiveSession && !startTestDeploy.isPending && changeNodes.length > 0}
+                            onRetry={() => {
+                              if (!detail || hasActiveSession) return;
+                              startTestDeploy.mutate(testDeployDefaults(detail, clusters));
+                            }}
+                          />
+                        );
+                      }
                       return (
                         <SessionTimelineItem
                           key={`session-${item.session.id}`}

@@ -907,13 +907,13 @@ export function StatusBadge(props: { value: string; className?: string; label?: 
       ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
       : normalizedValue === "closed"
         ? "bg-[color:var(--done-soft)] text-[color:var(--done)]"
-        : normalizedValue === "failed" || normalizedValue === "test_failed"
+        : normalizedValue === "failed" || normalizedValue === "test_failed" || normalizedValue === "deploy_failed" || normalizedValue === "cleanup_failed"
         ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
         : normalizedValue === "running" || normalizedValue === "in_progress" || normalizedValue === "test_in_progress" || normalizedValue === "deploying"
           ? "bg-[color:var(--blue-soft)] text-[color:var(--accent-blue)]"
-          : normalizedValue === "blocked" || normalizedValue === "needs_review" || normalizedValue === "ready_for_test" || normalizedValue === "changes_requested" || normalizedValue === "cleanup_requested"
+          : normalizedValue === "blocked" || normalizedValue === "needs_review" || normalizedValue === "ready_for_test" || normalizedValue === "changes_requested" || normalizedValue === "cleanup_requested" || normalizedValue === "preview_unverified" || normalizedValue === "deploy_interrupted"
             ? "bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
-            : normalizedValue === "cancelled" || normalizedValue === "retained"
+            : normalizedValue === "cancelled" || normalizedValue === "retained" || normalizedValue === "cleaned"
               ? "bg-[color:var(--block)] text-[color:var(--muted)]"
               : "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
   const isRunning = normalizedValue === "running" || normalizedValue === "in_progress" || normalizedValue === "test_in_progress" || normalizedValue === "deploying";
@@ -953,7 +953,12 @@ function statusLabel(value: string) {
     closed: "Closed",
     completed: "Completed",
     deploying: "Deploying",
+    preview_unverified: "Preview unverified",
+    deploy_failed: "Deploy failed",
+    deploy_interrupted: "Deploy interrupted",
     cleanup_requested: "Cleanup requested",
+    cleanup_failed: "Cleanup failed",
+    cleaned: "Cleaned",
     retained: "Retained",
   };
   if (labels[value]) return labels[value];

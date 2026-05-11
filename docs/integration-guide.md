@@ -251,13 +251,14 @@ Import returns `imported` clusters and `skipped` entries. Each kubeconfig contex
 
 ## Issue Test Environment APIs
 
-Issue test environments are manually triggered. They are not created automatically when a normal local agent session finishes.
+Issue test deployments, retain decisions, and cleanup turns are manually triggered. Preview status checks are automatic from Issue Detail when a test environment already exists, and can also be called directly for debugging or automation.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/issues/{issueID}/test-deploy` | Queue a deploy/test agent turn for the issue namespace. |
 | `POST` | `/api/issues/{issueID}/test-environment/retain` | Record that the namespace should be retained. |
 | `POST` | `/api/issues/{issueID}/test-environment/cleanup` | Queue a cleanup agent turn for the issue namespace. |
+| `POST` | `/api/issues/{issueID}/test-environment/probe` | Internal preview status check used by Issue Detail and debugging tools; do not present this as a primary product action. |
 
 Queue a NodePort deploy/test turn:
 
@@ -275,9 +276,9 @@ curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/test-deploy" \
   -d '{"clusterId":"<cluster-id>","sourceCommitSha":"<commit-sha>","sourceSessionId":"<session-id>","exposureMode":"ingress","previewDomain":"preview.example.com","ingressClass":"nginx"}'
 ```
 
-The deploy/test session receives the selected source commit, source session, kubeconfig, context, issue namespace, registry prefix, exposure mode, and preview routing values through environment variables. The runner prepares the deploy worktree at the selected commit so the agent deploys the selected change node instead of implicitly using the latest session. If the agent writes `$MSPACE_SESSION_ARTIFACT_DIR/test-environment.json` with `previewUrl`, the runner copies that URL back to the issue test environment.
+The deploy/test session receives the selected source commit, source session, kubeconfig, context, issue namespace, registry prefix, exposure mode, and preview routing values through environment variables. The runner prepares the deploy worktree at the selected commit so the agent deploys the selected change node instead of implicitly using the latest session. After deploy, the runner captures Kubernetes evidence, discovers preview candidates, checks the preview URL, and stores the result as `active`, `preview_unverified`, `deploy_failed`, or `deploy_interrupted`. If any completed continuation session writes `$MSPACE_SESSION_ARTIFACT_DIR/test-environment.json` with `previewUrl`, the runner can copy that URL back and adopt the session as the issue's current deploy session.
 
-If the runner process restarts while a deploy or cleanup session is active, the next startup marks the interrupted session `failed` with `agentStatus="interrupted"`. A deploy session linked through `lastDeploySessionId` moves the environment to `namespaceStatus="deploy_failed"`; a cleanup session linked through `lastCleanupSessionId` moves it to `namespaceStatus="cleanup_failed"` and `cleanupStatus="cleanup_failed"`.
+If the runner process restarts while a deploy or cleanup session is active, the next startup marks the interrupted session `failed` with `agentStatus="interrupted"`. A deploy session linked through `lastDeploySessionId` moves the environment to `namespaceStatus="deploy_interrupted"`; a cleanup session linked through `lastCleanupSessionId` moves it to `namespaceStatus="cleanup_failed"` and `cleanupStatus="cleanup_failed"`.
 
 ## Error Notes
 
