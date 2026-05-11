@@ -297,6 +297,7 @@ Current implementation:
 - saves the comment before queuing the Codex app-server session, so the current turn is visible in the issue history;
 - sends the mention-stripped comment as the current turn request, ahead of the original issue context;
 - shows Type and Priority controls in the quiet metadata sidebar, with a `Classifying...` state while the triage agent is assigning type;
+- keeps the quiet metadata sidebar on Overview only, while Commits, Sessions, and Evidence use the full page width for review-heavy content;
 - exposes a Stop action for queued or running sessions, cancelling only that session and rendering the stop as a compact, non-editable event while leaving the issue status unchanged;
 - streams session logs and status while a session is running, but keeps debug output collapsed by default;
 - renders a compact failure callout with the last meaningful runner error when a session fails;
@@ -332,6 +333,7 @@ Current implementation:
 ```
 
 The document body and activity thread are the center of gravity. Session and evidence should support them, not compete with them.
+The two-column layout is the Overview shape. Review-heavy tabs such as Commits, Sessions, and Evidence hide the metadata sidebar and expand the main column inside the same page frame.
 
 ## Projects
 

@@ -159,7 +159,7 @@ The default desktop shape is a sidebar plus document workspace.
 Screen priorities:
 
 - Inbox: row-level triage, unread state, assignment, linked session.
-- Issue Detail: document body first, then activity, session, and evidence.
+- Issue Detail: document body first, then activity, session, and evidence. Keep the right metadata sidebar on Overview only; Commits, Sessions, and Evidence use the full page width so diffs, paths, command output, and Kubernetes evidence have room.
 - Session Detail: logs, worktree state, branch comparison, evidence.
 - Agents: managed Codex-backed profiles, mentions, enabled state, and instructions.
 - Clusters: reusable kubeconfig, registry, and preview exposure defaults.

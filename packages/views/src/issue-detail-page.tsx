@@ -3693,6 +3693,7 @@ export function IssueDetailPage() {
       : "";
   const selectedTypeLabel = issueLabels.find((label) => issueLabelMatchesDimension(label, "type"));
   const selectedPriorityLabel = issueLabels.find((label) => issueLabelMatchesDimension(label, "priority"));
+  const showIssueSidebar = issueTab === "overview";
 
   return (
     <PageFrame
@@ -3717,7 +3718,12 @@ export function IssueDetailPage() {
         active={issueTab}
         onChange={setIssueTab}
       />
-      <div className="grid gap-10 xl:grid-cols-[minmax(0,780px)_280px] xl:items-start">
+      <div
+        className={cn(
+          "grid gap-10 xl:items-start",
+          showIssueSidebar ? "xl:grid-cols-[minmax(0,780px)_280px]" : "xl:grid-cols-[minmax(0,1fr)]",
+        )}
+      >
         <main className="min-w-0">
           {issueTab === "overview" ? (
             <>
@@ -3983,6 +3989,7 @@ export function IssueDetailPage() {
           )}
         </main>
 
+        {showIssueSidebar ? (
         <aside className="xl:sticky xl:top-8">
           <div className="grid gap-6 px-1 text-[13px]">
             <SidebarSection title="Issue">
@@ -4100,6 +4107,7 @@ export function IssueDetailPage() {
             </SidebarSection>
           </div>
         </aside>
+        ) : null}
       </div>
 
       {runbookOpen ? (
