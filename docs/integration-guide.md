@@ -19,7 +19,29 @@ Agent sessions also receive `MSPACE_API_BASE_URL` so they can update issue task 
 
 Normal source-code agent sessions are captured as issue change nodes when they finish with git changes. If the session worktree is already ahead of the project base branch, the runner records the current HEAD commit as the change node instead of creating a duplicate commit. Otherwise it commits the session worktree changes, excludes `.mspace` artifacts, and exposes the commit metadata and diff preview from `GET /api/issues/{issueID}` as `changeNodes`.
 
-Review evidence is exposed from the same issue detail response as `reviewEvidence`. This is not a diff surface: code changes stay in `changeNodes` and the Commits tab. `reviewEvidence` is the durable session snapshot for commands run, tests, build result, deployment result, preview URL, Kubernetes namespace state, agent summary, risks/follow-ups, and cleanup/retain state. Agents can improve the snapshot by writing `${MSPACE_SESSION_ARTIFACT_DIR}/review-evidence.json` with `commandsRun`, `tests`, `buildResult`, `deploymentResult`, `agentSummary`, `risks`, and `followUps`; the runner falls back to session logs, test-environment state, and Kubernetes evidence when the artifact is missing.
+Review evidence is exposed from the same issue detail response as `reviewEvidence`. This is not a diff surface: code changes stay in `changeNodes` and the Commits tab. `reviewEvidence` is the durable session snapshot for commands run, tests, build result, deployment result, preview URL, Kubernetes namespace state, agent summary, risks/follow-ups, and cleanup/retain state. The runner persists compact evidence commands in `session_review_evidence.commands_json`; exploratory command output such as file reads and searches stays in `session_logs` for raw debugging.
+
+Agents can improve the snapshot by writing `${MSPACE_SESSION_ARTIFACT_DIR}/review-evidence.json`. Supported fields are `commandsRun`, `tests`, `buildResult`, `deploymentResult`, `agentSummary`, `risks`, and `followUps`. `commandsRun` may be an array of command objects or strings; `tests` may be an array or a map; result fields may be objects or short strings. When the artifact is missing, the runner derives evidence from session logs, test-environment state, and Kubernetes evidence, then keeps only evidence-worthy commands such as test/build/deploy commands, dependency install commands, `git diff --check`, `git commit`, Playwright checks, and issue-status update calls. If an earlier test/build/deploy attempt failed but a later attempt passed, the latest result is treated as authoritative and the failed attempt remains available in `session_logs`.
+
+Minimal review evidence artifact:
+
+```json
+{
+  "agentSummary": "Implemented the issue and moved it to ready_for_test.",
+  "commandsRun": ["pnpm typecheck", "pnpm --filter @mspace/desktop build"],
+  "tests": {
+    "pnpm typecheck": "passed",
+    "pnpm --filter @mspace/desktop build": "passed"
+  },
+  "buildResult": "passed: desktop build completed",
+  "deploymentResult": {
+    "status": "not_reported",
+    "summary": "Deployment result was not reported."
+  },
+  "risks": [],
+  "followUps": []
+}
+```
 
 ## Issue Writing APIs
 

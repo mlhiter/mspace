@@ -1726,6 +1726,138 @@ func TestBuildSessionReviewEvidenceUsesArtifactAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestBuildSessionReviewEvidenceCompactsDerivedCommands(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db, broker: newEventBroker(), workdir: t.TempDir(), repoRoot: t.TempDir()}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES ('project-1', 'Demo', ?, 'local', '', '', '', '', 'main', '', '', '', '', ?, ?)
+	`, t.TempDir(), now, now); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
+			VALUES ('issue-1', 'project-1', 'Evidence issue', '', 'needs_review', 'codex', 'agent', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	session := agentSession{
+		ID:          "session-1",
+		IssueID:     "issue-1",
+		RuntimeMode: "codex-app-server",
+		Status:      "completed",
+		Branch:      "mspace/issue/session-1",
+		Workdir:     t.TempDir(),
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES (?, ?, 'codex', 'codex', ?, '', ?, ?, ?, '', '', 'completed', '', 'retained', '', ?, ?)
+	`, session.ID, session.IssueID, session.RuntimeMode, session.Status, session.Branch, session.Workdir, now, now); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	logMessages := []string{
+		`$ /bin/zsh -lc "sed -n '1,220p' package.json"`,
+		`Command exit 0.`,
+		`$ /bin/zsh -lc 'rg -n "Evidence" runner/main.go'`,
+		`Command exit 0.`,
+		`$ /bin/zsh -lc 'find . -maxdepth 2 -type f'`,
+		`Command exit 0.`,
+		`$ /bin/zsh -lc 'npm run lint'`,
+		"Command failed with exit 127.\nsh: eslint: command not found",
+		`$ /bin/zsh -lc 'npm ci'`,
+		`Command exit 0.`,
+		`$ /bin/zsh -lc 'npm run lint'`,
+		`Command exit 0.`,
+		`$ /bin/zsh -lc 'npm test'`,
+		`Command exit 0.`,
+		`$ /bin/zsh -lc 'NODE_ENV=production npm run build'`,
+		`Command exit 0.`,
+		`$ /bin/zsh -lc 'git diff --check'`,
+		`Command exit 0.`,
+		`$ /bin/zsh -lc 'git commit -m "fix: demo"'`,
+		`Command exit 0.`,
+	}
+	for _, message := range logMessages {
+		application.appendSessionLog(session.ID, "command", message)
+	}
+
+	review, err := application.buildSessionReviewEvidence(session, project{ID: "project-1", Name: "Demo"}, nil, true)
+	if err != nil {
+		t.Fatalf("build session review evidence failed: %v", err)
+	}
+
+	commands := make([]string, 0, len(review.CommandsRun))
+	for _, command := range review.CommandsRun {
+		commands = append(commands, command.Command)
+		if strings.Contains(command.Command, "sed -n") || strings.Contains(command.Command, "rg -n") || strings.Contains(command.Command, "find .") {
+			t.Fatalf("exploratory command should not be persisted in review evidence: %+v", review.CommandsRun)
+		}
+		if strings.Contains(command.Summary, "eslint: command not found") {
+			t.Fatalf("superseded failed lint output should stay in session logs: %+v", review.CommandsRun)
+		}
+	}
+	joined := strings.Join(commands, "\n")
+	for _, want := range []string{"npm ci", "npm run lint", "npm test", "npm run build", "git diff --check", "git commit"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected compact review commands to include %q, got %v", want, commands)
+		}
+	}
+	if review.BuildResult.Status != "passed" {
+		t.Fatalf("expected latest build result to pass, got %+v", review.BuildResult)
+	}
+	if len(review.Tests) != 2 {
+		t.Fatalf("expected lint and test checks, got %+v", review.Tests)
+	}
+	for _, check := range review.Tests {
+		if check.Status != "passed" {
+			t.Fatalf("expected superseded test failures to be hidden by latest pass, got %+v", review.Tests)
+		}
+	}
+}
+
+func TestReadReviewEvidenceArtifactAcceptsCompactShapes(t *testing.T) {
+	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	writeFile(t, filepath.Join(artifactDir, "review-evidence.json"), `{
+		"agentSummary":"Artifact summary.",
+		"commandsRun":["pnpm test","NODE_ENV=production pnpm build"],
+		"tests":{"pnpm test":"passed: all tests"},
+		"buildResult":"success: build passed",
+		"deploymentResult":{"status":"ok","summary":"preview updated"},
+		"risks":"manual verification still recommended",
+		"followUps":{"e2e":"add browser coverage"}
+	}`)
+
+	artifact := readReviewEvidenceArtifact(agentSession{ArtifactDir: artifactDir})
+	if artifact.AgentSummary != "Artifact summary." {
+		t.Fatalf("expected artifact summary, got %q", artifact.AgentSummary)
+	}
+	if len(artifact.CommandsRun) != 2 || artifact.CommandsRun[0].Command != "pnpm test" {
+		t.Fatalf("expected string command list to parse, got %+v", artifact.CommandsRun)
+	}
+	if len(artifact.Tests) != 1 || artifact.Tests[0].Status != "passed" {
+		t.Fatalf("expected test map to parse, got %+v", artifact.Tests)
+	}
+	if artifact.BuildResult.Status != "passed" || artifact.DeploymentResult.Status != "passed" {
+		t.Fatalf("expected compact result shapes to normalize, got build=%+v deploy=%+v", artifact.BuildResult, artifact.DeploymentResult)
+	}
+	if len(artifact.Risks) != 1 || len(artifact.FollowUps) != 1 {
+		t.Fatalf("expected risk/follow-up compact shapes to parse, got risks=%+v followUps=%+v", artifact.Risks, artifact.FollowUps)
+	}
+}
+
 func TestPrepareSessionWorkspaceChecksOutSourceCommit(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is required for source checkout test")

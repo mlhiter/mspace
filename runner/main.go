@@ -4614,7 +4614,7 @@ func (a *app) buildSessionReviewEvidence(session agentSession, project project, 
 		return sessionReviewEvidence{}, err
 	}
 	artifact := readReviewEvidenceArtifact(session)
-	commands := artifact.CommandsRun
+	commands := normalizeReviewCommands(artifact.CommandsRun, session.Status)
 	if len(commands) == 0 {
 		commands = deriveReviewCommands(logs, session)
 	}
@@ -4656,7 +4656,7 @@ func (a *app) buildSessionReviewEvidence(session agentSession, project project, 
 		SourceCommitSHA:  sourceCommitSHA,
 		Branch:           branch,
 		AgentSummary:     agentSummary,
-		CommandsRun:      commands,
+		CommandsRun:      compactReviewEvidenceCommands(commands),
 		Tests:            tests,
 		BuildResult:      buildResult,
 		DeploymentResult: deploymentResult,
@@ -4696,13 +4696,140 @@ func readReviewEvidenceArtifact(session agentSession) reviewEvidenceArtifact {
 	if err != nil {
 		return reviewEvidenceArtifact{}
 	}
-	var artifact reviewEvidenceArtifact
-	if err := json.Unmarshal(data, &artifact); err != nil {
+	var raw struct {
+		AgentSummary     string          `json:"agentSummary"`
+		CommandsRun      json.RawMessage `json:"commandsRun"`
+		Tests            json.RawMessage `json:"tests"`
+		BuildResult      json.RawMessage `json:"buildResult"`
+		DeploymentResult json.RawMessage `json:"deploymentResult"`
+		Risks            json.RawMessage `json:"risks"`
+		FollowUps        json.RawMessage `json:"followUps"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
 		return reviewEvidenceArtifact{}
 	}
-	artifact.Risks = normalizeStringList(artifact.Risks)
-	artifact.FollowUps = normalizeStringList(artifact.FollowUps)
-	return artifact
+	return reviewEvidenceArtifact{
+		AgentSummary:     strings.TrimSpace(raw.AgentSummary),
+		CommandsRun:      parseReviewCommandsValue(raw.CommandsRun),
+		Tests:            parseReviewChecksValue(raw.Tests),
+		BuildResult:      parseReviewResultValue(raw.BuildResult),
+		DeploymentResult: parseReviewResultValue(raw.DeploymentResult),
+		Risks:            parseReviewStringListValue(raw.Risks),
+		FollowUps:        parseReviewStringListValue(raw.FollowUps),
+	}
+}
+
+func parseReviewCommandsValue(data json.RawMessage) []reviewEvidenceCommand {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var commands []reviewEvidenceCommand
+	if err := json.Unmarshal(data, &commands); err == nil {
+		return commands
+	}
+	var commandStrings []string
+	if err := json.Unmarshal(data, &commandStrings); err == nil {
+		commands = make([]reviewEvidenceCommand, 0, len(commandStrings))
+		for _, command := range commandStrings {
+			command = strings.TrimSpace(command)
+			if command == "" {
+				continue
+			}
+			commands = append(commands, reviewEvidenceCommand{Command: command})
+		}
+		return commands
+	}
+	return nil
+}
+
+func parseReviewChecksValue(data json.RawMessage) []reviewEvidenceCheck {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var checks []reviewEvidenceCheck
+	if err := json.Unmarshal(data, &checks); err == nil {
+		return checks
+	}
+	var checkMap map[string]any
+	if err := json.Unmarshal(data, &checkMap); err == nil {
+		checks = make([]reviewEvidenceCheck, 0, len(checkMap))
+		for name, value := range checkMap {
+			summary := reviewEvidenceValueText(value)
+			checks = append(checks, reviewEvidenceCheck{
+				Name:    strings.TrimSpace(name),
+				Status:  inferReviewStatus(summary),
+				Summary: truncate(summary, 600),
+			})
+		}
+		return checks
+	}
+	return nil
+}
+
+func parseReviewResultValue(data json.RawMessage) reviewEvidenceResult {
+	if len(data) == 0 || string(data) == "null" {
+		return reviewEvidenceResult{}
+	}
+	var result reviewEvidenceResult
+	if err := json.Unmarshal(data, &result); err == nil {
+		result.Status = normalizeReviewStatus(result.Status)
+		result.Summary = strings.TrimSpace(result.Summary)
+		result.Details = truncate(strings.TrimSpace(result.Details), 1200)
+		return result
+	}
+	var summary string
+	if err := json.Unmarshal(data, &summary); err == nil {
+		summary = strings.TrimSpace(summary)
+		return reviewEvidenceResult{Status: inferReviewStatus(summary), Summary: summary}
+	}
+	summary = reviewEvidenceValueText(data)
+	return reviewEvidenceResult{Status: inferReviewStatus(summary), Summary: truncate(summary, 600)}
+}
+
+func parseReviewStringListValue(data json.RawMessage) []string {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal(data, &values); err == nil {
+		return normalizeStringList(values)
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err == nil {
+		return normalizeStringList([]string{value})
+	}
+	var valueMap map[string]any
+	if err := json.Unmarshal(data, &valueMap); err == nil {
+		values = make([]string, 0, len(valueMap))
+		for key, value := range valueMap {
+			text := strings.TrimSpace(reviewEvidenceValueText(value))
+			if text == "" {
+				continue
+			}
+			values = append(values, fmt.Sprintf("%s: %s", key, text))
+		}
+		return normalizeStringList(values)
+	}
+	return nil
+}
+
+func reviewEvidenceValueText(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case json.RawMessage:
+		var decoded any
+		if err := json.Unmarshal(typed, &decoded); err == nil {
+			return reviewEvidenceValueText(decoded)
+		}
+		return strings.TrimSpace(string(typed))
+	default:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(data))
+	}
 }
 
 func deriveReviewCommands(logs []sessionLog, session agentSession) []reviewEvidenceCommand {
@@ -4742,7 +4869,125 @@ func deriveReviewCommands(logs []sessionLog, session agentSession) []reviewEvide
 			commands[i].Status = statusForCompletedSession(session.Status)
 		}
 	}
-	return commands
+	return normalizeReviewCommands(commands, session.Status)
+}
+
+func normalizeReviewCommands(commands []reviewEvidenceCommand, sessionStatus string) []reviewEvidenceCommand {
+	result := make([]reviewEvidenceCommand, 0, len(commands))
+	for _, command := range commands {
+		command.Command = strings.TrimSpace(command.Command)
+		if command.Command == "" {
+			continue
+		}
+		command.Status = normalizeReviewStatus(command.Status)
+		if command.Status == "" {
+			command.Status = statusForCompletedSession(sessionStatus)
+		}
+		command.Category = strings.TrimSpace(command.Category)
+		if command.Category == "" {
+			command.Category = commandEvidenceCategory(command.Command)
+		}
+		command.Summary = truncate(strings.TrimSpace(command.Summary), 600)
+		result = append(result, command)
+	}
+	return result
+}
+
+func normalizeReviewStatus(status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case "success", "succeeded", "ok", "pass":
+		return "passed"
+	case "failure", "error", "fail":
+		return "failed"
+	default:
+		return status
+	}
+}
+
+func inferReviewStatus(text string) string {
+	lower := strings.ToLower(text)
+	switch {
+	case strings.Contains(lower, "failed") || strings.Contains(lower, " failure") || strings.Contains(lower, "error"):
+		return "failed"
+	case strings.Contains(lower, "passed") || strings.Contains(lower, "success") || strings.Contains(lower, " ok"):
+		return "passed"
+	default:
+		return ""
+	}
+}
+
+func compactReviewEvidenceCommands(commands []reviewEvidenceCommand) []reviewEvidenceCommand {
+	commands = normalizeReviewCommands(commands, "")
+	latestPassedByCategory := map[string]int{}
+	for index, command := range commands {
+		if command.Status == "passed" {
+			latestPassedByCategory[command.Category] = index
+		}
+	}
+	result := []reviewEvidenceCommand{}
+	positions := map[string]int{}
+	for index, command := range commands {
+		if !reviewCommandIsEvidenceWorthy(command) {
+			continue
+		}
+		if command.Category != "command" {
+			if latestPassedIndex, ok := latestPassedByCategory[command.Category]; ok && index < latestPassedIndex && command.Status != "passed" {
+				continue
+			}
+		}
+		key := reviewCommandCompactKey(command)
+		if index, ok := positions[key]; ok {
+			result[index] = command
+			continue
+		}
+		positions[key] = len(result)
+		result = append(result, command)
+	}
+	const maxReviewCommands = 12
+	if len(result) > maxReviewCommands {
+		return result[len(result)-maxReviewCommands:]
+	}
+	return result
+}
+
+func reviewCommandIsEvidenceWorthy(command reviewEvidenceCommand) bool {
+	switch command.Category {
+	case "test", "build", "deploy":
+		return true
+	}
+	return reviewCommandIsStateChange(command.Command)
+}
+
+func reviewCommandIsStateChange(command string) bool {
+	lower := strings.ToLower(command)
+	return strings.Contains(lower, "git commit") ||
+		strings.Contains(lower, "git diff --check") ||
+		strings.Contains(lower, "git status") ||
+		strings.Contains(lower, "npm ci") ||
+		strings.Contains(lower, "pnpm install") ||
+		strings.Contains(lower, "playwright") ||
+		(strings.Contains(lower, "curl") && strings.Contains(lower, "/api/issues/") && strings.Contains(lower, "-x put"))
+}
+
+func reviewCommandCompactKey(command reviewEvidenceCommand) string {
+	return command.Category + "\x00" + normalizeReviewCommandText(command.Command)
+}
+
+func normalizeReviewCommandText(command string) string {
+	command = strings.TrimSpace(command)
+	const zshPrefix = "/bin/zsh -lc "
+	if strings.HasPrefix(command, zshPrefix) {
+		command = strings.TrimSpace(strings.TrimPrefix(command, zshPrefix))
+	}
+	if len(command) >= 2 {
+		first := command[0]
+		last := command[len(command)-1]
+		if (first == '\'' && last == '\'') || (first == '"' && last == '"') {
+			command = command[1 : len(command)-1]
+		}
+	}
+	return strings.Join(strings.Fields(command), " ")
 }
 
 func commandCompletionStatus(message string) string {
@@ -4780,7 +5025,7 @@ func statusForCompletedSession(status string) string {
 func commandEvidenceCategory(command string) string {
 	lower := strings.ToLower(command)
 	switch {
-	case strings.Contains(lower, " test") || strings.HasPrefix(lower, "test") || strings.Contains(lower, "vitest") || strings.Contains(lower, "jest") || strings.Contains(lower, "pytest") || strings.Contains(lower, "go test") || strings.Contains(lower, "cargo test") || strings.Contains(lower, "typecheck") || strings.Contains(lower, "tsc"):
+	case strings.Contains(lower, " test") || strings.HasPrefix(lower, "test") || strings.Contains(lower, "vitest") || strings.Contains(lower, "jest") || strings.Contains(lower, "pytest") || strings.Contains(lower, "go test") || strings.Contains(lower, "cargo test") || strings.Contains(lower, "typecheck") || strings.Contains(lower, "tsc") || strings.Contains(lower, " lint") || strings.Contains(lower, "eslint"):
 		return "test"
 	case strings.Contains(lower, "build") || strings.Contains(lower, "docker build") || strings.Contains(lower, "buildx") || strings.Contains(lower, "go build") || strings.Contains(lower, "cargo build"):
 		return "build"
@@ -4792,45 +5037,56 @@ func commandEvidenceCategory(command string) string {
 }
 
 func reviewChecksFromCommands(commands []reviewEvidenceCommand, category string) []reviewEvidenceCheck {
-	checks := []reviewEvidenceCheck{}
+	commands = normalizeReviewCommands(commands, "")
+	checksByCommand := map[string]reviewEvidenceCheck{}
+	order := []string{}
 	for _, command := range commands {
 		if command.Category != category {
 			continue
 		}
-		checks = append(checks, reviewEvidenceCheck{
+		key := normalizeReviewCommandText(command.Command)
+		if _, ok := checksByCommand[key]; !ok {
+			order = append(order, key)
+		}
+		checksByCommand[key] = reviewEvidenceCheck{
 			Name:    command.Command,
 			Status:  command.Status,
 			Summary: command.Summary,
-		})
+		}
+	}
+	checks := make([]reviewEvidenceCheck, 0, len(order))
+	for _, key := range order {
+		checks = append(checks, checksByCommand[key])
 	}
 	return checks
 }
 
 func reviewResultFromCommands(commands []reviewEvidenceCommand, category, emptySummary string) reviewEvidenceResult {
+	commands = normalizeReviewCommands(commands, "")
 	matches := []reviewEvidenceCommand{}
 	for _, command := range commands {
-		if command.Category == category {
+		if command.Category == category && command.Status != "running" {
 			matches = append(matches, command)
 		}
 	}
 	if len(matches) == 0 {
 		return reviewEvidenceResult{Status: "not_reported", Summary: emptySummary}
 	}
-	status := "passed"
-	summaries := []string{}
-	for _, command := range matches {
+	latest := matches[len(matches)-1]
+	status := firstNonEmpty(latest.Status, "completed")
+	failedAttempts := 0
+	for _, command := range matches[:len(matches)-1] {
 		if command.Status == "failed" {
-			status = "failed"
-		}
-		if command.Summary != "" {
-			summaries = append(summaries, command.Summary)
+			failedAttempts++
 		}
 	}
-	summary := fmt.Sprintf("%d %s command(s) completed.", len(matches), category)
+	summary := fmt.Sprintf("Latest %s command %s.", category, status)
 	if status == "failed" {
-		summary = fmt.Sprintf("%d %s command(s) ran; at least one failed.", len(matches), category)
+		summary = fmt.Sprintf("Latest %s command failed.", category)
+	} else if failedAttempts > 0 {
+		summary += fmt.Sprintf(" %d earlier failed attempt(s) kept in session logs.", failedAttempts)
 	}
-	return reviewEvidenceResult{Status: status, Summary: summary, Details: truncate(strings.Join(summaries, "\n\n"), 1200)}
+	return reviewEvidenceResult{Status: status, Summary: summary, Details: truncate(latest.Summary, 1200)}
 }
 
 func (a *app) deploymentReviewResult(session agentSession, success bool) reviewEvidenceResult {
