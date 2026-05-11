@@ -125,6 +125,8 @@ Acceptance:
 
 ## Milestone 2: Evidence-Centered Session Review
 
+Status: mostly implemented for the local MVP path; remaining work is hardening failed-deploy evidence and richer Kubernetes resource parsing.
+
 Goal:
 
 - Turn a session from raw terminal output into reviewable work evidence.
@@ -134,7 +136,7 @@ Build:
 - Improve branch state display.
 - Improve changed files and diff previews.
 - Improve commit and base-branch comparison display.
-- Preserve command/tool history and runtime metadata, including Codex thread and turn ids.
+- Preserve compact command evidence, raw command logs, and runtime metadata, including Codex thread and turn ids.
 - Attach generated session evidence back to the issue.
 - Make evidence panels readable without opening a separate operations console.
 
@@ -143,11 +145,12 @@ Acceptance:
 - A user can open a session and understand what changed.
 - A user can compare the session branch against the project default branch.
 - A user can see commits, changed files, diff previews, logs, and evidence summary in one review path.
+- A user can understand tests, build/deploy result, preview URL, agent summary, risks, follow-ups, and cleanup/retain state without reading raw logs first.
 - Issue Detail remains the primary place to understand the work.
 
 ## Milestone 3: Issue Test Namespace Deployment
 
-Status: mostly implemented for the local MVP path; remaining work is deeper evidence parsing and hardening.
+Status: mostly implemented for the local MVP path; remaining work is deeper Kubernetes evidence parsing and hardening.
 
 Goal:
 

@@ -12,9 +12,10 @@
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Markdown session context included in the Codex app-server prompt. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory recorded in `agent_sessions.artifact_dir`. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional deploy/test artifact. When it includes `previewUrl`, the runner copies it back to the issue test environment. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional session review artifact. The runner imports compact commands, tests, build/deploy results, agent summary, risks, and follow-ups into `session_review_evidence`. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-learned project runbook artifact. When present after a successful session, the runner stores it as the current project runbook. |
 
-Reusable cluster configs are stored in `clusters`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Comment reactions are stored in `comment_reactions` so reaction counts do not mutate comment Markdown. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
+Reusable cluster configs are stored in `clusters`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Review snapshots are stored in `session_review_evidence`; raw execution trails stay in `session_logs`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Comment reactions are stored in `comment_reactions` so reaction counts do not mutate comment Markdown. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
 
 The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
 
@@ -224,6 +225,29 @@ cat > "$MSPACE_SESSION_ARTIFACT_DIR/project-runbook.md" <<'EOF'
 EOF
 ```
 
+To provide a clean Evidence tab without forcing reviewers through raw logs, write a compact review artifact from the session:
+
+```bash
+cat > "$MSPACE_SESSION_ARTIFACT_DIR/review-evidence.json" <<'EOF'
+{
+  "agentSummary": "Implemented the requested change and verified it.",
+  "commandsRun": ["pnpm typecheck", "pnpm --filter @mspace/desktop build"],
+  "tests": {
+    "pnpm typecheck": "passed"
+  },
+  "buildResult": "passed: desktop build completed",
+  "deploymentResult": {
+    "status": "not_reported",
+    "summary": "Deployment result was not reported."
+  },
+  "risks": [],
+  "followUps": []
+}
+EOF
+```
+
+If no review artifact exists, the runner derives evidence from `session_logs` and deployment state. It persists only evidence-worthy commands such as tests, builds, deploys, dependency installs, `git diff --check`, `git commit`, Playwright checks, and issue-status update calls. Exploratory commands such as `sed`, `rg`, and `find` remain in raw session logs.
+
 Reusable test clusters:
 
 ```bash
@@ -292,6 +316,7 @@ Expected shadcn/ui source components currently include:
 - badge
 - button
 - card
+- dropdown-menu
 - field
 - input
 - label

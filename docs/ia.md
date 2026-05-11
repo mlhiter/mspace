@@ -248,6 +248,7 @@ The composer is the main interaction control:
 - supported agent mentions save the comment and start a Codex app-server turn with the selected managed profile;
 - unsupported agent mentions should be visible but not queued;
 - when an agent is already working, a second agent turn should be disabled until the current turn finishes or is stopped.
+- issue lifecycle actions live in the composer footer with the comment submit controls. Show the primary close or reopen action directly, hide less common close reasons such as `Close as not planned` behind a compact dropdown, and do not repeat the current issue status inside the composer.
 
 The UI can provide lightweight mention assistance, but it should not feel like a separate command console.
 
@@ -272,8 +273,11 @@ Secondary actions:
 
 The evidence panel should summarize:
 
-- PR link when manually generated;
-- branch link;
+- code-change handoff through the Commits tab;
+- session branch and source commit identity;
+- compact commands run;
+- tests;
+- build and deployment result;
 - preview URL;
 - cluster and namespace summary;
 - pod health;
@@ -298,6 +302,8 @@ Current implementation:
 - renders a compact failure callout with the last meaningful runner error when a session fails;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
+- separates source review from execution evidence: Commits shows code changes and diffs, while Evidence shows compact commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state;
+- keeps raw command trails collapsed in session logs, with exploratory commands excluded from persisted review evidence;
 - shows a compact Project runbook entry in the Workflow sidebar; clicking it opens a read-only TipTap runbook modal;
 - renders the issue creator, human comments, system comments, Codex-backed agent turns, and actor-authored status changes with their current display names and avatar sources;
 - renders comment reactions inline with quiet reaction chips and a compact icon picker;
@@ -505,10 +511,11 @@ Implemented as of 2026-05-09:
 11. Issue test environment records plus manual deploy/cleanup/retain actions.
 12. Server-backed GitHub sign-in with sidebar account/workspace state and local issue/comment actor display snapshots.
 13. Sidebar global search and Command+K palette for issues and projects.
+14. Commits/Evidence split on Issue Detail, with structured `session_review_evidence` snapshots and compact evidence-command persistence.
 
 Next build steps:
 
-1. Improve deploy/test evidence parsing and preview URL capture from agent artifacts.
+1. Harden Kubernetes resource parsing and failed-deploy evidence.
 2. Manual PR generation action from Issue Detail.
 3. Scoped kubeconfig or ServiceAccount generation.
 4. Standalone Sessions list view.

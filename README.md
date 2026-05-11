@@ -38,7 +38,7 @@ The interaction model is closer to a shared engineering document than a terminal
 - **Issues are the durable workspace.** Agent turns, child tasks, progress, blockers, session evidence, and review comments stay attached to the issue.
 - **Local development stays fast.** Sessions run in prepared git worktrees under `~/.mspace/workdirs`.
 - **Validation is real.** Test deployments use a saved cluster config and issue-scoped namespace to create Kubernetes preview environments.
-- **Evidence is reviewable.** Branch status, diffs, logs, namespace state, preview URLs, and deployment output are visible without reconstructing context from a terminal.
+- **Evidence is reviewable.** Code changes stay in Commits, while the Evidence tab shows compact command, test, build, deploy, namespace, preview, risk, and cleanup state without reconstructing context from a terminal.
 
 ## Features
 
@@ -57,7 +57,7 @@ The interaction model is closer to a shared engineering document than a terminal
 - Type and priority labels, child issue task lists with create/toggle/delete controls, asynchronous type triage, server-backed unread Inbox updates with a sidebar badge, latest-comment editing before agent consumption, comment reactions, running-session stop controls, failed-session callouts, and manual worktree cleanup after completion or cancellation.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Project default cluster selection.
-- Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and record evidence.
+- Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and record structured review evidence.
 
 > [!IMPORTANT]
 > Generated scoped kubeconfigs, ServiceAccounts, automatic PR capture, and Kubernetes-hosted agent runtime are future work. The MVP trusts the kubeconfig path configured on the selected cluster.
@@ -151,6 +151,7 @@ Local data paths:
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Session context markdown included in Codex prompts. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional agent-written deployment result; `previewUrl` is copied back to the issue test environment. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional agent-written review snapshot for commands, tests, build/deploy result, summary, risks, and follow-ups. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-written project runbook update imported after a successful session. |
 
 ## Verification

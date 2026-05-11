@@ -157,7 +157,7 @@ Raw logs are not enough. mspace needs an Evidence surface on the issue.
 
 The Evidence view should gather:
 
-- code changes and diff summary;
+- source session, branch, and source commit identity;
 - commands run;
 - test results;
 - build result;
@@ -169,6 +169,8 @@ The Evidence view should gather:
 - agent summary;
 - risks and follow-ups;
 - cleanup or retain state.
+
+Code changes and diff summary belong in the Commits surface. Evidence should reference the source session/branch/commit, but should not duplicate the code diff.
 
 This view is what turns a session from terminal output into review material. It should help a human decide the next action without replaying the agent run.
 
@@ -242,7 +244,7 @@ The next work should favor the first complete loop over broader platform feature
 
 1. Run a real dogfood issue through the full flow.
 2. Add or refine the agent-discovered project runbook.
-3. Build the issue Evidence surface.
+3. Harden the issue Evidence surface with failed-deploy and Kubernetes-resource evidence.
 4. Complete branch and PR handoff.
 5. Make failure states continueable.
 6. Add scoped Kubernetes credentials after the loop works.

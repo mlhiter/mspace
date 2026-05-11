@@ -37,6 +37,7 @@ Current installed shadcn/ui primitives:
 - `badge`
 - `button`
 - `card`
+- `dropdown-menu`
 - `field`
 - `input`
 - `label`
@@ -192,7 +193,7 @@ Screen priorities:
 - Use `Badge` for status, branch/runtime labels, and namespace hints.
 - Status values remain English unless the product explicitly changes locale.
 - Status badges must use readable labels, not storage values: `Needs review`, `Ready for test`, and `Closed` are acceptable; `needs_review` and `ready_for_test` are not. Runtime badges may still use readable progress labels such as `Running` or `Deploying`.
-- Use GitHub-adjacent status semantics for issues: `Open` is green and `Closed` is purple. Other handoff states should use restrained semantic colors that help scanning without turning the issue header or timeline into a dashboard. Do not put transient session or test-deploy progress in the Issue status selector.
+- Use GitHub-adjacent status semantics for issues: `Open` is green and `Closed` is purple. Other handoff states should use restrained semantic colors that help scanning without turning the issue header or timeline into a dashboard. The Issue sidebar status is a read-only badge. Human lifecycle actions belong inside the Issue Detail comment composer footer: keep the primary action visible, hide less common close reasons such as `Close as not planned` in a compact dropdown, and do not repeat the current issue status there. Do not use a generic Issue status selector, and do not put transient session or test-deploy progress there.
 - Status-change timeline rows should be one-line actor events with from/to badges. Hide compatibility prose from the stored comment body unless the user is inspecting raw data.
 - Avoid decorative badges that do not change behavior or scanning.
 
