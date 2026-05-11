@@ -1057,31 +1057,35 @@ func (a *app) migrateClosedIssueStatuses() error {
 	if _, err := a.db.Exec(`
 		UPDATE issues
 		SET status = CASE status
-			WHEN 'completed' THEN 'closed'
-			WHEN 'done' THEN 'closed'
-			WHEN 'review' THEN 'needs_review'
-			WHEN 'testing' THEN 'test_in_progress'
-			WHEN 'queued' THEN 'in_progress'
-			WHEN 'running' THEN 'in_progress'
-			ELSE status
-		END
-		WHERE status IN ('completed', 'done', 'review', 'testing', 'queued', 'running')
-	`); err != nil {
+				WHEN 'completed' THEN 'closed'
+				WHEN 'done' THEN 'closed'
+				WHEN 'review' THEN 'needs_review'
+				WHEN 'testing' THEN 'needs_review'
+				WHEN 'test_in_progress' THEN 'needs_review'
+				WHEN 'queued' THEN 'open'
+				WHEN 'running' THEN 'open'
+				WHEN 'in_progress' THEN 'open'
+				ELSE status
+			END
+			WHERE status IN ('completed', 'done', 'review', 'testing', 'test_in_progress', 'queued', 'running', 'in_progress')
+		`); err != nil {
 		return fmt.Errorf("migrate completed issue statuses: %w", err)
 	}
 	if _, err := a.db.Exec(`
 		UPDATE inbox_items
 		SET status = CASE status
-			WHEN 'completed' THEN 'closed'
-			WHEN 'done' THEN 'closed'
-			WHEN 'review' THEN 'needs_review'
-			WHEN 'testing' THEN 'test_in_progress'
-			WHEN 'queued' THEN 'in_progress'
-			WHEN 'running' THEN 'in_progress'
-			ELSE status
-		END
-		WHERE status IN ('completed', 'done', 'review', 'testing', 'queued', 'running')
-	`); err != nil {
+				WHEN 'completed' THEN 'closed'
+				WHEN 'done' THEN 'closed'
+				WHEN 'review' THEN 'needs_review'
+				WHEN 'testing' THEN 'needs_review'
+				WHEN 'test_in_progress' THEN 'needs_review'
+				WHEN 'queued' THEN 'open'
+				WHEN 'running' THEN 'open'
+				WHEN 'in_progress' THEN 'open'
+				ELSE status
+			END
+			WHERE status IN ('completed', 'done', 'review', 'testing', 'test_in_progress', 'queued', 'running', 'in_progress')
+		`); err != nil {
 		return fmt.Errorf("migrate completed inbox statuses: %w", err)
 	}
 	return nil
@@ -2513,20 +2517,20 @@ func formatIssueTaskDraftTitles(tasks []issueTaskDraft) string {
 func normalizeIssueStatus(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	switch value {
-	case "", "open", "in_progress", "needs_review", "changes_requested", "ready_for_test", "test_in_progress", "blocked", "closed", "cancelled":
+	case "", "open", "needs_review", "changes_requested", "ready_for_test", "blocked", "closed", "cancelled":
 		return value
 	case "review", "in_review":
 		return "needs_review"
 	case "ready_for_testing", "ready_to_test", "waiting_for_test", "awaiting_test":
 		return "ready_for_test"
-	case "testing":
-		return "test_in_progress"
+	case "testing", "test_in_progress":
+		return "needs_review"
 	case "todo":
 		return "open"
 	case "done", "completed":
 		return "closed"
-	case "queued", "running":
-		return "in_progress"
+	case "queued", "running", "in_progress":
+		return "open"
 	default:
 		return value
 	}
@@ -2534,7 +2538,7 @@ func normalizeIssueStatus(value string) string {
 
 func validateIssueStatus(value string) error {
 	switch normalizeIssueStatus(value) {
-	case "open", "in_progress", "needs_review", "changes_requested", "ready_for_test", "test_in_progress", "blocked", "closed", "cancelled":
+	case "open", "needs_review", "changes_requested", "ready_for_test", "blocked", "closed", "cancelled":
 		return nil
 	default:
 		return fmt.Errorf("unsupported issue status %q", value)
@@ -3395,10 +3399,6 @@ func (a *app) handleStartIssueTestDeploy(w http.ResponseWriter, r *http.Request)
 		environment.ImageRegistryPrefix,
 		previewStrategyLabel(environment),
 	))
-	if err := a.transitionIssueStatus(issueID, "test_in_progress", actor, fmt.Sprintf("Test deployment session `%s` was queued for namespace `%s`.", shortID(session.ID), environment.Namespace)); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 	a.publishInboxEvent(issueID, "test-deploy")
 
 	writeJSON(w, map[string]any{
@@ -3582,7 +3582,7 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 	if profile.Name != "" {
 		displayAgent = profile.Name
 	}
-	if err := a.updateIssueAssignment(issueID, assignee, "agent", "in_progress", actor, fmt.Sprintf("Assigned to agent `%s` and queued local session `%s`.", displayAgent, shortID(session.ID))); err != nil {
+	if err := a.updateIssueAssignment(issueID, assignee, "agent", "open", actor, fmt.Sprintf("Assigned to agent `%s` and queued local session `%s`.", displayAgent, shortID(session.ID))); err != nil {
 		return agentSession{}, err
 	}
 	a.addSystemComment(issueID, fmt.Sprintf(
@@ -4047,7 +4047,6 @@ func (a *app) runSession(session agentSession, project project) {
 	}
 
 	a.updateSessionStatus(session.ID, "running")
-	a.updateIssueStatus(session.IssueID, "in_progress")
 	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Runner starting %s session in %s", session.Provider, session.Workdir))
 	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Source repository: %s", project.RepoPath))
 	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Session branch: %s", session.Branch))
@@ -4142,6 +4141,13 @@ func (a *app) recordSourceChangeNode(session agentSession, project project) (*is
 	}
 
 	if err := exec.Command(gitPath, "-C", session.Workdir, "diff", "--cached", "--quiet").Run(); err == nil {
+		changeNode, err := a.recordExistingSourceHeadChangeNode(session, project, gitPath)
+		if err != nil {
+			return nil, err
+		}
+		if changeNode != nil {
+			return changeNode, nil
+		}
 		a.appendSessionLog(session.ID, "system", "Session completed with no source changes to commit.")
 		return nil, nil
 	} else {
@@ -4167,7 +4173,54 @@ func (a *app) recordSourceChangeNode(session agentSession, project project) (*is
 	if err != nil {
 		return nil, err
 	}
-	commitSubject, err := runGitReadOnly(gitPath, session.Workdir, "log", "-1", "--pretty=%s")
+	node, err := a.recordIssueChangeNodeForCommit(session, project, gitPath, commitSHA)
+	if err != nil {
+		return nil, err
+	}
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Captured source commit %s with %d changed files.", shortCommitSHA(node.CommitSHA), node.FilesChanged))
+	a.broker.publish(session.ID, sessionEvent{Type: "status", Payload: "source-commit"})
+	return node, nil
+}
+
+func (a *app) recordExistingSourceHeadChangeNode(session agentSession, project project, gitPath string) (*issueChangeNode, error) {
+	baseRef, err := resolveBaseRef(gitPath, session.Workdir, project.DefaultBranch)
+	if err != nil {
+		return nil, err
+	}
+	mergeBase, err := runGitReadOnly(gitPath, session.Workdir, "merge-base", "HEAD", baseRef)
+	if err != nil {
+		return nil, err
+	}
+	mergeBase = strings.TrimSpace(mergeBase)
+
+	head, err := runGitReadOnly(gitPath, session.Workdir, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	head = strings.TrimSpace(head)
+	if head == "" || mergeBase == "" || head == mergeBase {
+		return nil, nil
+	}
+
+	aheadOutput, err := runGitReadOnly(gitPath, session.Workdir, "rev-list", "--count", mergeBase+"..HEAD")
+	if err != nil {
+		return nil, err
+	}
+	if parseIntOrZero(aheadOutput) == 0 {
+		return nil, nil
+	}
+
+	node, err := a.recordIssueChangeNodeForCommit(session, project, gitPath, head)
+	if err != nil {
+		return nil, err
+	}
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Captured existing source commit %s with %d changed files.", shortCommitSHA(node.CommitSHA), node.FilesChanged))
+	a.broker.publish(session.ID, sessionEvent{Type: "status", Payload: "source-commit"})
+	return node, nil
+}
+
+func (a *app) recordIssueChangeNodeForCommit(session agentSession, project project, gitPath, commitSHA string) (*issueChangeNode, error) {
+	commitSubject, err := runGitReadOnly(gitPath, session.Workdir, "log", "-1", "--pretty=%s", commitSHA)
 	if err != nil {
 		return nil, err
 	}
@@ -4206,8 +4259,6 @@ func (a *app) recordSourceChangeNode(session agentSession, project project) (*is
 	}
 
 	hydrateIssueChangeNode(&node, project)
-	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Captured source commit %s with %d changed files.", shortCommitSHA(node.CommitSHA), node.FilesChanged))
-	a.broker.publish(session.ID, sessionEvent{Type: "status", Payload: "source-commit"})
 	return &node, nil
 }
 
@@ -6301,24 +6352,48 @@ func authorizeIssueStatusTransition(existing issue, nextStatus string, actor iss
 	if actor.Kind == "" {
 		return errUnauthorized
 	}
-	if (nextStatus == "closed" || nextStatus == "cancelled") && existing.ParentIssueID == "" && actor.Kind != "human" {
-		return errForbidden
-	}
-	if actor.Kind != "agent" {
-		return nil
-	}
-	if existing.ID != actor.IssueID && existing.ParentIssueID != actor.IssueID {
-		return errForbidden
-	}
 	if existing.ParentIssueID != "" && (nextStatus == "open" || nextStatus == "closed") {
+		if actor.Kind == "agent" && existing.ParentIssueID != actor.IssueID {
+			return errForbidden
+		}
 		return nil
 	}
-	switch nextStatus {
-	case "in_progress", "needs_review", "ready_for_test", "test_in_progress", "blocked":
-		return nil
-	default:
+
+	if existing.ParentIssueID == "" {
+		switch actor.Kind {
+		case "human":
+			switch nextStatus {
+			case "open", "changes_requested", "ready_for_test", "blocked", "closed", "cancelled":
+				return nil
+			default:
+				return errForbidden
+			}
+		case "agent":
+			if existing.ID != actor.IssueID {
+				return errForbidden
+			}
+			switch nextStatus {
+			case "needs_review", "ready_for_test", "blocked":
+				return nil
+			default:
+				return errForbidden
+			}
+		case "system":
+			switch nextStatus {
+			case "open", "needs_review", "ready_for_test", "blocked":
+				return nil
+			default:
+				return errForbidden
+			}
+		default:
+			return errForbidden
+		}
+	}
+
+	if actor.Kind == "agent" {
 		return errForbidden
 	}
+	return nil
 }
 
 func issueStatusTransitionComment(existing issue, nextStatus string, actor issueActor, reason string) string {
@@ -6345,11 +6420,11 @@ func displayStoredIssueStatus(status string) string {
 	if status == "review" {
 		return "needs_review"
 	}
-	if status == "testing" {
-		return "test_in_progress"
+	if status == "testing" || status == "test_in_progress" {
+		return "needs_review"
 	}
-	if status == "queued" || status == "running" {
-		return "in_progress"
+	if status == "queued" || status == "running" || status == "in_progress" {
+		return "open"
 	}
 	return status
 }
@@ -6581,7 +6656,7 @@ func inboxStatusToIssueEventKind(status string) string {
 	switch status {
 	case "needs_review":
 		return "issue_needs_review"
-	case "ready_for_test", "test_in_progress", "test_passed", "test_failed":
+	case "ready_for_test", "test_passed", "test_failed":
 		return "issue_test_status_changed"
 	case "closed":
 		return "issue_closed"
@@ -6615,8 +6690,6 @@ func inboxStatusToIssueEventSummary(status string) string {
 		return "Issue is ready for human review."
 	case "ready_for_test":
 		return "Issue is ready for testing."
-	case "test_in_progress":
-		return "Issue test is in progress."
 	case "test_passed":
 		return "Issue test passed."
 	case "test_failed":

@@ -415,11 +415,9 @@ Inbox item states:
 Issue states:
 
 - open
-- in_progress
 - needs_review
 - changes_requested
 - ready_for_test
-- test_in_progress
 - blocked
 - cancelled (closed as not planned)
 - closed

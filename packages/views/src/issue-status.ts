@@ -1,14 +1,14 @@
 export const issueStatusOptions = [
   "open",
-  "in_progress",
   "needs_review",
   "changes_requested",
   "ready_for_test",
-  "test_in_progress",
   "blocked",
   "cancelled",
   "closed",
 ];
+
+export const humanIssueStatusOptions = ["open", "changes_requested", "ready_for_test", "blocked", "cancelled", "closed"];
 
 const issueStatusLabels: Record<string, string> = {
   open: "Open",
@@ -25,8 +25,8 @@ const issueStatusLabels: Record<string, string> = {
 export function displayIssueStatus(status: string) {
   const normalized = status.trim().toLowerCase();
   if (normalized === "review" || normalized === "in_review") return "needs_review";
-  if (normalized === "testing") return "test_in_progress";
-  if (normalized === "queued" || normalized === "running") return "in_progress";
+  if (normalized === "testing" || normalized === "test_in_progress") return "needs_review";
+  if (normalized === "queued" || normalized === "running" || normalized === "in_progress") return "open";
   if (normalized === "test_passed" || normalized === "test_failed" || normalized === "failed") return "open";
   return normalized === "completed" || normalized === "done" ? "closed" : normalized;
 }

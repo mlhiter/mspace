@@ -80,7 +80,7 @@ import {
   selectedIssueLabelKey,
 } from "./issue-labels";
 import { IssueLabelBadge, IssueLabelOptionLabel, IssueLabelSelectValue } from "./issue-label-chip";
-import { displayIssueStatus, issueStatusLabel, issueStatusOptions } from "./issue-status";
+import { displayIssueStatus, humanIssueStatusOptions, issueStatusLabel } from "./issue-status";
 import { formatAbsoluteTime, formatRelativeTime } from "./time";
 import { visibleWorkspaceFileChanges, workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
@@ -1172,7 +1172,7 @@ function ReviewStatusPill(props: { status: string }) {
 
 function EvidenceSection(props: { title: string; children: React.ReactNode; aside?: React.ReactNode }) {
   return (
-    <section className="grid gap-3 border-t border-[color:var(--line)] pt-4">
+    <section className="grid min-w-0 gap-3 border-t border-[color:var(--line)] pt-4">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <h3 className="text-[13px] font-semibold leading-5 text-[color:var(--muted-strong)]">{props.title}</h3>
         {props.aside}
@@ -1186,11 +1186,11 @@ function ReviewMetaGrid(props: { rows: Array<{ label: string; value: string; mon
   const rows = props.rows.filter((row) => row.value);
   if (rows.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">Not reported.</div>;
   return (
-    <div className="grid gap-2 md:grid-cols-2">
+    <div className="grid min-w-0 gap-2 md:grid-cols-2">
       {rows.map((row) => (
-        <div key={row.label} className="min-w-0 rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div key={row.label} className="min-w-0 overflow-hidden rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="text-[11px] leading-4 text-[color:var(--faint)]">{row.label}</div>
-          <div className={cn("mt-0.5 min-w-0 break-all text-[12px] leading-5 text-[color:var(--muted-strong)]", row.mono && "font-mono")}>{row.value}</div>
+          <div className={cn("mt-0.5 min-w-0 text-[12px] leading-5 text-[color:var(--muted-strong)] [overflow-wrap:anywhere]", row.mono && "font-mono")}>{row.value}</div>
         </div>
       ))}
     </div>
@@ -1202,34 +1202,124 @@ function ReviewResultBlock(props: { result: ReviewEvidenceResult; empty: string 
   const status = result.status || "not_reported";
   const summary = result.summary || props.empty;
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 gap-2">
       <ReviewStatusPill status={status} />
-      <div className="text-[13px] leading-6 text-[color:var(--muted-strong)]">{summary}</div>
+      <div className="min-w-0 text-[13px] leading-6 text-[color:var(--muted-strong)] [overflow-wrap:anywhere]">{summary}</div>
       {result.details ? (
-        <pre className="max-h-56 overflow-auto rounded-[8px] bg-[color:var(--code-bg)] px-3 py-2 font-mono text-[12px] leading-6 text-[color:var(--code-text)] whitespace-pre-wrap">
-          {result.details}
-        </pre>
+        <ReviewDetailsDisclosure label="Show raw output">
+          <pre className="max-h-56 max-w-full overflow-auto rounded-[8px] bg-[color:var(--code-bg)] px-3 py-2 font-mono text-[12px] leading-6 text-[color:var(--code-text)] whitespace-pre-wrap [overflow-wrap:anywhere]">
+            {result.details}
+          </pre>
+        </ReviewDetailsDisclosure>
       ) : null}
     </div>
+  );
+}
+
+function reviewResultForDisplay(result: ReviewEvidenceResult, commands: ReviewEvidenceCommand[], category: string) {
+  const matches = listOrEmpty(commands).filter((command) => command.category === category && command.status !== "running");
+  if (matches.length === 0) return result;
+  const latest = matches[matches.length - 1];
+  if (result.status === "failed" && latest.status === "passed") {
+    return {
+      ...result,
+      status: "passed",
+      summary: `Latest ${category} command passed. Earlier failed attempts are kept in the raw command trail.`,
+      details: latest.summary || result.details,
+    };
+  }
+  return result;
+}
+
+function commandEvidenceIsKey(command: ReviewEvidenceCommand) {
+  if (command.status === "failed") return true;
+  if (command.category !== "command") return true;
+  const value = command.command.toLowerCase();
+  return (
+    value.includes("git commit") ||
+    value.includes("git diff --check") ||
+    value.includes("git status") ||
+    value.includes("npm ci") ||
+    value.includes("pnpm install") ||
+    value.includes("playwright") ||
+    value.includes("curl -sS -X PUT".toLowerCase())
+  );
+}
+
+function compactCommandText(value: string) {
+  let command = value.trim();
+  const zshPrefix = "/bin/zsh -lc ";
+  if (command.startsWith(zshPrefix)) {
+    command = command.slice(zshPrefix.length).trim();
+  }
+  if ((command.startsWith('"') && command.endsWith('"')) || (command.startsWith("'") && command.endsWith("'"))) {
+    command = command.slice(1, -1);
+  }
+  return command;
+}
+
+function ReviewDetailsDisclosure(props: { label: string; children: React.ReactNode }) {
+  return (
+    <details className="group min-w-0">
+      <summary className="cursor-pointer select-none text-[12px] font-medium leading-5 text-[color:var(--muted)] transition-colors hover:text-[color:var(--text)]">
+        {props.label}
+      </summary>
+      <div className="mt-2 min-w-0">{props.children}</div>
+    </details>
   );
 }
 
 function CommandEvidenceList(props: { commands: ReviewEvidenceCommand[] }) {
   const commands = listOrEmpty(props.commands);
   if (commands.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">No commands were reported.</div>;
+  const keyCommands = commands.filter(commandEvidenceIsKey).slice(-8);
+  const hiddenCount = Math.max(0, commands.length - keyCommands.length);
   return (
-    <div className="grid gap-2">
-      {commands.map((command, index) => (
-        <div key={`${command.command}-${index}`} className="grid gap-2 rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <ReviewStatusPill status={command.status} />
-            <span className="rounded-full bg-[color:var(--surface)] px-2 py-0.5 text-[11px] leading-4 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">{command.category || "command"}</span>
-            {command.createdAt ? <span className="text-[11px] leading-4 text-[color:var(--faint)]">{formatRelativeTime(command.createdAt)}</span> : null}
-          </div>
-          <code className="break-all font-mono text-[12px] leading-5 text-[color:var(--text)]">{command.command}</code>
-          {command.summary ? <div className="text-[12px] leading-5 text-[color:var(--muted)] whitespace-pre-wrap">{command.summary}</div> : null}
+    <div className="grid min-w-0 gap-3">
+      <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+        Captured {commands.length} command{commands.length === 1 ? "" : "s"}. Showing key validation and state-change commands only.
+      </div>
+      {keyCommands.length > 0 ? (
+        <div className="grid min-w-0 gap-1.5">
+          {keyCommands.map((command, index) => (
+            <div key={`${command.command}-${index}`} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2 gap-y-1 rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+              <ReviewStatusPill status={command.status} />
+              <div className="min-w-0">
+                <div className="flex min-w-0 flex-wrap items-center gap-2 text-[11px] leading-4 text-[color:var(--faint)]">
+                  <span>{command.category || "command"}</span>
+                  {command.createdAt ? <span>{formatRelativeTime(command.createdAt)}</span> : null}
+                </div>
+                <code className="mt-0.5 block min-w-0 max-w-full font-mono text-[12px] leading-5 text-[color:var(--text)] whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  {compactCommandText(command.command)}
+                </code>
+              </div>
+            </div>
+          ))}
         </div>
-      ))}
+      ) : null}
+      {hiddenCount > 0 ? (
+        <ReviewDetailsDisclosure label={`Show raw command trail (${commands.length})`}>
+          <div className="grid min-w-0 gap-2">
+            {commands.map((command, index) => (
+              <div key={`${command.command}-${index}`} className="grid min-w-0 gap-2 overflow-hidden rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <ReviewStatusPill status={command.status} />
+                  <span className="rounded-full bg-[color:var(--surface)] px-2 py-0.5 text-[11px] leading-4 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">{command.category || "command"}</span>
+                  {command.createdAt ? <span className="text-[11px] leading-4 text-[color:var(--faint)]">{formatRelativeTime(command.createdAt)}</span> : null}
+                </div>
+                <code className="block min-w-0 max-w-full font-mono text-[12px] leading-5 text-[color:var(--text)] whitespace-pre-wrap [overflow-wrap:anywhere]">{compactCommandText(command.command)}</code>
+                {command.summary ? (
+                  <ReviewDetailsDisclosure label="Show command output">
+                    <div className="max-h-44 min-w-0 overflow-auto border-t border-[color:var(--line)] pt-2 text-[12px] leading-5 text-[color:var(--muted)] whitespace-pre-wrap [overflow-wrap:anywhere]">
+                      {command.summary}
+                    </div>
+                  </ReviewDetailsDisclosure>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </ReviewDetailsDisclosure>
+      ) : null}
     </div>
   );
 }
@@ -1238,14 +1328,18 @@ function CheckEvidenceList(props: { checks: ReviewEvidenceCheck[] }) {
   const checks = listOrEmpty(props.checks);
   if (checks.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">No test result was reported.</div>;
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 gap-2">
       {checks.map((check, index) => (
-        <div key={`${check.name}-${index}`} className="grid gap-1 rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div key={`${check.name}-${index}`} className="grid min-w-0 gap-1 overflow-hidden rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="flex min-w-0 items-center gap-2">
             <ReviewStatusPill status={check.status} />
-            <span className="min-w-0 break-all font-mono text-[12px] leading-5 text-[color:var(--text)]">{check.name}</span>
+            <span className="min-w-0 font-mono text-[12px] leading-5 text-[color:var(--text)] [overflow-wrap:anywhere]">{check.name}</span>
           </div>
-          {check.summary ? <div className="text-[12px] leading-5 text-[color:var(--muted)] whitespace-pre-wrap">{check.summary}</div> : null}
+          {check.summary ? (
+            <ReviewDetailsDisclosure label="Show test output">
+              <div className="max-h-36 min-w-0 overflow-auto text-[12px] leading-5 text-[color:var(--muted)] whitespace-pre-wrap [overflow-wrap:anywhere]">{check.summary}</div>
+            </ReviewDetailsDisclosure>
+          ) : null}
         </div>
       ))}
     </div>
@@ -1258,7 +1352,7 @@ function ReviewStringList(props: { items: string[]; empty: string }) {
   return (
     <ul className="grid gap-1.5">
       {items.map((item, index) => (
-        <li key={`${index}-${item}`} className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-6 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+        <li key={`${index}-${item}`} className="min-w-0 rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-6 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)] [overflow-wrap:anywhere]">
           {item}
         </li>
       ))}
@@ -1281,13 +1375,13 @@ function IssueEvidenceTab(props: {
     return <Notice>No review evidence has been captured for this issue yet.</Notice>;
   }
   return (
-    <section className="grid gap-5">
+    <section className="grid min-w-0 gap-5 overflow-hidden">
       {reviews.map((review) => {
         const sourceCommit = review.sourceCommitSha.trim();
         const sourceNode = sourceCommit ? props.changeNodes.find((node) => node.commitSha === sourceCommit || node.commitSha.startsWith(sourceCommit)) : undefined;
         const sourceSession = props.sessions.find((session) => session.id === review.sourceSessionId || session.id === review.sessionId);
         return (
-          <article key={review.id || review.sessionId} className="grid gap-4 rounded-[12px] bg-[color:var(--block-subtle)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
+          <article key={review.id || review.sessionId} className="grid min-w-0 gap-4 overflow-hidden rounded-[12px] bg-[color:var(--block-subtle)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
             <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">Review evidence</div>
@@ -1333,7 +1427,7 @@ function IssueEvidenceTab(props: {
                 <CheckEvidenceList checks={review.tests} />
               </EvidenceSection>
               <EvidenceSection title="Build result">
-                <ReviewResultBlock result={review.buildResult} empty="No build result was reported." />
+                <ReviewResultBlock result={reviewResultForDisplay(review.buildResult, review.commandsRun, "build")} empty="No build result was reported." />
               </EvidenceSection>
             </div>
 
@@ -3534,7 +3628,7 @@ export function IssueDetailPage() {
                       <StatusBadge value={displayIssueStatus(detail.issue.status)} valueLabel={issueStatusLabel(detail.issue.status)} />
                     </SelectTrigger>
                     <SelectContent>
-                      {issueStatusOptions.map((status) => (
+                      {humanIssueStatusOptions.map((status) => (
                         <SelectItem key={status} value={status}>
                           <IssueStatusOptionLabel status={status} />
                         </SelectItem>

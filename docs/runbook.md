@@ -475,7 +475,7 @@ Common causes:
 
 ### Session Fails While Recording Source Commit
 
-When a source-code session finishes with git changes, the runner stages the worktree, excludes `.mspace` artifacts, and creates the captured source commit. It retries transient `.git/index.lock` conflicts during `git add`, `git reset`, and `git commit`.
+When a source-code session finishes with git changes, the runner first checks whether the session branch is already ahead of the project base branch. If the agent already created a commit, the runner records that HEAD commit as the issue change node instead of creating an extra commit. If the worktree still has uncommitted changes, it stages the worktree, excludes `.mspace` artifacts, and creates the captured source commit. It retries transient `.git/index.lock` conflicts during `git add`, `git reset`, and `git commit`.
 
 If failures persist, check for a stale lock only after confirming no git process is active for the worktree:
 

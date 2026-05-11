@@ -191,8 +191,8 @@ Screen priorities:
 
 - Use `Badge` for status, branch/runtime labels, and namespace hints.
 - Status values remain English unless the product explicitly changes locale.
-- Status badges must use readable labels, not storage values: `In progress`, `Needs review`, `Ready for test`, `Test in progress`, and `Closed` are acceptable; `in_progress`, `needs_review`, `ready_for_test`, and `test_in_progress` are not.
-- Use GitHub-adjacent status semantics for issues: `Open` is green and `Closed` is purple. Other workflow states should use restrained semantic colors that help scanning without turning the issue header or timeline into a dashboard.
+- Status badges must use readable labels, not storage values: `Needs review`, `Ready for test`, and `Closed` are acceptable; `needs_review` and `ready_for_test` are not. Runtime badges may still use readable progress labels such as `Running` or `Deploying`.
+- Use GitHub-adjacent status semantics for issues: `Open` is green and `Closed` is purple. Other handoff states should use restrained semantic colors that help scanning without turning the issue header or timeline into a dashboard. Do not put transient session or test-deploy progress in the Issue status selector.
 - Status-change timeline rows should be one-line actor events with from/to badges. Hide compatibility prose from the stored comment body unless the user is inspecting raw data.
 - Avoid decorative badges that do not change behavior or scanning.
 
