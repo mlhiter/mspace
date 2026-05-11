@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-10
+> Status: local MVP operations guide, updated 2026-05-11
 
 ## Local Data
 
@@ -14,7 +14,7 @@
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional deploy/test artifact. When it includes `previewUrl`, the runner copies it back to the issue test environment. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-learned project runbook artifact. When present after a successful session, the runner stores it as the current project runbook. |
 
-Reusable cluster configs are stored in `clusters`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
+Reusable cluster configs are stored in `clusters`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Comment reactions are stored in `comment_reactions` so reaction counts do not mutate comment Markdown. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
 
 The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
 
@@ -166,6 +166,7 @@ Local actor display snapshots:
 ```bash
 sqlite3 ~/.mspace/mspace.db "select id,title,creator_name,creator_avatar_url from issues order by updated_at desc limit 5;"
 sqlite3 ~/.mspace/mspace.db "select issue_id,author_type,author_name,author_avatar_url,created_at from comments order by created_at desc limit 10;"
+sqlite3 ~/.mspace/mspace.db "select issue_id,comment_id,reaction,user_id,created_at from comment_reactions order by created_at desc limit 10;"
 ```
 
 Status-transition author checks:
@@ -471,6 +472,20 @@ Common causes:
 - the project repo path is not a git repository;
 - the session branch already exists in an unexpected state;
 - the planned worktree directory already exists.
+
+### Session Fails While Recording Source Commit
+
+When a source-code session finishes with git changes, the runner stages the worktree, excludes `.mspace` artifacts, and creates the captured source commit. It retries transient `.git/index.lock` conflicts during `git add`, `git reset`, and `git commit`.
+
+If failures persist, check for a stale lock only after confirming no git process is active for the worktree:
+
+```bash
+sqlite3 ~/.mspace/mspace.db "select id,status,workdir from agent_sessions order by updated_at desc limit 5;"
+git -C <workdir> status --short
+lsof <worktree-git-dir>/index.lock
+```
+
+Remove `index.lock` only when no running git process owns it.
 
 ### Kubernetes Validation Does Not Run
 

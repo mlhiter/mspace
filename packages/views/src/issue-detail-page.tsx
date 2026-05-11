@@ -5,6 +5,7 @@ import type { Editor } from "@tiptap/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  BookOpenText,
   Bot,
   CheckCircle2,
   CircleAlert,
@@ -22,6 +23,7 @@ import {
   Rocket,
   Save,
   Send,
+  SmilePlus,
   Trash2,
   X,
 } from "lucide-react";
@@ -34,12 +36,14 @@ import {
   type AgentSession,
   type Cluster,
   type Comment,
+  type CommentReactionSummary,
   type DeploymentEvidence,
   type IssueChangeNode,
   type IssueLabel,
   type IssueLabelDefinition,
   type IssueListItem,
   type IssueTestEnvironment,
+  type ProjectRunbook,
   type ReviewEvidenceCheck,
   type ReviewEvidenceCommand,
   type ReviewEvidenceResult,
@@ -153,6 +157,21 @@ function useSessionStream(sessionId: string | undefined, onEvent: (event: Sessio
 
 function listOrEmpty<T>(items: T[] | null | undefined): T[] {
   return Array.isArray(items) ? items : [];
+}
+
+const COMMENT_REACTION_OPTIONS = [
+  { reaction: "thumbs_up", emoji: "👍", label: "Thumbs up" },
+  { reaction: "thumbs_down", emoji: "👎", label: "Thumbs down" },
+  { reaction: "laugh", emoji: "😄", label: "Laugh" },
+  { reaction: "hooray", emoji: "🎉", label: "Hooray" },
+  { reaction: "confused", emoji: "😕", label: "Confused" },
+  { reaction: "heart", emoji: "❤️", label: "Heart" },
+  { reaction: "rocket", emoji: "🚀", label: "Rocket" },
+  { reaction: "eyes", emoji: "👀", label: "Eyes" },
+] as const;
+
+function commentReactionOption(reaction: string) {
+  return COMMENT_REACTION_OPTIONS.find((option) => option.reaction === reaction);
 }
 
 function mentionKey(value: string) {
@@ -297,6 +316,42 @@ function isNoisySystemComment(comment: Comment) {
 
 function latestAgentMessage(logs: LogLine[]) {
   return [...logs].reverse().find((log) => log.stream === "agent")?.message || "";
+}
+
+const ansiEscapePattern = /\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+const sessionFailureNoisePrefixes = [
+  "Preparing workspace",
+  "Runner starting",
+  "Source repository:",
+  "Session branch:",
+  "Agent profile:",
+  "Session context:",
+  "Agent instructions:",
+  "Starting Codex app-server",
+  "Codex app-server ready:",
+  "Codex thread:",
+  "Codex turn:",
+  "Project runbook updated",
+  "Collecting Kubernetes evidence",
+];
+
+function normalizeSessionLogMessage(message: string) {
+  return message.replace(ansiEscapePattern, "").replace(/\s+/g, " ").trim();
+}
+
+function latestSessionFailureMessage(logs: LogLine[]) {
+  for (const log of [...logs].reverse()) {
+    const message = normalizeSessionLogMessage(log.message);
+    if (!message || sessionFailureNoisePrefixes.some((prefix) => message.startsWith(prefix))) continue;
+    const stream = log.stream.toLowerCase();
+    const isErrorish = /record source commit|fatal:|error|failed|unable to|command failed|prepare workspace|write session context|exit status|permission denied|no such file/i.test(
+      message,
+    );
+    if ((stream === "system" || stream.includes("stderr") || stream === "live") && isErrorish) {
+      return message.length > 560 ? `${message.slice(0, 557)}...` : message;
+    }
+  }
+  return "";
 }
 
 function isHttpUrl(value: string) {
@@ -502,7 +557,7 @@ function AgentMentionPill(props: { agent: AgentProfile; label: string }) {
   return (
     <span
       title={props.agent.name}
-      className="mx-0.5 inline-flex h-6 max-w-full items-center gap-1.5 rounded-full bg-[color:var(--block)] px-1.5 pr-2 align-[-5px] text-[12px] font-semibold leading-none text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--line)]"
+      className="mx-0.5 inline-flex h-6 max-w-full items-center gap-1.5 rounded-full bg-[color:var(--block)] px-1.5 pr-2 align-middle text-[12px] font-semibold leading-none text-[color:var(--text)]"
     >
       <span className="grid size-4 shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--paper)] text-[color:var(--accent-blue)] shadow-[inset_0_0_0_1px_var(--line)]">
         {isCodex ? <img src={codexAvatarDataUrl} alt="" className="size-full p-0.5" /> : <Bot data-icon className="size-3" />}
@@ -1464,6 +1519,111 @@ function TimelineShell(props: {
   );
 }
 
+function CommentReactionBar(props: {
+  reactions?: CommentReactionSummary[];
+  pendingReaction?: string;
+  onToggleReaction?: (reaction: string, reactedByMe: boolean) => void;
+}) {
+  const reactions = listOrEmpty(props.reactions);
+  if (reactions.length === 0) return null;
+
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+      {reactions.map((reaction) => {
+        const option = commentReactionOption(reaction.reaction);
+        if (!option) return null;
+        return (
+          <button
+            key={reaction.reaction}
+            type="button"
+            className={cn(
+              "inline-flex h-6 items-center gap-1 rounded-full px-1.5 text-[12px] font-medium leading-none text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)] transition-[background-color,color,box-shadow,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-95",
+              reaction.reactedByMe && "bg-[color:var(--hover)] text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--accent-blue)]",
+            )}
+            aria-pressed={reaction.reactedByMe}
+            title={option.label}
+            disabled={!props.onToggleReaction || props.pendingReaction === reaction.reaction}
+            onClick={() => props.onToggleReaction?.(reaction.reaction, reaction.reactedByMe)}
+          >
+            <span aria-hidden="true">{option.emoji}</span>
+            <span>{reaction.count}</span>
+          </button>
+        );
+      })}
+      {props.onToggleReaction ? (
+        <CommentReactionPicker
+          reactions={reactions}
+          pendingReaction={props.pendingReaction}
+          onToggleReaction={props.onToggleReaction}
+          triggerClassName="size-6"
+          menuClassName="left-0 top-7"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function CommentReactionPicker(props: {
+  reactions?: CommentReactionSummary[];
+  pendingReaction?: string;
+  onToggleReaction?: (reaction: string, reactedByMe: boolean) => void;
+  triggerClassName?: string;
+  menuClassName?: string;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const reactions = listOrEmpty(props.reactions);
+  const reactionsByKey = useMemo(() => {
+    const entries = new Map<string, CommentReactionSummary>();
+    for (const reaction of reactions) {
+      entries.set(reaction.reaction, reaction);
+    }
+    return entries;
+  }, [reactions]);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        className={cn(
+          "grid place-items-center rounded-full text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)] transition-[background-color,color,opacity,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95",
+          props.triggerClassName || "size-7",
+        )}
+        aria-label="Add reaction"
+        aria-expanded={menuOpen}
+        onClick={() => setMenuOpen((open) => !open)}
+      >
+        <SmilePlus data-icon />
+      </button>
+      {menuOpen ? (
+        <div className={cn("absolute z-30 flex gap-1 rounded-[10px] bg-[color:var(--paper)] p-1 shadow-[0_12px_36px_rgba(0,0,0,0.14),0_0_0_1px_var(--line)]", props.menuClassName || "right-0 top-8")}>
+          {COMMENT_REACTION_OPTIONS.map((option) => {
+            const existing = reactionsByKey.get(option.reaction);
+            return (
+              <button
+                key={option.reaction}
+                type="button"
+                className={cn(
+                  "grid size-7 place-items-center rounded-[7px] text-[16px] transition-[background-color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-95",
+                  existing?.reactedByMe && "bg-[color:var(--hover)] shadow-[inset_0_0_0_1px_var(--accent-blue)]",
+                )}
+                title={option.label}
+                aria-pressed={Boolean(existing?.reactedByMe)}
+                disabled={props.pendingReaction === option.reaction}
+                onClick={() => {
+                  props.onToggleReaction?.(option.reaction, Boolean(existing?.reactedByMe));
+                  setMenuOpen(false);
+                }}
+              >
+                <span aria-hidden="true">{option.emoji}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CommentTimelineItem(props: {
   comment: Comment;
   agents?: AgentProfile[];
@@ -1487,6 +1647,8 @@ function CommentTimelineItem(props: {
   helperText?: string;
   saveLabel?: string;
   canSave?: boolean;
+  pendingReaction?: string;
+  onToggleReaction?: (reaction: string, reactedByMe: boolean) => void;
 }) {
   const actor = actorForComment(props.comment);
   const sessionAction = parseSessionActionComment(props.comment.body);
@@ -1575,19 +1737,34 @@ function CommentTimelineItem(props: {
                 Edited {formatRelativeTime(props.comment.editedAt)}
               </div>
             ) : null}
+            <CommentReactionBar
+              reactions={props.comment.reactions}
+              pendingReaction={props.pendingReaction}
+              onToggleReaction={props.onToggleReaction}
+            />
           </div>
-          {props.canEdit ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 shrink-0 opacity-70 hover:opacity-100"
-              onClick={props.onStartEdit}
-              aria-label="Edit comment"
-            >
-              <Pencil data-icon />
-            </Button>
-          ) : null}
+          <div className="flex shrink-0 items-center gap-1 opacity-70 transition-opacity duration-150 group-hover/comment:opacity-100 focus-within:opacity-100">
+            {listOrEmpty(props.comment.reactions).length === 0 && props.onToggleReaction ? (
+              <CommentReactionPicker
+                reactions={props.comment.reactions}
+                pendingReaction={props.pendingReaction}
+                onToggleReaction={props.onToggleReaction}
+                triggerClassName="size-7"
+              />
+            ) : null}
+            {props.canEdit ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0"
+                onClick={props.onStartEdit}
+                aria-label="Edit comment"
+              >
+                <Pencil data-icon />
+              </Button>
+            ) : null}
+          </div>
         </div>
       )}
     </TimelineShell>
@@ -1698,6 +1875,27 @@ function SessionActionTitle(props: { actorName: string; action: SessionAction; a
   );
 }
 
+function SessionFailureCallout(props: { logs: LogLine[]; hasAgentMessage: boolean }) {
+  const failureMessage = latestSessionFailureMessage(props.logs);
+  return (
+    <div className="mt-3 rounded-[8px] bg-[color:var(--danger-soft)] px-3 py-2.5 text-[12px] leading-5 text-[color:var(--danger)] shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="flex min-w-0 items-center gap-2 font-semibold">
+        <CircleAlert data-icon className="shrink-0" />
+        <span>{props.hasAgentMessage ? "Session failed after this agent message" : "Session failed"}</span>
+      </div>
+      <p className="mt-1 text-[color:var(--danger)]">
+        mspace did not finish the run successfully. Treat the agent summary as partial until this failure is resolved.
+      </p>
+      {failureMessage ? (
+        <div className="mt-2 grid gap-1 rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+          <span className="text-[11px] font-medium text-[color:var(--danger)]">Last runner error</span>
+          <span className="break-words font-mono text-[11px] leading-5 text-[color:var(--text)]">{failureMessage}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SessionTimelineItem(props: {
   session: AgentSession;
   logs: LogLine[];
@@ -1714,6 +1912,16 @@ function SessionTimelineItem(props: {
   const agentMessage = latestAgentMessage(logs);
   const isActive = ["queued", "running"].includes(session.status);
   const isEmptyCancelledSession = session.status === "cancelled" && !agentMessage && props.changes.length === 0;
+  const title = isActive ? (
+    `${agent.name} is working`
+  ) : session.status === "failed" ? (
+    <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+      <span>{agent.name}</span>
+      <span className="font-normal text-[color:var(--danger)]">failed</span>
+    </span>
+  ) : (
+    agent.name
+  );
   if (isEmptyCancelledSession && props.hasStopAction) {
     return null;
   }
@@ -1736,7 +1944,7 @@ function SessionTimelineItem(props: {
   return (
     <TimelineShell
       actor={codexActor(agent.name)}
-      title={isActive ? `${agent.name} is working` : agent.name}
+      title={title}
       time={session.updatedAt || session.createdAt}
     >
       {isActive ? (
@@ -1770,6 +1978,8 @@ function SessionTimelineItem(props: {
               No final agent summary was captured for this session.
             </div>
           )}
+
+          {session.status === "failed" ? <SessionFailureCallout logs={logs} hasAgentMessage={Boolean(agentMessage)} /> : null}
 
           <SessionFileChanges changes={props.changes} workdir={session.workdir} />
         </div>
@@ -2155,6 +2365,100 @@ function IssueStatusOptionLabel(props: { status: string }) {
   );
 }
 
+function runbookStatusLabel(status: string) {
+  if (status === "learned") return "learned";
+  if (status === "stale") return "stale";
+  return "not learned";
+}
+
+function runbookUpdatedLabel(value: string) {
+  return value ? formatRelativeTime(value) : "not available";
+}
+
+function ProjectRunbookModal(props: {
+  projectName: string;
+  projectStatus: string;
+  projectUpdatedAt: string;
+  runbook?: ProjectRunbook;
+  isLoading: boolean;
+  error?: Error | null;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") props.onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [props.onClose]);
+
+  const content = props.runbook?.content || "";
+  const hasContent = Boolean(content.trim());
+  const status = runbookStatusLabel(props.runbook?.status || props.projectStatus);
+  const updatedAt = props.runbook?.updatedAt || props.projectUpdatedAt;
+
+  return (
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
+      <button type="button" aria-label="Close project runbook dialog backdrop" className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="project-runbook-title"
+        className="relative max-h-[calc(100vh-40px)] w-full max-w-[780px] overflow-auto rounded-[12px] bg-[color:var(--paper)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.18),0_0_0_1px_var(--line)]"
+      >
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 id="project-runbook-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">Project runbook</h2>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] leading-5 text-[color:var(--muted)]">
+              <span className="font-medium text-[color:var(--muted-strong)]">{props.projectName}</span>
+              <span aria-hidden="true">/</span>
+              <span>{status}</span>
+              <span aria-hidden="true">/</span>
+              <span>{updatedAt ? formatRelativeTime(updatedAt) : "not available"}</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close modal"
+            className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
+            onClick={props.onClose}
+          >
+            <X data-icon />
+          </button>
+        </div>
+
+        {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
+        {props.isLoading ? (
+          <div className="grid min-h-[220px] place-items-center rounded-[10px] bg-[color:var(--block)] text-[13px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+            Loading runbook...
+          </div>
+        ) : hasContent ? (
+          <div className="border-t border-[color:var(--line)] pt-5">
+            <IssueDocumentEditor
+              variant="runbook-viewer"
+              ariaLabel="Project runbook content"
+              value={content}
+              editable={false}
+              onChange={() => undefined}
+              placeholder="No runbook yet."
+            />
+          </div>
+        ) : (
+          <div className="grid min-h-[220px] place-items-center rounded-[10px] bg-[color:var(--block)] px-6 text-center shadow-[inset_0_0_0_1px_var(--line)]">
+            <div>
+              <BookOpenText data-icon className="mx-auto mb-3 text-[color:var(--muted)]" />
+              <div className="text-[14px] font-medium leading-6 text-[color:var(--text)]">No runbook yet</div>
+              <p className="mt-1 max-w-[44ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
+                A successful agent session can write project learning back into mspace.
+              </p>
+            </div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function TestDeployModal(props: {
   value: StartTestDeployInput;
   clusters: Cluster[];
@@ -2380,6 +2684,7 @@ export function IssueDetailPage() {
   const [sessionSnapshotsById, setSessionSnapshotsById] = useState<Record<string, SessionSnapshot>>({});
   const [issueTab, setIssueTab] = useState<IssueTab>("overview");
   const [testDeployOpen, setTestDeployOpen] = useState(false);
+  const [runbookOpen, setRunbookOpen] = useState(false);
   const [testDeployForm, setTestDeployForm] = useState<StartTestDeployInput>({
     agentProfile: "codex",
     clusterId: "",
@@ -2412,6 +2717,11 @@ export function IssueDetailPage() {
   });
 
   const detail = issueQuery.data;
+  const projectRunbookQuery = useQuery({
+    queryKey: detail?.project.id ? queryKeys.projectRunbook(detail.project.id) : queryKeys.projectRunbook("__none"),
+    queryFn: ({ queryKey }) => api.getProjectRunbook(queryKey[1]),
+    enabled: runbookOpen && Boolean(detail?.project.id),
+  });
   const agents = listOrEmpty(agentsQuery.data);
   const clusters = listOrEmpty(clustersQuery.data);
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
@@ -2614,6 +2924,18 @@ export function IssueDetailPage() {
         queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
       ]);
+    },
+  });
+
+  const toggleCommentReaction = useMutation({
+    mutationFn: async (input: { commentId: string; reaction: string; reactedByMe: boolean }) => {
+      if (input.reactedByMe) {
+        return api.deleteCommentReaction(issueId, input.commentId, input.reaction);
+      }
+      return api.setCommentReaction(issueId, input.commentId, input.reaction);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) });
     },
   });
 
@@ -3031,6 +3353,14 @@ export function IssueDetailPage() {
                           helperText={isEditing ? editHelperText : undefined}
                           saveLabel={isEditing ? editSaveLabel : undefined}
                           canSave={isEditing ? canSaveEditingComment : undefined}
+                          pendingReaction={
+                            toggleCommentReaction.isPending && toggleCommentReaction.variables?.commentId === item.comment.id
+                              ? toggleCommentReaction.variables.reaction
+                              : ""
+                          }
+                          onToggleReaction={(reaction, reactedByMe) => {
+                            toggleCommentReaction.mutate({ commentId: item.comment.id, reaction, reactedByMe });
+                          }}
                           mentionMenu={
                             isEditing && editingMentionMenuOpen ? (
                               <AgentMentionMenu
@@ -3300,19 +3630,39 @@ export function IssueDetailPage() {
             ) : null}
 
             <SidebarSection title="Workflow">
-              <details>
-                <summary className="cursor-pointer select-none text-[13px] font-medium text-[color:var(--muted-strong)]">
-                  Project runbook
-                </summary>
-                <div className="mt-2 grid gap-2">
-                  <MetaLine label="Status" value={detail.project.runbookStatus === "learned" ? "learned" : detail.project.runbookStatus === "stale" ? "stale" : "not learned"} />
-                  <MetaLine label="Updated" value={detail.project.runbookUpdatedAt || "not available"} />
+              <button
+                type="button"
+                className="grid w-full gap-2 rounded-[8px] px-2 py-2 text-left transition-[background-color,box-shadow,transform] duration-150 ease-out hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99]"
+                onClick={() => setRunbookOpen(true)}
+              >
+                <span className="flex items-center justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium leading-5 text-[color:var(--muted-strong)]">
+                    <BookOpenText data-icon className="shrink-0" />
+                    <span className="truncate">Project runbook</span>
+                  </span>
+                  <span className="shrink-0 text-[12px] font-medium leading-5 text-[color:var(--muted)]">View</span>
+                </span>
+                <div className="grid gap-1.5">
+                  <MetaLine label="Status" value={runbookStatusLabel(detail.project.runbookStatus)} />
+                  <MetaLine label="Updated" value={runbookUpdatedLabel(detail.project.runbookUpdatedAt)} />
                 </div>
-              </details>
+              </button>
             </SidebarSection>
           </div>
         </aside>
       </div>
+
+      {runbookOpen ? (
+        <ProjectRunbookModal
+          projectName={detail.project.name}
+          projectStatus={detail.project.runbookStatus}
+          projectUpdatedAt={detail.project.runbookUpdatedAt}
+          runbook={projectRunbookQuery.data}
+          isLoading={projectRunbookQuery.isLoading}
+          error={projectRunbookQuery.error}
+          onClose={() => setRunbookOpen(false)}
+        />
+      ) : null}
 
       {testDeployOpen ? (
         <TestDeployModal

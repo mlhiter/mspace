@@ -55,6 +55,19 @@ const projectRunbookPromptLimit = 24 * 1024
 
 var checklistItemPattern = regexp.MustCompile(`^\s*(?:[-*+]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
 
+var allowedCommentReactions = map[string]bool{
+	"thumbs_up":   true,
+	"thumbs_down": true,
+	"laugh":       true,
+	"hooray":      true,
+	"confused":    true,
+	"heart":       true,
+	"rocket":      true,
+	"eyes":        true,
+}
+
+var commentReactionOrder = []string{"thumbs_up", "thumbs_down", "laugh", "hooray", "confused", "heart", "rocket", "eyes"}
+
 func runnerHealthPayload() map[string]any {
 	return map[string]any{
 		"ok":             true,
@@ -190,16 +203,23 @@ type issueListItem struct {
 }
 
 type comment struct {
-	ID           string `json:"id"`
-	IssueID      string `json:"issueId"`
-	AuthorType   string `json:"authorType"`
-	AuthorUserID string `json:"authorUserId"`
-	AuthorName   string `json:"authorName"`
-	AuthorAvatar string `json:"authorAvatarUrl"`
-	Body         string `json:"body"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
-	EditedAt     string `json:"editedAt"`
+	ID           string                   `json:"id"`
+	IssueID      string                   `json:"issueId"`
+	AuthorType   string                   `json:"authorType"`
+	AuthorUserID string                   `json:"authorUserId"`
+	AuthorName   string                   `json:"authorName"`
+	AuthorAvatar string                   `json:"authorAvatarUrl"`
+	Body         string                   `json:"body"`
+	CreatedAt    string                   `json:"createdAt"`
+	UpdatedAt    string                   `json:"updatedAt"`
+	EditedAt     string                   `json:"editedAt"`
+	Reactions    []commentReactionSummary `json:"reactions"`
+}
+
+type commentReactionSummary struct {
+	Reaction    string `json:"reaction"`
+	Count       int    `json:"count"`
+	ReactedByMe bool   `json:"reactedByMe"`
 }
 
 type issueAttachment struct {
@@ -706,6 +726,8 @@ func main() {
 	router.Put("/api/issues/{issueID}/labels", application.handleUpdateIssueLabels)
 	router.Post("/api/issues/{issueID}/comments", application.handleCreateComment)
 	router.Put("/api/issues/{issueID}/comments/{commentID}", application.handleUpdateComment)
+	router.Put("/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}", application.handleSetCommentReaction)
+	router.Delete("/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}", application.handleDeleteCommentReaction)
 	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
 	router.Post("/api/issues/{issueID}/sessions", application.handleCreateSession)
 	router.Post("/api/issues/{issueID}/test-deploy", application.handleStartIssueTestDeploy)
@@ -753,6 +775,9 @@ func (a *app) migrate() error {
 		return err
 	}
 	if err := a.ensureCommentColumns(); err != nil {
+		return err
+	}
+	if err := a.ensureCommentReactionTables(); err != nil {
 		return err
 	}
 	if err := a.ensureIssueAttachmentTables(); err != nil {
@@ -1092,6 +1117,46 @@ func (a *app) ensureCommentColumns() error {
 		WHERE updated_at = ''
 	`); err != nil {
 		return fmt.Errorf("backfill comment updated_at: %w", err)
+	}
+	return nil
+}
+
+func (a *app) ensureCommentReactionTables() error {
+	if _, err := a.db.Exec(`
+		CREATE TABLE IF NOT EXISTS comment_reactions (
+			id TEXT PRIMARY KEY,
+			issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+			comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+			reaction TEXT NOT NULL CHECK(reaction IN ('thumbs_up', 'thumbs_down', 'laugh', 'hooray', 'confused', 'heart', 'rocket', 'eyes')),
+			user_id TEXT NOT NULL,
+			actor_name TEXT NOT NULL DEFAULT '',
+			actor_avatar_url TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			UNIQUE(comment_id, user_id, reaction)
+		)
+	`); err != nil {
+		return fmt.Errorf("create comment reactions: %w", err)
+	}
+	if err := a.ensureTableColumns("comment_reactions", map[string]string{
+		"issue_id":         "TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE",
+		"comment_id":       "TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE",
+		"reaction":         "TEXT NOT NULL DEFAULT 'thumbs_up'",
+		"user_id":          "TEXT NOT NULL DEFAULT ''",
+		"actor_name":       "TEXT NOT NULL DEFAULT ''",
+		"actor_avatar_url": "TEXT NOT NULL DEFAULT ''",
+		"created_at":       "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_comment_reactions_issue_comment ON comment_reactions(issue_id, comment_id)
+	`); err != nil {
+		return fmt.Errorf("create comment reactions issue index: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_comment_reactions_user ON comment_reactions(user_id)
+	`); err != nil {
+		return fmt.Errorf("create comment reactions user index: %w", err)
 	}
 	return nil
 }
@@ -2549,7 +2614,13 @@ func projectTokenScore(text, token string, weight int) int {
 
 func (a *app) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "issueID")
-	detail, err := a.loadIssueDetail(issueID)
+	viewerUserID := ""
+	if requestBearerToken(r) != "" {
+		if actor, err := a.authenticateActor(r); err == nil && actor.Kind == "human" {
+			viewerUserID = actor.UserID
+		}
+	}
+	detail, err := a.loadIssueDetailForViewer(issueID, viewerUserID)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, sql.ErrNoRows) {
@@ -3091,6 +3162,101 @@ func (a *app) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "comment": updated})
+}
+
+func (a *app) handleSetCommentReaction(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	commentID := chi.URLParam(r, "commentID")
+	reaction, err := normalizeCommentReaction(chi.URLParam(r, "reaction"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	actor, ok := a.requireHumanActor(w, r)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(actor.UserID) == "" {
+		writeError(w, http.StatusForbidden, errors.New("authenticated user id is required"))
+		return
+	}
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+	if err := ensureCommentOnIssueTx(tx, issueID, commentID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("comment not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO comment_reactions (id, issue_id, comment_id, reaction, user_id, actor_name, actor_avatar_url, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(comment_id, user_id, reaction) DO UPDATE SET
+			actor_name = excluded.actor_name,
+			actor_avatar_url = excluded.actor_avatar_url
+	`, uuid.NewString(), issueID, commentID, reaction, actor.UserID, commentActorName(actor), actor.AvatarURL, nowString()); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (a *app) handleDeleteCommentReaction(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	commentID := chi.URLParam(r, "commentID")
+	reaction, err := normalizeCommentReaction(chi.URLParam(r, "reaction"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	actor, ok := a.requireHumanActor(w, r)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(actor.UserID) == "" {
+		writeError(w, http.StatusForbidden, errors.New("authenticated user id is required"))
+		return
+	}
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+	if err := ensureCommentOnIssueTx(tx, issueID, commentID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("comment not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM comment_reactions
+		WHERE issue_id = ? AND comment_id = ? AND reaction = ? AND user_id = ?
+	`, issueID, commentID, reaction, actor.UserID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 func (a *app) handleAssignIssueToAgent(w http.ResponseWriter, r *http.Request) {
@@ -3966,11 +4132,11 @@ func (a *app) recordSourceChangeNode(session agentSession, project project) (*is
 		return nil, err
 	}
 
-	output, err := exec.Command(gitPath, "-C", session.Workdir, "add", "-A", "--", ".").CombinedOutput()
+	output, err := runGitWriteWithIndexLockRetry(gitPath, session.Workdir, nil, "add", "-A", "--", ".")
 	if err != nil {
 		return nil, fmt.Errorf("stage source changes: %s", formatCommandFailure(err, output))
 	}
-	output, err = exec.Command(gitPath, "-C", session.Workdir, "reset", "-q", "--", ".mspace").CombinedOutput()
+	output, err = runGitWriteWithIndexLockRetry(gitPath, session.Workdir, nil, "reset", "-q", "--", ".mspace")
 	if err != nil {
 		return nil, fmt.Errorf("exclude session artifacts from source commit: %s", formatCommandFailure(err, output))
 	}
@@ -3987,14 +4153,12 @@ func (a *app) recordSourceChangeNode(session agentSession, project project) (*is
 
 	issueTitle := a.issueTitleForCommit(session.IssueID)
 	subject := sourceCommitSubject(issueTitle, session.IssueID)
-	commit := exec.Command(gitPath, "-C", session.Workdir, "commit", "-m", subject)
-	commit.Env = append(os.Environ(),
+	output, err = runGitWriteWithIndexLockRetry(gitPath, session.Workdir, []string{
 		"GIT_AUTHOR_NAME=mspace",
 		"GIT_AUTHOR_EMAIL=mspace@example.local",
 		"GIT_COMMITTER_NAME=mspace",
 		"GIT_COMMITTER_EMAIL=mspace@example.local",
-	)
-	output, err = commit.CombinedOutput()
+	}, "commit", "-m", subject)
 	if err != nil {
 		return nil, fmt.Errorf("commit source changes: %s", formatCommandFailure(err, output))
 	}
@@ -4781,6 +4945,10 @@ func (a *app) listChildIssues(parentIssueID string) ([]issueListItem, error) {
 }
 
 func (a *app) loadIssueDetail(issueID string) (issueDetail, error) {
+	return a.loadIssueDetailForViewer(issueID, "")
+}
+
+func (a *app) loadIssueDetailForViewer(issueID, viewerUserID string) (issueDetail, error) {
 	var detail issueDetail
 	row := a.db.QueryRow(`
 		SELECT i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.close_reason, i.triage_status, i.assignee, i.assignee_type, i.creator_name, i.creator_avatar_url, i.environment_url, i.created_at, i.updated_at,
@@ -4817,7 +4985,7 @@ func (a *app) loadIssueDetail(issueID string) (issueDetail, error) {
 	}
 	detail.Labels = labels
 
-	comments, err := a.listComments(issueID)
+	comments, err := a.listCommentsForViewer(issueID, viewerUserID)
 	if err != nil {
 		return detail, err
 	}
@@ -5460,6 +5628,10 @@ func (a *app) listSessionLogs(sessionID string) ([]sessionLog, error) {
 }
 
 func (a *app) listComments(issueID string) ([]comment, error) {
+	return a.listCommentsForViewer(issueID, "")
+}
+
+func (a *app) listCommentsForViewer(issueID, viewerUserID string) ([]comment, error) {
 	rows, err := a.db.Query(`
 		SELECT id, issue_id, author_type, author_user_id, author_name, author_avatar_url, body, created_at, updated_at, edited_at
 		FROM comments
@@ -5478,7 +5650,60 @@ func (a *app) listComments(issueID string) ([]comment, error) {
 		}
 		comments = append(comments, c)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := a.attachCommentReactions(issueID, viewerUserID, comments); err != nil {
+		return nil, err
+	}
 	return comments, nil
+}
+
+func (a *app) attachCommentReactions(issueID, viewerUserID string, comments []comment) error {
+	if len(comments) == 0 {
+		return nil
+	}
+	reactionsByComment := make(map[string]map[string]commentReactionSummary)
+	rows, err := a.db.Query(`
+		SELECT comment_id, reaction, COUNT(*), SUM(CASE WHEN user_id = ? THEN 1 ELSE 0 END)
+		FROM comment_reactions
+		WHERE issue_id = ?
+		GROUP BY comment_id, reaction
+	`, strings.TrimSpace(viewerUserID), issueID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var commentID string
+		var summary commentReactionSummary
+		var reactedByMe int
+		if err := rows.Scan(&commentID, &summary.Reaction, &summary.Count, &reactedByMe); err != nil {
+			return err
+		}
+		summary.ReactedByMe = reactedByMe > 0
+		if reactionsByComment[commentID] == nil {
+			reactionsByComment[commentID] = map[string]commentReactionSummary{}
+		}
+		reactionsByComment[commentID][summary.Reaction] = summary
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for index := range comments {
+		byReaction := reactionsByComment[comments[index].ID]
+		if len(byReaction) == 0 {
+			comments[index].Reactions = []commentReactionSummary{}
+			continue
+		}
+		comments[index].Reactions = make([]commentReactionSummary, 0, len(byReaction))
+		for _, reaction := range commentReactionOrder {
+			if summary, ok := byReaction[reaction]; ok {
+				comments[index].Reactions = append(comments[index].Reactions, summary)
+			}
+		}
+	}
+	return nil
 }
 
 func (a *app) loadComment(issueID, commentID string) (comment, error) {
@@ -5499,6 +5724,24 @@ func loadCommentTx(tx *sql.Tx, issueID, commentID string) (comment, error) {
 		WHERE issue_id = ? AND id = ?
 	`, issueID, commentID).Scan(&c.ID, &c.IssueID, &c.AuthorType, &c.AuthorUserID, &c.AuthorName, &c.AuthorAvatar, &c.Body, &c.CreatedAt, &c.UpdatedAt, &c.EditedAt)
 	return c, err
+}
+
+func ensureCommentOnIssueTx(tx *sql.Tx, issueID, commentID string) error {
+	var exists int
+	return tx.QueryRow(`
+		SELECT 1
+		FROM comments
+		WHERE issue_id = ? AND id = ?
+	`, issueID, commentID).Scan(&exists)
+}
+
+func normalizeCommentReaction(value string) (string, error) {
+	reaction := strings.ToLower(strings.TrimSpace(value))
+	reaction = strings.ReplaceAll(reaction, "-", "_")
+	if allowedCommentReactions[reaction] {
+		return reaction, nil
+	}
+	return "", fmt.Errorf("unsupported reaction %q", value)
 }
 
 func commentBelongsToActor(c comment, actor issueActor) bool {
@@ -7748,6 +7991,34 @@ func runGitReadOnly(gitPath, repoPath string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), formatCommandFailure(err, output))
 	}
 	return strings.TrimRight(string(output), "\r\n"), nil
+}
+
+func runGitWriteWithIndexLockRetry(gitPath, repoPath string, extraEnv []string, args ...string) ([]byte, error) {
+	commandArgs := append([]string{"-C", repoPath}, args...)
+	var output []byte
+	var err error
+	for attempt := 0; attempt < 6; attempt++ {
+		command := exec.Command(gitPath, commandArgs...)
+		if len(extraEnv) > 0 {
+			command.Env = append(os.Environ(), extraEnv...)
+		}
+		output, err = command.CombinedOutput()
+		if err == nil {
+			return output, nil
+		}
+		if !isGitIndexLockFailure(err, output) || attempt == 5 {
+			return output, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+	}
+	return output, err
+}
+
+func isGitIndexLockFailure(err error, output []byte) bool {
+	message := strings.ToLower(err.Error() + "\n" + string(output))
+	return strings.Contains(message, "index.lock") &&
+		strings.Contains(message, "unable to create") &&
+		strings.Contains(message, "file exists")
 }
 
 func formatCommandFailure(err error, output []byte) string {

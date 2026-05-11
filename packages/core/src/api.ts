@@ -337,6 +337,14 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(input),
     }),
+  setCommentReaction: (issueId: string, commentId: string, reaction: string) =>
+    request<{ ok: boolean }>(`/api/issues/${issueId}/comments/${commentId}/reactions/${encodeURIComponent(reaction)}`, {
+      method: "PUT",
+    }),
+  deleteCommentReaction: (issueId: string, commentId: string, reaction: string) =>
+    request<{ ok: boolean }>(`/api/issues/${issueId}/comments/${commentId}/reactions/${encodeURIComponent(reaction)}`, {
+      method: "DELETE",
+    }),
   assignAgent: (issueId: string, input: CreateSessionInput) =>
     request<{ sessionId: string }>(`/api/issues/${issueId}/assign-agent`, {
       method: "POST",

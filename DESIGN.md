@@ -1,6 +1,6 @@
 # mspace Design System
 
-> Status: design system baseline, updated 2026-05-10
+> Status: design system baseline, updated 2026-05-11
 
 ## Visual Thesis
 
@@ -178,7 +178,8 @@ Screen priorities:
 - Keep labels short and specific.
 - Validation states use `data-invalid` on the field and `aria-invalid` on the control.
 - Project configuration should keep creation light, then expose project name, repository metadata, default cluster, and the project runbook from a full settings page. Do not add separate install, test, build, deploy, or validation command fields; the runbook is the user-facing operation knowledge surface. Cluster settings own kubeconfig, context, registry, and preview exposure defaults.
-- The issue creation, comment, and project runbook editors use a local TipTap view component, not a shared shadcn primitive. Keep `.mspace-doc-editor` styling quiet, document-like, and Markdown-compatible. Image attachment nodes should render as restrained thumbnails with a stable loading/error fallback; never expose browser-default broken-image text as the primary UI.
+- The issue creation, comment, and project runbook editors use a local TipTap view component, not a shared shadcn primitive. Keep `.mspace-doc-editor` styling quiet, document-like, and Markdown-compatible. The Issue Detail runbook modal should use the `runbook-viewer` read-only TipTap variant with light code blocks, not the editable runbook shell or a ReactMarkdown fallback. Image attachment nodes should render as restrained thumbnails with a stable loading/error fallback; never expose browser-default broken-image text as the primary UI.
+- Comment reactions should stay visually secondary: quiet chips for existing reactions, a small SmilePlus-style emoji trigger instead of a generic plus icon, and no heavy bordered toolbar around the comment body.
 
 ### Cards And Panels
 

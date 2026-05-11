@@ -51,10 +51,10 @@ The interaction model is closer to a shared engineering document than a terminal
 - Project import from a local folder or GitHub repository URL, including GitHub remote metadata detection when available.
 - Managed agent profiles stored in SQLite, seeded with internal `@triage` plus user-facing `@codex`, `@bugfix`, and `@design`.
 - Agent mentions from issue comments, with turn queueing, profile instructions, trigger-comment tracking, status updates, and issue timeline updates.
-- Markdown-backed TipTap writing surfaces for issue creation and human issue comments, including checklist input that becomes child tasks plus image upload, paste, drop, and thumbnail previews backed by stable attachment URLs.
-- Project runbooks stored by mspace with revision history, edited as Markdown from the Projects settings page and learned from successful agent session artifacts.
+- Markdown-backed TipTap writing surfaces for issue creation and human issue comments, including checklist input that becomes child tasks plus image upload, paste, drop, thumbnail previews backed by stable attachment URLs, and lightweight comment reactions.
+- Project runbooks stored by mspace with revision history, edited as Markdown from the Projects settings page, shown from the Issue Detail sidebar in a read-only TipTap modal, and learned from successful agent session artifacts.
 - Per-session git worktrees, workspace inspection, changed file lists, diff previews, commits, and comparison against the project default branch.
-- Type and priority labels, child issue task lists with create/toggle/delete controls, asynchronous type triage, server-backed unread Inbox updates with a sidebar badge, latest-comment editing before agent consumption, running-session stop controls, and manual worktree cleanup after completion or cancellation.
+- Type and priority labels, child issue task lists with create/toggle/delete controls, asynchronous type triage, server-backed unread Inbox updates with a sidebar badge, latest-comment editing before agent consumption, comment reactions, running-session stop controls, failed-session callouts, and manual worktree cleanup after completion or cancellation.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Project default cluster selection.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and record evidence.
@@ -145,7 +145,7 @@ Local data paths:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.mspace/mspace.db` | SQLite database for issues, comments, sessions, evidence, and local issue image attachment blobs. |
+| `~/.mspace/mspace.db` | SQLite database for issues, comments, reactions, sessions, evidence, and local issue image attachment blobs. |
 | `~/.mspace/repos/<owner>/<repo>` | Cached clone path for GitHub-imported projects. |
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree for one agent session. |
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Session context markdown included in Codex prompts. |

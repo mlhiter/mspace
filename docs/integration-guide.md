@@ -1,6 +1,6 @@
 # mspace Local API Integration Guide
 
-> Status: local MVP API guide, updated 2026-05-10
+> Status: local MVP API guide, updated 2026-05-11
 
 This guide is for local tools or future desktop integrations that need to call the mspace runner directly. The API is local-first and currently served by the Go runner, normally on `http://127.0.0.1:7788`.
 
@@ -23,7 +23,7 @@ Review evidence is exposed from the same issue detail response as `reviewEvidenc
 
 ## Issue Writing APIs
 
-The desktop uses a rich TipTap editor for issue creation, human comments, and project runbook editing, but the runner API stores Markdown text. Image uploads are stored as attachment records and inserted into Markdown as stable `/api/attachments/<id>` image URLs, so future storage backends can change without rewriting issue bodies. Issue write APIs require a bearer token:
+The desktop uses a rich TipTap editor for issue creation, human comments, project runbook editing, and read-only Issue Detail runbook viewing, but the runner API stores Markdown text. Image uploads are stored as attachment records and inserted into Markdown as stable `/api/attachments/<id>` image URLs, so future storage backends can change without rewriting issue bodies. Issue write APIs require a bearer token:
 
 - human requests use the mspace session token from GitHub sign-in, verified by the control plane through `GET /api/auth/me`;
 - agent requests use the scoped `MSPACE_AGENT_TOKEN` injected into the session environment.
@@ -37,8 +37,12 @@ The desktop uses a rich TipTap editor for issue creation, human comments, and pr
 | `POST` | `/api/issues` | Create an issue from `title`, `body` or `prompt`, optional `projectId`, optional labels, and optional child task drafts. |
 | `POST` | `/api/issues/{issueID}/comments` | Add a Markdown human comment. |
 | `PUT` | `/api/issues/{issueID}/comments/{commentID}` | Edit the latest human comment before it has triggered an agent session. |
+| `PUT` | `/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current human user's reaction to a comment. |
+| `DELETE` | `/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current human user's reaction from a comment. |
 
 When `projectId` is omitted, the runner infers the best matching existing project from the title, body, and task text. If no project exists, issue creation returns `400 Bad Request`.
+
+Comment reactions are stored separately from comment Markdown so they do not change agent prompt history or comment edit eligibility. Supported reaction keys are `thumbs_up`, `thumbs_down`, `laugh`, `hooray`, `confused`, `heart`, `rocket`, and `eyes`; `GET /api/issues/{issueID}` returns per-comment reaction counts plus `reactedByMe` for the authenticated viewer.
 
 The desktop API client attaches `Authorization: Bearer <msp-token>` and injects the current display identity from `localStorage["mspace.authIdentity"]` into local runner writes. External local integrations may pass the same display snapshots directly:
 

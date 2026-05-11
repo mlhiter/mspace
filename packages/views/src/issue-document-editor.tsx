@@ -109,7 +109,7 @@ export function IssueDocumentEditor(props: {
   value: string;
   placeholder: string;
   autoFocus?: boolean;
-  variant?: "document" | "comment" | "runbook";
+  variant?: "document" | "comment" | "runbook" | "runbook-viewer";
   editable?: boolean;
   ariaLabel?: string;
   onReady?: (editor: Editor | null) => void;
@@ -250,6 +250,7 @@ export function IssueDocumentEditor(props: {
     "mspace-doc-editor",
     variant === "comment" && "mspace-doc-editor--comment",
     variant === "runbook" && "mspace-doc-editor--runbook",
+    variant === "runbook-viewer" && "mspace-doc-editor--runbook-viewer",
     !isEditable && "is-readonly",
   ]
     .filter(Boolean)
@@ -297,7 +298,7 @@ export function IssueDocumentEditor(props: {
           {uploadError ? <span className="mspace-doc-editor-attachment-error">{uploadError}</span> : null}
         </div>
       ) : null}
-      {editor ? <IssueEditorBubbleMenu editor={editor} /> : null}
+      {editor && isEditable ? <IssueEditorBubbleMenu editor={editor} /> : null}
     </div>
   );
 }

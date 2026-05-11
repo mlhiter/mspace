@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-05-10
+> Status: local MVP implementation snapshot, updated 2026-05-11
 
 ## IA Goal
 
@@ -243,6 +243,7 @@ Status changes are timeline events, not long comments. Render them in one line a
 The composer is the main interaction control:
 
 - Markdown comments stay on the issue through the same TipTap-backed document editor used for issue creation, including image upload, paste, drop, and thumbnail previews;
+- comment reactions stay as lightweight metadata on comments and should not rewrite the Markdown body or agent prompt history;
 - the latest human-authored comment can be edited inline only while it is still unconsumed by an agent session, including adding a supported agent mention and then saving that edit to queue the turn;
 - supported agent mentions save the comment and start a Codex app-server turn with the selected managed profile;
 - unsupported agent mentions should be visible but not queued;
@@ -294,9 +295,12 @@ Current implementation:
 - shows Type and Priority controls in the quiet metadata sidebar, with a `Classifying...` state while the triage agent is assigning type;
 - exposes a Stop action for queued or running sessions, cancelling only that session and rendering the stop as a compact, non-editable event while leaving the issue status unchanged;
 - streams session logs and status while a session is running, but keeps debug output collapsed by default;
+- renders a compact failure callout with the last meaningful runner error when a session fails;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
+- shows a compact Project runbook entry in the Workflow sidebar; clicking it opens a read-only TipTap runbook modal;
 - renders the issue creator, human comments, system comments, Codex-backed agent turns, and actor-authored status changes with their current display names and avatar sources;
+- renders comment reactions inline with quiet reaction chips and a compact icon picker;
 - renders status changes as compact one-line events with `from` and `to` badges instead of showing the full stored status-change comment body;
 - links into full session detail for deep inspection.
 
@@ -361,6 +365,7 @@ Current implementation:
 - auto-detects GitHub metadata for local repositories when a remote exists;
 - opens Project settings as a full page, not a modal;
 - edits project name, default cluster, and the mspace-owned Markdown runbook from that page;
+- exposes the project runbook from Issue Detail as a read-only TipTap modal so users can inspect runbook knowledge without leaving the issue;
 - only allows deletion before issues or sessions exist;
 - stores runbook history in `project_runbooks` and `project_runbook_revisions`, plus the default reusable cluster id.
 
@@ -447,7 +452,7 @@ Must-have for MVP:
 - Inbox review list
 - Issues list and issue creation flow
 - Issue detail as the main work surface
-- Comments and progress updates
+- Comments, reactions, and progress updates
 - Manage Agents and start Codex from an enabled agent-profile issue comment
 - Issue labels
 - Stop queued or running sessions

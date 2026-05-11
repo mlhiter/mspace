@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-10
+> Status: local MVP implementation snapshot, updated 2026-05-11
 
 ## One-Line Definition
 
@@ -19,15 +19,15 @@ The repository now has a runnable local desktop MVP:
 - label priority manually from Issue Detail, and scan/filter labels from the Issues list;
 - manage Codex-backed agents from the Agents route, including mention, description, enabled state, and role instructions;
 - use Inbox as a review feed for unread issue and session updates;
-- open document-style issue detail pages with Markdown-backed rich comments, image attachment thumbnails, and linked sessions;
+- open document-style issue detail pages with Markdown-backed rich comments, image attachment thumbnails, lightweight reactions, and linked sessions;
 - mention an enabled agent from issue detail and start local app-server agent sessions with the matching managed profile;
 - edit the latest unconsumed human comment, then stop and retry a session when a bad prompt has already been consumed;
 - stop a queued or running session from Issue Detail or Session Detail without cancelling the whole issue;
 - run sessions in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`;
 - clean a completed or cancelled session worktree from Session Detail while preserving the issue timeline, logs, evidence, and session metadata;
 - cache imported GitHub repositories under `~/.mspace/repos/<owner>/<repo>`;
-- show a project runbook in Projects and update it either from direct Markdown edits or from successful agent session artifacts;
-- store session metadata, logs, comments, issues, projects, evidence, local creator/author display snapshots, and issue image attachment blobs in SQLite under `~/.mspace/mspace.db`;
+- show a project runbook in Projects, open it from the Issue Detail sidebar as a read-only TipTap modal, and update it either from direct Markdown edits or from successful agent session artifacts;
+- store session metadata, logs, comments, comment reactions, issues, projects, evidence, local creator/author display snapshots, and issue image attachment blobs in SQLite under `~/.mspace/mspace.db`;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
 - choose a default cluster per project and select a cluster when manually deploying an issue test environment;
@@ -95,7 +95,7 @@ A project records:
 - remote URL and detected Git provider metadata;
 - default branch;
 - default test cluster;
-- project runbook as mspace-owned Markdown with revision history;
+- project runbook as mspace-owned Markdown with revision history, editable from Project settings and visible from the Issue Detail sidebar;
 - allowed Kubernetes resource scope.
 
 A cluster records reusable deployment access:
@@ -142,7 +142,7 @@ An Issue should hold:
 
 - title and durable problem statement;
 - project link;
-- comments and progress updates;
+- comments, lightweight reactions, and progress updates;
 - assignee and subscriber list;
 - linked branch, PR, and environment evidence;
 - inline task rows backed by child issues, not Markdown checkbox state;
@@ -242,7 +242,7 @@ The interaction should feel closer to Multica than to a terminal-only tool:
 
 - inbox and issue views are first-class, not side panels for runtime jobs;
 - agents appear as assignees or collaborators, not as hidden background jobs;
-- every issue has status, owner, comments, subscribers, and linked sessions;
+- every issue has status, owner, comments, lightweight reactions, subscribers, and linked sessions;
 - every session has logs, blockers, and evidence;
 - a human can pause, resume, or cancel a session;
 - the UI explains what runtime, namespace, and cluster the agent can operate.

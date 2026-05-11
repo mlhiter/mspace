@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: local MVP implementation snapshot, updated 2026-05-10
+> Status: local MVP implementation snapshot, updated 2026-05-11
 
 ## Current Implementation Snapshot
 
@@ -10,7 +10,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`. It owns users, workspaces, membership, GitHub identity, mspace auth sessions, and future GitHub App installation state.
 - Desktop GitHub sign-in uses the server OAuth flow, stores an `msp_...` session token, and caches a lightweight display identity for local runner writes while collaboration data still lives in SQLite.
-- Issue creation and the Issue Detail reply composer use a local TipTap-backed `IssueDocumentEditor` that emits Markdown. This preserves document-like writing surfaces while keeping runner-side checklist extraction and comment storage text-based. Images can be uploaded, pasted, or dropped into the editor; Markdown stores stable `/api/attachments/<id>` image URLs backed by runner attachment records rather than loose local files, and the renderer shows them as thumbnail node views.
+- Issue creation, the Issue Detail reply composer, the Project runbook editor, and the Issue Detail runbook modal use a local TipTap-backed `IssueDocumentEditor` that emits or renders Markdown. This preserves document-like writing surfaces while keeping runner-side checklist extraction, runbook storage, and comment storage text-based. The Issue Detail runbook modal uses the read-only `runbook-viewer` variant rather than ReactMarkdown or the editable runbook shell. Images can be uploaded, pasted, or dropped into the editor; Markdown stores stable `/api/attachments/<id>` image URLs backed by runner attachment records rather than loose local files, and the renderer shows them as thumbnail node views.
 - Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless `/health` is healthy and advertises the expected runner protocol capabilities; in desktop development, stale local runners on `127.0.0.1:7788` are replaced before startup continues.
 - SQLite state lives at `~/.mspace/mspace.db`, including local MVP issue image attachment blobs in `issue_attachments`.
 - Imported GitHub repositories are cached under `~/.mspace/repos/<owner>/<repo>`.
@@ -22,12 +22,12 @@ The repository currently contains a runnable local-first desktop MVP:
 - The runner persists Codex agent profile, thread id, turn id, agent status, artifact directory, scoped agent token, cleanup status, and cleaned timestamp on `agent_sessions`.
 - Agent profiles live in `agent_profiles` and are exposed through the Agents module. Default Codex-backed agents are seeded, but new sessions resolve profile instructions from SQLite rather than hardcoded profile switches.
 - Finished local session worktrees can be cleaned through `POST /api/sessions/{sessionID}/cleanup`; active sessions are rejected, the stored workdir must stay under the mspace workdir root, and session records remain for review.
-- Source changes and review evidence are split deliberately. `issue_change_nodes` backs the Commits tab for commit metadata and diffs; `session_review_evidence` backs the Evidence tab for commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state. Changed-file UI uses Material Icon Theme file icons and filters directory-only placeholder paths while preserving concrete file paths under those directories.
+- Source changes and review evidence are split deliberately. `issue_change_nodes` backs the Commits tab for commit metadata and diffs; source capture retries transient `.git/index.lock` conflicts while staging, excluding `.mspace`, and committing session worktree changes. `session_review_evidence` backs the Evidence tab for commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state. Changed-file UI uses Material Icon Theme file icons and filters directory-only placeholder paths while preserving concrete file paths under those directories.
 - Session branch defaults to `mspace/<issue-short-id>/<session-short-id>` when the user does not provide one.
 - Project import supports existing local folders and GitHub repository URLs. Local repositories auto-detect git remote metadata when available.
 - Inbox is an unread review feed. Signed-in team state is built from server `issue_events` and per-user `issue_event_receipts`; the local runner `inbox_items.unread` plus `/api/inbox/stream` remains a fallback and invalidation path.
 - Issue comments that mention an enabled agent are saved first, then the desktop calls `POST /api/issues/{issueID}/assign-agent` with the mention-stripped comment as the current turn request and the selected Codex profile.
-- Local runner issues and comments keep denormalized display identity snapshots: issue creator name/avatar and comment author name/avatar. Existing anonymous local human rows are backfilled to `mlhiter`; ordinary system comments display as `mspace`. Status-transition comments are authored by the actor that performed the change, so human changes render as that signed-in user and scoped agent changes render as the agent.
+- Local runner issues and comments keep denormalized display identity snapshots: issue creator name/avatar and comment author name/avatar. Comment reactions are stored separately in `comment_reactions` and returned as per-comment summaries from issue detail so they do not rewrite Markdown bodies or agent prompt history. Existing anonymous local human rows are backfilled to `mlhiter`; ordinary system comments display as `mspace`. Status-transition comments are authored by the actor that performed the change, so human changes render as that signed-in user and scoped agent changes render as the agent.
 - Local runner issue writes are authenticated. Human write requests carry a mspace session token and are verified against control-plane `GET /api/auth/me`; agent write requests carry the session-scoped `MSPACE_AGENT_TOKEN`.
 - Issue workflow status values are `open`, `in_progress`, `needs_review`, `changes_requested`, `ready_for_test`, `test_in_progress`, `blocked`, `cancelled`, and `closed`. `cancelled` is the issue-level "closed as not planned" outcome, not a stopped-session state. Only humans can close or cancel top-level issues; agent sessions move issues into review/test/progress states, use `blocked` when they cannot proceed, and may close child tasks under their assigned issue. Every transition is mirrored to the issue timeline and rendered as a compact actor-authored status event with readable badges.
 - The desktop shell exposes a global search / Command+K palette backed by the existing issues and projects queries. Active work remains a separate sidebar block because it is an issue subset, not an additional global search source.
@@ -109,12 +109,14 @@ Implemented runner API:
 | `GET` | `/api/attachments/{attachmentID}` | Serve a stored image attachment by id. |
 | `GET` | `/api/issues` | List issues across the local workspace. |
 | `POST` | `/api/issues` | Create an issue and inbox item, optionally including creator display name and avatar snapshots. |
-| `GET` | `/api/issues/{issueID}` | Load issue detail, comments, sessions, and evidence. |
+| `GET` | `/api/issues/{issueID}` | Load issue detail, comments with reaction summaries, sessions, and evidence. |
 | `PUT` | `/api/issues/{issueID}` | Update issue title, body, or status. Human auth is required for title/body and top-level `closed`; scoped agent auth may update allowed workflow states and child task completion. |
 | `POST` | `/api/issues/{issueID}/tasks` | Create a child issue task under a parent issue. |
 | `DELETE` | `/api/issues/{issueID}/tasks/{taskID}` | Delete a child issue task after verifying it belongs to the parent issue. |
 | `PUT` | `/api/issues/{issueID}/labels` | Replace issue-local labels. |
 | `POST` | `/api/issues/{issueID}/comments` | Add a human comment, optionally including author display name and avatar snapshots. |
+| `PUT` | `/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current human user's reaction to a comment. |
+| `DELETE` | `/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current human user's reaction from a comment. |
 | `POST` | `/api/issues/{issueID}/assign-agent` | Queue a Codex turn from an issue comment. |
 | `POST` | `/api/issues/{issueID}/sessions` | Queue and start a local agent session. |
 | `POST` | `/api/issues/{issueID}/test-deploy` | Manually queue an issue-scoped test deployment agent turn. |
@@ -248,7 +250,7 @@ Current implemented fields:
 - creator display name and avatar snapshot;
 - assignee;
 - assignee type;
-- comments and progress updates;
+- comments, lightweight reactions, and progress updates;
 - linked sessions;
 - environment evidence;
 - optional issue test environment record.
@@ -538,9 +540,22 @@ comments
   id
   issue_id
   author_type
+  author_user_id
   author_name
   author_avatar_url
   body
+  created_at
+  updated_at
+  edited_at
+
+comment_reactions
+  id
+  issue_id
+  comment_id
+  reaction
+  user_id
+  actor_name
+  actor_avatar_url
   created_at
 
 issue_attachments
@@ -773,6 +788,16 @@ comments
   body
   created_at
 
+comment_reactions
+  id
+  issue_id
+  comment_id
+  reaction
+  user_id
+  actor_name
+  actor_avatar_url
+  created_at
+
 agent_sessions
   id
   issue_id
@@ -826,8 +851,9 @@ Shows:
 Shows:
 
 - problem statement;
-- comments and progress updates;
+- comments, lightweight reactions, and progress updates;
 - assignee and subscribers;
+- compact Project runbook entry;
 - linked sessions;
 - PR/branch output;
 - environment evidence.

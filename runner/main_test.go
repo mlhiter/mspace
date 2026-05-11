@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -338,6 +339,33 @@ func TestEnsureIssueColumnsAddsTriageStatus(t *testing.T) {
 	}
 }
 
+func TestEnsureCommentReactionTablesCreatesTable(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if err := application.ensureCommentReactionTables(); err != nil {
+		t.Fatalf("ensure comment reaction tables should be idempotent: %v", err)
+	}
+	for _, column := range []string{"id", "issue_id", "comment_id", "reaction", "user_id", "actor_name", "actor_avatar_url", "created_at"} {
+		if !tableColumnExists(t, db, "comment_reactions", column) {
+			t.Fatalf("expected comment_reactions.%s to exist", column)
+		}
+	}
+	if !tableIndexExists(t, db, "comment_reactions", "idx_comment_reactions_issue_comment") {
+		t.Fatal("expected idx_comment_reactions_issue_comment to exist")
+	}
+	if !tableIndexExists(t, db, "comment_reactions", "idx_comment_reactions_user") {
+		t.Fatal("expected idx_comment_reactions_user to exist")
+	}
+}
+
 func TestExtractIssueTaskDraftsRemovesChecklistLines(t *testing.T) {
 	body, tasks := extractIssueTaskDrafts(strings.Join([]string{
 		"Implement rich issue editing",
@@ -649,6 +677,77 @@ func TestUpdateCommentRejectsSessionTrigger(t *testing.T) {
 	router.ServeHTTP(update, authRequest(http.MethodPut, "/api/issues/issue-1/comments/"+createResponse.CommentID, `{"body":"@codex edited turn"}`, humanToken))
 	if update.Code != http.StatusConflict {
 		t.Fatalf("expected consumed comment update to return 409, got %d body=%s", update.Code, update.Body.String())
+	}
+}
+
+func TestCommentReactionsToggleAndAggregateByViewer(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Reactable issue", "open")
+
+	router := chi.NewRouter()
+	router.Get("/api/issues/{issueID}", application.handleGetIssue)
+	router.Post("/api/issues/{issueID}/comments", application.handleCreateComment)
+	router.Put("/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}", application.handleSetCommentReaction)
+	router.Delete("/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}", application.handleDeleteCommentReaction)
+
+	create := httptest.NewRecorder()
+	router.ServeHTTP(create, authRequest(http.MethodPost, "/api/issues/issue-1/comments", `{"body":"Looks good"}`, humanToken))
+	if create.Code != http.StatusOK {
+		t.Fatalf("expected comment create to return 200, got %d body=%s", create.Code, create.Body.String())
+	}
+	var createResponse struct {
+		CommentID string `json:"commentId"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode create comment response: %v", err)
+	}
+
+	react := httptest.NewRecorder()
+	router.ServeHTTP(react, authRequest(http.MethodPut, "/api/issues/issue-1/comments/"+createResponse.CommentID+"/reactions/thumbs_up", "", humanToken))
+	if react.Code != http.StatusOK {
+		t.Fatalf("expected reaction create to return 200, got %d body=%s", react.Code, react.Body.String())
+	}
+	again := httptest.NewRecorder()
+	router.ServeHTTP(again, authRequest(http.MethodPut, "/api/issues/issue-1/comments/"+createResponse.CommentID+"/reactions/thumbs_up", "", humanToken))
+	if again.Code != http.StatusOK {
+		t.Fatalf("expected duplicate reaction create to return 200, got %d body=%s", again.Code, again.Body.String())
+	}
+
+	detailRecorder := httptest.NewRecorder()
+	router.ServeHTTP(detailRecorder, authRequest(http.MethodGet, "/api/issues/issue-1", "", humanToken))
+	if detailRecorder.Code != http.StatusOK {
+		t.Fatalf("expected issue detail to return 200, got %d body=%s", detailRecorder.Code, detailRecorder.Body.String())
+	}
+	var detail issueDetail
+	if err := json.NewDecoder(detailRecorder.Body).Decode(&detail); err != nil {
+		t.Fatalf("decode issue detail: %v", err)
+	}
+	if len(detail.Comments) != 1 || len(detail.Comments[0].Reactions) != 1 {
+		t.Fatalf("expected one comment reaction summary, got %+v", detail.Comments)
+	}
+	reaction := detail.Comments[0].Reactions[0]
+	if reaction.Reaction != "thumbs_up" || reaction.Count != 1 || !reaction.ReactedByMe {
+		t.Fatalf("unexpected reaction summary: %+v", reaction)
+	}
+
+	invalid := httptest.NewRecorder()
+	router.ServeHTTP(invalid, authRequest(http.MethodPut, "/api/issues/issue-1/comments/"+createResponse.CommentID+"/reactions/not_real", "", humanToken))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid reaction to return 400, got %d body=%s", invalid.Code, invalid.Body.String())
+	}
+
+	remove := httptest.NewRecorder()
+	router.ServeHTTP(remove, authRequest(http.MethodDelete, "/api/issues/issue-1/comments/"+createResponse.CommentID+"/reactions/thumbs_up", "", humanToken))
+	if remove.Code != http.StatusOK {
+		t.Fatalf("expected reaction delete to return 200, got %d body=%s", remove.Code, remove.Body.String())
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM comment_reactions WHERE comment_id = ?`, createResponse.CommentID).Scan(&count); err != nil {
+		t.Fatalf("count comment reactions: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected deleted reaction count 0, got %d", count)
 	}
 }
 
@@ -1342,6 +1441,19 @@ func TestRecordSourceChangeNodeCommitsWorkspace(t *testing.T) {
 	`, sessionWorkdir, now, now); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
+
+	worktreeGitDir := strings.TrimSpace(gitOutput(t, sessionWorkdir, "rev-parse", "--git-dir"))
+	if !filepath.IsAbs(worktreeGitDir) {
+		worktreeGitDir = filepath.Join(sessionWorkdir, worktreeGitDir)
+	}
+	indexLockPath := filepath.Join(worktreeGitDir, "index.lock")
+	writeFile(t, indexLockPath, "locked\n")
+	time.AfterFunc(300*time.Millisecond, func() {
+		_ = os.Remove(indexLockPath)
+	})
+	t.Cleanup(func() {
+		_ = os.Remove(indexLockPath)
+	})
 
 	node, err := application.recordSourceChangeNode(agentSession{
 		ID:           "session-1",

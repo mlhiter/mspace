@@ -198,6 +198,20 @@ svg {
   line-height: 1.75;
 }
 
+.mspace-doc-editor--runbook-viewer.is-readonly {
+  opacity: 1;
+}
+
+.mspace-doc-editor--runbook-viewer .ProseMirror {
+  min-height: 0;
+  max-width: 72ch;
+  padding: 0;
+  outline: none;
+  font-size: 14px;
+  line-height: 1.72;
+  color: var(--muted-strong);
+}
+
 @media (min-width: 1280px) {
   .mspace-doc-editor--runbook,
   .mspace-doc-editor--runbook .ProseMirror {
@@ -239,6 +253,29 @@ svg {
 .mspace-doc-editor--comment .ProseMirror h2 {
   font-size: 16px;
   line-height: 1.5;
+}
+
+.mspace-doc-editor--runbook-viewer .ProseMirror h1 {
+  margin-bottom: 1rem;
+  font-size: 24px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.mspace-doc-editor--runbook-viewer .ProseMirror h2 {
+  margin-top: 1.75rem;
+  margin-bottom: 0.5rem;
+  font-size: 17px;
+  line-height: 1.45;
+  font-weight: 650;
+}
+
+.mspace-doc-editor--runbook-viewer .ProseMirror h3 {
+  margin-top: 1.25rem;
+  margin-bottom: 0.35rem;
+  font-size: 14px;
+  line-height: 1.45;
+  font-weight: 650;
 }
 
 .mspace-doc-editor .ProseMirror ul,
@@ -302,6 +339,25 @@ svg {
   background: var(--code-bg);
   padding: 0.75rem 1rem;
   color: var(--code-text);
+}
+
+.mspace-doc-editor--runbook-viewer .ProseMirror pre {
+  margin: 0.75rem 0;
+  border-radius: 8px;
+  background: var(--block);
+  padding: 0.6rem 0.75rem;
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.mspace-doc-editor--runbook-viewer .ProseMirror pre code {
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.7;
+  box-shadow: none;
 }
 
 .mspace-doc-editor .ProseMirror blockquote {

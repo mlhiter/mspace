@@ -83,6 +83,21 @@ CREATE TABLE IF NOT EXISTS comments (
   edited_at TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS comment_reactions (
+  id TEXT PRIMARY KEY,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  comment_id TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+  reaction TEXT NOT NULL CHECK(reaction IN ('thumbs_up', 'thumbs_down', 'laugh', 'hooray', 'confused', 'heart', 'rocket', 'eyes')),
+  user_id TEXT NOT NULL,
+  actor_name TEXT NOT NULL DEFAULT '',
+  actor_avatar_url TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  UNIQUE(comment_id, user_id, reaction)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_issue_comment ON comment_reactions(issue_id, comment_id);
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_user ON comment_reactions(user_id);
+
 CREATE TABLE IF NOT EXISTS issue_attachments (
   id TEXT PRIMARY KEY,
   issue_id TEXT REFERENCES issues(id) ON DELETE CASCADE,

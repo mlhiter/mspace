@@ -158,6 +158,13 @@ export interface Comment {
   createdAt: string;
   updatedAt: string;
   editedAt: string;
+  reactions: CommentReactionSummary[];
+}
+
+export interface CommentReactionSummary {
+  reaction: string;
+  count: number;
+  reactedByMe: boolean;
 }
 
 export interface IssueAttachment {
