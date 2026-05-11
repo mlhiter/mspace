@@ -8,6 +8,8 @@ mspace should feel like a clean black-and-white Notion-style document workspace 
 
 The closest visual reference is Notion's calm document environment. The product interaction reference remains Multica-style inbox, issue, and teammate collaboration. The runtime evidence should feel closer to Optio's Kubernetes-backed proof of work.
 
+Scope boundary: these rules govern the desktop product shell and shared app UI. The public website in `apps/website` is allowed to be a high-contrast brand surface, but it should remain recognizably about the issue-to-evidence loop and must not leak its marketing treatment back into product routes.
+
 ## Design Principles
 
 - Document first: Issue Detail is the main working surface, not a dashboard drill-down.
@@ -15,7 +17,7 @@ The closest visual reference is Notion's calm document environment. The product 
 - Evidence attached: logs, diffs, branch state, and Kubernetes status should support the issue story.
 - Local-first, K8s-aware: UI copy should make local runtime and validation namespace explicit.
 - Compact but not cramped: dense rows are good; tiny hit areas and ambiguous icons are not.
-- No marketing shell: no hero sections, decorative dashboards, abstract AI claims, or generic landing-page composition.
+- No marketing shell inside the product: no hero sections, decorative dashboards, abstract AI claims, or generic landing-page composition in desktop routes.
 
 ## CSS Strategy
 

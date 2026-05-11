@@ -14,7 +14,7 @@
 ![Go](https://img.shields.io/badge/Go-1.24+-00add8?style=flat-square&logo=go&logoColor=white)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-validation%20target-326ce5?style=flat-square&logo=kubernetes&logoColor=white)
 
-[Overview](#overview) • [Screenshots](#screenshots) • [Features](#features) • [Architecture](#architecture) • [Quick Start](#quick-start) • [Verification](#verification) • [Docs](#docs)
+[Overview](#overview) • [Screenshots](#screenshots) • [Website](#website) • [Features](#features) • [Architecture](#architecture) • [Quick Start](#quick-start) • [Verification](#verification) • [Docs](#docs)
 
 </div>
 
@@ -32,6 +32,26 @@ The interaction model is closer to a shared engineering document than a terminal
 ![mspace issues list](./docs/images/mspace-issues-list.png)
 
 ![mspace issue detail](./docs/images/mspace-issue-detail.png)
+
+## Website
+
+Public site: [mspace-website-blue.vercel.app](https://mspace-website-blue.vercel.app)
+
+The website is a Vite/React/Tailwind brand surface in `apps/website`. It is intentionally bolder than the desktop product shell, but it should stay anchored to the same product story: issue workspace, local Codex sessions, source diffs, Kubernetes namespace previews, review evidence, and cleanup decisions.
+
+Local website commands:
+
+```bash
+pnpm dev:website
+pnpm build:website
+pnpm preview:website
+```
+
+Production deployment uses the root `vercel.json`:
+
+- install: `pnpm install --frozen-lockfile`
+- build: `pnpm --filter @mspace/website build`
+- output: `apps/website/dist`
 
 ## Why mspace
 
@@ -158,6 +178,7 @@ Local data paths:
 
 ```bash
 pnpm typecheck
+pnpm build:website
 pnpm build:desktop
 pnpm test:server
 (cd packages/ui && pnpm dlx shadcn@latest info --json)
@@ -178,6 +199,7 @@ curl http://127.0.0.1:7788/health
 
 ```text
 apps/desktop/        Electron desktop shell and renderer entrypoint
+apps/website/        Public Vite/React brand site for the issue-to-evidence story
 packages/core/       Shared API client and TypeScript types
 packages/ui/         Shared UI primitives and shadcn/ui source components
 packages/views/      Product routes for Inbox, Issues, Agents, Projects, Sessions
@@ -197,4 +219,5 @@ docs/                Product, value thesis, architecture, IA, references, runboo
 - [Local Runbook](./docs/runbook.md)
 - [Reference Notes](./docs/references.md)
 - [Design System](./DESIGN.md)
+- [Website App Notes](./apps/website/README.md)
 - [Roadmap](./ROADMAP.md)

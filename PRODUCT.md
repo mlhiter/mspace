@@ -18,9 +18,11 @@ The product succeeds when a team can create or route an issue, assign a local-fi
 
 Calm, operational, and exact. The interface should feel like a serious document workspace for real engineering work: quiet enough for daily use, explicit about runtime and namespace scope, and direct about what agents are doing.
 
+The public website can use a sharper brand surface, but it should still be specific about the mspace issue-to-evidence workflow. The product app itself stays calm and document-first.
+
 ## Anti-references
 
-- No marketing shell, AI hero page, decorative dashboard, or generic automation pitch.
+- No marketing shell, AI hero page, decorative dashboard, or generic automation pitch inside the product app.
 - No terminal-only experience that hides issues, comments, owners, or review state.
 - No Sealos API dependency as the primary control path.
 - No cluster-wide agent permission model.

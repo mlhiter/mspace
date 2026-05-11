@@ -50,6 +50,30 @@ cp .env.example .env.local
 pnpm run server
 ```
 
+## Website
+
+Production site:
+
+- [mspace-website-blue.vercel.app](https://mspace-website-blue.vercel.app)
+
+Local development:
+
+```bash
+pnpm dev:website
+pnpm build:website
+pnpm preview:website
+```
+
+The website app lives in `apps/website`. It reuses the desktop brand mark from `apps/desktop/assets/brand/mspace-icon.png` and product screenshots from `docs/images/`.
+
+Vercel deployment is configured from the repository root:
+
+```bash
+npx vercel@latest --prod
+```
+
+The root `vercel.json` uses `pnpm install --frozen-lockfile`, builds with `pnpm --filter @mspace/website build`, and publishes `apps/website/dist`. The local `.vercel/` project link is intentionally ignored by git. Vercel CLI authentication is machine/account-level rather than per shell session; check with `npx vercel@latest whoami` if a fresh terminal cannot deploy.
+
 ## Environment Variables
 
 | Variable | Used by | Default | Purpose |

@@ -2,6 +2,7 @@ node_modules/
 .turbo/
 .env
 .env.local
+.vercel/
 server/.env
 server/.env.local
 dist/
@@ -9,3 +10,4 @@ out/
 .DS_Store
 *.tsbuildinfo
 runner/runner
+.vercel

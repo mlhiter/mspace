@@ -6,6 +6,9 @@
   "scripts": {
     "dev:desktop": "pnpm --filter @mspace/desktop dev",
     "build:desktop": "pnpm --filter @mspace/desktop build",
+    "dev:website": "pnpm --filter @mspace/website dev",
+    "build:website": "pnpm --filter @mspace/website build",
+    "preview:website": "pnpm --filter @mspace/website preview",
     "server": "cd server && go run ./cmd/server",
     "test:server": "cd server && go test ./...",
     "typecheck": "turbo typecheck",
