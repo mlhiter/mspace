@@ -2545,6 +2545,11 @@ func validateIssueStatus(value string) error {
 	}
 }
 
+func isClosedIssueStatusValue(value string) bool {
+	normalized := normalizeIssueStatus(value)
+	return normalized == "closed" || normalized == "cancelled"
+}
+
 func (a *app) resolveIssueProject(projectID, text string) (project, error) {
 	projectID = strings.TrimSpace(projectID)
 	if projectID != "" {
@@ -3582,7 +3587,7 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 	if profile.Name != "" {
 		displayAgent = profile.Name
 	}
-	if err := a.updateIssueAssignment(issueID, assignee, "agent", "open", actor, fmt.Sprintf("Assigned to agent `%s` and queued local session `%s`.", displayAgent, shortID(session.ID))); err != nil {
+	if err := a.updateIssueAssignment(issueID, assignee, "agent", normalizeIssueStatus(detail.Issue.Status), actor, fmt.Sprintf("Assigned to agent `%s` and queued local session `%s`.", displayAgent, shortID(session.ID))); err != nil {
 		return agentSession{}, err
 	}
 	a.addSystemComment(issueID, fmt.Sprintf(
@@ -6524,11 +6529,11 @@ func (a *app) transitionIssueStatus(issueID, status string, actor issueActor, re
 	if err != nil {
 		return err
 	}
+	if normalizeIssueStatus(existing.Status) == nextStatus {
+		return nil
+	}
 	if err := authorizeIssueStatusTransition(existing, nextStatus, actor); err != nil {
 		return err
-	}
-	if existing.Status == nextStatus {
-		return nil
 	}
 	updatedAt := nowString()
 	closeReason := ""
@@ -6619,8 +6624,13 @@ func authorizeIssueStatusTransition(existing issue, nextStatus string, actor iss
 		switch actor.Kind {
 		case "human":
 			switch nextStatus {
-			case "open", "changes_requested", "ready_for_test", "blocked", "closed", "cancelled":
+			case "closed", "cancelled":
 				return nil
+			case "changes_requested":
+				if isClosedIssueStatusValue(existing.Status) {
+					return nil
+				}
+				return errForbidden
 			default:
 				return errForbidden
 			}

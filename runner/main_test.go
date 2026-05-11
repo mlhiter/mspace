@@ -869,6 +869,24 @@ func TestTopLevelIssueCloseRequiresHumanAuth(t *testing.T) {
 	}
 	assertCommentContains(t, db, "issue-1", "Issue status changed from `open` to `closed` by Test Human.")
 	assertCommentAuthorContains(t, db, "issue-1", "Issue status changed from `open` to `closed` by Test Human.", "human", "Test Human")
+
+	reopen := httptest.NewRecorder()
+	router.ServeHTTP(reopen, authRequest(http.MethodPut, "/api/issues/issue-1", `{"status":"changes_requested"}`, humanToken))
+	if reopen.Code != http.StatusOK {
+		t.Fatalf("expected human reopen for changes to return 200, got %d body=%s", reopen.Code, reopen.Body.String())
+	}
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'issue-1'`).Scan(&status); err != nil {
+		t.Fatalf("query issue status after reopen: %v", err)
+	}
+	if status != "changes_requested" {
+		t.Fatalf("expected reopen to set changes_requested, got %q", status)
+	}
+
+	reopenToOpen := httptest.NewRecorder()
+	router.ServeHTTP(reopenToOpen, authRequest(http.MethodPut, "/api/issues/issue-1", `{"status":"open"}`, humanToken))
+	if reopenToOpen.Code != http.StatusForbidden {
+		t.Fatalf("expected human reopen to open to return 403, got %d body=%s", reopenToOpen.Code, reopenToOpen.Body.String())
+	}
 }
 
 func TestAgentStatusChangeIsScopedAndRecorded(t *testing.T) {
@@ -901,6 +919,12 @@ func TestAgentStatusChangeIsScopedAndRecorded(t *testing.T) {
 	}
 	assertCommentContains(t, db, "issue-1", "Issue status changed from `open` to `needs_review` by Codex.")
 	assertCommentAuthorContains(t, db, "issue-1", "Issue status changed from `open` to `needs_review` by Codex.", "agent", "Codex")
+
+	humanRequestChanges := httptest.NewRecorder()
+	router.ServeHTTP(humanRequestChanges, authRequest(http.MethodPut, "/api/issues/issue-1", `{"status":"changes_requested"}`, humanToken))
+	if humanRequestChanges.Code != http.StatusForbidden {
+		t.Fatalf("expected human request-changes status edit to return 403, got %d body=%s", humanRequestChanges.Code, humanRequestChanges.Body.String())
+	}
 
 	closeTask := httptest.NewRecorder()
 	router.ServeHTTP(closeTask, authRequest(http.MethodPut, "/api/issues/task-1", `{"status":"closed"}`, agentToken))

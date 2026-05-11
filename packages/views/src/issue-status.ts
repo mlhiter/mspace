@@ -8,8 +8,6 @@ export const issueStatusOptions = [
   "closed",
 ];
 
-export const humanIssueStatusOptions = ["open", "changes_requested", "ready_for_test", "blocked", "cancelled", "closed"];
-
 const issueStatusLabels: Record<string, string> = {
   open: "Open",
   in_progress: "In progress",

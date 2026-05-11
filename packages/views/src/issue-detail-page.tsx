@@ -8,6 +8,7 @@ import {
   BookOpenText,
   Bot,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   CircleDot,
   CircleStop,
@@ -55,6 +56,11 @@ import {
 } from "@mspace/core";
 import {
   Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
   Field,
   InlineMeta,
   Input,
@@ -80,7 +86,7 @@ import {
   selectedIssueLabelKey,
 } from "./issue-labels";
 import { IssueLabelBadge, IssueLabelOptionLabel, IssueLabelSelectValue } from "./issue-label-chip";
-import { displayIssueStatus, humanIssueStatusOptions, issueStatusLabel } from "./issue-status";
+import { displayIssueStatus, issueStatusLabel } from "./issue-status";
 import { formatAbsoluteTime, formatRelativeTime } from "./time";
 import { visibleWorkspaceFileChanges, workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
@@ -138,6 +144,10 @@ type ParsedEvidence = {
 
 function isClosedIssueStatus(status: string) {
   return status === "closed" || status === "completed";
+}
+
+function isIssueClosedForLifecycle(status: string) {
+  return isClosedIssueStatus(status) || status === "cancelled";
 }
 
 function useSessionStream(sessionId: string | undefined, onEvent: (event: SessionStreamEvent) => void) {
@@ -2006,16 +2016,7 @@ function SessionTimelineItem(props: {
   const agentMessage = latestAgentMessage(logs);
   const isActive = ["queued", "running"].includes(session.status);
   const isEmptyCancelledSession = session.status === "cancelled" && !agentMessage && props.changes.length === 0;
-  const title = isActive ? (
-    `${agent.name} is working`
-  ) : session.status === "failed" ? (
-    <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
-      <span>{agent.name}</span>
-      <span className="font-normal text-[color:var(--danger)]">failed</span>
-    </span>
-  ) : (
-    agent.name
-  );
+  const title = isActive ? `${agent.name} is working` : agent.name;
   if (isEmptyCancelledSession && props.hasStopAction) {
     return null;
   }
@@ -2266,6 +2267,74 @@ function SidebarSection(props: { title: string; children: React.ReactNode }) {
   );
 }
 
+function IssueLifecycleActions(props: {
+  status: string;
+  isPending: boolean;
+  pendingStatus?: string;
+  onCloseIssue: () => void;
+  onCloseNotPlanned: () => void;
+  onReopenForChanges: () => void;
+}) {
+  const displayStatus = displayIssueStatus(props.status);
+  const isClosed = isIssueClosedForLifecycle(displayStatus);
+  const pendingStatus = props.isPending ? props.pendingStatus : "";
+
+  return (
+    <div className="flex min-w-0 items-center" aria-label="Issue actions">
+      {isClosed ? (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          className="h-8 min-h-8"
+          disabled={props.isPending}
+          onClick={props.onReopenForChanges}
+        >
+          <CircleDot data-icon />
+          {pendingStatus === "changes_requested" ? "Reopening..." : "Reopen for changes"}
+        </Button>
+      ) : (
+        <div className="inline-flex overflow-hidden rounded-[7px] bg-[color:var(--surface)] shadow-[0_0_0_1px_var(--line)]">
+          <button
+            type="button"
+            className="inline-flex h-8 items-center gap-1.5 px-3 text-[13px] font-medium leading-5 text-[color:var(--text)] transition-[background-color,color,opacity] duration-150 ease-out hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] disabled:pointer-events-none disabled:opacity-50"
+            disabled={props.isPending}
+            onClick={props.onCloseIssue}
+          >
+            <CheckCircle2 data-icon />
+            {pendingStatus === "closed" ? "Closing..." : "Close"}
+          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="grid h-8 w-8 place-items-center border-l border-[color:var(--line)] text-[color:var(--muted)] transition-[background-color,color,opacity] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] disabled:pointer-events-none disabled:opacity-50"
+                disabled={props.isPending}
+                aria-label="More issue close actions"
+              >
+                <ChevronDown data-icon />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuLabel>Close issue as</DropdownMenuLabel>
+              <DropdownMenuItem
+                disabled={props.isPending}
+                onSelect={props.onCloseNotPlanned}
+              >
+                <X data-icon />
+                <span className="grid gap-0.5">
+                  <span>{pendingStatus === "cancelled" ? "Closing..." : "Close as not planned"}</span>
+                  <span className="text-[12px] leading-4 text-[color:var(--muted)]">Use when this issue should not be worked on.</span>
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AgentMentionMenu(props: {
   agents: AgentProfile[];
   activeIndex: number;
@@ -2447,14 +2516,6 @@ function HeaderMetaBadge(props: { label?: string; value: string; muted?: boolean
     >
       {props.label ? <span className="shrink-0 text-[color:var(--faint)]">{props.label}</span> : null}
       <span className="truncate">{props.value}</span>
-    </span>
-  );
-}
-
-function IssueStatusOptionLabel(props: { status: string }) {
-  return (
-    <span className="flex min-w-0 items-center">
-      <StatusBadge value={props.status} valueLabel={issueStatusLabel(props.status)} className="pointer-events-none" />
     </span>
   );
 }
@@ -3526,7 +3587,7 @@ export function IssueDetailPage() {
                 </div>
               </section>
 
-              <section className="mt-2 grid grid-cols-[32px_minmax(0,1fr)] gap-3">
+              <section className="mt-3 grid grid-cols-[32px_minmax(0,1fr)] gap-3">
                 <ActorMark actor={composerActor} />
                 <form
                   className="min-w-0 rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]"
@@ -3569,29 +3630,40 @@ export function IssueDetailPage() {
                       />
                     ) : null}
                   </div>
+                  {updateIssueStatus.error ? <div className="border-t border-[color:var(--line)] px-3 py-2"><Notice tone="danger">{updateIssueStatus.error.message}</Notice></div> : null}
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[color:var(--line)] px-3 py-2">
-                    <div className="text-[12px] leading-5 text-[color:var(--muted)]">
+                    <div className="min-w-[220px] flex-1 text-[12px] leading-5 text-[color:var(--muted)]">
                       {isSupportedAgentMention
                         ? `This comment will be saved and sent to ${mentionedAgentConfig?.name}.`
                         : isUnsupportedAgentMention
                           ? `@${mentionedAgent} is not available yet.`
                           : "Comments stay on the issue. Mention an agent when you want a turn."}
                     </div>
-                    <Button
-                      type="submit"
-                      variant="secondary"
-                      size="sm"
-                      disabled={!canSendComposer}
-                    >
-                      <Send data-icon />
-                      {sendComposer.isPending
-                        ? "Sending..."
-                        : isSupportedAgentMention
-                          ? hasActiveSession
-                            ? "Agent is working"
-                            : `Send to ${mentionedAgentConfig?.name}`
-                          : "Comment"}
-                    </Button>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <IssueLifecycleActions
+                        status={detail.issue.status}
+                        isPending={updateIssueStatus.isPending}
+                        pendingStatus={updateIssueStatus.variables}
+                        onCloseIssue={() => updateIssueStatus.mutate("closed")}
+                        onCloseNotPlanned={() => updateIssueStatus.mutate("cancelled")}
+                        onReopenForChanges={() => updateIssueStatus.mutate("changes_requested")}
+                      />
+                      <Button
+                        type="submit"
+                        variant="secondary"
+                        size="sm"
+                        disabled={!canSendComposer}
+                      >
+                        <Send data-icon />
+                        {sendComposer.isPending
+                          ? "Sending..."
+                          : isSupportedAgentMention
+                            ? hasActiveSession
+                              ? "Agent is working"
+                              : `Send to ${mentionedAgentConfig?.name}`
+                            : "Comment"}
+                      </Button>
+                    </div>
                   </div>
                 </form>
               </section>
@@ -3619,24 +3691,10 @@ export function IssueDetailPage() {
               <div className="grid gap-2">
                 <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-2">
                   <span className="text-[12px] leading-5 text-[color:var(--muted)]">Status</span>
-                  <Select
-                    value={displayIssueStatus(detail.issue.status)}
-                    onValueChange={(status) => updateIssueStatus.mutate(status)}
-                    disabled={updateIssueStatus.isPending}
-                  >
-                    <SelectTrigger className="h-7 min-h-7 rounded-[6px] bg-transparent px-1.5 py-1 text-[12px] leading-4 shadow-none hover:bg-[color:var(--hover)] focus:bg-[color:var(--hover)] focus:shadow-[inset_0_0_0_1px_var(--line)] data-[state=open]:bg-[color:var(--hover)] data-[state=open]:shadow-[inset_0_0_0_1px_var(--line)] [&_svg]:size-3.5">
-                      <StatusBadge value={displayIssueStatus(detail.issue.status)} valueLabel={issueStatusLabel(detail.issue.status)} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {humanIssueStatusOptions.map((status) => (
-                        <SelectItem key={status} value={status}>
-                          <IssueStatusOptionLabel status={status} />
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex min-w-0 items-center">
+                    <StatusBadge value={displayIssueStatus(detail.issue.status)} valueLabel={issueStatusLabel(detail.issue.status)} />
+                  </div>
                 </div>
-                {updateIssueStatus.error ? <Notice tone="danger">{updateIssueStatus.error.message}</Notice> : null}
                 <MetaIdentityLine label="Assignee" actor={assigneeActor} />
                 <MetaLine label="Updated" value={formatRelativeTime(detail.issue.updatedAt)} />
                 <LabelEditor
