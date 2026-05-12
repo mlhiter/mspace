@@ -291,7 +291,7 @@ In the default test path, the answer should be grounded in the issue namespace, 
 
 Current implementation:
 
-- shows issue body first, then a timeline of human comments, Codex turns, and evidence;
+- shows issue body first, then a timeline of human comments, Codex turns, and failure/deploy attention events;
 - supports rich Markdown comments and managed agent mentions from the same reply box;
 - reads enabled mention suggestions from the Agents module instead of a frontend constant;
 - saves the comment before queuing the Codex app-server session, so the current turn is visible in the issue history;
@@ -304,7 +304,7 @@ Current implementation:
 - renders structured failure records as continueable timeline and Evidence entries, including failed command, error summary, namespace/resource hints, and Continue / Retry deploy / Stop affordances when applicable;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
-- automatically checks preview status in the background when Issue Detail opens or refreshes an existing test environment, instead of exposing a separate Probe button;
+- automatically checks preview status in the background when Issue Detail opens or refreshes an existing test environment, updating only the Test environment sidebar state and `Checked` time instead of exposing a separate Probe button or adding timeline evidence;
 - separates source review from execution evidence: Commits shows code changes and diffs, while Evidence shows compact commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state;
 - shows issue-level branch / PR handoff state on the Commits tab and sidebar, with actions to create one PR for the issue from the selected source branch, auto-detect an existing PR for that branch through `gh`, and refresh PR state;
 - keeps raw command trails collapsed in session logs, with exploratory commands excluded from persisted review evidence;
@@ -466,7 +466,7 @@ Must-have for MVP:
 - Issue labels
 - Stop queued or running sessions
 - Agent turns inline on the issue timeline
-- Evidence attached to the issue timeline
+- Evidence tab plus Test environment sidebar state, without health-check noise in the issue timeline
 - Project settings and runtime defaults
 - Local session startup with git worktree isolation
 - Manual cleanup for retained local session worktrees
@@ -518,7 +518,8 @@ Implemented as of 2026-05-11:
 13. Sidebar global search and Command+K palette for issues and projects.
 14. Commits/Evidence split on Issue Detail, with structured `session_review_evidence` snapshots and compact evidence-command persistence.
 15. Issue-level branch / PR handoff records, including local PR creation, existing PR auto-detection by source branch, status refresh, source commits, preview URL, and evidence summary.
-16. Structured `session_failures` records that surface failed sessions, deploy failures, preview probe failures, agent interruption, and cleanup failures as continueable Issue Detail timeline and Evidence entries.
+16. Structured `session_failures` records that surface failed sessions, deploy-time preview verification failures, agent interruption, and cleanup failures as continueable Issue Detail timeline and Evidence entries.
+17. Preview status refreshes that update Test environment state and `Checked` time without adding healthy snapshot cards to the Overview timeline.
 
 Next build steps:
 

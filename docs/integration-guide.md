@@ -255,14 +255,14 @@ Import returns `imported` clusters and `skipped` entries. Each kubeconfig contex
 
 ## Issue Test Environment APIs
 
-Issue test deployments, retain decisions, and cleanup turns are manually triggered. Preview status checks are automatic from Issue Detail when a test environment already exists, and can also be called directly for debugging or automation.
+Issue test deployments, retain decisions, and cleanup turns are manually triggered. Preview status checks are automatic from Issue Detail when a test environment already exists, and can also be called directly for debugging or automation. These checks update the issue test environment state only; they must not append review evidence, deployment evidence, failure records, or top-level issue status/timeline events.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/issues/{issueID}/test-deploy` | Queue a deploy/test agent turn for the issue namespace. |
 | `POST` | `/api/issues/{issueID}/test-environment/retain` | Record that the namespace should be retained. |
 | `POST` | `/api/issues/{issueID}/test-environment/cleanup` | Queue a cleanup agent turn for the issue namespace. |
-| `POST` | `/api/issues/{issueID}/test-environment/probe` | Internal preview status check used by Issue Detail and debugging tools; do not present this as a primary product action. |
+| `POST` | `/api/issues/{issueID}/test-environment/probe` | Internal preview status check used by Issue Detail and debugging tools; updates test-environment state only and should not be presented as a primary product action. |
 
 Queue a NodePort deploy/test turn:
 

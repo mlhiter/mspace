@@ -336,7 +336,7 @@ Force the same preview status check that Issue Detail normally runs in the backg
 curl -X POST http://127.0.0.1:7788/api/issues/<issue-id>/test-environment/probe
 ```
 
-Use that route for debugging or automation only. In the product UI, users should open the preview link; mspace refreshes status without a separate Probe button.
+Use that route for debugging or automation only. In the product UI, users should open the preview link; mspace refreshes status without a separate Probe button. A preview status check updates `issue_test_environments` and the Test environment sidebar `Checked` state only; it should not create deployment/review evidence rows, failure rows, or top-level issue status events.
 
 Record or trigger namespace cleanup:
 
