@@ -17,6 +17,8 @@ export const changelog: ChangelogEntry[] = [
       "Added an optional workspace switch for automatic draft PR creation and PR status refresh after source commits.",
       "Added an Issue Detail Resources tab for the current test namespace.",
       "Showed Pods, Services, Deployments, Ingresses, Events, and NodePort mappings without requiring a separate Kubernetes console.",
+      "Refined the Evidence tab around the current review packet and compact command evidence.",
+      "Moved previous attempts and Kubernetes snapshot history into dedicated full-width evidence pages.",
     ],
   },
   {

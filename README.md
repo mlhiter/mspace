@@ -58,7 +58,7 @@ Production deployment uses the root `vercel.json`:
 - **Issues are the durable workspace.** Agent turns, child tasks, progress, blockers, session evidence, and review comments stay attached to the issue.
 - **Local development stays fast.** Sessions run in prepared git worktrees under `~/.mspace/workdirs`.
 - **Validation is real.** Test deployments use a saved cluster config and issue-scoped namespace to create Kubernetes preview environments.
-- **Evidence is reviewable.** Code changes stay in Commits, while the Evidence tab shows compact command, test, build, deploy, namespace, preview, risk, and cleanup state without reconstructing context from a terminal.
+- **Evidence is reviewable.** Code changes stay in Commits, live Kubernetes objects stay in Resources, and the Evidence tab focuses on the current review packet with compact command evidence, agent summary, risks, source facts, and links to full history pages.
 
 ## Features
 
@@ -79,6 +79,7 @@ Production deployment uses the root `vercel.json`:
 - Project default cluster selection.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, reconcile Kubernetes evidence, and check preview status in the background.
 - Issue Resources tab for the current test namespace, showing Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events without accepting cross-namespace input.
+- Issue Evidence tab for the current review packet, with separate full-width pages for previous attempts and Kubernetes snapshot history.
 - Issue-level branch / PR handoff records that keep one current PR with source commit, head commit, commit list, preview URL, evidence summary, local preflight errors, and refreshable PR state.
 - Workspace automation settings keep source commit capture always on and let users opt into automatic draft PR creation after captured source commits.
 - Structured failure evidence for failed sessions, deploy reconciliation, preview checks, agent interruption, and cleanup failures, shown from Issue Detail Overview and Evidence so users can continue, retry deploy, stop, retain, or clean up instead of treating failure as terminal.
@@ -148,6 +149,7 @@ The server automatically loads `.env.local` from the project root. Keep `MSPACE_
 8. Open the Commits tab to review the issue-level PR card plus the captured commit list, then create or refresh the issue PR from the selected source branch when ready.
 9. Optionally enable automatic draft PRs from Workspace Settings in the workspace menu if this workspace should refresh a draft PR after future source commits.
 10. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
+11. Use Evidence for the current review packet and command evidence; open Previous attempts or Kubernetes snapshots only when reviewing historical blockers or namespace evidence.
 
 ## Configuration
 

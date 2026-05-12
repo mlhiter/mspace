@@ -15,6 +15,8 @@ import {
   AgentsPage,
   ClustersPage,
   IssueCommitDetailPage,
+  IssueEvidenceHistoryPage,
+  IssueEvidenceSnapshotsPage,
   InboxPage,
   IssueDetailPage,
   IssuesPage,
@@ -246,6 +248,18 @@ const issueCommitDetailRoute = createRoute({
   component: IssueCommitDetailPage,
 });
 
+const issueEvidenceSnapshotsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/issues/$issueId/evidence/snapshots",
+  component: IssueEvidenceSnapshotsPage,
+});
+
+const issueEvidenceHistoryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/issues/$issueId/evidence/history",
+  component: IssueEvidenceHistoryPage,
+});
+
 const agentsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/agents",
@@ -281,6 +295,8 @@ const routeTree = rootRoute.addChildren([
   inboxRoute,
   issuesRoute,
   issueCommitDetailRoute,
+  issueEvidenceSnapshotsRoute,
+  issueEvidenceHistoryRoute,
   issueDetailRoute,
   agentsRoute,
   clustersRoute,

@@ -298,6 +298,8 @@ EOF
 
 If no review artifact exists, the runner derives evidence from `session_logs` and deployment state. It persists only evidence-worthy commands such as tests, builds, deploys, dependency installs, `git diff --check`, `git commit`, Playwright checks, and issue-status update calls. Exploratory commands such as `sed`, `rg`, and `find` remain in raw session logs.
 
+In the product UI, the default Evidence tab is a read-only current review packet. `Command evidence` shows the compact commands that support that packet. Older reviews, failed attempts, interruptions, blockers, and Kubernetes snapshot tables open from the Evidence tab into full-width history pages so the right rail does not become a logs or resources browser.
+
 Reusable test clusters:
 
 ```bash
@@ -591,7 +593,7 @@ kill <runner-pid>
 cd runner && MSPACE_PORT=7788 go run .
 ```
 
-After backfill, open the affected issue and check Issue Detail `Overview` for `Failure needs attention` and `Evidence` for `Failure evidence`.
+After backfill, open the affected issue and check Issue Detail `Overview` for `Failure needs attention`. For older failures or interruptions, open Evidence and then `Previous attempts`; the default Evidence view stays focused on the current review packet.
 
 ### Session Fails Before Starting Runtime
 

@@ -35,7 +35,7 @@ The repository now has a runnable local desktop MVP:
 - manually trigger an issue-scoped test deployment where the agent creates the namespace, builds and pushes images, deploys resources, and returns a preview URL;
 - record issue test namespace state, cleanup/retain state, deploy session, cleanup session, and preview URL.
 - inspect the current issue namespace from a Resources tab with Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events.
-- review structured session evidence from Issue Detail, with code changes in Commits and compact commands/tests/build/deploy/risks/cleanup state in Evidence.
+- review structured session evidence from Issue Detail, with code changes in Commits, live namespace objects in Resources, and the current review packet plus command evidence in Evidence.
 - record issue-level branch / PR handoff state from the selected source change, including commit list, preview URL, evidence summary, PR URL/title/state, and local preflight errors.
 - show failed sessions and failed deploy/preview/cleanup checks as structured failure evidence, with continue, retry deploy, stop, retain, or cleanup choices from Issue Detail.
 - use a Notion-like desktop workspace shell with real shadcn/ui primitives, Radix base components, lucide-react icons, Material Icon Theme file icons, and low-contrast document surfaces.
@@ -188,7 +188,7 @@ A completed session should leave:
 - issue comments or progress updates;
 - PR or branch link;
 - environment URL when available;
-- compact command evidence plus raw session logs for debugging;
+- compact command evidence for the current review packet plus raw session logs for debugging;
 - test, build, deployment, risk, follow-up, and cleanup evidence;
 - runtime evidence such as pod status and logs;
 - cleanup state: retained or cleaned for local worktrees, with namespace cleanup as a later lifecycle.

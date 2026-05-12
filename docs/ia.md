@@ -70,6 +70,8 @@ Current implemented desktop routes:
 /issues
 /issues/:issueId
 /issues/:issueId/commits/:commitSha
+/issues/:issueId/evidence/history
+/issues/:issueId/evidence/snapshots
 /agents
 /clusters
 /projects
@@ -272,25 +274,29 @@ Secondary actions:
 - open full session;
 - expand execution details.
 
-### Evidence panel
+### Evidence tab
 
-The evidence panel should summarize:
+The Evidence tab should summarize the current review packet, not act as a second logs or Kubernetes resources page.
+
+The default Evidence view should show:
 
 - code-change handoff through the Commits tab;
 - session branch and source commit identity;
-- compact commands run;
-- tests;
-- build and deployment result;
-- preview URL;
-- cluster and namespace summary;
-- pod health;
-- deployment status;
-- recent events;
-- recent logs.
+- the current review packet verdict and status signals;
+- agent summary;
+- compact command evidence for the current packet;
+- risks and follow-ups;
+- source and capture facts.
 
-It should answer "where can the team test this?" without forcing the user into a separate ops view.
+It should answer "can I trust this review packet?" without forcing the user through raw logs. It should not repeat the Resources tab, duplicate the current packet validation rows, or expand historical failures in the right rail.
 
-In the default test path, the answer should be grounded in the issue namespace, image reference, preview URL check, Kubernetes deployment state, and recent evidence rather than generic agent logs alone.
+Historical or wide information has its own pages:
+
+- `Previous attempts` opens `/issues/:issueId/evidence/history` for older review evidence, interruptions, failures, and blockers.
+- `Kubernetes evidence` opens `/issues/:issueId/evidence/snapshots` for deployment evidence snapshots, resource tables, and events.
+- Live namespace inspection stays in the Resources tab.
+
+In the default test path, the current review packet should be grounded in the issue namespace, source commit, preview URL check, build/deploy/test result, and command evidence rather than generic agent logs alone.
 
 Current implementation:
 
@@ -309,7 +315,7 @@ Current implementation:
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
 - automatically checks preview status in the background when Issue Detail opens or refreshes an existing test environment, updating only the Test environment sidebar state and `Checked` time instead of exposing a separate Probe button or adding timeline evidence;
 - exposes a Resources tab for the issue's current test namespace, refreshed on tab entry or manual refresh, with cluster/context/lifecycle/exposure/cleanup/preview metadata plus Pods, Services, Deployments, Ingresses, and Events;
-- separates source review from execution evidence: Commits shows code changes and diffs, while Evidence shows compact commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state;
+- separates source review, live resources, and review evidence: Commits shows code changes and diffs, Resources shows live namespace objects, and Evidence shows the current review packet with command evidence, agent summary, risks/follow-ups, source facts, plus links to full-width previous-attempt and Kubernetes-snapshot history pages;
 - shows issue-level branch / PR handoff state on the Commits tab and sidebar, with actions to create one PR for the issue from the selected source branch, auto-detect an existing PR for that branch through `gh`, refresh PR state, and optionally let Workspace Settings create draft PRs after source commit capture;
 - keeps raw command trails collapsed in session logs, with exploratory commands excluded from persisted review evidence;
 - shows a compact Project runbook entry in the Workflow sidebar; clicking it opens a read-only TipTap runbook modal;

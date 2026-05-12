@@ -2460,7 +2460,7 @@ function AgentSummaryBlock(props: { summary: string }) {
 
 function EvidenceCommandsPanel(props: { commands: ReviewEvidenceCommand[] }) {
   return (
-    <EvidenceSection title="Commands run" aside={<InlineMeta>{props.commands.length} captured</InlineMeta>}>
+    <EvidenceSection title="Command evidence" aside={<InlineMeta>{props.commands.length} captured</InlineMeta>}>
       <ReviewDetailsDisclosure label="Show command evidence">
         <CommandEvidenceList commands={props.commands} />
       </ReviewDetailsDisclosure>
@@ -2468,97 +2468,59 @@ function EvidenceCommandsPanel(props: { commands: ReviewEvidenceCommand[] }) {
   );
 }
 
-function KubernetesEvidenceDigest(props: { evidence: DeploymentEvidence[] }) {
+function KubernetesEvidenceDigest(props: { issueId: string; evidence: DeploymentEvidence[] }) {
   const evidence = listOrEmpty(props.evidence);
   if (evidence.length === 0) return null;
-  const latest = evidence[0];
-  const parsed = parseEvidenceDetails(latest);
-  const hiddenCount = Math.max(0, evidence.length - 1);
-  const sessionCount = uniqueEvidenceSessions(evidence);
   return (
-    <EvidenceSection
-      title="Kubernetes snapshot"
-      aside={<InlineMeta>{evidence.length} snapshot{evidence.length === 1 ? "" : "s"} across {sessionCount} session{sessionCount === 1 ? "" : "s"}</InlineMeta>}
-    >
-      <div className="rounded-[10px] bg-[color:var(--block-subtle)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
-        <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+    <EvidenceSection title="Kubernetes evidence">
+      <div className="rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <CheckCircle2 data-icon className={cn("shrink-0", parsed.tone === "healthy" ? "text-[color:var(--success)]" : "text-[color:var(--muted)]")} />
-              <div className="min-w-0 text-[13px] font-semibold leading-5 text-[color:var(--text)]">{latest.summary || "Kubernetes evidence captured"}</div>
-            </div>
-            <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
-              <EvidenceMeta label="Namespace" value={latest.namespace} />
-              <EvidenceMeta label="Context" value={latest.cluster} />
-              <EvidenceMeta label="Session" value={latest.sessionId.slice(0, 8)} />
-              <span title={formatAbsoluteTime(latest.createdAt)}>{formatRelativeTime(latest.createdAt)}</span>
-            </div>
+            <div className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">Snapshot history</div>
+            <div className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">Open the full history page.</div>
           </div>
-          <EvidenceStatusPill tone={parsed.tone} />
+          <Button type="button" variant="secondary" size="sm" asChild>
+            <Link to="/issues/$issueId/evidence/snapshots" params={{ issueId: props.issueId }}>
+              <History data-icon />
+              Open
+            </Link>
+          </Button>
         </div>
-        {parsed.resources.length > 0 ? <EvidenceResourceGroups resources={parsed.resources} /> : null}
-        <EvidenceEvents events={parsed.events.slice(0, 5)} />
-        {hiddenCount > 0 ? (
-          <ReviewDetailsDisclosure label={`Show snapshot history (${hiddenCount} older)`}>
-            <div className="relative mt-3">
-              <div className="absolute bottom-0 left-4 top-0 w-px bg-[color:var(--line)]" aria-hidden="true" />
-              <div className="relative">
-                {evidence.slice(1).map((item) => (
-                  <EvidenceTimelineItem key={item.id} evidence={item} />
-                ))}
-              </div>
-            </div>
-          </ReviewDetailsDisclosure>
-        ) : null}
       </div>
     </EvidenceSection>
   );
 }
 
 function ReviewHistoryList(props: {
+  issueId: string;
   reviews: SessionReviewEvidence[];
   failures: SessionFailure[];
-  sessions: AgentSession[];
-  evidence: DeploymentEvidence[];
 }) {
   const reviews = listOrEmpty(props.reviews);
   const failures = listOrEmpty(props.failures);
   if (reviews.length === 0 && failures.length === 0) return null;
   return (
-    <EvidenceSection title="Run history" aside={<InlineMeta>{reviews.length + failures.length} item{reviews.length + failures.length === 1 ? "" : "s"}</InlineMeta>}>
-      <ReviewDetailsDisclosure label="Show older reviews and blockers">
-        <div className="grid gap-3">
-          {failures.map((failure) => {
-            const session = props.sessions.find((item) => item.id === failure.sessionId);
-            const failureEvidence = props.evidence.find((item) => item.id === failure.evidenceId || item.sessionId === failure.sessionId);
-            return (
-              <SessionFailureCard
-                key={failure.id}
-                failure={failure}
-                session={session}
-                evidence={failureEvidence}
-                compact
-              />
-            );
-          })}
-          {reviews.map((review) => (
-            <div key={review.id || review.sessionId} className="grid gap-2 rounded-[10px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <ReviewStatusPill status={reviewStatusForPacket(review)} />
-                <span className="font-mono text-[12px] leading-5 text-[color:var(--text)]">Session {review.sessionId.slice(0, 8)}</span>
-                {review.sourceCommitSha ? <span className="font-mono text-[12px] leading-5 text-[color:var(--muted)]">{review.sourceCommitSha.slice(0, 12)}</span> : null}
-                {review.updatedAt ? <span className="text-[12px] leading-5 text-[color:var(--faint)]" title={formatAbsoluteTime(review.updatedAt)}>{formatRelativeTime(review.updatedAt)}</span> : null}
-              </div>
-              {review.agentSummary ? <div className="line-clamp-2 text-[12px] leading-5 text-[color:var(--muted-strong)] [overflow-wrap:anywhere]">{review.agentSummary}</div> : null}
-            </div>
-          ))}
+    <EvidenceSection title="Previous attempts">
+      <div className="rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">Older reviews and blockers</div>
+            <div className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">Open older reviews and blockers.</div>
+          </div>
+          <Button type="button" variant="secondary" size="sm" asChild>
+            <Link to="/issues/$issueId/evidence/history" params={{ issueId: props.issueId }}>
+              <History data-icon />
+              Open
+            </Link>
+          </Button>
         </div>
-      </ReviewDetailsDisclosure>
+      </div>
     </EvidenceSection>
   );
 }
 
 function IssueEvidenceTab(props: {
+  issueId: string;
   reviewEvidence: SessionReviewEvidence[];
   evidence: DeploymentEvidence[];
   failures: SessionFailure[];
@@ -2610,12 +2572,11 @@ function IssueEvidenceTab(props: {
             sourceSession={sourceSession}
             evidenceCount={evidence.length}
           />
-          <KubernetesEvidenceDigest evidence={evidence} />
+          <KubernetesEvidenceDigest issueId={props.issueId} evidence={evidence} />
           <ReviewHistoryList
+            issueId={props.issueId}
             reviews={historicalReviews}
             failures={failures}
-            sessions={props.sessions}
-            evidence={evidence}
           />
         </aside>
       </div>
@@ -3647,6 +3608,183 @@ function EvidenceTimelineItem(props: { evidence: DeploymentEvidence }) {
         <EvidenceEvents events={parsed.events} />
       </div>
     </TimelineShell>
+  );
+}
+
+export function IssueEvidenceSnapshotsPage() {
+  const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
+  const issueQuery = useQuery({
+    queryKey: queryKeys.issue(issueId),
+    queryFn: () => api.getIssue(issueId),
+    enabled: issueId.length > 0,
+    refetchInterval: 4_000,
+  });
+
+  const detail = issueQuery.data;
+  const evidence = listOrEmpty(detail?.evidence);
+  const sessionCount = uniqueEvidenceSessions(evidence);
+
+  if (!detail) {
+    return (
+      <PageFrame title="Kubernetes snapshots" subtitle="Load historical namespace evidence for this issue.">
+        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? "Loading snapshots..." : "Issue not found."}</div>
+      </PageFrame>
+    );
+  }
+
+  return (
+    <PageFrame
+      title="Kubernetes snapshots"
+      subtitle={`Historical namespace evidence for ${detail.issue.title}.`}
+      breadcrumbs={[
+        { label: "mspace", to: "/inbox" },
+        { label: "Issues", to: "/issues" },
+        { label: detail.issue.title, to: "/issues/$issueId", params: { issueId }, search: issueTabSearch("evidence") },
+        { label: "Kubernetes snapshots" },
+      ]}
+    >
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <Button type="button" variant="ghost" size="sm" asChild>
+          <Link to="/issues/$issueId" params={{ issueId }} search={issueTabSearch("evidence")}>
+            <ArrowLeft data-icon />
+            Back to evidence
+          </Link>
+        </Button>
+        {evidence.length > 0 ? (
+          <InlineMeta>{evidence.length} snapshot{evidence.length === 1 ? "" : "s"} across {sessionCount} session{sessionCount === 1 ? "" : "s"}</InlineMeta>
+        ) : null}
+      </div>
+
+      {evidence.length > 0 ? (
+        <section className="relative">
+          <div className="absolute bottom-0 left-4 top-0 w-px bg-[color:var(--line)]" aria-hidden="true" />
+          <div className="relative">
+            {evidence.map((item) => (
+              <EvidenceTimelineItem key={item.id} evidence={item} />
+            ))}
+          </div>
+        </section>
+      ) : (
+        <Notice>No Kubernetes snapshots have been captured for this issue yet.</Notice>
+      )}
+    </PageFrame>
+  );
+}
+
+function ReviewEvidenceTimelineItem(props: { review: SessionReviewEvidence }) {
+  const review = props.review;
+  return (
+    <TimelineShell actor={evidenceActor()} title="Review evidence attached" time={review.updatedAt || review.createdAt}>
+      <div className="grid gap-3 rounded-[10px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <ReviewStatusPill status={reviewStatusForPacket(review)} />
+          <span className="font-mono text-[12px] leading-5 text-[color:var(--text)]">Session {review.sessionId.slice(0, 8)}</span>
+          {review.sourceCommitSha ? <span className="font-mono text-[12px] leading-5 text-[color:var(--muted)]">{review.sourceCommitSha.slice(0, 12)}</span> : null}
+        </div>
+        {review.agentSummary ? (
+          <div className="rounded-[8px] bg-[color:var(--paper)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+            <RichText className="text-[13px] leading-6">{review.agentSummary}</RichText>
+          </div>
+        ) : null}
+        <ReviewMetaGrid
+          rows={[
+            { label: "Source commit", value: review.sourceCommitSha, mono: true },
+            { label: "Source session", value: review.sourceSessionId, mono: true },
+            { label: "Branch", value: review.branch, mono: true },
+            { label: "Namespace", value: review.namespace, mono: true },
+            { label: "Cleanup", value: review.cleanupStatus },
+          ]}
+        />
+        {[...listOrEmpty(review.risks), ...listOrEmpty(review.followUps)].length > 0 ? (
+          <ReviewDetailsDisclosure label="Show risks and follow-ups">
+            <ReviewStringList items={[...listOrEmpty(review.risks), ...listOrEmpty(review.followUps)]} empty="No risks or follow-ups were reported." />
+          </ReviewDetailsDisclosure>
+        ) : null}
+        {review.commandsRun.length > 0 ? (
+          <ReviewDetailsDisclosure label="Show command evidence">
+            <CommandEvidenceList commands={review.commandsRun} />
+          </ReviewDetailsDisclosure>
+        ) : null}
+      </div>
+    </TimelineShell>
+  );
+}
+
+export function IssueEvidenceHistoryPage() {
+  const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
+  const issueQuery = useQuery({
+    queryKey: queryKeys.issue(issueId),
+    queryFn: () => api.getIssue(issueId),
+    enabled: issueId.length > 0,
+    refetchInterval: 4_000,
+  });
+
+  const detail = issueQuery.data;
+  const reviews = listOrEmpty(detail?.reviewEvidence);
+  const failures = listOrEmpty(detail?.failures);
+  const evidence = listOrEmpty(detail?.evidence);
+  const sessions = listOrEmpty(detail?.sessions);
+  const entries = [
+    ...failures.map((failure) => ({ kind: "failure" as const, id: failure.id, time: failure.updatedAt || failure.createdAt, failure })),
+    ...reviews.map((review) => ({ kind: "review" as const, id: review.id || review.sessionId, time: review.updatedAt || review.createdAt, review })),
+  ].sort((a, b) => new Date(b.time || 0).getTime() - new Date(a.time || 0).getTime());
+
+  if (!detail) {
+    return (
+      <PageFrame title="Previous attempts" subtitle="Load review history for this issue.">
+        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? "Loading history..." : "Issue not found."}</div>
+      </PageFrame>
+    );
+  }
+
+  return (
+    <PageFrame
+      title="Previous attempts"
+      subtitle={`Older review evidence and blockers for ${detail.issue.title}.`}
+      breadcrumbs={[
+        { label: "mspace", to: "/inbox" },
+        { label: "Issues", to: "/issues" },
+        { label: detail.issue.title, to: "/issues/$issueId", params: { issueId }, search: issueTabSearch("evidence") },
+        { label: "Previous attempts" },
+      ]}
+    >
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <Button type="button" variant="ghost" size="sm" asChild>
+          <Link to="/issues/$issueId" params={{ issueId }} search={issueTabSearch("evidence")}>
+            <ArrowLeft data-icon />
+            Back to evidence
+          </Link>
+        </Button>
+        {entries.length > 0 ? <InlineMeta>{entries.length} item{entries.length === 1 ? "" : "s"}</InlineMeta> : null}
+      </div>
+
+      {entries.length > 0 ? (
+        <section className="relative">
+          <div className="absolute bottom-0 left-4 top-0 w-px bg-[color:var(--line)]" aria-hidden="true" />
+          <div className="relative">
+            {entries.map((entry) => {
+              if (entry.kind === "failure") {
+                const session = sessions.find((item) => item.id === entry.failure.sessionId);
+                const failureEvidence = evidence.find((item) => item.id === entry.failure.evidenceId || item.sessionId === entry.failure.sessionId);
+                const review = reviews.find((item) => item.id === entry.failure.reviewEvidenceId || item.sessionId === entry.failure.sessionId);
+                return (
+                  <SessionFailureTimelineItem
+                    key={`failure-${entry.id}`}
+                    failure={entry.failure}
+                    session={session}
+                    evidence={failureEvidence}
+                    review={review}
+                  />
+                );
+              }
+              return <ReviewEvidenceTimelineItem key={`review-${entry.id}`} review={entry.review} />;
+            })}
+          </div>
+        </section>
+      ) : (
+        <Notice>No earlier review attempts or blockers have been captured for this issue yet.</Notice>
+      )}
+    </PageFrame>
   );
 }
 
@@ -5546,6 +5684,7 @@ export function IssueDetailPage() {
             />
           ) : (
 	            <IssueEvidenceTab
+              issueId={issueId}
 	              reviewEvidence={listOrEmpty(detail.reviewEvidence)}
 	              evidence={listOrEmpty(detail.evidence)}
 	              failures={listOrEmpty(detail.failures)}
