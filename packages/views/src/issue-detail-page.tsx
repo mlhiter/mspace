@@ -1066,6 +1066,250 @@ function ChangeNodeFileList(props: { changes: WorkspaceChange[]; workdir: string
   );
 }
 
+type DiffRowKind = "add" | "remove" | "context" | "hunk" | "gap" | "meta";
+
+type ParsedDiffRow = {
+  kind: DiffRowKind;
+  content: string;
+  oldLine?: number;
+  newLine?: number;
+};
+
+type ParsedDiffFile = {
+  oldPath: string;
+  newPath: string;
+  displayPath: string;
+  additions: number;
+  deletions: number;
+  rows: ParsedDiffRow[];
+};
+
+function cleanDiffPath(value: string) {
+  const trimmed = value.trim().replace(/^"|"$/g, "");
+  if (trimmed === "/dev/null") return trimmed;
+  if (trimmed.startsWith("a/") || trimmed.startsWith("b/")) return trimmed.slice(2);
+  return trimmed;
+}
+
+function parseDiffGitLine(line: string) {
+  const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
+  if (!match) return undefined;
+  return { oldPath: match[1], newPath: match[2] };
+}
+
+function displayDiffPath(file: ParsedDiffFile) {
+  if (file.newPath && file.newPath !== "/dev/null") return file.newPath;
+  if (file.oldPath && file.oldPath !== "/dev/null") return file.oldPath;
+  return "Changed file";
+}
+
+function parseUnifiedDiffPreview(text: string) {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+
+  const leadRows: string[] = [];
+  const files: ParsedDiffFile[] = [];
+  let currentFile: ParsedDiffFile | null = null;
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+
+  const pushCurrentFile = () => {
+    if (!currentFile) return;
+    currentFile.displayPath = displayDiffPath(currentFile);
+    files.push(currentFile);
+    currentFile = null;
+    oldLine = 0;
+    newLine = 0;
+    inHunk = false;
+  };
+
+  for (const line of lines) {
+    const diffPaths = parseDiffGitLine(line);
+    if (diffPaths) {
+      pushCurrentFile();
+      currentFile = {
+        oldPath: cleanDiffPath(diffPaths.oldPath),
+        newPath: cleanDiffPath(diffPaths.newPath),
+        displayPath: cleanDiffPath(diffPaths.newPath),
+        additions: 0,
+        deletions: 0,
+        rows: [],
+      };
+      continue;
+    }
+
+    if (!currentFile) {
+      if (line.trim()) leadRows.push(line);
+      continue;
+    }
+
+    if (!inHunk && line.startsWith("--- ")) {
+      currentFile.oldPath = cleanDiffPath(line.slice(4));
+      continue;
+    }
+    if (!inHunk && line.startsWith("+++ ")) {
+      currentFile.newPath = cleanDiffPath(line.slice(4));
+      currentFile.displayPath = displayDiffPath(currentFile);
+      continue;
+    }
+
+    const hunkMatch = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/);
+    if (hunkMatch) {
+      const nextOldLine = Number(hunkMatch[1]);
+      const nextNewLine = Number(hunkMatch[2]);
+      const gap = inHunk && oldLine > 0 && newLine > 0 ? Math.max(nextOldLine - oldLine, nextNewLine - newLine) : 0;
+      if (gap > 1) currentFile.rows.push({ kind: "gap", content: `${gap} unchanged lines` });
+      currentFile.rows.push({ kind: "hunk", content: line });
+      oldLine = nextOldLine;
+      newLine = nextNewLine;
+      inHunk = true;
+      continue;
+    }
+
+    if (inHunk && line.startsWith("+")) {
+      currentFile.rows.push({ kind: "add", content: line.slice(1), newLine });
+      currentFile.additions += 1;
+      newLine += 1;
+      continue;
+    }
+    if (inHunk && line.startsWith("-")) {
+      currentFile.rows.push({ kind: "remove", content: line.slice(1), oldLine });
+      currentFile.deletions += 1;
+      oldLine += 1;
+      continue;
+    }
+    if (inHunk && line.startsWith(" ")) {
+      currentFile.rows.push({ kind: "context", content: line.slice(1), oldLine, newLine });
+      oldLine += 1;
+      newLine += 1;
+      continue;
+    }
+    if (inHunk && line === "") {
+      currentFile.rows.push({ kind: "context", content: "", oldLine, newLine });
+      oldLine += 1;
+      newLine += 1;
+      continue;
+    }
+    if (line.trim()) currentFile.rows.push({ kind: "meta", content: line });
+  }
+
+  pushCurrentFile();
+
+  const fallbackRows: ParsedDiffRow[] = leadRows.map((line) => ({ kind: "meta", content: line }));
+  return { leadRows, files, fallbackRows };
+}
+
+function DiffPreview(props: { text: string; truncated: boolean }) {
+  const parsed = useMemo(() => parseUnifiedDiffPreview(props.text), [props.text]);
+  const files = parsed.files;
+  const rows = files.length > 0 ? undefined : parsed.fallbackRows;
+
+  return (
+    <div className="overflow-hidden rounded-[9px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
+      {props.truncated ? (
+        <div className="border-b border-[color:var(--line)] bg-[color:var(--warning-soft)] px-3 py-2 text-[12px] leading-5 text-[color:var(--warning)]">
+          Diff preview was truncated at the stored limit.
+        </div>
+      ) : null}
+      <div className="max-h-[680px] overflow-auto">
+        {files.length > 0 ? (
+          files.map((file) => <DiffFileSection key={`${file.oldPath}->${file.newPath}`} file={file} />)
+        ) : (
+          <DiffFallback rows={rows || []} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DiffFallback(props: { rows: ParsedDiffRow[] }) {
+  if (props.rows.length === 0) {
+    return <div className="px-3 py-2 text-[13px] leading-6 text-[color:var(--muted)]">No diff rows were found in this preview.</div>;
+  }
+  return (
+    <div className="grid min-w-[720px] gap-0 py-1 font-mono text-[12px] leading-5">
+      {props.rows.map((row, index) => (
+        <div key={`${index}-${row.content}`} className="px-3 py-0.5 text-[color:var(--muted-strong)]">
+          <span className="whitespace-pre">{row.content || " "}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DiffFileSection(props: { file: ParsedDiffFile }) {
+  const file = props.file;
+  return (
+    <section className="border-b border-[color:var(--line)] last:border-b-0">
+      <div className="sticky top-0 z-10 flex min-w-[720px] items-center justify-between gap-3 border-b border-[color:var(--line)] bg-[color:var(--paper)] px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <FileTypeIcon path={file.displayPath} />
+          <span className="min-w-0 truncate font-mono text-[12px] font-semibold text-[color:var(--text)]">{file.displayPath}</span>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 font-mono text-[12px] leading-5">
+          <span className="text-[color:var(--success)]">+{file.additions}</span>
+          <span className="text-[color:var(--danger)]">-{file.deletions}</span>
+        </div>
+      </div>
+      <table className="w-full min-w-[720px] border-collapse font-mono text-[12px] leading-5">
+        <tbody>
+          {file.rows.map((row, index) => (
+            <DiffLineRow key={`${index}-${row.kind}-${row.oldLine || ""}-${row.newLine || ""}`} row={row} />
+          ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function DiffLineRow(props: { row: ParsedDiffRow }) {
+  const row = props.row;
+  if (row.kind === "hunk" || row.kind === "gap" || row.kind === "meta") {
+    return (
+      <tr
+        className={cn(
+          "border-y border-[color:var(--line)]",
+          row.kind === "hunk" && "bg-[color:var(--blue-soft)] text-[color:var(--accent-blue)]",
+          row.kind === "gap" && "bg-[color:var(--block)] text-[color:var(--muted)]",
+          row.kind === "meta" && "bg-[color:var(--block)] text-[color:var(--faint)]",
+        )}
+      >
+        <td className="w-[52px] select-none border-r border-[color:var(--line)] px-2 py-1 text-right tabular-nums" />
+        <td className="w-[52px] select-none border-r border-[color:var(--line)] px-2 py-1 text-right tabular-nums" />
+        <td className="px-3 py-1">
+          <span className="whitespace-pre">{row.content || " "}</span>
+        </td>
+      </tr>
+    );
+  }
+
+  const sign = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " ";
+  const rowTone =
+    row.kind === "add"
+      ? "bg-[color:var(--success-soft)]"
+      : row.kind === "remove"
+        ? "bg-[color:var(--danger-soft)]"
+        : "bg-[color:var(--paper)]";
+  const numberTone = row.kind === "add" ? "text-[color:var(--success)]" : row.kind === "remove" ? "text-[color:var(--danger)]" : "text-[color:var(--faint)]";
+  const codeTone = row.kind === "add" ? "text-[color:var(--success)]" : row.kind === "remove" ? "text-[color:var(--danger)]" : "text-[color:var(--muted-strong)]";
+
+  return (
+    <tr className={rowTone}>
+      <td className={cn("w-[52px] select-none border-r border-[color:var(--line)] px-2 py-0.5 text-right tabular-nums", numberTone)}>
+        {row.oldLine || ""}
+      </td>
+      <td className={cn("w-[52px] select-none border-r border-[color:var(--line)] px-2 py-0.5 text-right tabular-nums", numberTone)}>
+        {row.newLine || ""}
+      </td>
+      <td className={cn("px-3 py-0.5", codeTone)}>
+        <span className="inline-block w-4 select-none text-right">{sign}</span>
+        <span className="whitespace-pre">{row.content || " "}</span>
+      </td>
+    </tr>
+  );
+}
+
 function handoffMatchesNode(handoff: IssueHandoff, node: IssueChangeNode) {
   return (
     handoff.sourceCommitSha === node.commitSha ||
@@ -1109,6 +1353,23 @@ function changeNodeSourceLabel(node: IssueChangeNode) {
   return `${node.branch || "detached"} · ${node.shortCommitSha || node.commitSha.slice(0, 12)}`;
 }
 
+function HandoffMeta(props: { label: string; value: string; mono?: boolean; title?: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[11px] leading-4 text-[color:var(--faint)]">{props.label}</div>
+      <div
+        className={cn(
+          "mt-0.5 min-w-0 truncate text-[12px] leading-5 text-[color:var(--muted-strong)]",
+          props.mono && "font-mono tabular-nums",
+        )}
+        title={props.title || props.value}
+      >
+        {props.value || "Not recorded"}
+      </div>
+    </div>
+  );
+}
+
 function IssueHandoffPanel(props: {
   changeNodes: IssueChangeNode[];
   handoffs: IssueHandoff[];
@@ -1132,84 +1393,104 @@ function IssueHandoffPanel(props: {
   }, [nodes, sourceCommit]);
   const selectedNode = nodes.find((node) => node.commitSha === sourceCommit) || nodes[0];
   const syncedPR = issuePullRequestHandoff(props.handoffs);
+  const primaryHandoff = syncedPR || props.handoffs[0];
   const canCreate = Boolean(selectedNode?.branch) && !syncedPR?.prUrl && !props.isCreatingPr;
+  const sourceBranch = primaryHandoff?.branch || selectedNode?.branch || "No branch captured";
+  const sourceCommitValue =
+    primaryHandoff?.headCommitSha ||
+    primaryHandoff?.sourceCommitSha ||
+    selectedNode?.commitSha ||
+    "";
+  const commitCount = primaryHandoff?.commits.length || (selectedNode ? 1 : 0);
+  const checkedAt = primaryHandoff?.lastCheckedAt || primaryHandoff?.updatedAt || "";
   return (
-    <div className="grid gap-3 rounded-[10px] bg-[color:var(--paper)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
+    <div className="grid gap-4 rounded-[10px] bg-[color:var(--paper)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
+        <div className="flex min-w-0 items-start gap-2">
+          <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-[7px] bg-[color:var(--block)] text-[color:var(--muted-strong)]">
+            <GitPullRequest data-icon />
+          </span>
           <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold leading-5 text-[color:var(--text)]">
-            <GitPullRequest data-icon className="text-[color:var(--muted)]" />
-            Issue pull request
-          </div>
-          <div className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">
-            One PR delivers this issue. Commits below are the source evidence for that PR.
+            <div>
+              <div>Pull request</div>
+              <div className="mt-0.5 text-[12px] font-normal leading-5 text-[color:var(--muted)]">
+                One issue-level PR, backed by the commits below.
+              </div>
+            </div>
           </div>
         </div>
-        <Button type="button" variant="secondary" size="sm" disabled={!canCreate} title={syncedPR?.prUrl ? "This issue already has a synced PR." : undefined} onClick={() => selectedNode && props.onCreatePr(selectedNode)}>
-          <GitPullRequest data-icon />
-          {props.isCreatingPr ? "Syncing" : "Create or sync PR"}
-        </Button>
+        {syncedPR?.prUrl ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+            <Button type="button" variant="ghost" size="sm" onClick={() => void openRichLink(syncedPR.prUrl)}>
+              <ExternalLink data-icon />
+              Open PR
+            </Button>
+            <Button type="button" variant="ghost" size="sm" disabled={props.refreshingHandoffId === syncedPR.id} onClick={() => props.onRefresh(syncedPR)}>
+              <RefreshCw data-icon />
+              {props.refreshingHandoffId === syncedPR.id ? "Refreshing" : "Refresh"}
+            </Button>
+          </div>
+        ) : (
+          <Button type="button" variant="secondary" size="sm" disabled={!canCreate} title={!selectedNode?.branch ? "A captured branch is required before PR sync." : undefined} onClick={() => selectedNode && props.onCreatePr(selectedNode)}>
+            <GitPullRequest data-icon />
+            {props.isCreatingPr ? "Syncing" : "Create or sync PR"}
+          </Button>
+        )}
       </div>
 
-      {nodes.length > 1 ? (
-        <div className="grid gap-1.5">
-          <div className="text-[11px] font-medium leading-4 text-[color:var(--faint)]">Source branch</div>
-          <Select value={selectedNode?.commitSha || "__none"} onValueChange={(value) => setSourceCommit(value === "__none" ? "" : value)}>
-            <SelectTrigger className="max-w-full sm:max-w-[360px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none">Select source branch</SelectItem>
-              {nodes.map((node) => (
-                <SelectItem key={node.id || node.commitSha} value={node.commitSha}>
-                  {changeNodeSourceLabel(node)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      ) : selectedNode ? (
-        <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
-          <span className="font-mono">{selectedNode.branch || "detached"}</span>
-          <span className="font-mono">{selectedNode.shortCommitSha || selectedNode.commitSha.slice(0, 12)}</span>
-        </div>
-      ) : null}
-
-      {props.handoffs.length > 0 ? (
-        <div className="grid gap-2">
-          {props.handoffs.map((handoff) => (
-            <div key={handoff.id} className="grid min-w-0 gap-2 text-[12px] leading-5 text-[color:var(--muted-strong)]">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <HandoffStatusPill handoff={handoff} />
-                <span className="font-medium text-[color:var(--text)]">{handoffTitle(handoff)}</span>
-                {handoff.prTitle ? <span className="min-w-0 truncate text-[color:var(--muted)]">{handoff.prTitle}</span> : null}
-              </div>
-              <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-[color:var(--faint)]">
-                {handoff.branch ? <span>{handoff.branch}</span> : null}
-                {handoff.headCommitSha ? <span>{handoff.headCommitSha.slice(0, 12)}</span> : null}
-                {handoff.commits.length > 0 ? <span>{handoff.commits.length} commits</span> : null}
-                {handoff.lastCheckedAt ? <span title={formatAbsoluteTime(handoff.lastCheckedAt)}>{formatRelativeTime(handoff.lastCheckedAt)}</span> : null}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {handoff.prUrl ? (
-                  <Button type="button" variant="ghost" size="sm" onClick={() => void openRichLink(handoff.prUrl)}>
-                    <ExternalLink data-icon />
-                    Open PR
-                  </Button>
-                ) : null}
-                {handoff.prUrl ? (
-                  <Button type="button" variant="ghost" size="sm" disabled={props.refreshingHandoffId === handoff.id} onClick={() => props.onRefresh(handoff)}>
-                    <RefreshCw data-icon />
-                    {props.refreshingHandoffId === handoff.id ? "Refreshing" : "Refresh"}
-                  </Button>
-                ) : null}
-              </div>
-              {handoff.error ? <Notice tone="danger">{handoff.error}</Notice> : null}
-            </div>
-          ))}
+      {syncedPR ? (
+        <div className="grid gap-3 border-t border-[color:var(--line)] pt-3">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <HandoffStatusPill handoff={syncedPR} />
+            <a
+              href={syncedPR.prUrl}
+              className="inline-flex min-w-0 items-center gap-1 font-mono text-[12px] font-semibold leading-5 text-[color:var(--accent-blue)] underline underline-offset-2 transition-colors hover:text-[color:var(--text)]"
+              onClick={(event) => {
+                event.preventDefault();
+                void openRichLink(syncedPR.prUrl);
+              }}
+            >
+              {handoffTitle(syncedPR)}
+              <ExternalLink data-icon className="shrink-0" />
+            </a>
+            {syncedPR.prTitle ? <span className="min-w-0 truncate text-[14px] font-medium leading-6 text-[color:var(--text)]">{syncedPR.prTitle}</span> : null}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-4">
+            <HandoffMeta label="Source branch" value={sourceBranch} mono />
+            <HandoffMeta label="Head commit" value={sourceCommitValue ? sourceCommitValue.slice(0, 12) : ""} mono title={sourceCommitValue} />
+            <HandoffMeta label="Commits" value={commitCount ? `${commitCount}` : ""} mono />
+            <HandoffMeta label="Checked" value={checkedAt ? formatRelativeTime(checkedAt) : ""} title={checkedAt ? formatAbsoluteTime(checkedAt) : undefined} />
+          </div>
+          {syncedPR.error ? <Notice tone="danger">{syncedPR.error}</Notice> : null}
         </div>
       ) : (
-        <div className="text-[12px] leading-5 text-[color:var(--muted)]">No PR has been detected for this issue branch yet.</div>
+        <div className="grid gap-3 border-t border-[color:var(--line)] pt-3">
+          {nodes.length > 1 ? (
+            <div className="grid gap-1.5">
+              <div className="text-[11px] font-medium leading-4 text-[color:var(--faint)]">Source branch for PR</div>
+              <Select value={selectedNode?.commitSha || "__none"} onValueChange={(value) => setSourceCommit(value === "__none" ? "" : value)}>
+                <SelectTrigger className="max-w-full sm:max-w-[380px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none">Select source branch</SelectItem>
+                  {nodes.map((node) => (
+                    <SelectItem key={node.id || node.commitSha} value={node.commitSha}>
+                      {changeNodeSourceLabel(node)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <HandoffMeta label="Source branch" value={sourceBranch} mono />
+            <HandoffMeta label="Source commit" value={sourceCommitValue ? sourceCommitValue.slice(0, 12) : ""} mono title={sourceCommitValue} />
+            <HandoffMeta label="Status" value={selectedNode?.branch ? "Ready to sync" : "Waiting for captured branch"} />
+          </div>
+          {primaryHandoff?.error ? <Notice tone="danger">{primaryHandoff.error}</Notice> : null}
+          <div className="text-[12px] leading-5 text-[color:var(--muted)]">mspace will ask GitHub for a PR on this branch before creating a new one.</div>
+        </div>
       )}
 
       {props.createError ? <Notice tone="danger">{props.createError.message}</Notice> : null}
@@ -1358,9 +1639,7 @@ function IssueCommitsTab(props: {
                 {selectedNode.diffTruncated ? <InlineMeta>Truncated</InlineMeta> : null}
               </div>
               {selectedNode.diffPreview ? (
-                <pre className="max-h-[560px] overflow-auto rounded-[9px] bg-[color:var(--code-bg)] px-4 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)] whitespace-pre-wrap">
-                  {selectedNode.diffPreview}
-                </pre>
+                <DiffPreview text={selectedNode.diffPreview} truncated={selectedNode.diffTruncated} />
               ) : (
                 <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
                   No diff preview is available for this commit.
