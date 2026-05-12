@@ -12,12 +12,14 @@ import type {
   CreateIssueInput,
   CreateIssueTaskInput,
   CreateProjectInput,
+  CreatePullRequestInput,
   CreateSessionInput,
   CreateTeamIssueEventInput,
   InboxItem,
   Issue,
   IssueAttachment,
   IssueDetail,
+  IssueHandoff,
   IssueLabel,
   IssueLabelDefinition,
   IssueListItem,
@@ -371,6 +373,15 @@ export const api = {
     }),
   probeTestEnvironment: (issueId: string) =>
     request<IssueTestEnvironment>(`/api/issues/${issueId}/test-environment/probe`, {
+      method: "POST",
+    }),
+  createPullRequest: (issueId: string, input: CreatePullRequestInput) =>
+    request<IssueHandoff>(`/api/issues/${issueId}/handoffs/create-pr`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  refreshIssueHandoff: (issueId: string, handoffId: string) =>
+    request<IssueHandoff>(`/api/issues/${issueId}/handoffs/${handoffId}/refresh`, {
       method: "POST",
     }),
   getSession: (sessionId: string) =>

@@ -54,6 +54,7 @@ const projectRunbookMaxBytes = 128 * 1024
 const projectRunbookPromptLimit = 24 * 1024
 
 var checklistItemPattern = regexp.MustCompile(`^\s*(?:[-*+]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
+var pullRequestURLPattern = regexp.MustCompile(`github\.com/[^/]+/[^/]+/pull/(\d+)`)
 
 var allowedCommentReactions = map[string]bool{
 	"thumbs_up":   true,
@@ -75,6 +76,7 @@ func runnerHealthPayload() map[string]any {
 		"runnerProtocol": runnerProtocolVersion,
 		"capabilities": map[string]bool{
 			"issueAttachments": true,
+			"issueHandoffs":    true,
 		},
 	}
 }
@@ -316,6 +318,27 @@ type deploymentEvidence struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+type sessionFailure struct {
+	ID                 string `json:"id"`
+	IssueID            string `json:"issueId"`
+	SessionID          string `json:"sessionId"`
+	Phase              string `json:"phase"`
+	Status             string `json:"status"`
+	FailedCommand      string `json:"failedCommand"`
+	ErrorSummary       string `json:"errorSummary"`
+	ErrorExcerpt       string `json:"errorExcerpt"`
+	Cluster            string `json:"cluster"`
+	Namespace          string `json:"namespace"`
+	ResourceKind       string `json:"resourceKind"`
+	ResourceName       string `json:"resourceName"`
+	EvidenceID         string `json:"evidenceId"`
+	ReviewEvidenceID   string `json:"reviewEvidenceId"`
+	RetrySessionID     string `json:"retrySessionId"`
+	ContinuedSessionID string `json:"continuedSessionId"`
+	CreatedAt          string `json:"createdAt"`
+	UpdatedAt          string `json:"updatedAt"`
+}
+
 type reviewEvidenceCommand struct {
 	Command   string `json:"command"`
 	Status    string `json:"status"`
@@ -397,6 +420,34 @@ type issueChangeNode struct {
 	CreatedAt      string            `json:"createdAt"`
 }
 
+type issueHandoffCommit struct {
+	SHA      string `json:"sha"`
+	ShortSHA string `json:"shortSha"`
+	Subject  string `json:"subject"`
+}
+
+type issueHandoff struct {
+	ID              string               `json:"id"`
+	IssueID         string               `json:"issueId"`
+	SourceSessionID string               `json:"sourceSessionId"`
+	SourceCommitSHA string               `json:"sourceCommitSha"`
+	Branch          string               `json:"branch"`
+	HeadCommitSHA   string               `json:"headCommitSha"`
+	Commits         []issueHandoffCommit `json:"commits"`
+	Kind            string               `json:"kind"`
+	PRURL           string               `json:"prUrl"`
+	PRNumber        int                  `json:"prNumber"`
+	PRState         string               `json:"prState"`
+	PRTitle         string               `json:"prTitle"`
+	PreviewURL      string               `json:"previewUrl"`
+	EvidenceSummary string               `json:"evidenceSummary"`
+	CreatedVia      string               `json:"createdVia"`
+	LastCheckedAt   string               `json:"lastCheckedAt"`
+	Error           string               `json:"error"`
+	CreatedAt       string               `json:"createdAt"`
+	UpdatedAt       string               `json:"updatedAt"`
+}
+
 type issueDetail struct {
 	Issue           issue                   `json:"issue"`
 	Project         project                 `json:"project"`
@@ -406,8 +457,10 @@ type issueDetail struct {
 	Comments        []comment               `json:"comments"`
 	Sessions        []agentSession          `json:"sessions"`
 	Evidence        []deploymentEvidence    `json:"evidence"`
+	Failures        []sessionFailure        `json:"failures"`
 	ChangeNodes     []issueChangeNode       `json:"changeNodes"`
 	ReviewEvidence  []sessionReviewEvidence `json:"reviewEvidence"`
+	Handoffs        []issueHandoff          `json:"handoffs"`
 }
 
 type sessionDetail struct {
@@ -416,6 +469,7 @@ type sessionDetail struct {
 	Project   project              `json:"project"`
 	Logs      []sessionLog         `json:"logs"`
 	Evidence  []deploymentEvidence `json:"evidence"`
+	Failures  []sessionFailure     `json:"failures"`
 	Workspace workspaceSnapshot    `json:"workspace"`
 }
 
@@ -626,6 +680,23 @@ type testDeployRequest struct {
 	SourceCommitSHA string `json:"sourceCommitSha"`
 }
 
+type issueHandoffRequest struct {
+	SourceSessionID string `json:"sourceSessionId"`
+	SourceCommitSHA string `json:"sourceCommitSha"`
+	Branch          string `json:"branch"`
+	PRURL           string `json:"prUrl"`
+	PRTitle         string `json:"prTitle"`
+	EvidenceSummary string `json:"evidenceSummary"`
+	Kind            string `json:"kind"`
+}
+
+type issuePullRequestRequest struct {
+	SourceSessionID string `json:"sourceSessionId"`
+	SourceCommitSHA string `json:"sourceCommitSha"`
+	Title           string `json:"title"`
+	Draft           bool   `json:"draft"`
+}
+
 type agentProfileInput struct {
 	Name         string `json:"name"`
 	Mention      string `json:"mention"`
@@ -738,6 +809,8 @@ func main() {
 	router.Post("/api/issues/{issueID}/test-environment/cleanup", application.handleRequestIssueTestEnvironmentCleanup)
 	router.Post("/api/issues/{issueID}/test-environment/retain", application.handleRetainIssueTestEnvironment)
 	router.Post("/api/issues/{issueID}/test-environment/probe", application.handleProbeIssueTestEnvironment)
+	router.Post("/api/issues/{issueID}/handoffs/create-pr", application.handleCreateIssuePullRequest)
+	router.Post("/api/issues/{issueID}/handoffs/{handoffID}/refresh", application.handleRefreshIssueHandoff)
 	router.Get("/api/sessions/{sessionID}", application.handleGetSession)
 	router.Post("/api/sessions/{sessionID}/cancel", application.handleCancelSession)
 	router.Post("/api/sessions/{sessionID}/cleanup", application.handleCleanupSessionWorktree)
@@ -806,6 +879,15 @@ func (a *app) migrate() error {
 	if err := a.ensureSessionReviewEvidenceTables(); err != nil {
 		return err
 	}
+	if err := a.ensureSessionFailureTables(); err != nil {
+		return err
+	}
+	if err := a.backfillSessionFailures(); err != nil {
+		return err
+	}
+	if err := a.ensureIssueHandoffTables(); err != nil {
+		return err
+	}
 	if err := a.migrateClosedIssueStatuses(); err != nil {
 		return err
 	}
@@ -850,13 +932,72 @@ func (a *app) markSessionInterruptedByRunnerRestart(session agentSession) {
 	session.AgentStatus = "interrupted"
 	a.appendSessionLog(session.ID, "system", reason)
 	a.updateIssueStatus(session.IssueID, "blocked")
-	if detail, err := a.loadSessionDetail(session.ID); err == nil && a.isIssueTestDeploySession(session) {
-		a.reconcileIssueTestEnvironmentForSession(session, detail.Project, "interrupted")
-		a.recordSessionReviewEvidence(session, detail.Project, nil, false)
+	if detail, err := a.loadSessionDetail(session.ID); err == nil {
+		if a.isIssueTestDeploySession(session) {
+			a.reconcileIssueTestEnvironmentForSession(session, detail.Project, "interrupted")
+			a.recordSessionReviewEvidence(session, detail.Project, nil, false)
+		}
+		a.recordSessionFailure(session, detail.Project, errors.New(reason), nil, "agent_interrupted", "open")
 	} else {
 		a.markIssueTestEnvironmentSessionInterrupted(session)
 	}
 	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` was interrupted.\n\n%s", shortID(session.ID), reason))
+}
+
+func (a *app) backfillSessionFailures() error {
+	rows, err := a.db.Query(`
+		SELECT s.id
+		FROM agent_sessions s
+		LEFT JOIN session_failures f ON f.session_id = s.id
+		WHERE s.status IN ('failed', 'cancelled') AND f.id IS NULL
+		ORDER BY s.updated_at ASC
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	sessionIDs := []string{}
+	for rows.Next() {
+		var sessionID string
+		if err := rows.Scan(&sessionID); err != nil {
+			return err
+		}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, sessionID := range sessionIDs {
+		detail, err := a.loadSessionDetail(sessionID)
+		if err != nil {
+			return fmt.Errorf("load failed session %s: %w", shortID(sessionID), err)
+		}
+		message := latestFailureLogMessage(detail.Logs)
+		if message == "" {
+			if detail.Session.Status == "cancelled" {
+				message = "Session was stopped before it completed."
+			} else {
+				message = "Session did not finish successfully."
+			}
+		}
+		evidence, err := a.latestDeploymentEvidenceForSession(sessionID)
+		if err != nil {
+			return fmt.Errorf("load failure evidence for session %s: %w", shortID(sessionID), err)
+		}
+		phase := ""
+		status := "open"
+		if detail.Session.Status == "cancelled" {
+			phase = "agent_interrupted"
+			status = "stopped"
+		}
+		failure := a.buildSessionFailure(detail.Session, detail.Project, errors.New(message), evidence, phase, status)
+		if _, err := a.storeSessionFailureRecord(failure); err != nil {
+			return fmt.Errorf("backfill session failure %s: %w", shortID(sessionID), err)
+		}
+	}
+	return nil
 }
 
 func (a *app) ensureClusterTables() error {
@@ -1574,6 +1715,98 @@ func (a *app) ensureSessionReviewEvidenceTables() error {
 		CREATE INDEX IF NOT EXISTS idx_session_review_evidence_issue_created ON session_review_evidence(issue_id, created_at DESC)
 	`); err != nil {
 		return fmt.Errorf("create session_review_evidence issue index: %w", err)
+	}
+	return nil
+}
+
+func (a *app) ensureSessionFailureTables() error {
+	if _, err := a.db.Exec(`
+		CREATE TABLE IF NOT EXISTS session_failures (
+			id TEXT PRIMARY KEY,
+			issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+			session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+			phase TEXT NOT NULL DEFAULT 'unknown',
+			status TEXT NOT NULL DEFAULT 'open',
+			failed_command TEXT NOT NULL DEFAULT '',
+			error_summary TEXT NOT NULL DEFAULT '',
+			error_excerpt TEXT NOT NULL DEFAULT '',
+			cluster TEXT NOT NULL DEFAULT '',
+			namespace TEXT NOT NULL DEFAULT '',
+			resource_kind TEXT NOT NULL DEFAULT '',
+			resource_name TEXT NOT NULL DEFAULT '',
+			evidence_id TEXT NOT NULL DEFAULT '',
+			review_evidence_id TEXT NOT NULL DEFAULT '',
+			retry_session_id TEXT NOT NULL DEFAULT '',
+			continued_session_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(session_id)
+		)
+	`); err != nil {
+		return fmt.Errorf("create session_failures: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_session_failures_issue_created ON session_failures(issue_id, created_at DESC)
+	`); err != nil {
+		return fmt.Errorf("create session_failures issue index: %w", err)
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_session_failures_status ON session_failures(status)
+	`); err != nil {
+		return fmt.Errorf("create session_failures status index: %w", err)
+	}
+	return nil
+}
+
+func (a *app) ensureIssueHandoffTables() error {
+	if _, err := a.db.Exec(`
+		CREATE TABLE IF NOT EXISTS issue_handoffs (
+			id TEXT PRIMARY KEY,
+			issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+			source_session_id TEXT NOT NULL DEFAULT '',
+			source_commit_sha TEXT NOT NULL DEFAULT '',
+			branch TEXT NOT NULL DEFAULT '',
+			head_commit_sha TEXT NOT NULL DEFAULT '',
+			commits_json TEXT NOT NULL DEFAULT '[]',
+			kind TEXT NOT NULL DEFAULT 'branch',
+			pr_url TEXT NOT NULL DEFAULT '',
+			pr_number INTEGER NOT NULL DEFAULT 0,
+			pr_state TEXT NOT NULL DEFAULT '',
+			pr_title TEXT NOT NULL DEFAULT '',
+			preview_url TEXT NOT NULL DEFAULT '',
+			evidence_summary TEXT NOT NULL DEFAULT '',
+			created_via TEXT NOT NULL DEFAULT 'manual',
+			last_checked_at TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("create issue_handoffs: %w", err)
+	}
+	if err := a.ensureTableColumns("issue_handoffs", map[string]string{
+		"source_session_id": "TEXT NOT NULL DEFAULT ''",
+		"source_commit_sha": "TEXT NOT NULL DEFAULT ''",
+		"branch":            "TEXT NOT NULL DEFAULT ''",
+		"head_commit_sha":   "TEXT NOT NULL DEFAULT ''",
+		"commits_json":      "TEXT NOT NULL DEFAULT '[]'",
+		"kind":              "TEXT NOT NULL DEFAULT 'branch'",
+		"pr_url":            "TEXT NOT NULL DEFAULT ''",
+		"pr_number":         "INTEGER NOT NULL DEFAULT 0",
+		"pr_state":          "TEXT NOT NULL DEFAULT ''",
+		"pr_title":          "TEXT NOT NULL DEFAULT ''",
+		"preview_url":       "TEXT NOT NULL DEFAULT ''",
+		"evidence_summary":  "TEXT NOT NULL DEFAULT ''",
+		"created_via":       "TEXT NOT NULL DEFAULT 'manual'",
+		"last_checked_at":   "TEXT NOT NULL DEFAULT ''",
+		"error":             "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if _, err := a.db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_issue_handoffs_issue_updated ON issue_handoffs(issue_id, updated_at DESC)
+	`); err != nil {
+		return fmt.Errorf("create issue_handoffs issue index: %w", err)
 	}
 	return nil
 }
@@ -3547,8 +3780,11 @@ func (a *app) handleRetainIssueTestEnvironment(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, errors.New("issue has no test namespace to retain"))
 		return
 	}
+	if a.issueHasActiveSession(issueID) {
+		writeError(w, http.StatusConflict, errActiveIssueSession)
+		return
+	}
 	environment := *detail.TestEnvironment
-	environment.NamespaceStatus = "retained"
 	environment.CleanupStatus = "retained"
 	if err := a.saveIssueTestEnvironment(environment); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -3585,7 +3821,6 @@ func (a *app) handleProbeIssueTestEnvironment(w http.ResponseWriter, r *http.Req
 	}
 	a.appendSessionLog(deploySession.ID, "system", "Preview status check requested from Issue Detail.")
 	a.reconcileIssueTestEnvironmentForSession(*deploySession, detail.Project, "probe")
-	a.recordSessionReviewEvidence(*deploySession, detail.Project, nil, deploySession.Status == "completed")
 	environment, err := a.loadIssueTestEnvironment(issueID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -3596,6 +3831,649 @@ func (a *app) handleProbeIssueTestEnvironment(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, environment)
+}
+
+func (a *app) handleCreateIssuePullRequest(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	if _, ok := a.requireHumanActor(w, r); !ok {
+		return
+	}
+	var input issuePullRequestRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := a.loadIssueDetail(issueID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("issue not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	if current := currentIssuePullRequestHandoff(detail.Handoffs); current != nil && strings.TrimSpace(current.PRURL) != "" {
+		writeError(w, http.StatusConflict, fmt.Errorf("issue already has a pull request handoff: %s", current.PRURL))
+		return
+	}
+	handoff, err := a.buildIssueHandoff(detail, issueHandoffRequest{
+		SourceSessionID: input.SourceSessionID,
+		SourceCommitSHA: input.SourceCommitSHA,
+		Kind:            "pr",
+	}, "gh")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.createPullRequestForHandoff(detail, &handoff, strings.TrimSpace(input.Title), input.Draft); err != nil {
+		handoff.Error = err.Error()
+		_, _ = a.storeIssueHandoff(handoff)
+		a.publishInboxEvent(issueID, "handoff")
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	handoff, err = a.storeIssueHandoff(handoff)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.addSystemComment(issueID, issueHandoffComment(handoff))
+	a.publishInboxEvent(issueID, "handoff")
+	writeJSON(w, handoff)
+}
+
+func (a *app) handleRefreshIssueHandoff(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	handoffID := chi.URLParam(r, "handoffID")
+	if _, ok := a.requireHumanActor(w, r); !ok {
+		return
+	}
+	handoff, err := a.loadIssueHandoff(issueID, handoffID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("handoff not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	detail, err := a.loadIssueDetail(issueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := refreshIssueHandoffPRStatus(detail.Project, &handoff); err != nil {
+		handoff.Error = err.Error()
+		handoff.LastCheckedAt = nowString()
+	}
+	handoff, err = a.storeIssueHandoff(handoff)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, handoff)
+}
+
+func (a *app) buildIssueHandoff(detail issueDetail, input issueHandoffRequest, createdVia string) (issueHandoff, error) {
+	issueID := detail.Issue.ID
+	input.SourceSessionID = strings.TrimSpace(input.SourceSessionID)
+	input.SourceCommitSHA = strings.TrimSpace(input.SourceCommitSHA)
+	input.Branch = strings.TrimSpace(input.Branch)
+	input.PRURL = strings.TrimSpace(input.PRURL)
+	input.PRTitle = strings.TrimSpace(input.PRTitle)
+	input.EvidenceSummary = strings.TrimSpace(input.EvidenceSummary)
+	input.Kind = strings.ToLower(strings.TrimSpace(input.Kind))
+	if input.Kind == "" {
+		input.Kind = "branch"
+		if input.PRURL != "" {
+			input.Kind = "pr"
+		}
+	}
+	if input.Kind != "branch" && input.Kind != "pr" {
+		return issueHandoff{}, fmt.Errorf("unsupported handoff kind %q", input.Kind)
+	}
+	if input.PRURL != "" {
+		normalizedURL, err := normalizePullRequestURL(input.PRURL)
+		if err != nil {
+			return issueHandoff{}, err
+		}
+		input.PRURL = normalizedURL
+		input.Kind = "pr"
+	}
+
+	var sourceNode *issueChangeNode
+	if input.SourceCommitSHA != "" || input.SourceSessionID != "" || (input.Branch == "" && input.PRURL == "") {
+		node, err := a.loadIssueChangeNodeForDeploy(issueID, input.SourceCommitSHA, input.SourceSessionID, detail.Project)
+		if err != nil {
+			if input.Branch == "" {
+				return issueHandoff{}, err
+			}
+		} else {
+			sourceNode = &node
+		}
+	}
+
+	sourceSessionID := input.SourceSessionID
+	sourceCommitSHA := input.SourceCommitSHA
+	branch := input.Branch
+	if sourceNode != nil {
+		sourceSessionID = sourceNode.SessionID
+		sourceCommitSHA = sourceNode.CommitSHA
+		if branch == "" {
+			branch = sourceNode.Branch
+		}
+	}
+	if branch == "" && input.PRURL == "" && sourceCommitSHA == "" {
+		return issueHandoff{}, errors.New("handoff requires a source commit, branch, or pull request URL")
+	}
+
+	handoff := issueHandoff{
+		ID:              uuid.NewString(),
+		IssueID:         issueID,
+		SourceSessionID: sourceSessionID,
+		SourceCommitSHA: sourceCommitSHA,
+		Branch:          branch,
+		Kind:            input.Kind,
+		PRURL:           input.PRURL,
+		PRNumber:        parsePullRequestNumber(input.PRURL),
+		PRTitle:         input.PRTitle,
+		PreviewURL:      issueHandoffPreviewURL(detail, sourceSessionID, sourceCommitSHA),
+		CreatedVia:      firstNonEmpty(strings.TrimSpace(createdVia), "manual"),
+		CreatedAt:       nowString(),
+	}
+	if handoff.Kind == "pr" {
+		if current := currentIssuePullRequestHandoff(detail.Handoffs); current != nil {
+			handoff.ID = current.ID
+			handoff.CreatedAt = current.CreatedAt
+		}
+	}
+	handoff.EvidenceSummary = input.EvidenceSummary
+	if handoff.EvidenceSummary == "" {
+		handoff.EvidenceSummary = issueHandoffEvidenceSummary(detail, sourceSessionID, sourceCommitSHA)
+	}
+
+	commits, head, err := a.issueHandoffCommits(detail.Project, branch, sourceCommitSHA)
+	if err != nil {
+		handoff.Error = err.Error()
+	} else {
+		handoff.Commits = commits
+		handoff.HeadCommitSHA = head
+	}
+	if handoff.HeadCommitSHA == "" {
+		handoff.HeadCommitSHA = sourceCommitSHA
+	}
+	if len(handoff.Commits) == 0 && sourceCommitSHA != "" {
+		handoff.Commits = append(handoff.Commits, issueHandoffCommit{
+			SHA:      sourceCommitSHA,
+			ShortSHA: shortCommitSHA(sourceCommitSHA),
+			Subject:  sourceNodeSubject(sourceNode),
+		})
+	}
+	return handoff, nil
+}
+
+func (a *app) issueHandoffCommits(project project, branch, sourceCommitSHA string) ([]issueHandoffCommit, string, error) {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		return nil, "", errors.New("git is not available on PATH")
+	}
+	if err := ensureGitRepository(gitPath, project.RepoPath); err != nil {
+		return nil, "", err
+	}
+	branch = strings.TrimSpace(branch)
+	if branch != "" {
+		if err := validateGitBranchName(gitPath, project.RepoPath, branch); err != nil {
+			return nil, "", err
+		}
+		exists, err := gitRefExists(gitPath, project.RepoPath, "refs/heads/"+branch)
+		if err != nil {
+			return nil, "", err
+		}
+		if exists {
+			return gitCommitRangeForBranch(gitPath, project.RepoPath, project.DefaultBranch, branch)
+		}
+	}
+	sourceCommitSHA = strings.TrimSpace(sourceCommitSHA)
+	if sourceCommitSHA == "" {
+		return []issueHandoffCommit{}, "", nil
+	}
+	if err := gitCommitExists(gitPath, project.RepoPath, sourceCommitSHA); err != nil {
+		return nil, "", err
+	}
+	subject, _ := runGitReadOnly(gitPath, project.RepoPath, "log", "-1", "--pretty=%s", sourceCommitSHA)
+	return []issueHandoffCommit{{SHA: sourceCommitSHA, ShortSHA: shortCommitSHA(sourceCommitSHA), Subject: subject}}, sourceCommitSHA, nil
+}
+
+func (a *app) createPullRequestForHandoff(detail issueDetail, handoff *issueHandoff, title string, draft bool) error {
+	if handoff == nil {
+		return errors.New("handoff is required")
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		return errors.New("git is not available on PATH")
+	}
+	ghPath, err := exec.LookPath("gh")
+	if err != nil {
+		return errors.New("GitHub CLI is not available on PATH")
+	}
+	gitleaksPath, err := exec.LookPath("gitleaks")
+	if err != nil {
+		return errors.New("gitleaks is not available on PATH")
+	}
+	branch := strings.TrimSpace(handoff.Branch)
+	if branch == "" {
+		return errors.New("source branch is required to create a pull request")
+	}
+	if err := validateGitBranchName(gitPath, detail.Project.RepoPath, branch); err != nil {
+		return err
+	}
+	exists, err := gitRefExists(gitPath, detail.Project.RepoPath, "refs/heads/"+branch)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("source branch %q does not exist in the project repository", branch)
+	}
+	commits, head, err := gitCommitRangeForBranch(gitPath, detail.Project.RepoPath, detail.Project.DefaultBranch, branch)
+	if err != nil {
+		return err
+	}
+	handoff.Commits = commits
+	handoff.HeadCommitSHA = head
+	if len(commits) == 0 {
+		return fmt.Errorf("source branch %q has no commits ahead of %s", branch, valueOrUnset(detail.Project.DefaultBranch))
+	}
+	if title == "" {
+		title = firstNonEmpty(handoff.PRTitle, commits[0].Subject, detail.Issue.Title)
+	}
+	handoff.PRTitle = title
+	handoff.EvidenceSummary = firstNonEmpty(handoff.EvidenceSummary, issueHandoffEvidenceSummary(detail, handoff.SourceSessionID, handoff.SourceCommitSHA))
+	handoff.PreviewURL = firstNonEmpty(handoff.PreviewURL, issueHandoffPreviewURL(detail, handoff.SourceSessionID, handoff.SourceCommitSHA))
+
+	if err := runGitleaksHandoffScan(gitleaksPath, gitPath, detail.Project.RepoPath, detail.Project.DefaultBranch, branch); err != nil {
+		return err
+	}
+
+	if err := refreshIssueHandoffPRStatus(detail.Project, handoff); err == nil && strings.TrimSpace(handoff.PRURL) != "" {
+		handoff.Kind = "pr"
+		handoff.CreatedVia = "gh"
+		return nil
+	}
+
+	output, err := runCommandWithTimeout(2*time.Minute, gitPath, []string{"-C", detail.Project.RepoPath, "push", "-u", "origin", "refs/heads/" + branch + ":refs/heads/" + branch}, []string{"GIT_TERMINAL_PROMPT=0"})
+	if err != nil {
+		return fmt.Errorf("push branch %q: %s", branch, truncate(formatCommandFailure(err, output), 1200))
+	}
+
+	repoSlug, err := githubRepoSlug(detail.Project)
+	if err != nil {
+		return err
+	}
+	baseBranch := strings.TrimSpace(detail.Project.DefaultBranch)
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	body := buildIssuePullRequestBody(detail, *handoff)
+	args := []string{"pr", "create", "--repo", repoSlug, "--base", baseBranch, "--head", branch, "--title", title, "--body", body}
+	if draft {
+		args = append(args, "--draft")
+	}
+	output, err = runCommandWithTimeout(2*time.Minute, ghPath, args, []string{"GH_PROMPT_DISABLED=1", "GIT_TERMINAL_PROMPT=0"})
+	if err != nil {
+		return fmt.Errorf("create pull request: %s", truncate(formatCommandFailure(err, output), 1200))
+	}
+	prURL := firstHTTPURL(string(output))
+	if prURL == "" {
+		return fmt.Errorf("create pull request returned no URL: %s", truncate(strings.TrimSpace(string(output)), 600))
+	}
+	handoff.PRURL = prURL
+	handoff.PRNumber = parsePullRequestNumber(prURL)
+	handoff.Kind = "pr"
+	handoff.CreatedVia = "gh"
+	handoff.Error = ""
+	if err := refreshIssueHandoffPRStatus(detail.Project, handoff); err != nil {
+		handoff.Error = err.Error()
+	}
+	return nil
+}
+
+func normalizePullRequestURL(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", errors.New("pull request URL must be an absolute GitHub URL")
+	}
+	host := strings.TrimPrefix(strings.ToLower(parsed.Host), "www.")
+	if host != "github.com" {
+		return "", errors.New("pull request URL must point to github.com")
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) < 4 || parts[2] != "pull" || parseIntOrZero(parts[3]) == 0 {
+		return "", errors.New("pull request URL must look like https://github.com/<owner>/<repo>/pull/<number>")
+	}
+	parsed.Fragment = ""
+	parsed.RawQuery = ""
+	return parsed.String(), nil
+}
+
+func parsePullRequestNumber(value string) int {
+	matches := pullRequestURLPattern.FindStringSubmatch(value)
+	if len(matches) != 2 {
+		return 0
+	}
+	return parseIntOrZero(matches[1])
+}
+
+func refreshIssueHandoffPRStatus(project project, handoff *issueHandoff) error {
+	if handoff == nil {
+		return nil
+	}
+	ghPath, err := exec.LookPath("gh")
+	if err != nil {
+		return errors.New("GitHub CLI is not available on PATH")
+	}
+	selector := strings.TrimSpace(handoff.PRURL)
+	if selector == "" {
+		selector = strings.TrimSpace(handoff.Branch)
+	}
+	if selector == "" {
+		return errors.New("handoff has no pull request URL or source branch")
+	}
+	args := []string{"pr", "view", selector, "--json", "url,number,state,title,isDraft"}
+	if repoSlug, err := githubRepoSlug(project); err == nil && repoSlug != "" {
+		args = append(args, "--repo", repoSlug)
+	}
+	output, err := runCommandWithTimeout(45*time.Second, ghPath, args, []string{"GH_PROMPT_DISABLED=1"})
+	handoff.LastCheckedAt = nowString()
+	if err != nil {
+		if handoff.PRNumber == 0 {
+			handoff.PRNumber = parsePullRequestNumber(handoff.PRURL)
+		}
+		return fmt.Errorf("refresh pull request status: %s", truncate(formatCommandFailure(err, output), 600))
+	}
+	var payload struct {
+		URL     string `json:"url"`
+		Number  int    `json:"number"`
+		State   string `json:"state"`
+		Title   string `json:"title"`
+		IsDraft bool   `json:"isDraft"`
+	}
+	if err := json.Unmarshal(output, &payload); err != nil {
+		return fmt.Errorf("parse pull request status: %w", err)
+	}
+	if strings.TrimSpace(payload.URL) != "" {
+		handoff.PRURL = strings.TrimSpace(payload.URL)
+	}
+	if payload.Number > 0 {
+		handoff.PRNumber = payload.Number
+	}
+	if strings.TrimSpace(payload.Title) != "" {
+		handoff.PRTitle = strings.TrimSpace(payload.Title)
+	}
+	state := strings.ToLower(strings.TrimSpace(payload.State))
+	if payload.IsDraft && state == "open" {
+		state = "draft"
+	}
+	handoff.PRState = state
+	handoff.Error = ""
+	return nil
+}
+
+func gitCommitRangeForBranch(gitPath, repoPath, defaultBranch, branch string) ([]issueHandoffCommit, string, error) {
+	head, err := runGitReadOnly(gitPath, repoPath, "rev-parse", branch)
+	if err != nil {
+		return nil, "", err
+	}
+	baseRef, err := resolveBaseRef(gitPath, repoPath, defaultBranch)
+	if err != nil {
+		return nil, "", err
+	}
+	mergeBase, err := runGitReadOnly(gitPath, repoPath, "merge-base", branch, baseRef)
+	if err != nil {
+		return nil, "", err
+	}
+	output, err := runGitReadOnly(gitPath, repoPath, "log", "--reverse", "--pretty=%H%x00%s", mergeBase+".."+branch)
+	if err != nil {
+		return nil, "", err
+	}
+	commits := []issueHandoffCommit{}
+	for _, line := range splitNonEmptyLines(output) {
+		parts := strings.SplitN(line, "\x00", 2)
+		sha := strings.TrimSpace(parts[0])
+		if sha == "" {
+			continue
+		}
+		subject := ""
+		if len(parts) == 2 {
+			subject = strings.TrimSpace(parts[1])
+		}
+		commits = append(commits, issueHandoffCommit{SHA: sha, ShortSHA: shortCommitSHA(sha), Subject: subject})
+	}
+	return commits, strings.TrimSpace(head), nil
+}
+
+func validateGitBranchName(gitPath, repoPath, branch string) error {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return errors.New("branch is required")
+	}
+	if strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("invalid branch name %q", branch)
+	}
+	output, err := exec.Command(gitPath, "-C", repoPath, "check-ref-format", "--branch", branch).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("invalid branch name %q: %s", branch, formatCommandFailure(err, output))
+	}
+	return nil
+}
+
+func runGitleaksHandoffScan(gitleaksPath, gitPath, repoPath, defaultBranch, branch string) error {
+	baseRef, err := resolveBaseRef(gitPath, repoPath, defaultBranch)
+	if err != nil {
+		return err
+	}
+	mergeBase, err := runGitReadOnly(gitPath, repoPath, "merge-base", branch, baseRef)
+	if err != nil {
+		return err
+	}
+	output, err := runCommandWithTimeout(2*time.Minute, gitleaksPath, []string{"git", "--no-banner", "--redact", "--log-opts", mergeBase + ".." + branch, repoPath}, nil)
+	if err != nil {
+		return fmt.Errorf("gitleaks preflight failed: %s", truncate(formatCommandFailure(err, output), 1200))
+	}
+	return nil
+}
+
+func runCommandWithTimeout(timeout time.Duration, name string, args []string, extraEnv []string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, name, args...)
+	if len(extraEnv) > 0 {
+		command.Env = append(os.Environ(), extraEnv...)
+	}
+	output, err := command.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return output, fmt.Errorf("%s timed out", filepath.Base(name))
+	}
+	return output, err
+}
+
+func githubRepoSlug(project project) (string, error) {
+	if strings.EqualFold(project.GitProvider, "github") && strings.TrimSpace(project.GitOwner) != "" && strings.TrimSpace(project.GitRepo) != "" {
+		return project.GitOwner + "/" + project.GitRepo, nil
+	}
+	if info, ok := parseGitRemoteInfo(project.RemoteURL); ok && info.Provider == "github" {
+		return info.Owner + "/" + info.Repo, nil
+	}
+	return "", errors.New("project does not have GitHub repository metadata")
+}
+
+func firstHTTPURL(value string) string {
+	for _, field := range strings.Fields(value) {
+		field = strings.Trim(field, " \t\r\n<>\"'")
+		if strings.HasPrefix(field, "https://") || strings.HasPrefix(field, "http://") {
+			return field
+		}
+	}
+	return ""
+}
+
+func sourceNodeSubject(node *issueChangeNode) string {
+	if node == nil {
+		return ""
+	}
+	return node.Subject
+}
+
+func issueHandoffPreviewURL(detail issueDetail, sourceSessionID, sourceCommitSHA string) string {
+	if review := matchingReviewEvidence(detail, sourceSessionID, sourceCommitSHA); review != nil && strings.TrimSpace(review.PreviewURL) != "" {
+		return strings.TrimSpace(review.PreviewURL)
+	}
+	if detail.TestEnvironment != nil {
+		environment := detail.TestEnvironment
+		sourceMatches := sourceCommitSHA == "" || environment.SourceCommitSHA == sourceCommitSHA || strings.HasPrefix(environment.SourceCommitSHA, sourceCommitSHA)
+		sessionMatches := sourceSessionID == "" || environment.SourceSessionID == sourceSessionID
+		if sourceMatches && sessionMatches && strings.TrimSpace(environment.PreviewURL) != "" {
+			return strings.TrimSpace(environment.PreviewURL)
+		}
+	}
+	for _, review := range detail.ReviewEvidence {
+		if strings.TrimSpace(review.PreviewURL) != "" {
+			return strings.TrimSpace(review.PreviewURL)
+		}
+	}
+	return ""
+}
+
+func issueHandoffEvidenceSummary(detail issueDetail, sourceSessionID, sourceCommitSHA string) string {
+	review := matchingReviewEvidence(detail, sourceSessionID, sourceCommitSHA)
+	if review == nil {
+		if detail.TestEnvironment != nil && strings.TrimSpace(detail.TestEnvironment.PreviewURL) != "" {
+			return "Preview URL recorded: " + strings.TrimSpace(detail.TestEnvironment.PreviewURL)
+		}
+		return "No review evidence has been captured for this handoff yet."
+	}
+	lines := []string{}
+	if review.AgentSummary != "" {
+		lines = append(lines, "Agent summary: "+review.AgentSummary)
+	}
+	if tests := reviewChecksSummary(review.Tests); tests != "" {
+		lines = append(lines, "Tests: "+tests)
+	}
+	if build := reviewResultSummary(review.BuildResult); build != "" {
+		lines = append(lines, "Build: "+build)
+	}
+	if deploy := reviewResultSummary(review.DeploymentResult); deploy != "" {
+		lines = append(lines, "Deployment: "+deploy)
+	}
+	if review.PreviewURL != "" {
+		lines = append(lines, "Preview URL: "+review.PreviewURL)
+	}
+	if len(review.Risks) > 0 {
+		lines = append(lines, "Risks: "+strings.Join(review.Risks, "; "))
+	}
+	if len(review.FollowUps) > 0 {
+		lines = append(lines, "Follow-ups: "+strings.Join(review.FollowUps, "; "))
+	}
+	if len(lines) == 0 {
+		return "Review evidence exists, but no summary fields were reported."
+	}
+	return truncate(strings.Join(lines, "\n"), 3000)
+}
+
+func matchingReviewEvidence(detail issueDetail, sourceSessionID, sourceCommitSHA string) *sessionReviewEvidence {
+	sourceSessionID = strings.TrimSpace(sourceSessionID)
+	sourceCommitSHA = strings.TrimSpace(sourceCommitSHA)
+	for index := range detail.ReviewEvidence {
+		review := &detail.ReviewEvidence[index]
+		reviewCommit := strings.TrimSpace(review.SourceCommitSHA)
+		commitMatches := sourceCommitSHA != "" && reviewCommit != "" && (reviewCommit == sourceCommitSHA || strings.HasPrefix(reviewCommit, sourceCommitSHA) || strings.HasPrefix(sourceCommitSHA, reviewCommit))
+		sessionMatches := sourceSessionID != "" && (review.SourceSessionID == sourceSessionID || review.SessionID == sourceSessionID)
+		if commitMatches || sessionMatches {
+			return review
+		}
+	}
+	return nil
+}
+
+func reviewChecksSummary(checks []reviewEvidenceCheck) string {
+	if len(checks) == 0 {
+		return ""
+	}
+	values := make([]string, 0, len(checks))
+	for _, check := range checks {
+		name := firstNonEmpty(check.Name, "check")
+		status := firstNonEmpty(check.Status, "reported")
+		summary := strings.TrimSpace(check.Summary)
+		if summary != "" {
+			values = append(values, fmt.Sprintf("%s %s - %s", name, status, summary))
+		} else {
+			values = append(values, fmt.Sprintf("%s %s", name, status))
+		}
+	}
+	return strings.Join(values, "; ")
+}
+
+func reviewResultSummary(result reviewEvidenceResult) string {
+	status := strings.TrimSpace(result.Status)
+	summary := strings.TrimSpace(result.Summary)
+	if status == "" && summary == "" {
+		return ""
+	}
+	if status == "" {
+		return summary
+	}
+	if summary == "" {
+		return status
+	}
+	return status + " - " + summary
+}
+
+func buildIssuePullRequestBody(detail issueDetail, handoff issueHandoff) string {
+	var builder strings.Builder
+	builder.WriteString("## mspace Issue\n\n")
+	builder.WriteString(fmt.Sprintf("- Issue: `%s`\n", detail.Issue.ID))
+	builder.WriteString(fmt.Sprintf("- Title: %s\n", detail.Issue.Title))
+	builder.WriteString(fmt.Sprintf("- Project: %s\n", detail.Project.Name))
+	builder.WriteString("\n## Source\n\n")
+	builder.WriteString(fmt.Sprintf("- Branch: `%s`\n", valueOrUnset(handoff.Branch)))
+	builder.WriteString(fmt.Sprintf("- Source session: `%s`\n", valueOrUnset(handoff.SourceSessionID)))
+	builder.WriteString(fmt.Sprintf("- Source commit: `%s`\n", valueOrUnset(handoff.SourceCommitSHA)))
+	if len(handoff.Commits) > 0 {
+		builder.WriteString("- Commits:\n")
+		for _, commit := range handoff.Commits {
+			builder.WriteString(fmt.Sprintf("  - `%s` %s\n", firstNonEmpty(commit.ShortSHA, shortCommitSHA(commit.SHA)), commit.Subject))
+		}
+	}
+	builder.WriteString("\n## Preview\n\n")
+	if handoff.PreviewURL != "" {
+		builder.WriteString(fmt.Sprintf("- %s\n", handoff.PreviewURL))
+	} else {
+		builder.WriteString("- Not recorded.\n")
+	}
+	builder.WriteString("\n## Evidence\n\n")
+	builder.WriteString(strings.TrimSpace(firstNonEmpty(handoff.EvidenceSummary, "No review evidence has been captured for this handoff yet.")))
+	builder.WriteString("\n")
+	return builder.String()
+}
+
+func issueHandoffComment(handoff issueHandoff) string {
+	if strings.TrimSpace(handoff.PRURL) != "" {
+		state := strings.TrimSpace(handoff.PRState)
+		if state == "" {
+			state = "recorded"
+		}
+		label := "PR"
+		if handoff.PRNumber > 0 {
+			label = fmt.Sprintf("PR #%d", handoff.PRNumber)
+		}
+		return fmt.Sprintf("PR handoff [%s](%s) is %s.\n\nBranch: `%s`\nSource commit: `%s`", label, handoff.PRURL, state, valueOrUnset(handoff.Branch), valueOrUnset(shortCommitSHA(handoff.SourceCommitSHA)))
+	}
+	return fmt.Sprintf("Branch handoff recorded for `%s`.\n\nSource commit: `%s`", valueOrUnset(handoff.Branch), valueOrUnset(shortCommitSHA(handoff.SourceCommitSHA)))
 }
 
 func probeSessionForIssue(detail issueDetail) *agentSession {
@@ -4072,6 +4950,9 @@ func (a *app) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 				a.appendSessionLog(sessionID, "system", "Stop requested after the runner lost its in-memory handle for this session. No live process was attached in the current runner.")
 			}
 			a.markIssueTestEnvironmentSessionInterrupted(detail.Session)
+			detail.Session.Status = "cancelled"
+			detail.Session.AgentStatus = "cancelled"
+			a.recordSessionFailure(detail.Session, detail.Project, errors.New("Stopped after the runner lost its in-memory handle for this session."), nil, "agent_interrupted", "stopped")
 			a.addSystemComment(detail.Session.IssueID, fmt.Sprintf("Stopped session `%s` by %s.", shortID(sessionID), commentActorName(actor)))
 			writeJSON(w, map[string]bool{"ok": true})
 			return
@@ -4201,6 +5082,7 @@ func (a *app) runSession(session agentSession, project project) {
 		} else {
 			a.reconcileIssueTestEnvironmentForSession(session, project, "interrupted")
 		}
+		a.recordSessionFailure(session, project, errors.New("Session stopped by "+commentActorName(cancelActor)+"."), nil, "agent_interrupted", "stopped")
 		a.addSystemComment(session.IssueID, fmt.Sprintf("Stopped session `%s` by %s.", shortID(session.ID), commentActorName(cancelActor)))
 		return
 	}
@@ -4478,18 +5360,20 @@ func (a *app) failSession(session agentSession, project *project, err error) {
 	a.updateIssueStatus(session.IssueID, "blocked")
 	a.appendSessionLog(session.ID, "system", err.Error())
 	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` failed.\n\n%s", shortID(session.ID), err.Error()))
+	var evidence *deploymentEvidence
 	if project != nil && a.isIssueTestDeploySession(session) {
 		a.appendSessionLog(session.ID, "system", "Reconciling test deployment state after failure.")
-		a.reconcileIssueTestEnvironmentForSession(session, *project, "failed")
+		evidence = a.reconcileIssueTestEnvironmentForSession(session, *project, "failed")
 	} else if project != nil && a.evidenceTargetProject(session, *project).Namespace != "" {
 		a.appendSessionLog(session.ID, "system", "Collecting Kubernetes evidence after failure.")
-		a.collectEvidence(session, *project)
+		evidence = a.collectEvidence(session, *project)
 		a.updateIssueTestEnvironmentForSession(session, false)
 	} else {
 		a.updateIssueTestEnvironmentForSession(session, false)
 	}
 	if project != nil {
 		a.recordSessionReviewEvidence(session, *project, nil, false)
+		a.recordSessionFailure(session, *project, err, evidence, "", "open")
 	}
 }
 
@@ -4587,10 +5471,12 @@ func (a *app) writeSessionContext(session agentSession, project project) (string
 	return contextPath, nil
 }
 
-func (a *app) collectEvidence(session agentSession, project project) {
+func (a *app) collectEvidence(session agentSession, project project) *deploymentEvidence {
 	if evidence := a.collectEvidenceSnapshot(session, project); evidence != nil {
 		a.storeEvidence(*evidence, true)
+		return evidence
 	}
+	return nil
 }
 
 func (a *app) collectEvidenceSnapshot(session agentSession, project project) *deploymentEvidence {
@@ -4826,12 +5712,12 @@ func (a *app) appendDeployStage(sessionID, id, label, status, summary string) {
 	a.appendSessionLog(sessionID, "deploy-stage", string(payload))
 }
 
-func (a *app) reconcileIssueTestEnvironmentForSession(session agentSession, project project, outcome string) {
+func (a *app) reconcileIssueTestEnvironmentForSession(session agentSession, project project, outcome string) *deploymentEvidence {
 	environment, err := a.loadIssueTestEnvironment(session.IssueID)
 	artifactPreviewURL := readTestEnvironmentPreviewURL(session)
 	adoptPreviewSession := environment != nil && environment.LastDeploySessionID != session.ID && artifactPreviewURL != ""
 	if err != nil || environment == nil || (environment.LastDeploySessionID != session.ID && !adoptPreviewSession) {
-		return
+		return nil
 	}
 
 	targetProject := a.evidenceTargetProject(session, project)
@@ -4889,20 +5775,26 @@ func (a *app) reconcileIssueTestEnvironmentForSession(session agentSession, proj
 				environment.SourceCommitSHA = session.SourceCommitSHA
 			}
 		}
-		a.updateIssueStatus(session.IssueID, "ready_for_test")
+		if outcome != "probe" {
+			a.updateIssueStatus(session.IssueID, "ready_for_test")
+		}
 	} else if resourcesReady {
 		environment.NamespaceStatus = "preview_unverified"
 		environment.CleanupStatus = "retained"
 		if adoptPreviewSession {
 			environment.LastDeploySessionID = session.ID
 		}
-		a.updateIssueStatus(session.IssueID, "blocked")
+		if outcome != "probe" {
+			a.updateIssueStatus(session.IssueID, "blocked")
+		}
 	} else if outcome == "interrupted" {
 		environment.NamespaceStatus = "deploy_interrupted"
 		a.updateIssueStatus(session.IssueID, "blocked")
 	} else {
 		environment.NamespaceStatus = "deploy_failed"
-		a.updateIssueStatus(session.IssueID, "blocked")
+		if outcome != "probe" {
+			a.updateIssueStatus(session.IssueID, "blocked")
+		}
 	}
 
 	if err := a.saveIssueTestEnvironment(*environment); err == nil {
@@ -4911,7 +5803,7 @@ func (a *app) reconcileIssueTestEnvironmentForSession(session agentSession, proj
 
 	summary := deploymentReconcileSummary(*environment, resourcesReady, probe, outcome)
 	details := buildDeploymentReconcileDetails(discoverySummary, candidates, probe, evidence)
-	a.storeEvidence(deploymentEvidence{
+	record := deploymentEvidence{
 		ID:        uuid.NewString(),
 		IssueID:   session.IssueID,
 		SessionID: session.ID,
@@ -4920,8 +5812,15 @@ func (a *app) reconcileIssueTestEnvironmentForSession(session agentSession, proj
 		Summary:   summary,
 		Details:   truncate(details, 12000),
 		CreatedAt: nowString(),
-	}, outcome != "probe")
+	}
+	if outcome != "probe" {
+		a.storeEvidence(record, true)
+	}
+	if outcome != "probe" && shouldRecordFailureForNamespaceStatus(environment.NamespaceStatus) {
+		a.recordSessionFailure(session, targetProject, errors.New(summary), &record, failurePhaseForNamespaceStatus(environment.NamespaceStatus), failureStatusForSession(session))
+	}
 	a.appendDeployStage(session.ID, "reconcile", "Finalize deployment state", deployStageStatusForNamespace(environment.NamespaceStatus), summary)
+	return &record
 }
 
 func deploymentReconcileSummary(environment issueTestEnvironment, resourcesReady bool, probe previewProbeResult, outcome string) string {
@@ -5293,15 +6192,17 @@ type reviewEvidenceArtifact struct {
 	FollowUps        []string                `json:"followUps"`
 }
 
-func (a *app) recordSessionReviewEvidence(session agentSession, project project, changeNode *issueChangeNode, success bool) {
+func (a *app) recordSessionReviewEvidence(session agentSession, project project, changeNode *issueChangeNode, success bool) *sessionReviewEvidence {
 	evidence, err := a.buildSessionReviewEvidence(session, project, changeNode, success)
 	if err != nil {
 		a.appendSessionLog(session.ID, "system", "Review evidence snapshot could not be created: "+err.Error())
-		return
+		return nil
 	}
 	if err := a.storeSessionReviewEvidence(evidence); err != nil {
 		a.appendSessionLog(session.ID, "system", "Review evidence snapshot could not be stored: "+err.Error())
+		return nil
 	}
+	return &evidence
 }
 
 func (a *app) buildSessionReviewEvidence(session agentSession, project project, changeNode *issueChangeNode, success bool) (sessionReviewEvidence, error) {
@@ -5376,6 +6277,74 @@ func (a *app) buildSessionReviewEvidence(session agentSession, project project, 
 		}
 	}
 	return review, nil
+}
+
+func (a *app) recordSessionFailure(session agentSession, project project, cause error, evidence *deploymentEvidence, phaseOverride, statusOverride string) *sessionFailure {
+	failure := a.buildSessionFailure(session, project, cause, evidence, phaseOverride, statusOverride)
+	stored, err := a.storeSessionFailure(failure)
+	if err != nil {
+		a.appendSessionLog(session.ID, "system", "Failure evidence could not be stored: "+err.Error())
+		return nil
+	}
+	return &stored
+}
+
+func (a *app) buildSessionFailure(session agentSession, project project, cause error, evidence *deploymentEvidence, phaseOverride, statusOverride string) sessionFailure {
+	logs, _ := a.listSessionLogs(session.ID)
+	commands := deriveReviewCommands(logs, session)
+	failedCommand := latestFailedReviewCommand(commands)
+	causeText := ""
+	if cause != nil {
+		causeText = cause.Error()
+	}
+	evidenceSummary := ""
+	evidenceDetails := ""
+	if evidence != nil {
+		evidenceSummary = evidence.Summary
+		evidenceDetails = evidence.Details
+	}
+	errorText := strings.TrimSpace(strings.Join(nonEmptyStrings(
+		causeText,
+		failedCommand.Summary,
+		evidenceSummary,
+		latestFailureLogMessage(logs),
+		evidenceDetails,
+	), "\n"))
+	cluster := strings.TrimSpace(project.KubeContext)
+	namespace := strings.TrimSpace(project.Namespace)
+	if evidence != nil {
+		cluster = firstNonEmpty(evidence.Cluster, cluster)
+		namespace = firstNonEmpty(evidence.Namespace, namespace)
+	}
+	if environment, err := a.loadIssueTestEnvironment(session.IssueID); err == nil && environment != nil {
+		cluster = firstNonEmpty(cluster, environment.KubeContext, environment.ClusterID)
+		namespace = firstNonEmpty(namespace, environment.Namespace)
+	}
+	resourceKind, resourceName := failureResourceFromEvidence(evidenceDetails)
+	failedCommandText := strings.TrimSpace(failedCommand.Command)
+	if failedCommandText == "" && session.RuntimeMode != "codex-app-server" {
+		failedCommandText = strings.TrimSpace(session.Command)
+	}
+	phase := normalizeFailurePhase(firstNonEmpty(phaseOverride, inferFailurePhase(failedCommandText, errorText)))
+	status := normalizeFailureStatus(firstNonEmpty(statusOverride, failureStatusForSession(session)))
+	now := nowString()
+	return sessionFailure{
+		ID:            uuid.NewString(),
+		IssueID:       session.IssueID,
+		SessionID:     session.ID,
+		Phase:         phase,
+		Status:        status,
+		FailedCommand: truncate(failedCommandText, 1000),
+		ErrorSummary:  truncate(firstNonEmpty(failedCommand.Summary, causeText, evidenceSummary, latestFailureLogMessage(logs), "Session did not finish successfully."), 600),
+		ErrorExcerpt:  truncate(errorExcerpt(errorText), 2000),
+		Cluster:       cluster,
+		Namespace:     namespace,
+		ResourceKind:  resourceKind,
+		ResourceName:  resourceName,
+		EvidenceID:    evidenceID(evidence),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
 }
 
 func readReviewEvidenceArtifact(session agentSession) reviewEvidenceArtifact {
@@ -5566,6 +6535,171 @@ func deriveReviewCommands(logs []sessionLog, session agentSession) []reviewEvide
 		}
 	}
 	return normalizeReviewCommands(commands, session.Status)
+}
+
+func latestFailedReviewCommand(commands []reviewEvidenceCommand) reviewEvidenceCommand {
+	for index := len(commands) - 1; index >= 0; index-- {
+		if normalizeReviewStatus(commands[index].Status) == "failed" {
+			return commands[index]
+		}
+	}
+	return reviewEvidenceCommand{}
+}
+
+func latestFailureLogMessage(logs []sessionLog) string {
+	for index := len(logs) - 1; index >= 0; index-- {
+		message := strings.TrimSpace(logs[index].Message)
+		if message == "" {
+			continue
+		}
+		lower := strings.ToLower(message)
+		if strings.Contains(lower, "failed") || strings.Contains(lower, "error") || strings.Contains(lower, "interrupted") || strings.Contains(lower, "cancelled") {
+			return truncate(message, 600)
+		}
+	}
+	return ""
+}
+
+func inferFailurePhase(command, text string) string {
+	lower := strings.ToLower(strings.TrimSpace(command + "\n" + text))
+	switch {
+	case strings.Contains(lower, "interrupted") || strings.Contains(lower, "cancelled") || strings.Contains(lower, "canceled") || strings.Contains(lower, "runner restarted"):
+		return "agent_interrupted"
+	case strings.Contains(lower, "cleanup") || strings.Contains(lower, "delete namespace") || strings.Contains(lower, "cleanup_failed"):
+		return "cleanup"
+	case strings.Contains(lower, "docker push") || strings.Contains(lower, "image push") || strings.Contains(lower, "push access denied") || strings.Contains(lower, "registry") || strings.Contains(lower, "unauthorized"):
+		return "image_push"
+	case strings.Contains(lower, "go test") || strings.Contains(lower, "npm test") || strings.Contains(lower, "pnpm test") || strings.Contains(lower, "pytest") || strings.Contains(lower, "vitest") || strings.Contains(lower, "jest") || strings.Contains(lower, "typecheck") || strings.Contains(lower, "tsc") || strings.Contains(lower, "lint"):
+		return "test"
+	case strings.Contains(lower, "docker build") || strings.Contains(lower, "buildx") || strings.Contains(lower, "go build") || strings.Contains(lower, "npm run build") || strings.Contains(lower, "pnpm build") || strings.Contains(lower, "cargo build"):
+		return "build"
+	case strings.Contains(lower, "imagepullbackoff") || strings.Contains(lower, "crashloopbackoff") || strings.Contains(lower, "createcontainerconfigerror") || strings.Contains(lower, "pod") || strings.Contains(lower, "unschedulable"):
+		return "pod_startup"
+	case strings.Contains(lower, "service") || strings.Contains(lower, "ingress") || strings.Contains(lower, "nodeport") || strings.Contains(lower, "endpoint") || strings.Contains(lower, "connection refused") || strings.Contains(lower, "no route"):
+		return "network_exposure"
+	case strings.Contains(lower, "preview") || strings.Contains(lower, "probe") || strings.Contains(lower, "candidate url") || strings.Contains(lower, "http "):
+		return "preview_probe"
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeFailurePhase(phase string) string {
+	phase = strings.ToLower(strings.TrimSpace(phase))
+	switch phase {
+	case "build", "test", "image_push", "pod_startup", "network_exposure", "preview_probe", "agent_interrupted", "cleanup":
+		return phase
+	case "":
+		return "unknown"
+	default:
+		return "unknown"
+	}
+}
+
+func normalizeFailureStatus(status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case "open", "retrying", "continued", "resolved", "stopped", "superseded":
+		return status
+	case "cancelled", "canceled":
+		return "stopped"
+	default:
+		return "open"
+	}
+}
+
+func failureStatusForSession(session agentSession) string {
+	if strings.TrimSpace(session.Status) == "cancelled" {
+		return "stopped"
+	}
+	return "open"
+}
+
+func failurePhaseForNamespaceStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "cleanup_failed":
+		return "cleanup"
+	case "deploy_interrupted":
+		return "agent_interrupted"
+	case "preview_unverified":
+		return "preview_probe"
+	case "deploy_failed":
+		return "pod_startup"
+	default:
+		return ""
+	}
+}
+
+func shouldRecordFailureForNamespaceStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "deploy_failed", "deploy_interrupted", "preview_unverified", "cleanup_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func errorExcerpt(text string) string {
+	lines := splitNonEmptyLines(text)
+	if len(lines) == 0 {
+		return ""
+	}
+	const maxLines = 12
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func nonEmptyStrings(values ...string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func evidenceID(evidence *deploymentEvidence) string {
+	if evidence == nil {
+		return ""
+	}
+	return evidence.ID
+}
+
+func failureResourceFromEvidence(details string) (string, string) {
+	for _, line := range splitNonEmptyLines(details) {
+		if strings.HasPrefix(strings.ToUpper(line), "LAST SEEN ") || strings.HasPrefix(strings.ToUpper(line), "NAME ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 4 && strings.EqualFold(fields[1], "Warning") {
+			kind, name := splitKubernetesObjectRef(fields[3])
+			if kind != "" || name != "" {
+				return kind, name
+			}
+		}
+		if len(fields) >= 2 && !strings.EqualFold(fields[0], "NAME") {
+			kind, name := splitKubernetesObjectRef(fields[0])
+			if kind != "" || name != "" {
+				return kind, name
+			}
+		}
+	}
+	return "", ""
+}
+
+func splitKubernetesObjectRef(ref string) (string, string) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", ""
+	}
+	if parts := strings.SplitN(ref, "/", 2); len(parts) == 2 {
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	return "", ref
 }
 
 func normalizeReviewCommands(commands []reviewEvidenceCommand, sessionStatus string) []reviewEvidenceCommand {
@@ -6010,6 +7144,12 @@ func (a *app) loadIssueDetailForViewer(issueID, viewerUserID string) (issueDetai
 	}
 	detail.Evidence = evidence
 
+	failures, err := a.listSessionFailures(issueID)
+	if err != nil {
+		return detail, err
+	}
+	detail.Failures = failures
+
 	changeNodes, err := a.listIssueChangeNodes(issueID, detail.Project)
 	if err != nil {
 		return detail, err
@@ -6021,6 +7161,12 @@ func (a *app) loadIssueDetailForViewer(issueID, viewerUserID string) (issueDetai
 		return detail, err
 	}
 	detail.ReviewEvidence = reviewEvidence
+
+	handoffs, err := a.listIssueHandoffs(issueID)
+	if err != nil {
+		return detail, err
+	}
+	detail.Handoffs = handoffs
 
 	return detail, nil
 }
@@ -6553,6 +7699,12 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 		detail.Evidence = append(detail.Evidence, evidence)
 	}
 
+	failures, err := a.listSessionFailuresForSession(sessionID)
+	if err != nil {
+		return detail, err
+	}
+	detail.Failures = failures
+
 	detail.Workspace = inspectWorkspace(detail.Session.Workdir, detail.Project.DefaultBranch)
 	if detail.Session.CleanupStatus == "cleaned" && !detail.Workspace.Exists {
 		detail.Workspace.Error = "Session worktree has been cleaned up."
@@ -6875,6 +8027,60 @@ func (a *app) listEvidence(issueID string) ([]deploymentEvidence, error) {
 	return evidence, nil
 }
 
+func (a *app) listSessionFailures(issueID string) ([]sessionFailure, error) {
+	return a.querySessionFailures(`
+		SELECT id, issue_id, session_id, phase, status, failed_command, error_summary, error_excerpt, cluster, namespace, resource_kind, resource_name, evidence_id, review_evidence_id, retry_session_id, continued_session_id, created_at, updated_at
+		FROM session_failures
+		WHERE issue_id = ?
+		ORDER BY created_at DESC
+	`, issueID)
+}
+
+func (a *app) listSessionFailuresForSession(sessionID string) ([]sessionFailure, error) {
+	return a.querySessionFailures(`
+		SELECT id, issue_id, session_id, phase, status, failed_command, error_summary, error_excerpt, cluster, namespace, resource_kind, resource_name, evidence_id, review_evidence_id, retry_session_id, continued_session_id, created_at, updated_at
+		FROM session_failures
+		WHERE session_id = ?
+		ORDER BY created_at DESC
+	`, sessionID)
+}
+
+func (a *app) querySessionFailures(query, arg string) ([]sessionFailure, error) {
+	rows, err := a.db.Query(query, arg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	failures := []sessionFailure{}
+	for rows.Next() {
+		var failure sessionFailure
+		if err := rows.Scan(
+			&failure.ID,
+			&failure.IssueID,
+			&failure.SessionID,
+			&failure.Phase,
+			&failure.Status,
+			&failure.FailedCommand,
+			&failure.ErrorSummary,
+			&failure.ErrorExcerpt,
+			&failure.Cluster,
+			&failure.Namespace,
+			&failure.ResourceKind,
+			&failure.ResourceName,
+			&failure.EvidenceID,
+			&failure.ReviewEvidenceID,
+			&failure.RetrySessionID,
+			&failure.ContinuedSessionID,
+			&failure.CreatedAt,
+			&failure.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		failures = append(failures, failure)
+	}
+	return failures, rows.Err()
+}
+
 func (a *app) listSessionReviewEvidence(issueID string) ([]sessionReviewEvidence, error) {
 	rows, err := a.db.Query(`
 		SELECT id, issue_id, session_id, source_session_id, source_commit_sha, branch, agent_summary, commands_json, tests_json, build_result_json, deployment_result_json, risks_json, follow_ups_json, preview_url, cluster, namespace, namespace_status, cleanup_status, created_at, updated_at
@@ -6924,6 +8130,167 @@ func (a *app) listSessionReviewEvidence(issueID string) ([]sessionReviewEvidence
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (a *app) listIssueHandoffs(issueID string) ([]issueHandoff, error) {
+	rows, err := a.db.Query(`
+		SELECT id, issue_id, source_session_id, source_commit_sha, branch, head_commit_sha, commits_json, kind, pr_url, pr_number, pr_state, pr_title, preview_url, evidence_summary, created_via, last_checked_at, error, created_at, updated_at
+		FROM issue_handoffs
+		WHERE issue_id = ?
+		ORDER BY updated_at DESC
+	`, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []issueHandoff{}
+	for rows.Next() {
+		item, err := scanIssueHandoff(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (a *app) loadIssueHandoff(issueID, handoffID string) (issueHandoff, error) {
+	row := a.db.QueryRow(`
+		SELECT id, issue_id, source_session_id, source_commit_sha, branch, head_commit_sha, commits_json, kind, pr_url, pr_number, pr_state, pr_title, preview_url, evidence_summary, created_via, last_checked_at, error, created_at, updated_at
+		FROM issue_handoffs
+		WHERE issue_id = ? AND id = ?
+	`, issueID, handoffID)
+	return scanIssueHandoff(row)
+}
+
+type issueHandoffScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanIssueHandoff(scanner issueHandoffScanner) (issueHandoff, error) {
+	var item issueHandoff
+	var commitsJSON string
+	if err := scanner.Scan(
+		&item.ID,
+		&item.IssueID,
+		&item.SourceSessionID,
+		&item.SourceCommitSHA,
+		&item.Branch,
+		&item.HeadCommitSHA,
+		&commitsJSON,
+		&item.Kind,
+		&item.PRURL,
+		&item.PRNumber,
+		&item.PRState,
+		&item.PRTitle,
+		&item.PreviewURL,
+		&item.EvidenceSummary,
+		&item.CreatedVia,
+		&item.LastCheckedAt,
+		&item.Error,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	); err != nil {
+		return issueHandoff{}, err
+	}
+	decodeReviewJSON(commitsJSON, &item.Commits)
+	if item.Commits == nil {
+		item.Commits = []issueHandoffCommit{}
+	}
+	if strings.TrimSpace(item.Kind) == "" {
+		if strings.TrimSpace(item.PRURL) != "" {
+			item.Kind = "pr"
+		} else {
+			item.Kind = "branch"
+		}
+	}
+	return item, nil
+}
+
+func currentIssuePullRequestHandoff(handoffs []issueHandoff) *issueHandoff {
+	for index := range handoffs {
+		handoff := &handoffs[index]
+		if strings.EqualFold(handoff.Kind, "pr") || strings.TrimSpace(handoff.PRURL) != "" {
+			return handoff
+		}
+	}
+	return nil
+}
+
+func (a *app) loadCurrentIssuePullRequestHandoff(issueID string) (issueHandoff, bool, error) {
+	row := a.db.QueryRow(`
+		SELECT id, issue_id, source_session_id, source_commit_sha, branch, head_commit_sha, commits_json, kind, pr_url, pr_number, pr_state, pr_title, preview_url, evidence_summary, created_via, last_checked_at, error, created_at, updated_at
+		FROM issue_handoffs
+		WHERE issue_id = ? AND (kind = 'pr' OR pr_url != '')
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, issueID)
+	handoff, err := scanIssueHandoff(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return issueHandoff{}, false, nil
+	}
+	if err != nil {
+		return issueHandoff{}, false, err
+	}
+	return handoff, true, nil
+}
+
+func (a *app) storeIssueHandoff(handoff issueHandoff) (issueHandoff, error) {
+	handoff.Kind = strings.ToLower(strings.TrimSpace(handoff.Kind))
+	if handoff.Kind == "" {
+		handoff.Kind = "branch"
+		if handoff.PRURL != "" {
+			handoff.Kind = "pr"
+		}
+	}
+	if handoff.Kind == "pr" && strings.TrimSpace(handoff.IssueID) != "" {
+		existing, ok, err := a.loadCurrentIssuePullRequestHandoff(handoff.IssueID)
+		if err != nil {
+			return handoff, err
+		}
+		if ok && existing.ID != handoff.ID {
+			handoff.ID = existing.ID
+			if handoff.CreatedAt == "" {
+				handoff.CreatedAt = existing.CreatedAt
+			}
+		}
+	}
+	if handoff.ID == "" {
+		handoff.ID = uuid.NewString()
+	}
+	now := nowString()
+	if handoff.CreatedAt == "" {
+		handoff.CreatedAt = now
+	}
+	handoff.UpdatedAt = now
+	_, err := a.db.Exec(`
+		INSERT INTO issue_handoffs (id, issue_id, source_session_id, source_commit_sha, branch, head_commit_sha, commits_json, kind, pr_url, pr_number, pr_state, pr_title, preview_url, evidence_summary, created_via, last_checked_at, error, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			source_session_id = excluded.source_session_id,
+			source_commit_sha = excluded.source_commit_sha,
+			branch = excluded.branch,
+			head_commit_sha = excluded.head_commit_sha,
+			commits_json = excluded.commits_json,
+			kind = excluded.kind,
+			pr_url = excluded.pr_url,
+			pr_number = excluded.pr_number,
+			pr_state = excluded.pr_state,
+			pr_title = excluded.pr_title,
+			preview_url = excluded.preview_url,
+			evidence_summary = excluded.evidence_summary,
+			created_via = excluded.created_via,
+			last_checked_at = excluded.last_checked_at,
+			error = excluded.error,
+			updated_at = excluded.updated_at
+	`, handoff.ID, handoff.IssueID, handoff.SourceSessionID, handoff.SourceCommitSHA, handoff.Branch, handoff.HeadCommitSHA, reviewJSON(handoff.Commits, "[]"), handoff.Kind, handoff.PRURL, handoff.PRNumber, handoff.PRState, handoff.PRTitle, handoff.PreviewURL, handoff.EvidenceSummary, handoff.CreatedVia, handoff.LastCheckedAt, handoff.Error, handoff.CreatedAt, handoff.UpdatedAt)
+	if err != nil {
+		return handoff, err
+	}
+	_, _ = a.db.Exec(`UPDATE issues SET updated_at = ? WHERE id = ?`, handoff.UpdatedAt, handoff.IssueID)
+	_, _ = a.db.Exec(`UPDATE inbox_items SET updated_at = ?, unread = 1 WHERE issue_id = ?`, handoff.UpdatedAt, handoff.IssueID)
+	return handoff, nil
 }
 
 func decodeReviewJSON(value string, target any) {
@@ -7647,6 +9014,8 @@ func inboxStatusToIssueEventKind(status string) string {
 		return "agent_failed"
 	case "test-deploy", "test-environment":
 		return "test_environment_updated"
+	case "handoff":
+		return "issue_handoff_updated"
 	case "test-cleanup":
 		return "test_environment_cleanup_requested"
 	case "test-retain":
@@ -7689,6 +9058,8 @@ func inboxStatusToIssueEventSummary(status string) string {
 		return "Issue test environment cleanup was requested."
 	case "test-retain":
 		return "Issue test environment was retained."
+	case "handoff":
+		return "Issue branch or pull request handoff changed."
 	case "labels":
 		return "Issue labels changed."
 	case "triaged":
@@ -7748,10 +9119,61 @@ func (a *app) storeSessionReviewEvidence(evidence sessionReviewEvidence) error {
 			updated_at = excluded.updated_at
 	`, evidence.ID, evidence.IssueID, evidence.SessionID, evidence.SourceSessionID, evidence.SourceCommitSHA, evidence.Branch, evidence.AgentSummary, reviewJSON(evidence.CommandsRun, "[]"), reviewJSON(evidence.Tests, "[]"), reviewJSON(evidence.BuildResult, "{}"), reviewJSON(evidence.DeploymentResult, "{}"), reviewJSON(evidence.Risks, "[]"), reviewJSON(evidence.FollowUps, "[]"), evidence.PreviewURL, evidence.Cluster, evidence.Namespace, evidence.NamespaceStatus, evidence.CleanupStatus, evidence.CreatedAt, evidence.UpdatedAt)
 	if err == nil {
+		_, _ = a.db.Exec(`
+			UPDATE session_failures SET review_evidence_id = ?, updated_at = ? WHERE session_id = ? AND review_evidence_id = ''
+		`, evidence.ID, evidence.UpdatedAt, evidence.SessionID)
 		a.broker.publish(evidence.SessionID, sessionEvent{Type: "status", Payload: "review-evidence"})
 		a.publishInboxEvent(evidence.IssueID, "evidence")
 	}
 	return err
+}
+
+func (a *app) storeSessionFailure(failure sessionFailure) (sessionFailure, error) {
+	stored, err := a.storeSessionFailureRecord(failure)
+	if err != nil {
+		return stored, err
+	}
+	if a.broker != nil {
+		a.broker.publish(stored.SessionID, sessionEvent{Type: "status", Payload: "failure"})
+	}
+	a.publishInboxEvent(stored.IssueID, "failed")
+	return stored, nil
+}
+
+func (a *app) storeSessionFailureRecord(failure sessionFailure) (sessionFailure, error) {
+	if failure.ID == "" {
+		failure.ID = uuid.NewString()
+	}
+	now := nowString()
+	if failure.CreatedAt == "" {
+		failure.CreatedAt = now
+	}
+	failure.UpdatedAt = now
+	failure.Phase = normalizeFailurePhase(failure.Phase)
+	failure.Status = normalizeFailureStatus(failure.Status)
+	_, err := a.db.Exec(`
+		INSERT INTO session_failures (id, issue_id, session_id, phase, status, failed_command, error_summary, error_excerpt, cluster, namespace, resource_kind, resource_name, evidence_id, review_evidence_id, retry_session_id, continued_session_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session_id) DO UPDATE SET
+			phase = excluded.phase,
+			status = excluded.status,
+			failed_command = excluded.failed_command,
+			error_summary = excluded.error_summary,
+			error_excerpt = excluded.error_excerpt,
+			cluster = excluded.cluster,
+			namespace = excluded.namespace,
+			resource_kind = excluded.resource_kind,
+			resource_name = excluded.resource_name,
+			evidence_id = excluded.evidence_id,
+			review_evidence_id = CASE WHEN excluded.review_evidence_id != '' THEN excluded.review_evidence_id ELSE session_failures.review_evidence_id END,
+			retry_session_id = CASE WHEN excluded.retry_session_id != '' THEN excluded.retry_session_id ELSE session_failures.retry_session_id END,
+			continued_session_id = CASE WHEN excluded.continued_session_id != '' THEN excluded.continued_session_id ELSE session_failures.continued_session_id END,
+			updated_at = excluded.updated_at
+	`, failure.ID, failure.IssueID, failure.SessionID, failure.Phase, failure.Status, failure.FailedCommand, failure.ErrorSummary, failure.ErrorExcerpt, failure.Cluster, failure.Namespace, failure.ResourceKind, failure.ResourceName, failure.EvidenceID, failure.ReviewEvidenceID, failure.RetrySessionID, failure.ContinuedSessionID, failure.CreatedAt, failure.UpdatedAt)
+	if err != nil {
+		return failure, err
+	}
+	return failure, nil
 }
 
 func reviewJSON(value any, fallback string) string {

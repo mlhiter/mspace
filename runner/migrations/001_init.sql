@@ -269,6 +269,55 @@ CREATE TABLE IF NOT EXISTS session_review_evidence (
 
 CREATE INDEX IF NOT EXISTS idx_session_review_evidence_issue_created ON session_review_evidence(issue_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS session_failures (
+  id TEXT PRIMARY KEY,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  phase TEXT NOT NULL DEFAULT 'unknown',
+  status TEXT NOT NULL DEFAULT 'open',
+  failed_command TEXT NOT NULL DEFAULT '',
+  error_summary TEXT NOT NULL DEFAULT '',
+  error_excerpt TEXT NOT NULL DEFAULT '',
+  cluster TEXT NOT NULL DEFAULT '',
+  namespace TEXT NOT NULL DEFAULT '',
+  resource_kind TEXT NOT NULL DEFAULT '',
+  resource_name TEXT NOT NULL DEFAULT '',
+  evidence_id TEXT NOT NULL DEFAULT '',
+  review_evidence_id TEXT NOT NULL DEFAULT '',
+  retry_session_id TEXT NOT NULL DEFAULT '',
+  continued_session_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_failures_issue_created ON session_failures(issue_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_session_failures_status ON session_failures(status);
+
+CREATE TABLE IF NOT EXISTS issue_handoffs (
+  id TEXT PRIMARY KEY,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  source_session_id TEXT NOT NULL DEFAULT '',
+  source_commit_sha TEXT NOT NULL DEFAULT '',
+  branch TEXT NOT NULL DEFAULT '',
+  head_commit_sha TEXT NOT NULL DEFAULT '',
+  commits_json TEXT NOT NULL DEFAULT '[]',
+  kind TEXT NOT NULL DEFAULT 'branch',
+  pr_url TEXT NOT NULL DEFAULT '',
+  pr_number INTEGER NOT NULL DEFAULT 0,
+  pr_state TEXT NOT NULL DEFAULT '',
+  pr_title TEXT NOT NULL DEFAULT '',
+  preview_url TEXT NOT NULL DEFAULT '',
+  evidence_summary TEXT NOT NULL DEFAULT '',
+  created_via TEXT NOT NULL DEFAULT 'manual',
+  last_checked_at TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_issue_handoffs_issue_updated ON issue_handoffs(issue_id, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS issue_test_environments (
   issue_id TEXT PRIMARY KEY REFERENCES issues(id) ON DELETE CASCADE,
   namespace TEXT NOT NULL,

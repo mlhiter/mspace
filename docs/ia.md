@@ -301,10 +301,12 @@ Current implementation:
 - exposes a Stop action for queued or running sessions, cancelling only that session and rendering the stop as a compact, non-editable event while leaving the issue status unchanged;
 - streams session logs and status while a session is running, but keeps debug output collapsed by default;
 - renders a compact failure callout with the last meaningful runner error when a session fails;
+- renders structured failure records as continueable timeline and Evidence entries, including failed command, error summary, namespace/resource hints, and Continue / Retry deploy / Stop affordances when applicable;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
 - automatically checks preview status in the background when Issue Detail opens or refreshes an existing test environment, instead of exposing a separate Probe button;
 - separates source review from execution evidence: Commits shows code changes and diffs, while Evidence shows compact commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state;
+- shows issue-level branch / PR handoff state on the Commits tab and sidebar, with actions to create one PR for the issue from the selected source branch, auto-detect an existing PR for that branch through `gh`, and refresh PR state;
 - keeps raw command trails collapsed in session logs, with exploratory commands excluded from persisted review evidence;
 - shows a compact Project runbook entry in the Workflow sidebar; clicking it opens a read-only TipTap runbook modal;
 - renders the issue creator, human comments, system comments, Codex-backed agent turns, and actor-authored status changes with their current display names and avatar sources;
@@ -499,7 +501,7 @@ Avoiding Kubernetes as the first visual focus does not mean hiding it. Kubeconfi
 
 ## Build Sequence
 
-Implemented as of 2026-05-09:
+Implemented as of 2026-05-11:
 
 1. Inbox review list, Issues list, and issue creation flow.
 2. Issue detail shell with document body and activity thread.
@@ -515,10 +517,12 @@ Implemented as of 2026-05-09:
 12. Server-backed GitHub sign-in with sidebar account/workspace state and local issue/comment actor display snapshots.
 13. Sidebar global search and Command+K palette for issues and projects.
 14. Commits/Evidence split on Issue Detail, with structured `session_review_evidence` snapshots and compact evidence-command persistence.
+15. Issue-level branch / PR handoff records, including local PR creation, existing PR auto-detection by source branch, status refresh, source commits, preview URL, and evidence summary.
+16. Structured `session_failures` records that surface failed sessions, deploy failures, preview probe failures, agent interruption, and cleanup failures as continueable Issue Detail timeline and Evidence entries.
 
 Next build steps:
 
-1. Harden Kubernetes resource parsing and failed-deploy evidence.
-2. Manual PR generation action from Issue Detail.
+1. Dogfood one real issue through source change, PR handoff, test namespace, preview URL, failure recovery if needed, and cleanup/retain.
+2. Harden Kubernetes resource parsing and failure evidence quality.
 3. Scoped kubeconfig or ServiceAccount generation.
 4. Standalone Sessions list view.

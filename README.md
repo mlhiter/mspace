@@ -78,6 +78,8 @@ Production deployment uses the root `vercel.json`:
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Project default cluster selection.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, reconcile Kubernetes evidence, and check preview status in the background.
+- Issue-level branch / PR handoff records that keep one current PR with source commit, head commit, commit list, preview URL, evidence summary, local preflight errors, and refreshable PR state.
+- Structured failure evidence for failed sessions, deploy reconciliation, preview checks, agent interruption, and cleanup failures, shown from Issue Detail Overview and Evidence so users can continue, retry deploy, stop, retain, or clean up instead of treating failure as terminal.
 
 > [!IMPORTANT]
 > Generated scoped kubeconfigs, ServiceAccounts, automatic PR capture, and Kubernetes-hosted agent runtime are future work. The MVP trusts the kubeconfig path configured on the selected cluster.
@@ -165,7 +167,7 @@ Local data paths:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.mspace/mspace.db` | SQLite database for issues, comments, reactions, sessions, evidence, and local issue image attachment blobs. |
+| `~/.mspace/mspace.db` | SQLite database for issues, comments, reactions, sessions, evidence, failure records, handoffs, and local issue image attachment blobs. |
 | `~/.mspace/repos/<owner>/<repo>` | Cached clone path for GitHub-imported projects. |
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree for one agent session. |
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Session context markdown included in Codex prompts. |

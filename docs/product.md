@@ -34,6 +34,8 @@ The repository now has a runnable local desktop MVP:
 - manually trigger an issue-scoped test deployment where the agent creates the namespace, builds and pushes images, deploys resources, and returns a preview URL;
 - record issue test namespace state, cleanup/retain state, deploy session, cleanup session, and preview URL.
 - review structured session evidence from Issue Detail, with code changes in Commits and compact commands/tests/build/deploy/risks/cleanup state in Evidence.
+- record issue-level branch / PR handoff state from the selected source change, including commit list, preview URL, evidence summary, PR URL/title/state, and local preflight errors.
+- show failed sessions and failed deploy/preview/cleanup checks as structured failure evidence, with continue, retry deploy, stop, retain, or cleanup choices from Issue Detail.
 - use a Notion-like desktop workspace shell with real shadcn/ui primitives, Radix base components, lucide-react icons, Material Icon Theme file icons, and low-contrast document surfaces.
 
 Kubernetes is the deployment and test environment, not the required development runtime for the first version. The current development runtime is local. Running the agent runtime inside Kubernetes remains a later option once the local workflow is stable.
@@ -146,6 +148,7 @@ An Issue should hold:
 - comments, lightweight reactions, and progress updates;
 - assignee and subscriber list;
 - linked branch, PR, and environment evidence;
+- structured failure evidence when a session, deployment, preview check, interruption, or cleanup needs attention;
 - inline task rows backed by child issues, not Markdown checkbox state;
 - one or more attached agent sessions;
 - one issue test environment record with namespace, preview URL, deploy status, and cleanup decision.
@@ -220,7 +223,7 @@ Still outside the current implemented MVP:
 - ServiceAccount and RoleBinding lifecycle;
 - namespace per session;
 - full Kubernetes resource browser;
-- PR link capture;
+- server-owned GitHub App PR automation;
 - automated namespace cleanup policy beyond the current manual cleanup/retain decision.
 
 The product architecture is now explicitly moving toward a server control plane for multiplayer collaboration. The local desktop runner remains the execution path, but users, workspaces, membership, GitHub identity, auth sessions, audit, and future GitHub App installation state should live in the server rather than in local-only SQLite.

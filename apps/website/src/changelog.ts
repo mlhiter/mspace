@@ -22,6 +22,8 @@ export const changelog: ChangelogEntry[] = [
       "Refined issue status, session evidence, and review handoff behavior.",
       "Compacted review evidence commands so evidence stays readable.",
       "Added commit-backed deploy source selection and automatic preview status checks.",
+      "Added issue-level branch / PR handoff records with PR creation, branch-based PR detection, and status refresh from Issue Detail.",
+      "Made failed sessions and failed deploy checks visible as continueable issue evidence.",
       "Expanded Issue Detail review tabs by hiding the metadata sidebar outside Overview.",
       "Limited manual issue lifecycle actions to the intended human workflow.",
       "Synced issue workflow guidance across project docs.",

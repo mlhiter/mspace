@@ -31,7 +31,7 @@ func TestRunnerHealthPayloadAdvertisesRequiredCapabilities(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected boolean capabilities map, got %#v", payload["capabilities"])
 	}
-	if !maps.Equal(capabilities, map[string]bool{"issueAttachments": true}) {
+	if !maps.Equal(capabilities, map[string]bool{"issueAttachments": true, "issueHandoffs": true}) {
 		t.Fatalf("unexpected capabilities: %#v", capabilities)
 	}
 }
@@ -979,6 +979,73 @@ func TestCancelQueuedSessionKeepsIssueStatusForRetry(t *testing.T) {
 	assertCommentAuthorContains(t, db, "issue-1", "Stopped session `session-` by Test Human.", "system", "mspace")
 }
 
+func TestRetainIssueTestEnvironmentKeepsNamespaceLifecycle(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Retain namespace", "ready_for_test")
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO issue_test_environments (issue_id, namespace, namespace_status, cleanup_status, preview_url, created_at, updated_at)
+		VALUES ('issue-1', 'ns-demo', 'active', 'cleanup_failed', 'http://192.0.2.10:30080/', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert test environment: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Post("/api/issues/{issueID}/test-environment/retain", application.handleRetainIssueTestEnvironment)
+
+	retain := httptest.NewRecorder()
+	router.ServeHTTP(retain, authRequest(http.MethodPost, "/api/issues/issue-1/test-environment/retain", "", humanToken))
+	if retain.Code != http.StatusOK {
+		t.Fatalf("expected retain to return 200, got %d body=%s", retain.Code, retain.Body.String())
+	}
+
+	var namespaceStatus, cleanupStatus string
+	if err := db.QueryRow(`SELECT namespace_status, cleanup_status FROM issue_test_environments WHERE issue_id = 'issue-1'`).Scan(&namespaceStatus, &cleanupStatus); err != nil {
+		t.Fatalf("query test environment: %v", err)
+	}
+	if namespaceStatus != "active" || cleanupStatus != "retained" {
+		t.Fatalf("expected retain to preserve namespace lifecycle and update decision, got namespace=%q cleanup=%q", namespaceStatus, cleanupStatus)
+	}
+	assertCommentAuthorContains(t, db, "issue-1", "Retained test namespace `ns-demo` for later inspection.", "system", "mspace")
+}
+
+func TestRetainIssueTestEnvironmentRejectsActiveSession(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Retain with active session", "ready_for_test")
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, agent_status, created_at, updated_at)
+		VALUES ('session-1', 'issue-1', 'codex', 'codex', 'local', 'deploy', 'running', 'mspace/issue/session', '/tmp/workdir', 'reasoning', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert running session: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issue_test_environments (issue_id, namespace, namespace_status, cleanup_status, preview_url, created_at, updated_at)
+		VALUES ('issue-1', 'ns-demo', 'active', 'cleanup_failed', 'http://192.0.2.10:30080/', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert test environment: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Post("/api/issues/{issueID}/test-environment/retain", application.handleRetainIssueTestEnvironment)
+
+	retain := httptest.NewRecorder()
+	router.ServeHTTP(retain, authRequest(http.MethodPost, "/api/issues/issue-1/test-environment/retain", "", humanToken))
+	if retain.Code != http.StatusConflict {
+		t.Fatalf("expected retain to return 409, got %d body=%s", retain.Code, retain.Body.String())
+	}
+
+	var namespaceStatus, cleanupStatus string
+	if err := db.QueryRow(`SELECT namespace_status, cleanup_status FROM issue_test_environments WHERE issue_id = 'issue-1'`).Scan(&namespaceStatus, &cleanupStatus); err != nil {
+		t.Fatalf("query test environment: %v", err)
+	}
+	if namespaceStatus != "active" || cleanupStatus != "cleanup_failed" {
+		t.Fatalf("expected failed retain to leave environment unchanged, got namespace=%q cleanup=%q", namespaceStatus, cleanupStatus)
+	}
+}
+
 func TestCancelOrphanedRunningSessionAllowsStop(t *testing.T) {
 	application, db := newAuthTestApp(t)
 	humanToken := configureTestHumanAuth(t, application)
@@ -1097,6 +1164,67 @@ func TestProbePreviewCandidatesRejectsServerErrors(t *testing.T) {
 	result := probePreviewCandidates([]previewCandidate{{URL: server.URL, Source: "nodeport"}})
 	if result.OK || !strings.Contains(result.Error, "HTTP 503") {
 		t.Fatalf("expected 503 preview to fail, got %+v", result)
+	}
+}
+
+func TestProbeIssueTestEnvironmentOnlyUpdatesEnvironmentState(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Probe namespace", "blocked")
+	preview := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer preview.Close()
+
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, agent_status, created_at, updated_at)
+		VALUES ('session-1', 'issue-1', 'codex', 'codex', 'local', 'deploy', 'completed', 'mspace/issue/session', '/tmp/workdir', 'completed', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert deploy session: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issue_test_environments (issue_id, namespace, namespace_status, cleanup_status, preview_url, last_deploy_session_id, created_at, updated_at)
+		VALUES ('issue-1', 'ns-demo', 'preview_unverified', 'retained', ?, 'session-1', ?, ?)
+	`, preview.URL, now, now); err != nil {
+		t.Fatalf("insert test environment: %v", err)
+	}
+
+	router := chi.NewRouter()
+	router.Post("/api/issues/{issueID}/test-environment/probe", application.handleProbeIssueTestEnvironment)
+
+	probe := httptest.NewRecorder()
+	router.ServeHTTP(probe, authRequest(http.MethodPost, "/api/issues/issue-1/test-environment/probe", "", humanToken))
+	if probe.Code != http.StatusOK {
+		t.Fatalf("expected probe to return 200, got %d body=%s", probe.Code, probe.Body.String())
+	}
+
+	var namespaceStatus, cleanupStatus, issueStatus string
+	if err := db.QueryRow(`SELECT namespace_status, cleanup_status FROM issue_test_environments WHERE issue_id = 'issue-1'`).Scan(&namespaceStatus, &cleanupStatus); err != nil {
+		t.Fatalf("query test environment: %v", err)
+	}
+	if namespaceStatus != "active" || cleanupStatus != "retained" {
+		t.Fatalf("expected probe to update only environment status, got namespace=%q cleanup=%q", namespaceStatus, cleanupStatus)
+	}
+	if err := db.QueryRow(`SELECT status FROM issues WHERE id = 'issue-1'`).Scan(&issueStatus); err != nil {
+		t.Fatalf("query issue status: %v", err)
+	}
+	if issueStatus != "blocked" {
+		t.Fatalf("expected probe to leave issue status unchanged, got %q", issueStatus)
+	}
+	for table, query := range map[string]string{
+		"deployment_evidence":     `SELECT COUNT(*) FROM deployment_evidence WHERE issue_id = 'issue-1'`,
+		"session_review_evidence": `SELECT COUNT(*) FROM session_review_evidence WHERE issue_id = 'issue-1'`,
+		"session_failures":        `SELECT COUNT(*) FROM session_failures WHERE issue_id = 'issue-1'`,
+	} {
+		var count int
+		if err := db.QueryRow(query).Scan(&count); err != nil {
+			t.Fatalf("query %s count: %v", table, err)
+		}
+		if count != 0 {
+			t.Fatalf("expected probe not to create %s rows, got %d", table, count)
+		}
 	}
 }
 
@@ -1431,6 +1559,211 @@ func TestEnsureSessionReviewEvidenceTablesCreatesTable(t *testing.T) {
 	}
 	if !tableIndexExists(t, db, "session_review_evidence", "idx_session_review_evidence_issue_created") {
 		t.Fatal("expected session review evidence issue index to exist")
+	}
+}
+
+func TestEnsureIssueHandoffTablesCreatesTable(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db}
+	if err := application.ensureIssueHandoffTables(); err != nil {
+		t.Fatalf("ensure issue handoff tables failed: %v", err)
+	}
+	if err := application.ensureIssueHandoffTables(); err != nil {
+		t.Fatalf("ensure issue handoff tables should be idempotent: %v", err)
+	}
+	for _, column := range []string{"id", "issue_id", "source_session_id", "source_commit_sha", "branch", "head_commit_sha", "commits_json", "kind", "pr_url", "pr_number", "pr_state", "pr_title", "preview_url", "evidence_summary", "created_via", "last_checked_at", "error", "created_at", "updated_at"} {
+		if !tableColumnExists(t, db, "issue_handoffs", column) {
+			t.Fatalf("expected issue_handoffs.%s to exist", column)
+		}
+	}
+	if !tableIndexExists(t, db, "issue_handoffs", "idx_issue_handoffs_issue_updated") {
+		t.Fatal("expected issue handoff issue index to exist")
+	}
+}
+
+func TestBuildIssueHandoffUsesBranchCommitsAndReviewEvidence(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for handoff test")
+	}
+
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init", "-b", "main")
+	runGit(t, repoDir, "config", "user.name", "mspace test")
+	runGit(t, repoDir, "config", "user.email", "mspace@example.com")
+	writeFile(t, filepath.Join(repoDir, "README.md"), "# demo\n")
+	runGit(t, repoDir, "add", "README.md")
+	runGit(t, repoDir, "commit", "-m", "base")
+	runGit(t, repoDir, "checkout", "-b", "mspace/issue/session-1")
+	writeFile(t, filepath.Join(repoDir, "app.txt"), "hello\n")
+	runGit(t, repoDir, "add", "app.txt")
+	runGit(t, repoDir, "commit", "-m", "feat: add app")
+	sourceCommit := strings.TrimSpace(gitOutput(t, repoDir, "rev-parse", "HEAD"))
+
+	application, db := newAuthTestApp(t)
+	insertAuthTestIssue(t, db, "issue-1", "", "Ship branch handoff", "needs_review")
+	insertAuthTestAgentSession(t, db, "session-1", "issue-1")
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO issue_change_nodes (id, issue_id, session_id, commit_sha, branch, subject, files_changed, created_at)
+		VALUES ('node-1', 'issue-1', 'session-1', ?, 'mspace/issue/session-1', 'feat: add app', 1, ?)
+	`, sourceCommit, now); err != nil {
+		t.Fatalf("insert issue change node: %v", err)
+	}
+
+	detail := issueDetail{
+		Issue: issue{
+			ID:    "issue-1",
+			Title: "Ship branch handoff",
+		},
+		Project: project{
+			ID:            "project-1",
+			Name:          "Demo",
+			RepoPath:      repoDir,
+			DefaultBranch: "main",
+		},
+		ReviewEvidence: []sessionReviewEvidence{{
+			ID:               "review-1",
+			IssueID:          "issue-1",
+			SessionID:        "deploy-session",
+			SourceSessionID:  "session-1",
+			SourceCommitSHA:  sourceCommit,
+			Branch:           "mspace/issue/session-1",
+			AgentSummary:     "Implemented the source change.",
+			Tests:            []reviewEvidenceCheck{{Name: "go test ./...", Status: "passed", Summary: "ok"}},
+			BuildResult:      reviewEvidenceResult{Status: "passed", Summary: "build succeeded"},
+			DeploymentResult: reviewEvidenceResult{Status: "completed", Summary: "preview deployed"},
+			PreviewURL:       "https://preview.example.com/issue-1",
+			Risks:            []string{"manual QA still recommended"},
+		}},
+	}
+
+	handoff, err := application.buildIssueHandoff(detail, issueHandoffRequest{
+		SourceSessionID: "session-1",
+		SourceCommitSHA: sourceCommit,
+		Kind:            "pr",
+	}, "gh")
+	if err != nil {
+		t.Fatalf("build issue handoff failed: %v", err)
+	}
+	if handoff.Branch != "mspace/issue/session-1" {
+		t.Fatalf("expected handoff branch from source node, got %q", handoff.Branch)
+	}
+	if handoff.HeadCommitSHA != sourceCommit {
+		t.Fatalf("expected handoff head commit %q, got %q", sourceCommit, handoff.HeadCommitSHA)
+	}
+	if len(handoff.Commits) != 1 || handoff.Commits[0].SHA != sourceCommit || handoff.Commits[0].Subject != "feat: add app" {
+		t.Fatalf("unexpected handoff commits: %+v", handoff.Commits)
+	}
+	if handoff.PreviewURL != "https://preview.example.com/issue-1" {
+		t.Fatalf("expected preview URL from review evidence, got %q", handoff.PreviewURL)
+	}
+	for _, expected := range []string{"Agent summary: Implemented the source change.", "Tests: go test ./... passed - ok", "Preview URL: https://preview.example.com/issue-1"} {
+		if !strings.Contains(handoff.EvidenceSummary, expected) {
+			t.Fatalf("expected evidence summary to contain %q, got:\n%s", expected, handoff.EvidenceSummary)
+		}
+	}
+
+	body := buildIssuePullRequestBody(detail, handoff)
+	for _, expected := range []string{"Issue: `issue-1`", "Title: Ship branch handoff", "Branch: `mspace/issue/session-1`", "https://preview.example.com/issue-1", "Agent summary: Implemented the source change."} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("expected PR body to contain %q, got:\n%s", expected, body)
+		}
+	}
+}
+
+func TestStoreIssueHandoffKeepsOnePullRequestPerIssue(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	insertAuthTestIssue(t, db, "issue-1", "", "One issue PR", "needs_review")
+
+	first, err := application.storeIssueHandoff(issueHandoff{
+		IssueID:         "issue-1",
+		SourceSessionID: "session-1",
+		SourceCommitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Branch:          "mspace/issue/session-1",
+		Kind:            "pr",
+		PRURL:           "https://github.com/mlhiter/mspace/pull/1",
+		PRNumber:        1,
+		PRState:         "open",
+		CreatedVia:      "manual",
+	})
+	if err != nil {
+		t.Fatalf("store first handoff: %v", err)
+	}
+	second, err := application.storeIssueHandoff(issueHandoff{
+		IssueID:         "issue-1",
+		SourceSessionID: "session-2",
+		SourceCommitSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Branch:          "mspace/issue/session-2",
+		Kind:            "pr",
+		PRURL:           "https://github.com/mlhiter/mspace/pull/2",
+		PRNumber:        2,
+		PRState:         "open",
+		CreatedVia:      "manual",
+	})
+	if err != nil {
+		t.Fatalf("store second handoff: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected second PR handoff to update first row, got first=%q second=%q", first.ID, second.ID)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM issue_handoffs WHERE issue_id = 'issue-1' AND kind = 'pr'`).Scan(&count); err != nil {
+		t.Fatalf("query handoff count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one PR handoff row, got %d", count)
+	}
+	var prURL string
+	if err := db.QueryRow(`SELECT pr_url FROM issue_handoffs WHERE issue_id = 'issue-1'`).Scan(&prURL); err != nil {
+		t.Fatalf("query handoff URL: %v", err)
+	}
+	if prURL != "https://github.com/mlhiter/mspace/pull/2" {
+		t.Fatalf("expected current PR URL to update, got %q", prURL)
+	}
+}
+
+func TestIssueHandoffCommentLinksPullRequest(t *testing.T) {
+	comment := issueHandoffComment(issueHandoff{
+		PRURL:           "https://github.com/mlhiter/mspace/pull/12",
+		PRNumber:        12,
+		PRState:         "open",
+		Branch:          "mspace/issue/session-1",
+		SourceCommitSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	})
+	if !strings.Contains(comment, "[PR #12](https://github.com/mlhiter/mspace/pull/12)") {
+		t.Fatalf("expected PR handoff comment to contain a markdown PR link, got %q", comment)
+	}
+	if strings.Contains(comment, "`https://github.com") {
+		t.Fatalf("expected PR URL not to be rendered as inline code, got %q", comment)
+	}
+}
+
+func TestEnsureSessionFailureTablesCreatesTable(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db}
+	if err := application.ensureSessionFailureTables(); err != nil {
+		t.Fatalf("ensure session failure tables failed: %v", err)
+	}
+	if err := application.ensureSessionFailureTables(); err != nil {
+		t.Fatalf("ensure session failure tables should be idempotent: %v", err)
+	}
+	for _, column := range []string{"id", "issue_id", "session_id", "phase", "status", "failed_command", "error_summary", "error_excerpt", "cluster", "namespace", "resource_kind", "resource_name", "evidence_id", "review_evidence_id", "retry_session_id", "continued_session_id", "created_at", "updated_at"} {
+		if !tableColumnExists(t, db, "session_failures", column) {
+			t.Fatalf("expected session_failures.%s to exist", column)
+		}
+	}
+	if !tableIndexExists(t, db, "session_failures", "idx_session_failures_issue_created") {
+		t.Fatal("expected session failures issue index to exist")
 	}
 }
 
@@ -2153,6 +2486,129 @@ func TestBuildSessionReviewEvidenceCompactsDerivedCommands(t *testing.T) {
 		if check.Status != "passed" {
 			t.Fatalf("expected superseded test failures to be hidden by latest pass, got %+v", review.Tests)
 		}
+	}
+}
+
+func TestBuildSessionFailureUsesFailedCommandAndEvidence(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db, broker: newEventBroker(), workdir: t.TempDir(), repoRoot: t.TempDir()}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES ('project-1', 'Demo', ?, 'local', '', '', '', '', 'main', '', '', 'ctx-a', 'issue-ns', ?, ?)
+	`, t.TempDir(), now, now); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
+			VALUES ('issue-1', 'project-1', 'Failure issue', '', 'blocked', 'codex', 'agent', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	session := agentSession{
+		ID:          "session-1",
+		IssueID:     "issue-1",
+		RuntimeMode: "codex-app-server",
+		Status:      "failed",
+		Branch:      "mspace/issue/session-1",
+		Workdir:     t.TempDir(),
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES (?, ?, 'codex', 'codex', ?, '', ?, ?, ?, '', '', 'failed', '', 'retained', '', ?, ?)
+	`, session.ID, session.IssueID, session.RuntimeMode, session.Status, session.Branch, session.Workdir, now, now); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	application.appendSessionLog(session.ID, "command", `$ /bin/zsh -lc 'docker push registry.example/mspace:demo'`)
+	application.appendSessionLog(session.ID, "command", "Command failed with exit 1.\ndenied: requested access to the resource is denied")
+	evidence := deploymentEvidence{
+		ID:        "evidence-1",
+		IssueID:   session.IssueID,
+		SessionID: session.ID,
+		Cluster:   "ctx-a",
+		Namespace: "issue-ns",
+		Summary:   "Deployment failed.",
+		Details:   "LAST SEEN TYPE REASON OBJECT MESSAGE\n1m Warning Failed pod/demo denied: requested access",
+		CreatedAt: now,
+	}
+
+	failure := application.buildSessionFailure(session, project{ID: "project-1", KubeContext: "ctx-a", Namespace: "issue-ns"}, errors.New("command failed"), &evidence, "", "")
+	if failure.Phase != "image_push" {
+		t.Fatalf("expected image_push phase, got %+v", failure)
+	}
+	if !strings.Contains(failure.FailedCommand, "docker push") || !strings.Contains(failure.ErrorSummary, "denied") {
+		t.Fatalf("expected failed command and summary, got %+v", failure)
+	}
+	if failure.ResourceKind != "pod" || failure.ResourceName != "demo" || failure.EvidenceID != "evidence-1" {
+		t.Fatalf("expected Kubernetes evidence linkage, got %+v", failure)
+	}
+
+	stored, err := application.storeSessionFailure(failure)
+	if err != nil {
+		t.Fatalf("store session failure: %v", err)
+	}
+	loaded, err := application.listSessionFailures("issue-1")
+	if err != nil {
+		t.Fatalf("list session failures: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].ID != stored.ID || loaded[0].Phase != "image_push" {
+		t.Fatalf("unexpected loaded failures: %+v", loaded)
+	}
+}
+
+func TestBackfillSessionFailuresCreatesRowsForExistingFailedSessions(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db, broker: newEventBroker(), workdir: t.TempDir(), repoRoot: t.TempDir()}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES ('project-1', 'Demo', ?, 'local', '', '', '', '', 'main', '', '', 'ctx-a', 'issue-ns', ?, ?)
+	`, t.TempDir(), now, now); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
+			VALUES ('issue-1', 'project-1', 'Failure issue', '', 'blocked', 'codex', 'agent', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES ('session-1', 'issue-1', 'codex', 'codex', 'codex-app-server', '', 'failed', 'mspace/issue/session-1', ?, '', '', 'failed', '', 'retained', '', ?, ?)
+	`, t.TempDir(), now, now); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	application.appendSessionLog("session-1", "command", `$ /bin/zsh -lc 'pnpm test'`)
+	application.appendSessionLog("session-1", "command", "Command failed with exit 1.\nTest failed.")
+
+	if err := application.backfillSessionFailures(); err != nil {
+		t.Fatalf("backfill session failures: %v", err)
+	}
+	if err := application.backfillSessionFailures(); err != nil {
+		t.Fatalf("backfill session failures should be idempotent: %v", err)
+	}
+	loaded, err := application.listSessionFailures("issue-1")
+	if err != nil {
+		t.Fatalf("list session failures: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].Phase != "test" || !strings.Contains(loaded[0].FailedCommand, "pnpm test") {
+		t.Fatalf("unexpected backfilled failure: %+v", loaded)
 	}
 }
 

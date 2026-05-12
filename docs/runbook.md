@@ -15,7 +15,7 @@
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional session review artifact. The runner imports compact commands, tests, build/deploy results, agent summary, risks, and follow-ups into `session_review_evidence`. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-learned project runbook artifact. When present after a successful session, the runner stores it as the current project runbook. |
 
-Reusable cluster configs are stored in `clusters`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Review snapshots are stored in `session_review_evidence`; raw execution trails stay in `session_logs`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Comment reactions are stored in `comment_reactions` so reaction counts do not mutate comment Markdown. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `cleanup_status`, and `cleaned_at`.
+Reusable cluster configs are stored in `clusters`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Review snapshots are stored in `session_review_evidence`; continueable failed-session and failed-environment records are stored in `session_failures`; branch and PR delivery records are stored in `issue_handoffs`; raw execution trails stay in `session_logs`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Comment reactions are stored in `comment_reactions` so reaction counts do not mutate comment Markdown. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `trigger_comment_id`, `agent_token`, `cleanup_status`, and `cleaned_at`.
 
 The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
 
@@ -114,9 +114,12 @@ Session metadata is also passed into the Codex app-server process environment as
 | `MSPACE_ISSUE_ID` | Current issue id. |
 | `MSPACE_SESSION_ID` | Current session id. |
 | `MSPACE_API_BASE_URL` | Local runner API base URL. |
+| `MSPACE_AGENT_TOKEN` | Scoped bearer token for agent writes back to the local runner API. |
 | `MSPACE_AGENT_PROFILE` | Selected managed agent profile id. |
 | `MSPACE_SESSION_BRANCH` | Planned session branch. |
 | `MSPACE_SESSION_WORKDIR` | Prepared git worktree path. |
+| `MSPACE_SOURCE_SESSION_ID` | Selected source session for a deploy/test continuation, when present. |
+| `MSPACE_SOURCE_COMMIT_SHA` | Selected source commit for a deploy/test continuation, when present. |
 | `MSPACE_SESSION_CONTEXT` | Markdown context file written under `~/.mspace/workdirs/_contexts/`. |
 | `MSPACE_SESSION_ARTIFACT_DIR` | Session artifact directory under the prepared worktree. |
 
@@ -208,6 +211,18 @@ Recent sessions:
 
 ```bash
 sqlite3 ~/.mspace/mspace.db "select id,provider,agent_profile,status,agent_status,cleanup_status,cleaned_at,codex_thread_id,codex_turn_id,branch,workdir,updated_at from agent_sessions order by updated_at desc limit 5;"
+```
+
+Failure evidence:
+
+```bash
+sqlite3 ~/.mspace/mspace.db "select issue_id,session_id,phase,status,failed_command,error_summary,namespace,resource_kind,resource_name,updated_at from session_failures order by updated_at desc limit 10;"
+```
+
+Issue branch or PR handoff records:
+
+```bash
+sqlite3 ~/.mspace/mspace.db "select issue_id,kind,branch,pr_url,pr_state,error,updated_at from issue_handoffs order by updated_at desc limit 10;"
 ```
 
 Issue labels:
@@ -306,12 +321,14 @@ Queue an issue test deployment:
 
 ```bash
 CLUSTER_ID="$(sqlite3 ~/.mspace/mspace.db "select id from clusters order by updated_at desc limit 1;")"
+SOURCE_SESSION_ID="$(sqlite3 ~/.mspace/mspace.db "select session_id from issue_change_nodes where issue_id = '<issue-id>' order by created_at desc limit 1;")"
+SOURCE_COMMIT_SHA="$(sqlite3 ~/.mspace/mspace.db "select commit_sha from issue_change_nodes where issue_id = '<issue-id>' order by created_at desc limit 1;")"
 curl -X POST http://127.0.0.1:7788/api/issues/<issue-id>/test-deploy \
   -H 'Content-Type: application/json' \
-  -d "{\"clusterId\":\"${CLUSTER_ID}\",\"exposureMode\":\"nodeport\",\"nodeHost\":\"test-node.example.com\"}"
+  -d "{\"clusterId\":\"${CLUSTER_ID}\",\"sourceSessionId\":\"${SOURCE_SESSION_ID}\",\"sourceCommitSha\":\"${SOURCE_COMMIT_SHA}\",\"exposureMode\":\"nodeport\",\"nodeHost\":\"test-node.example.com\"}"
 ```
 
-The deploy/test agent uses the selected cluster config, creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when selected with a preview domain, and can write `previewUrl` to `$MSPACE_SESSION_ARTIFACT_DIR/test-environment.json`. The runner then captures Kubernetes evidence, discovers preview candidates, and checks whether the preview URL opens.
+The deploy/test agent uses the selected source commit plus selected cluster config, creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when selected with a preview domain, and can write `previewUrl` to `$MSPACE_SESSION_ARTIFACT_DIR/test-environment.json`. The runner then captures Kubernetes evidence, discovers preview candidates, checks whether the preview URL opens, and records a `session_failures` row when deploy, preview, interruption, or cleanup state needs attention.
 
 Force the same preview status check that Issue Detail normally runs in the background:
 
@@ -534,6 +551,28 @@ cd runner && MSPACE_PORT=7788 go run .
 ```
 
 If a stale active row is still shown while the current runner is serving, the Stop button should now succeed. It marks only the session `cancelled`, appends a system log explaining that the in-memory runner handle was lost, and leaves the top-level issue status unchanged so the issue can be retried.
+
+### Failure Evidence Does Not Appear In Issue Detail
+
+Failure cards render only when `session_failures` has rows for the issue or session. The runner creates rows when a session fails, when deploy/preview/cleanup reconciliation needs attention, when Stop resolves an orphaned active row, and when startup backfills older failed or cancelled sessions that predate the structured failure table.
+
+Check whether the table has data:
+
+```bash
+sqlite3 ~/.mspace/mspace.db "select count(*) from session_failures;"
+sqlite3 ~/.mspace/mspace.db "select issue_id,session_id,phase,status,error_summary,updated_at from session_failures order by updated_at desc limit 10;"
+```
+
+If the table exists but the count is `0` while old failed sessions exist, restart the runner so startup migrations and backfill run:
+
+```bash
+curl http://127.0.0.1:7788/health
+lsof -nP -iTCP:7788 -sTCP:LISTEN
+kill <runner-pid>
+cd runner && MSPACE_PORT=7788 go run .
+```
+
+After backfill, open the affected issue and check Issue Detail `Overview` for `Failure needs attention` and `Evidence` for `Failure evidence`.
 
 ### Session Fails Before Starting Runtime
 

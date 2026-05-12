@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "@tanstack/react-router";
+import { Link, useParams } from "@tanstack/react-router";
 import type { Editor } from "@tiptap/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   BookOpenText,
   Bot,
+  Bug,
   CheckCircle2,
   ChevronDown,
   CircleAlert,
@@ -16,11 +17,13 @@ import {
   ExternalLink,
   Files,
   GitCommit,
+  GitPullRequest,
   Globe2,
   History,
   ListChecks,
   Pencil,
   Plus,
+  RefreshCw,
   Rocket,
   Save,
   Send,
@@ -40,6 +43,7 @@ import {
   type CommentReactionSummary,
   type DeploymentEvidence,
   type IssueChangeNode,
+  type IssueHandoff,
   type IssueLabel,
   type IssueLabelDefinition,
   type IssueListItem,
@@ -48,6 +52,7 @@ import {
   type ReviewEvidenceCheck,
   type ReviewEvidenceCommand,
   type ReviewEvidenceResult,
+  type SessionFailure,
   type SessionLog,
   type SessionReviewEvidence,
   type SessionStreamEvent,
@@ -94,7 +99,7 @@ type TimelineItem =
   | { kind: "opened"; createdAt: string }
   | { kind: "comment"; createdAt: string; comment: Comment }
   | { kind: "session"; createdAt: string; session: AgentSession }
-  | { kind: "evidence"; createdAt: string; evidence: DeploymentEvidence };
+  | { kind: "failure"; createdAt: string; failure: SessionFailure };
 
 type IssueTab = "overview" | "commits" | "sessions" | "evidence";
 type ActorKind = "human" | "codex" | "system" | "evidence";
@@ -317,6 +322,26 @@ function previewStrategy(environment: IssueTestEnvironment | null | undefined) {
   return environment.nodeHost ? `NodePort · ${environment.nodeHost}` : "NodePort";
 }
 
+function cleanupDecisionLabel(status: string) {
+  if (status === "retained") return "Retained for debug";
+  if (status === "cleanup_requested") return "Cleanup requested";
+  if (status === "cleaned") return "Cleaned";
+  if (status === "cleanup_failed") return "Cleanup failed";
+  return status ? status.replace(/[_-]+/g, " ") : "Not decided";
+}
+
+function namespaceStatusLabel(status: string) {
+  if (!status) return "Not requested";
+  if (status === "active") return "Active";
+  if (status === "planned") return "Planned";
+  return status.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function environmentHasRetainableNamespace(environment: IssueTestEnvironment | null | undefined) {
+  if (!environment) return false;
+  return !["cleaned", "cleanup_requested"].includes(environment.namespaceStatus) && environment.cleanupStatus !== "cleaned";
+}
+
 function isNoisySystemComment(comment: Comment) {
   if (comment.authorType !== "system") return false;
   return [
@@ -479,6 +504,22 @@ function RichText(props: { children: string; basePath?: string; className?: stri
             const isBlock = /language-/.test(className || "");
             if (isBlock) {
               return <code className={className}>{children}</code>;
+            }
+            const value = plainText(children).trim();
+            if (isHttpUrl(value)) {
+              return (
+                <a
+                  href={value}
+                  className="font-medium text-[color:var(--accent-blue)] underline underline-offset-2 transition-colors hover:text-[color:var(--text)]"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    void openRichLink(value, props.basePath);
+                  }}
+                >
+                  {children}
+                  <ExternalLink data-icon className="ml-1 inline-block align-[-2px]" />
+                </a>
+              );
             }
             return (
               <code className="rounded-[5px] bg-[color:var(--block)] px-1.5 py-0.5 font-mono text-[12px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
@@ -1025,7 +1066,170 @@ function ChangeNodeFileList(props: { changes: WorkspaceChange[]; workdir: string
   );
 }
 
-function IssueCommitsTab(props: { changeNodes: IssueChangeNode[]; sessions: AgentSession[]; agents: AgentProfile[] }) {
+function handoffMatchesNode(handoff: IssueHandoff, node: IssueChangeNode) {
+  return (
+    handoff.sourceCommitSha === node.commitSha ||
+    Boolean(handoff.sourceCommitSha && node.commitSha.startsWith(handoff.sourceCommitSha)) ||
+    Boolean(handoff.sourceSessionId && handoff.sourceSessionId === node.sessionId) ||
+    Boolean(handoff.branch && handoff.branch === node.branch)
+  );
+}
+
+function handoffTitle(handoff: IssueHandoff) {
+  if (handoff.prNumber > 0) return `PR #${handoff.prNumber}`;
+  if (handoff.prUrl) return "Pull request";
+  return "Branch";
+}
+
+function handoffStateLabel(handoff: IssueHandoff) {
+  if (handoff.error) return "Needs attention";
+  if (handoff.prState) return handoff.prState.replace(/[_-]+/g, " ").toLowerCase();
+  if (handoff.prUrl) return "Synced";
+  return "Branch";
+}
+
+function HandoffStatusPill(props: { handoff: IssueHandoff }) {
+  const state = (props.handoff.error ? "error" : props.handoff.prState || props.handoff.kind).toLowerCase();
+  const tone =
+    state === "open" || state === "draft"
+      ? "bg-[color:var(--blue-soft)] text-[color:var(--accent-blue)]"
+      : state === "merged"
+        ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
+        : state === "closed" || state === "error"
+          ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
+          : "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
+  return <span className={cn("inline-flex w-fit rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 capitalize", tone)}>{handoffStateLabel(props.handoff)}</span>;
+}
+
+function issuePullRequestHandoff(handoffs: IssueHandoff[]) {
+  return handoffs.find((handoff) => handoff.kind === "pr" && handoff.prUrl) || handoffs.find((handoff) => handoff.prUrl);
+}
+
+function changeNodeSourceLabel(node: IssueChangeNode) {
+  return `${node.branch || "detached"} · ${node.shortCommitSha || node.commitSha.slice(0, 12)}`;
+}
+
+function IssueHandoffPanel(props: {
+  changeNodes: IssueChangeNode[];
+  handoffs: IssueHandoff[];
+  isCreatingPr: boolean;
+  refreshingHandoffId: string;
+  createError: Error | null;
+  refreshError: Error | null;
+  onCreatePr: (node: IssueChangeNode) => void;
+  onRefresh: (handoff: IssueHandoff) => void;
+}) {
+  const nodes = useMemo(() => props.changeNodes.filter((node) => !node.error), [props.changeNodes]);
+  const [sourceCommit, setSourceCommit] = useState(nodes[0]?.commitSha || "");
+  useEffect(() => {
+    if (nodes.length === 0) {
+      setSourceCommit("");
+      return;
+    }
+    if (!nodes.some((node) => node.commitSha === sourceCommit)) {
+      setSourceCommit(nodes[0].commitSha);
+    }
+  }, [nodes, sourceCommit]);
+  const selectedNode = nodes.find((node) => node.commitSha === sourceCommit) || nodes[0];
+  const syncedPR = issuePullRequestHandoff(props.handoffs);
+  const canCreate = Boolean(selectedNode?.branch) && !syncedPR?.prUrl && !props.isCreatingPr;
+  return (
+    <div className="grid gap-3 rounded-[10px] bg-[color:var(--paper)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold leading-5 text-[color:var(--text)]">
+            <GitPullRequest data-icon className="text-[color:var(--muted)]" />
+            Issue pull request
+          </div>
+          <div className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">
+            One PR delivers this issue. Commits below are the source evidence for that PR.
+          </div>
+        </div>
+        <Button type="button" variant="secondary" size="sm" disabled={!canCreate} title={syncedPR?.prUrl ? "This issue already has a synced PR." : undefined} onClick={() => selectedNode && props.onCreatePr(selectedNode)}>
+          <GitPullRequest data-icon />
+          {props.isCreatingPr ? "Syncing" : "Create or sync PR"}
+        </Button>
+      </div>
+
+      {nodes.length > 1 ? (
+        <div className="grid gap-1.5">
+          <div className="text-[11px] font-medium leading-4 text-[color:var(--faint)]">Source branch</div>
+          <Select value={selectedNode?.commitSha || "__none"} onValueChange={(value) => setSourceCommit(value === "__none" ? "" : value)}>
+            <SelectTrigger className="max-w-full sm:max-w-[360px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none">Select source branch</SelectItem>
+              {nodes.map((node) => (
+                <SelectItem key={node.id || node.commitSha} value={node.commitSha}>
+                  {changeNodeSourceLabel(node)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : selectedNode ? (
+        <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
+          <span className="font-mono">{selectedNode.branch || "detached"}</span>
+          <span className="font-mono">{selectedNode.shortCommitSha || selectedNode.commitSha.slice(0, 12)}</span>
+        </div>
+      ) : null}
+
+      {props.handoffs.length > 0 ? (
+        <div className="grid gap-2">
+          {props.handoffs.map((handoff) => (
+            <div key={handoff.id} className="grid min-w-0 gap-2 text-[12px] leading-5 text-[color:var(--muted-strong)]">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <HandoffStatusPill handoff={handoff} />
+                <span className="font-medium text-[color:var(--text)]">{handoffTitle(handoff)}</span>
+                {handoff.prTitle ? <span className="min-w-0 truncate text-[color:var(--muted)]">{handoff.prTitle}</span> : null}
+              </div>
+              <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-[color:var(--faint)]">
+                {handoff.branch ? <span>{handoff.branch}</span> : null}
+                {handoff.headCommitSha ? <span>{handoff.headCommitSha.slice(0, 12)}</span> : null}
+                {handoff.commits.length > 0 ? <span>{handoff.commits.length} commits</span> : null}
+                {handoff.lastCheckedAt ? <span title={formatAbsoluteTime(handoff.lastCheckedAt)}>{formatRelativeTime(handoff.lastCheckedAt)}</span> : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {handoff.prUrl ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => void openRichLink(handoff.prUrl)}>
+                    <ExternalLink data-icon />
+                    Open PR
+                  </Button>
+                ) : null}
+                {handoff.prUrl ? (
+                  <Button type="button" variant="ghost" size="sm" disabled={props.refreshingHandoffId === handoff.id} onClick={() => props.onRefresh(handoff)}>
+                    <RefreshCw data-icon />
+                    {props.refreshingHandoffId === handoff.id ? "Refreshing" : "Refresh"}
+                  </Button>
+                ) : null}
+              </div>
+              {handoff.error ? <Notice tone="danger">{handoff.error}</Notice> : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-[12px] leading-5 text-[color:var(--muted)]">No PR has been detected for this issue branch yet.</div>
+      )}
+
+      {props.createError ? <Notice tone="danger">{props.createError.message}</Notice> : null}
+      {props.refreshError ? <Notice tone="danger">{props.refreshError.message}</Notice> : null}
+    </div>
+  );
+}
+
+function IssueCommitsTab(props: {
+  changeNodes: IssueChangeNode[];
+  sessions: AgentSession[];
+  agents: AgentProfile[];
+  handoffs: IssueHandoff[];
+  isCreatingPr: boolean;
+  refreshingHandoffId: string;
+  createPrError: Error | null;
+  refreshHandoffError: Error | null;
+  onCreatePr: (node: IssueChangeNode) => void;
+  onRefreshHandoff: (handoff: IssueHandoff) => void;
+}) {
   const nodes = listOrEmpty(props.changeNodes);
   const [selectedCommit, setSelectedCommit] = useState(nodes[0]?.commitSha || "");
 
@@ -1068,12 +1272,25 @@ function IssueCommitsTab(props: { changeNodes: IssueChangeNode[]; sessions: Agen
         <InlineMeta>{nodes.length} captured</InlineMeta>
       </div>
 
+      <IssueHandoffPanel
+        changeNodes={nodes}
+        handoffs={props.handoffs}
+        isCreatingPr={props.isCreatingPr}
+        refreshingHandoffId={props.refreshingHandoffId}
+        createError={props.createPrError}
+        refreshError={props.refreshHandoffError}
+        onCreatePr={props.onCreatePr}
+        onRefresh={props.onRefreshHandoff}
+      />
+
       <div className="grid gap-4 lg:grid-cols-[290px_minmax(0,1fr)]">
         <div className="grid content-start gap-1 rounded-[10px] bg-[color:var(--paper)] p-1 shadow-[inset_0_0_0_1px_var(--line)]">
           {nodes.map((node) => {
             const session = changeNodeSession(node, props.sessions);
             const agent = session ? sessionAgent(session, props.agents) : undefined;
             const active = selectedNode.commitSha === node.commitSha;
+            const nodeHandoffs = props.handoffs.filter((handoff) => handoffMatchesNode(handoff, node));
+            const latestHandoff = nodeHandoffs[0];
             return (
               <button
                 key={node.id || node.commitSha}
@@ -1095,6 +1312,13 @@ function IssueCommitsTab(props: { changeNodes: IssueChangeNode[]; sessions: Agen
                   <span>Session {node.sessionId.slice(0, 8)}</span>
                   <span title={formatAbsoluteTime(node.createdAt)}>{formatRelativeTime(node.createdAt)}</span>
                 </div>
+                {latestHandoff ? (
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <GitPullRequest data-icon className="shrink-0 text-[color:var(--muted)]" />
+                    <HandoffStatusPill handoff={latestHandoff} />
+                    {nodeHandoffs.length > 1 ? <span className="text-[11px] leading-4 text-[color:var(--faint)]">+{nodeHandoffs.length - 1}</span> : null}
+                  </div>
+                ) : null}
               </button>
             );
           })}
@@ -1388,6 +1612,7 @@ function ReviewStringList(props: { items: string[]; empty: string }) {
 function IssueEvidenceTab(props: {
   reviewEvidence: SessionReviewEvidence[];
   evidence: DeploymentEvidence[];
+  failures: SessionFailure[];
   testEnvironment: IssueTestEnvironment | null;
   sessions: AgentSession[];
   changeNodes: IssueChangeNode[];
@@ -1396,11 +1621,34 @@ function IssueEvidenceTab(props: {
 }) {
   const reviews = listOrEmpty(props.reviewEvidence);
   const evidence = listOrEmpty(props.evidence);
-  if (reviews.length === 0 && evidence.length === 0 && !props.testEnvironment) {
+  const failures = listOrEmpty(props.failures);
+  if (reviews.length === 0 && evidence.length === 0 && failures.length === 0 && !props.testEnvironment) {
     return <Notice>No review evidence has been captured for this issue yet.</Notice>;
   }
   return (
     <section className="grid min-w-0 gap-5 overflow-hidden">
+      {failures.length > 0 ? (
+        <EvidenceSection title="Failure evidence">
+          <div className="grid gap-3">
+            {failures.map((failure) => {
+              const session = props.sessions.find((item) => item.id === failure.sessionId);
+              const failureEvidence = props.evidence.find((item) => item.id === failure.evidenceId || item.sessionId === failure.sessionId);
+              const review = props.reviewEvidence.find((item) => item.id === failure.reviewEvidenceId || item.sessionId === failure.sessionId);
+              return (
+                <SessionFailureCard
+                  key={failure.id}
+                  failure={failure}
+                  session={session}
+                  evidence={failureEvidence}
+                  review={review}
+                  compact
+                />
+              );
+            })}
+          </div>
+        </EvidenceSection>
+      ) : null}
+
       {reviews.map((review) => {
         const sourceCommit = review.sourceCommitSha.trim();
         const sourceNode = sourceCommit ? props.changeNodes.find((node) => node.commitSha === sourceCommit || node.commitSha.startsWith(sourceCommit)) : undefined;
@@ -2079,6 +2327,180 @@ function DeployAttentionCallout(props: {
   );
 }
 
+function failurePhaseLabel(phase: string) {
+  switch (phase) {
+    case "build":
+      return "Build failed";
+    case "test":
+      return "Tests failed";
+    case "image_push":
+      return "Image push failed";
+    case "pod_startup":
+      return "Pod did not start";
+    case "network_exposure":
+      return "Service route failed";
+    case "preview_probe":
+      return "Preview not verified";
+    case "agent_interrupted":
+      return "Agent interrupted";
+    case "cleanup":
+      return "Cleanup failed";
+    default:
+      return "Failure needs attention";
+  }
+}
+
+function failureStatusLabel(status: string) {
+  switch (status) {
+    case "retrying":
+      return "Retrying";
+    case "continued":
+      return "Continued";
+    case "resolved":
+      return "Resolved";
+    case "stopped":
+      return "Stopped";
+    case "superseded":
+      return "Superseded";
+    default:
+      return "Open";
+  }
+}
+
+function failureMetaRows(failure: SessionFailure) {
+  return [
+    { label: "Failed command", value: failure.failedCommand, mono: true },
+    { label: "Cluster", value: failure.cluster },
+    { label: "Namespace", value: failure.namespace, mono: true },
+    { label: "Resource", value: [failure.resourceKind, failure.resourceName].filter(Boolean).join("/") },
+  ];
+}
+
+function failureCanRetryDeploy(failure: SessionFailure, environment: IssueTestEnvironment | null | undefined) {
+  if (!environment) return false;
+  if (environment.lastDeploySessionId === failure.sessionId || environment.lastCleanupSessionId === failure.sessionId) return true;
+  return ["image_push", "pod_startup", "network_exposure", "preview_probe", "cleanup"].includes(failure.phase);
+}
+
+function failureContinueDraft(failure: SessionFailure, agent: AgentProfile) {
+  const mention = mentionKey(agent.mention);
+  const lines = [
+    `@${mention} Continue from this failure.`,
+    "",
+    `Failure phase: ${failurePhaseLabel(failure.phase)}`,
+    failure.failedCommand ? `Failed command: \`${failure.failedCommand}\`` : "",
+    failure.errorSummary ? `Error summary: ${failure.errorSummary}` : "",
+    failure.namespace ? `Namespace: \`${failure.namespace}\`` : "",
+    failure.resourceName ? `Resource: \`${[failure.resourceKind, failure.resourceName].filter(Boolean).join("/")}\`` : "",
+    "",
+    "Use the Issue Evidence tab and session logs, fix the blocker, then rerun the relevant validation/deploy step.",
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+function SessionFailureCard(props: {
+  failure: SessionFailure;
+  session?: AgentSession;
+  evidence?: DeploymentEvidence;
+  review?: SessionReviewEvidence;
+  compact?: boolean;
+  canContinue?: boolean;
+  canRetry?: boolean;
+  isRetrying?: boolean;
+  canStop?: boolean;
+  isStopping?: boolean;
+  onContinue?: () => void;
+  onRetry?: () => void;
+  onStop?: () => void;
+}) {
+  const active = props.session ? ["queued", "running"].includes(props.session.status) : false;
+  return (
+    <div className={cn("grid gap-3 rounded-[10px] bg-[color:var(--danger-soft)] p-3 text-[13px] leading-5 text-[color:var(--danger)] shadow-[inset_0_0_0_1px_var(--line)]", props.compact && "bg-[color:var(--block-subtle)] text-[color:var(--text)]")}>
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2 font-semibold">
+            <CircleAlert data-icon className="shrink-0" />
+            <span className="min-w-0 truncate">{failurePhaseLabel(props.failure.phase)}</span>
+            {active ? <span className="text-[12px] font-normal text-[color:var(--warning)]">active</span> : null}
+          </div>
+          <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] text-[color:var(--muted)]">
+            <span>Session {props.failure.sessionId.slice(0, 8)}</span>
+            <span>{failureStatusLabel(props.failure.status)}</span>
+            {props.failure.updatedAt ? <span title={formatAbsoluteTime(props.failure.updatedAt)}>{formatRelativeTime(props.failure.updatedAt)}</span> : null}
+          </div>
+        </div>
+        <div className="flex flex-wrap justify-end gap-2">
+          {props.onContinue ? (
+            <Button type="button" variant="secondary" size="sm" disabled={!props.canContinue} onClick={props.onContinue}>
+              <Send data-icon />
+              Continue
+            </Button>
+          ) : null}
+          {props.onRetry ? (
+            <Button type="button" variant="secondary" size="sm" disabled={!props.canRetry || props.isRetrying} onClick={props.onRetry}>
+              <Rocket data-icon />
+              {props.isRetrying ? "Queueing" : "Retry deploy"}
+            </Button>
+          ) : null}
+          {props.onStop ? (
+            <Button type="button" variant="ghost" size="sm" disabled={!props.canStop || props.isStopping} onClick={props.onStop}>
+              <CircleStop data-icon />
+              {props.isStopping ? "Stopping" : "Stop"}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      {props.failure.errorSummary ? (
+        <div className="rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--line)] [overflow-wrap:anywhere]">
+          {props.failure.errorSummary}
+        </div>
+      ) : null}
+      <ReviewMetaGrid rows={failureMetaRows(props.failure)} />
+      {props.failure.errorExcerpt && !props.compact ? (
+        <ReviewDetailsDisclosure label="Show error excerpt">
+          <div className="max-h-44 overflow-auto whitespace-pre-wrap text-[12px] leading-5 text-[color:var(--muted)] [overflow-wrap:anywhere]">{props.failure.errorExcerpt}</div>
+        </ReviewDetailsDisclosure>
+      ) : null}
+      {(props.evidence || props.review) && !props.compact ? (
+        <div className="flex flex-wrap gap-2">
+          {props.evidence ? <span className="text-[12px] text-[color:var(--muted)]">Kubernetes evidence captured</span> : null}
+          {props.review ? <span className="text-[12px] text-[color:var(--muted)]">Review evidence captured</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SessionFailureTimelineItem(props: {
+  failure: SessionFailure;
+  session?: AgentSession;
+  evidence?: DeploymentEvidence;
+  review?: SessionReviewEvidence;
+  onContinue?: () => void;
+  canContinue?: boolean;
+  onRetry?: () => void;
+  canRetry?: boolean;
+  isRetrying?: boolean;
+  onStop?: () => void;
+  canStop?: boolean;
+  isStopping?: boolean;
+}) {
+  return (
+    <TimelineShell
+      actor={{ kind: "system", name: "mspace" }}
+      title={
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+          <span>Failure needs attention</span>
+          <StatusBadge value={props.failure.phase} valueLabel={failurePhaseLabel(props.failure.phase)} className="h-5 px-2 py-0 text-[11px]" />
+        </span>
+      }
+      time={props.failure.updatedAt || props.failure.createdAt}
+    >
+      <SessionFailureCard {...props} />
+    </TimelineShell>
+  );
+}
+
 type DeployStage = {
   id: string;
   label: string;
@@ -2502,6 +2924,169 @@ function SidebarSection(props: { title: string; children: React.ReactNode }) {
       <h2 className="text-[12px] font-medium leading-5 text-[color:var(--faint)]">{props.title}</h2>
       {props.children}
     </section>
+  );
+}
+
+function EnvironmentMetaLine(props: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid min-w-0 grid-cols-[88px_minmax(0,1fr)] items-baseline gap-2">
+      <div className="text-[12px] leading-5 text-[color:var(--muted)]">{props.label}</div>
+      <div className="min-w-0 text-[12px] leading-5 text-[color:var(--muted-strong)]">{props.children}</div>
+    </div>
+  );
+}
+
+function EnvironmentSessionLink(props: { label: string; sessionId: string; sessions: AgentSession[] }) {
+  const sessionId = props.sessionId.trim();
+  const session = props.sessions.find((item) => item.id === sessionId);
+  if (!sessionId) {
+    return <span className="text-[color:var(--faint)]">not queued</span>;
+  }
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <Button asChild variant="ghost" size="sm" className="-ml-2 h-7 max-w-full px-2">
+        <Link to="/sessions/$sessionId" params={{ sessionId }} title={`${props.label} session ${sessionId}`}>
+          <History data-icon />
+          <span className="font-mono">{sessionId.slice(0, 8)}</span>
+        </Link>
+      </Button>
+      {session ? <StatusBadge value={session.status} className="h-5 px-2 py-0 text-[11px]" /> : null}
+    </div>
+  );
+}
+
+function IssueTestEnvironmentPanel(props: {
+  environment: IssueTestEnvironment | null;
+  cluster?: Cluster;
+  sessions: AgentSession[];
+  hasActiveSession: boolean;
+  startError?: Error | null;
+  cleanupError?: Error | null;
+  retainError?: Error | null;
+  isStarting: boolean;
+  isCleaning: boolean;
+  isRetaining: boolean;
+  onStartDeploy: () => void;
+  onCleanup: () => void;
+  onRetain: () => void;
+}) {
+  const environment = props.environment;
+  const namespaceStatus = environment?.namespaceStatus || "not_requested";
+  const namespaceBadgeValue = namespaceStatus === "active" ? "open" : namespaceStatus;
+  const cleanupStatus = environment?.cleanupStatus || "not_decided";
+  const failed = ["deploy_failed", "cleanup_failed"].includes(namespaceStatus);
+  const needsAttention = failed || ["deploy_interrupted", "preview_unverified"].includes(namespaceStatus);
+  const changing = ["planned", "deploying", "cleanup_requested"].includes(namespaceStatus);
+  const StatusIcon = failed || needsAttention ? CircleAlert : namespaceStatus === "active" ? CheckCircle2 : changing ? Clock3 : CircleDot;
+  const canCleanup =
+    Boolean(environment) &&
+    !props.hasActiveSession &&
+    !props.isCleaning &&
+    environment?.namespaceStatus !== "cleaned" &&
+    environment?.cleanupStatus !== "cleaned";
+  const canRetain =
+    Boolean(environment) &&
+    !props.hasActiveSession &&
+    !props.isRetaining &&
+    environmentHasRetainableNamespace(environment);
+
+  return (
+    <div className="grid gap-2.5">
+      {props.startError ? <Notice tone="danger">{props.startError.message}</Notice> : null}
+      {props.cleanupError ? <Notice tone="danger">{props.cleanupError.message}</Notice> : null}
+      {props.retainError ? <Notice tone="danger">{props.retainError.message}</Notice> : null}
+
+      <div className="rounded-[10px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2 text-[12px] font-semibold leading-5 text-[color:var(--muted-strong)]">
+              <StatusIcon
+                data-icon
+                className={cn(
+                  "shrink-0",
+                  namespaceStatus === "active"
+                    ? "text-[color:var(--success)]"
+                    : failed
+                      ? "text-[color:var(--danger)]"
+                      : needsAttention || changing
+                        ? "text-[color:var(--warning)]"
+                        : "text-[color:var(--faint)]",
+                )}
+              />
+              <span>Issue test namespace</span>
+            </div>
+            <div className="mt-1 min-w-0 break-all font-mono text-[13px] leading-5 text-[color:var(--text)]">
+              {environment?.namespace || "not created"}
+            </div>
+          </div>
+          <StatusBadge value={namespaceBadgeValue} valueLabel={namespaceStatusLabel(namespaceStatus)} className="h-6 shrink-0 px-2 py-0 text-[11px]" />
+        </div>
+
+        <div className="mt-3 grid gap-2">
+          <EnvironmentMetaLine label="Cluster">
+            <span className="break-words">{props.cluster?.name || environment?.clusterId || "not selected"}</span>
+          </EnvironmentMetaLine>
+          <EnvironmentMetaLine label="Context">
+            <span className="break-words">{environment?.kubeContext || "default context"}</span>
+          </EnvironmentMetaLine>
+          <EnvironmentMetaLine label="Exposure">
+            <span>{previewStrategy(environment)}</span>
+          </EnvironmentMetaLine>
+          <EnvironmentMetaLine label="Decision">
+            <StatusBadge value={cleanupStatus} valueLabel={cleanupDecisionLabel(cleanupStatus)} className="h-5 px-2 py-0 text-[11px]" />
+          </EnvironmentMetaLine>
+          <EnvironmentMetaLine label="Deploy">
+            <EnvironmentSessionLink label="Deploy" sessionId={environment?.lastDeploySessionId || ""} sessions={props.sessions} />
+          </EnvironmentMetaLine>
+          <EnvironmentMetaLine label="Cleanup">
+            <EnvironmentSessionLink label="Cleanup" sessionId={environment?.lastCleanupSessionId || ""} sessions={props.sessions} />
+          </EnvironmentMetaLine>
+          <EnvironmentMetaLine label="Source">
+            <span className="font-mono">{environment?.sourceCommitSha ? environment.sourceCommitSha.slice(0, 12) : "not selected"}</span>
+          </EnvironmentMetaLine>
+          <EnvironmentMetaLine label="Preview">
+            {environment?.previewUrl ? (
+              <button
+                type="button"
+                className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-[6px] px-1 py-1 text-left text-[12px] font-medium leading-5 text-[color:var(--accent-blue)] hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
+                onClick={() => void openRichLink(environment.previewUrl)}
+              >
+                <Globe2 data-icon className="shrink-0" />
+                <span className="min-w-0 break-all">{environment.previewUrl}</span>
+              </button>
+            ) : (
+              <span className="text-[color:var(--faint)]">not available</span>
+            )}
+          </EnvironmentMetaLine>
+          <EnvironmentMetaLine label="Checked">
+            {environment?.updatedAt ? (
+              <span title={formatAbsoluteTime(environment.updatedAt)}>{formatRelativeTime(environment.updatedAt)}</span>
+            ) : (
+              <span className="text-[color:var(--faint)]">not checked</span>
+            )}
+          </EnvironmentMetaLine>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="secondary" size="sm" disabled={props.hasActiveSession || props.isStarting} onClick={props.onStartDeploy}>
+          <Rocket data-icon />
+          {environment ? (props.isStarting ? "Queueing" : "Deploy again") : "Deploy test env"}
+        </Button>
+        {environment ? (
+          <>
+            <Button type="button" variant="ghost" size="sm" disabled={!canCleanup} onClick={props.onCleanup}>
+              <Trash2 data-icon />
+              {props.isCleaning ? "Queueing" : "Cleanup namespace"}
+            </Button>
+            <Button type="button" variant="ghost" size="sm" disabled={!canRetain} onClick={props.onRetain}>
+              <Bug data-icon />
+              {props.isRetaining ? "Saving" : "Retain for debug"}
+            </Button>
+          </>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -3119,8 +3704,11 @@ export function IssueDetailPage() {
   const clusters = listOrEmpty(clustersQuery.data);
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
   const enabledAgents = agents.filter((agent) => agent.enabled);
+  const continueAgent = enabledAgents.find((agent) => mentionKey(agent.mention) === "codex") || enabledAgents[0];
   const childIssues = listOrEmpty(detail?.childIssues);
   const changeNodes = listOrEmpty(detail?.changeNodes);
+  const handoffs = listOrEmpty(detail?.handoffs);
+  const latestHandoff = handoffs[0];
   const completedChildIssueCount = childIssues.filter((task) => isClosedIssueStatus(task.status)).length;
   const latestSession = detail?.sessions[0];
   const hasActiveSession = latestSession ? ["queued", "running"].includes(latestSession.status) : false;
@@ -3242,6 +3830,14 @@ export function IssueDetailPage() {
   );
 
   useSessionStream(latestSession?.id, handleSessionEvent);
+
+  const invalidateIssueHandoffSurfaces = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+    ]);
+  }, [issueId, queryClient]);
 
   useEffect(() => {
     setActiveMentionIndex(0);
@@ -3601,6 +4197,22 @@ export function IssueDetailPage() {
       ]);
     },
   });
+  const createPullRequest = useMutation({
+    mutationFn: (node: IssueChangeNode) =>
+      api.createPullRequest(issueId, {
+        sourceSessionId: node.sessionId,
+        sourceCommitSha: node.commitSha,
+      }),
+    onSettled: async () => {
+      await invalidateIssueHandoffSurfaces();
+    },
+  });
+  const refreshIssueHandoff = useMutation({
+    mutationFn: (handoff: IssueHandoff) => api.refreshIssueHandoff(issueId, handoff.id),
+    onSettled: async () => {
+      await invalidateIssueHandoffSurfaces();
+    },
+  });
   const checkPreviewStatus = probeTestEnvironment.mutate;
   const previewStatusCheckPending = probeTestEnvironment.isPending;
   useEffect(() => {
@@ -3654,6 +4266,16 @@ export function IssueDetailPage() {
     setTestDeployOpen(true);
   }
 
+  function continueFromFailure(failure: SessionFailure) {
+    if (!continueAgent || hasActiveSession) return;
+    const draft = failureContinueDraft(failure, continueAgent);
+    setComposerBody(draft);
+    setMentionMenuDismissed(true);
+    window.requestAnimationFrame(() => {
+      composerEditor?.commands.focus("end");
+    });
+  }
+
   const timelineItems = useMemo<TimelineItem[]>(() => {
     if (!detail) return [];
     return [
@@ -3662,7 +4284,7 @@ export function IssueDetailPage() {
         .filter((comment) => !isNoisySystemComment(comment))
         .map((comment) => ({ kind: "comment" as const, createdAt: comment.createdAt, comment })),
       ...listOrEmpty(detail.sessions).map((session) => ({ kind: "session" as const, createdAt: session.createdAt, session })),
-      ...listOrEmpty(detail.evidence).map((evidence) => ({ kind: "evidence" as const, createdAt: evidence.createdAt, evidence })),
+      ...listOrEmpty(detail.failures).map((failure) => ({ kind: "failure" as const, createdAt: failure.createdAt, failure })),
     ].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [detail]);
 
@@ -3871,10 +4493,10 @@ export function IssueDetailPage() {
                           />
                         );
                       }
-                      return (
-                        <SessionTimelineItem
-                          key={`session-${item.session.id}`}
-                          session={item.session}
+	                      return (
+	                        <SessionTimelineItem
+	                          key={`session-${item.session.id}`}
+	                          session={item.session}
                           logs={sessionSnapshot?.logs || []}
                           changes={sessionSnapshot?.changes || []}
                           agents={agents}
@@ -3883,11 +4505,39 @@ export function IssueDetailPage() {
                           isStopping={stopSession.isPending && stopSession.variables === item.session.id}
                           stopError={stopSession.error && stopSession.variables === item.session.id ? stopSession.error : null}
                           onStop={["queued", "running"].includes(item.session.status) ? () => stopSession.mutate(item.session.id) : undefined}
-                        />
-                      );
-                    }
-                    return <EvidenceTimelineItem key={`evidence-${item.evidence.id}`} evidence={item.evidence} />;
-                  })}
+	                        />
+	                      );
+	                    }
+	                    if (item.kind === "failure") {
+	                      const session = listOrEmpty(detail.sessions).find((candidate) => candidate.id === item.failure.sessionId);
+	                      const failureEvidence = listOrEmpty(detail.evidence).find((candidate) => candidate.id === item.failure.evidenceId || candidate.sessionId === item.failure.sessionId);
+	                      const review = listOrEmpty(detail.reviewEvidence).find((candidate) => candidate.id === item.failure.reviewEvidenceId || candidate.sessionId === item.failure.sessionId);
+	                      const canRetryFailure = failureCanRetryDeploy(item.failure, detail.testEnvironment) && !hasActiveSession && !startTestDeploy.isPending && changeNodes.length > 0;
+	                      const canStopFailure = Boolean(session && ["queued", "running"].includes(session.status));
+	                      const failureSessionId = session?.id || "";
+	                      return (
+	                        <SessionFailureTimelineItem
+	                          key={`failure-${item.failure.id}`}
+	                          failure={item.failure}
+	                          session={session}
+	                          evidence={failureEvidence}
+	                          review={review}
+	                          canContinue={Boolean(continueAgent) && !hasActiveSession}
+	                          onContinue={() => continueFromFailure(item.failure)}
+	                          canRetry={canRetryFailure}
+	                          isRetrying={startTestDeploy.isPending}
+	                          onRetry={() => {
+	                            if (!detail || hasActiveSession) return;
+	                            startTestDeploy.mutate(testDeployDefaults(detail, clusters));
+	                          }}
+	                          canStop={canStopFailure}
+	                          isStopping={Boolean(failureSessionId) && stopSession.isPending && stopSession.variables === failureSessionId}
+	                          onStop={failureSessionId && canStopFailure ? () => stopSession.mutate(failureSessionId) : undefined}
+	                        />
+	                      );
+	                    }
+	                    return null;
+	                  })}
                 </div>
               </section>
 
@@ -3973,15 +4623,33 @@ export function IssueDetailPage() {
               </section>
             </>
           ) : issueTab === "commits" ? (
-            <IssueCommitsTab changeNodes={changeNodes} sessions={listOrEmpty(detail.sessions)} agents={agents} />
+            <IssueCommitsTab
+              changeNodes={changeNodes}
+              sessions={listOrEmpty(detail.sessions)}
+              agents={agents}
+              handoffs={handoffs}
+              isCreatingPr={createPullRequest.isPending}
+              refreshingHandoffId={refreshIssueHandoff.isPending ? refreshIssueHandoff.variables?.id || "" : ""}
+              createPrError={createPullRequest.error}
+              refreshHandoffError={refreshIssueHandoff.error}
+              onCreatePr={(node) => {
+                createPullRequest.reset();
+                createPullRequest.mutate(node);
+              }}
+              onRefreshHandoff={(handoff) => {
+                refreshIssueHandoff.reset();
+                refreshIssueHandoff.mutate(handoff);
+              }}
+            />
           ) : issueTab === "sessions" ? (
             <IssueSessionsTab sessions={listOrEmpty(detail.sessions)} agents={agents} />
           ) : (
-            <IssueEvidenceTab
-              reviewEvidence={listOrEmpty(detail.reviewEvidence)}
-              evidence={listOrEmpty(detail.evidence)}
-              testEnvironment={detail.testEnvironment}
-              sessions={listOrEmpty(detail.sessions)}
+	            <IssueEvidenceTab
+	              reviewEvidence={listOrEmpty(detail.reviewEvidence)}
+	              evidence={listOrEmpty(detail.evidence)}
+	              failures={listOrEmpty(detail.failures)}
+	              testEnvironment={detail.testEnvironment}
+	              sessions={listOrEmpty(detail.sessions)}
               changeNodes={changeNodes}
               onOpenCommits={() => setIssueTab("commits")}
               onOpenSessions={() => setIssueTab("sessions")}
@@ -4022,60 +4690,21 @@ export function IssueDetailPage() {
             </SidebarSection>
 
             <SidebarSection title="Test environment">
-              <div className="grid gap-2">
-                {startTestDeploy.error ? <Notice tone="danger">{startTestDeploy.error.message}</Notice> : null}
-                {cleanupTestEnvironment.error ? <Notice tone="danger">{cleanupTestEnvironment.error.message}</Notice> : null}
-                {retainTestEnvironment.error ? <Notice tone="danger">{retainTestEnvironment.error.message}</Notice> : null}
-                <MetaLine label="Namespace" value={detail.testEnvironment?.namespace || "not created"} />
-                <MetaLine label="Cluster" value={testCluster?.name || detail.testEnvironment?.clusterId || "not selected"} />
-                <MetaLine label="Status" value={detail.testEnvironment?.namespaceStatus || "not requested"} />
-                <MetaLine label="Cleanup" value={detail.testEnvironment?.cleanupStatus || "not decided"} />
-                <MetaLine label="Exposure" value={previewStrategy(detail.testEnvironment)} />
-                <MetaLine label="Source" value={detail.testEnvironment?.sourceCommitSha ? detail.testEnvironment.sourceCommitSha.slice(0, 12) : "not selected"} />
-                {detail.testEnvironment?.previewUrl ? (
-                  <button
-                    type="button"
-                    className="inline-flex min-w-0 items-center gap-1.5 rounded-[6px] px-1 py-1 text-left text-[12px] font-medium leading-5 text-[color:var(--accent-blue)] hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
-                    onClick={() => void openRichLink(detail.testEnvironment!.previewUrl)}
-                  >
-                    <Globe2 data-icon className="shrink-0" />
-                    <span className="min-w-0 break-all">{detail.testEnvironment.previewUrl}</span>
-                  </button>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  disabled={hasActiveSession || startTestDeploy.isPending}
-                  onClick={openTestDeployModal}
-                >
-                  <Rocket data-icon />
-                  {detail.testEnvironment ? "Deploy again" : "Deploy test env"}
-                </Button>
-                {detail.testEnvironment ? (
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={hasActiveSession || cleanupTestEnvironment.isPending}
-                      onClick={() => cleanupTestEnvironment.mutate()}
-                    >
-                      <Trash2 data-icon />
-                      {cleanupTestEnvironment.isPending ? "Queueing" : "Cleanup"}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={retainTestEnvironment.isPending}
-                      onClick={() => retainTestEnvironment.mutate()}
-                    >
-                      Retain
-                    </Button>
-                  </div>
-                ) : null}
-              </div>
+              <IssueTestEnvironmentPanel
+                environment={detail.testEnvironment}
+                cluster={testCluster}
+                sessions={listOrEmpty(detail.sessions)}
+                hasActiveSession={hasActiveSession}
+                startError={startTestDeploy.error}
+                cleanupError={cleanupTestEnvironment.error}
+                retainError={retainTestEnvironment.error}
+                isStarting={startTestDeploy.isPending}
+                isCleaning={cleanupTestEnvironment.isPending}
+                isRetaining={retainTestEnvironment.isPending}
+                onStartDeploy={openTestDeployModal}
+                onCleanup={() => cleanupTestEnvironment.mutate()}
+                onRetain={() => retainTestEnvironment.mutate()}
+              />
             </SidebarSection>
 
             {latestSession ? (
@@ -4085,6 +4714,45 @@ export function IssueDetailPage() {
                 </div>
               </SidebarSection>
             ) : null}
+
+            <SidebarSection title="Handoff">
+              {latestHandoff ? (
+                <div className="grid gap-2">
+                  <div className="flex min-w-0 items-center justify-between gap-2">
+                    <HandoffStatusPill handoff={latestHandoff} />
+                    {latestHandoff.prUrl ? (
+                      <Button type="button" variant="ghost" size="sm" onClick={() => void openRichLink(latestHandoff.prUrl)}>
+                        <ExternalLink data-icon />
+                        Open
+                      </Button>
+                    ) : null}
+                  </div>
+                  <MetaLine label="Branch" value={latestHandoff.branch || "not recorded"} />
+                  <MetaLine label="PR" value={latestHandoff.prNumber > 0 ? `#${latestHandoff.prNumber}` : latestHandoff.prUrl ? "synced" : "not detected"} />
+                  <MetaLine label="Head" value={latestHandoff.headCommitSha ? latestHandoff.headCommitSha.slice(0, 12) : "not recorded"} />
+                  <MetaLine label="Checked" value={latestHandoff.lastCheckedAt ? formatRelativeTime(latestHandoff.lastCheckedAt) : "not checked"} />
+                  {latestHandoff.prUrl || latestHandoff.branch ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={refreshIssueHandoff.isPending && refreshIssueHandoff.variables?.id === latestHandoff.id}
+                      onClick={() => {
+                        refreshIssueHandoff.reset();
+                        refreshIssueHandoff.mutate(latestHandoff);
+                      }}
+                    >
+                      <RefreshCw data-icon />
+                      {refreshIssueHandoff.isPending && refreshIssueHandoff.variables?.id === latestHandoff.id ? "Refreshing" : "Refresh"}
+                    </Button>
+                  ) : null}
+                  {latestHandoff.error ? <Notice tone="danger">{latestHandoff.error}</Notice> : null}
+                  {refreshIssueHandoff.error && refreshIssueHandoff.variables?.id === latestHandoff.id ? <Notice tone="danger">{refreshIssueHandoff.error.message}</Notice> : null}
+                </div>
+              ) : (
+                <div className="text-[12px] leading-5 text-[color:var(--muted)]">No issue PR has been detected yet.</div>
+              )}
+            </SidebarSection>
 
             <SidebarSection title="Workflow">
               <button

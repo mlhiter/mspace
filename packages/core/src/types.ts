@@ -296,6 +296,27 @@ export interface DeploymentEvidence {
   createdAt: string;
 }
 
+export interface SessionFailure {
+  id: string;
+  issueId: string;
+  sessionId: string;
+  phase: string;
+  status: string;
+  failedCommand: string;
+  errorSummary: string;
+  errorExcerpt: string;
+  cluster: string;
+  namespace: string;
+  resourceKind: string;
+  resourceName: string;
+  evidenceId: string;
+  reviewEvidenceId: string;
+  retrySessionId: string;
+  continuedSessionId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ReviewEvidenceCommand {
   command: string;
   status: string;
@@ -355,6 +376,34 @@ export interface IssueChangeNode {
   createdAt: string;
 }
 
+export interface IssueHandoffCommit {
+  sha: string;
+  shortSha: string;
+  subject: string;
+}
+
+export interface IssueHandoff {
+  id: string;
+  issueId: string;
+  sourceSessionId: string;
+  sourceCommitSha: string;
+  branch: string;
+  headCommitSha: string;
+  commits: IssueHandoffCommit[];
+  kind: string;
+  prUrl: string;
+  prNumber: number;
+  prState: string;
+  prTitle: string;
+  previewUrl: string;
+  evidenceSummary: string;
+  createdVia: string;
+  lastCheckedAt: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface IssueTestEnvironment {
   issueId: string;
   clusterId: string;
@@ -386,8 +435,10 @@ export interface IssueDetail {
   comments: Comment[];
   sessions: AgentSession[];
   evidence: DeploymentEvidence[];
+  failures: SessionFailure[];
   changeNodes: IssueChangeNode[];
   reviewEvidence: SessionReviewEvidence[];
+  handoffs: IssueHandoff[];
 }
 
 export interface SessionDetail {
@@ -396,6 +447,7 @@ export interface SessionDetail {
   project: Project;
   logs: SessionLog[];
   evidence: DeploymentEvidence[];
+  failures: SessionFailure[];
   workspace: WorkspaceSnapshot;
 }
 
@@ -531,6 +583,13 @@ export interface StartTestDeployInput {
   nodeHost?: string;
   sourceSessionId?: string;
   sourceCommitSha?: string;
+}
+
+export interface CreatePullRequestInput {
+  sourceSessionId?: string;
+  sourceCommitSha?: string;
+  title?: string;
+  draft?: boolean;
 }
 
 export interface SessionStreamEvent {

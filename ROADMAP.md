@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-05-09
+> Status: milestone roadmap, updated 2026-05-11
 
 ## Purpose
 
@@ -26,6 +26,8 @@ Project
 The roadmap intentionally keeps local workflow first. Kubernetes is the manually triggered test target for the MVP, not the first development runtime.
 
 The first server control-plane slice now exists for GitHub sign-in, mspace auth sessions, users, workspaces, and membership. Full multiplayer collaboration is still later work; do not treat the local runner's display identity snapshots as that architecture.
+
+The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, and continueable failure evidence. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 
 ## Approved Execution Plan
 
@@ -178,18 +180,25 @@ Acceptance:
 
 ## Milestone 4: Branch / PR And Cleanup Loop
 
+Status: partially implemented for the local MVP path; remaining work is dogfood proof and hardening.
+
 Goal:
 
 - Complete the first end-to-end loop from issue to branch or manually generated PR, issue test namespace, preview URL, evidence, and cleanup decision.
 
-Build:
+Current implementation:
 
-- Capture branch output clearly.
-- Capture PR URL when available.
-- Attach branch or PR output back to Issue Detail.
-- Add session retain and cleanup controls for local worktrees.
-- Add project-level expectations for retained workdirs and evidence.
+- Captures source commits and branch evidence through `issue_change_nodes`.
+- Captures issue-level branch / PR delivery state through `issue_handoffs`.
+- Creates or refreshes PR handoff state from Issue Detail using the local runtime's `git`, `gitleaks`, and `gh` identity.
+- Keeps session retain and cleanup controls for local worktrees.
+- Records issue namespace retain/cleanup decisions.
+- Records failed sessions and failed environment checks as continueable `session_failures`.
+
+Build next:
+
 - Run one real internal project through the full flow.
+- Harden PR body quality, refresh errors, and failed-deploy evidence from that dogfood run.
 
 Acceptance:
 

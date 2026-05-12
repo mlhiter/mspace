@@ -240,13 +240,13 @@ If the answer is yes, mspace has independent value. If the answer is no, it rema
 
 ## Near-Term Product Priorities
 
-The next work should favor the first complete loop over broader platform features:
+The next work should favor dogfooding and hardening the first complete loop over broader platform features. The local MVP now has first versions of commit-backed deploy selection, branch / PR handoff records, structured review evidence, and continueable failure records; the remaining priority is proving those surfaces with real project runs and improving the quality of the captured Kubernetes evidence.
 
 1. Run a real dogfood issue through the full flow.
 2. Add or refine the agent-discovered project runbook.
-3. Harden the issue Evidence surface with failed-deploy and Kubernetes-resource evidence.
-4. Complete branch and PR handoff.
-5. Make failure states continueable.
+3. Harden the issue Evidence surface with deeper Kubernetes-resource evidence.
+4. Dogfood branch / PR handoff until the PR body and refresh behavior are reliable.
+5. Dogfood failure recovery until Continue / Retry deploy / Stop / retain / cleanup choices are obvious from Issue Detail.
 6. Add scoped Kubernetes credentials after the loop works.
 
 The product should defer multi-agent scheduling, generic skill management, automatic merge pipelines, Kubernetes-hosted agent runtime, and broad DevOps resource browsing until the issue-to-preview-to-evidence loop works for a real internal project.
