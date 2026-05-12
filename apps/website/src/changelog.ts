@@ -19,6 +19,7 @@ export const changelog: ChangelogEntry[] = [
       "Showed Pods, Services, Deployments, Ingresses, Events, and NodePort mappings without requiring a separate Kubernetes console.",
       "Refined the Evidence tab around the current review packet and compact command evidence.",
       "Moved previous attempts and Kubernetes snapshot history into dedicated full-width evidence pages.",
+      "Added the mspace browser tab icon using the public website brand mark.",
     ],
   },
   {
