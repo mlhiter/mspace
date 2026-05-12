@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-11
+> Status: local MVP implementation snapshot, updated 2026-05-12
 
 ## One-Line Definition
 
@@ -29,10 +29,12 @@ The repository now has a runnable local desktop MVP:
 - show a project runbook in Projects, open it from the Issue Detail sidebar as a read-only TipTap modal, and update it either from direct Markdown edits or from successful agent session artifacts;
 - store session metadata, logs, comments, comment reactions, issues, projects, evidence, local creator/author display snapshots, and issue image attachment blobs in SQLite under `~/.mspace/mspace.db`;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
+- manage workspace automation policy, keeping source commit capture always on while optionally creating draft PRs after captured source commits;
 - manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
 - choose a default cluster per project and select a cluster when manually deploying an issue test environment;
 - manually trigger an issue-scoped test deployment where the agent creates the namespace, builds and pushes images, deploys resources, and returns a preview URL;
 - record issue test namespace state, cleanup/retain state, deploy session, cleanup session, and preview URL.
+- inspect the current issue namespace from a Resources tab with Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events.
 - review structured session evidence from Issue Detail, with code changes in Commits and compact commands/tests/build/deploy/risks/cleanup state in Evidence.
 - record issue-level branch / PR handoff state from the selected source change, including commit list, preview URL, evidence summary, PR URL/title/state, and local preflight errors.
 - show failed sessions and failed deploy/preview/cleanup checks as structured failure evidence, with continue, retry deploy, stop, retain, or cleanup choices from Issue Detail.
@@ -48,7 +50,7 @@ The current high-leverage developer workflow is no longer just "ask Codex to edi
 2. Keep the problem statement, discussion, and decisions in one durable page.
 3. Attach an agent session to the issue.
 4. Let the agent modify code in a local development runtime.
-5. Manually trigger PR generation or a test deployment when the local agent result is ready.
+5. Create the PR manually by default, or let the workspace auto-create a draft PR, then trigger a test deployment when the local agent result is ready.
 6. For test deployment, let the agent create an issue namespace in the shared test cluster, deploy the app, and return a preview URL that mspace checks and records.
 7. Review the PR or preview URL together with logs, events, resources, and runtime evidence.
 
@@ -81,7 +83,7 @@ Project
   -> Agent Session
   -> Local code change
   -> Inbox review updates
-  -> Manual PR or manual test deploy
+  -> Manual PR, automatic draft PR, or manual test deploy
   -> Issue test namespace
   -> Preview URL
   -> Comments and progress updates

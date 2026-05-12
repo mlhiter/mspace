@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-05-11
+> Status: milestone roadmap, updated 2026-05-12
 
 ## Purpose
 
@@ -18,7 +18,7 @@ Project
   -> Local Agent Session
   -> Inbox review updates
   -> Worktree and evidence review
-  -> Manual PR or manual issue test deployment
+  -> Manual PR, automatic draft PR, or manual issue test deployment
   -> Issue namespace preview URL and validation evidence
   -> Branch / PR and cleanup
 ```
@@ -39,7 +39,7 @@ Target: 5-8 focused development days.
 
 Goal:
 
-- Create or import a project, create an issue, assign it to an agent, watch status updates, then manually trigger PR output or an issue-scoped Kubernetes test deployment.
+- Create or import a project, create an issue, assign it to an agent, watch status updates, then manually trigger PR output, opt into automatic draft PR output, or manually run an issue-scoped Kubernetes test deployment.
 
 Build in order:
 
@@ -53,7 +53,7 @@ Build in order:
 - Issue labels and session stop controls: keep type triage asynchronous, keep priority manual, and allow a human to interrupt queued or running work.
 - Manual test deployment: let the user select a saved cluster and optional exposure overrides before queueing a deploy/test agent turn.
 - Issue namespace lifecycle: each issue can reserve one test namespace; the deploy/test agent creates it, deploys resources, mspace validates the preview URL, and writes the result back.
-- Branch and PR output: expose PR generation as a manual action after agent work, not as automatic session cleanup.
+- Branch and PR output: expose PR generation as a manual action by default, with a workspace setting for automatic draft PR creation after source commit capture.
 - Cleanup controls: let the user retain or clean session worktrees now, and record retain/cleanup decisions for issue test namespaces.
 
 ### Stage 2: Kubernetes-Hosted Agent Runtime
@@ -127,7 +127,7 @@ Acceptance:
 
 ## Milestone 2: Evidence-Centered Session Review
 
-Status: mostly implemented for the local MVP path; remaining work is hardening failed-deploy evidence and richer Kubernetes resource parsing.
+Status: mostly implemented for the local MVP path; remaining work is hardening failed-deploy evidence and expanding Kubernetes resource depth beyond the current namespace Resources tab.
 
 Goal:
 
@@ -164,6 +164,7 @@ Build:
 - Discover regular files under `~/.kube` on first Clusters entry, show the candidates and contexts, and let the user choose which kubeconfig files to import.
 - Store project default cluster id.
 - Store one test environment record per issue: cluster id, namespace, preview URL, deploy session, cleanup session, namespace state, and cleanup state.
+- Show a narrow Resources tab for the current issue namespace: Pods, Services and NodePort mappings, Deployments, Ingresses, and Events.
 - Add a manual "Deploy test env" action from Issue Detail.
 - Queue an agent deployment turn that creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default, uses Ingress when configured, checks the preview URL, and writes preview output back.
 - Add manual retain/cleanup namespace decisions from Issue Detail.
@@ -175,6 +176,7 @@ Acceptance:
 - A user can trigger a test deployment only when ready, instead of every agent session deploying automatically.
 - The agent creates and manages the issue namespace.
 - The UI shows the selected cluster, issue namespace, namespace state, cleanup state, exposure mode, and preview URL when available.
+- The user can refresh current namespace Pods, Services, Deployments, Ingresses, and Events without entering a namespace or leaving the issue.
 - Kubernetes evidence is stored and reviewable after the session exits.
 - The user does not need a separate terminal just to answer "where can the team test this?"
 
@@ -184,13 +186,13 @@ Status: partially implemented for the local MVP path; remaining work is dogfood 
 
 Goal:
 
-- Complete the first end-to-end loop from issue to branch or manually generated PR, issue test namespace, preview URL, evidence, and cleanup decision.
+- Complete the first end-to-end loop from issue to branch or PR, issue test namespace, preview URL, evidence, and cleanup decision.
 
 Current implementation:
 
 - Captures source commits and branch evidence through `issue_change_nodes`.
 - Captures issue-level branch / PR delivery state through `issue_handoffs`.
-- Creates or refreshes PR handoff state from Issue Detail using the local runtime's `git`, `gitleaks`, and `gh` identity.
+- Creates or refreshes PR handoff state from Issue Detail using the local runtime's `git`, `gitleaks`, and `gh` identity, with workspace-level opt-in for automatic draft PRs.
 - Keeps session retain and cleanup controls for local worktrees.
 - Records issue namespace retain/cleanup decisions.
 - Records failed sessions and failed environment checks as continueable `session_failures`.

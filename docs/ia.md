@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-05-11
+> Status: local MVP implementation snapshot, updated 2026-05-12
 
 ## IA Goal
 
@@ -37,6 +37,7 @@ Navigation rules:
 - Agents is the managed profile surface for Codex-backed collaborators and mentions.
 - Clusters is reusable test cluster access: kubeconfig import, reachability status, registry, and exposure defaults.
 - Projects is configuration and project-level history.
+- Workspace Settings is accessed from the workspace identity menu instead of the main rail, because it controls local automation policy for the current workspace rather than daily issue work.
 - Session detail is deep-linked from issues and remains an operational fallback view, not a primary home.
 
 The fact that Inbox is first does not mean Kubernetes is secondary. It means the product starts from work intake, then routes that work into a local development flow plus a Kubernetes-backed validation flow.
@@ -68,9 +69,11 @@ Current implemented desktop routes:
 /inbox
 /issues
 /issues/:issueId
+/issues/:issueId/commits/:commitSha
 /agents
 /clusters
 /projects
+/settings
 /sessions/:sessionId
 ```
 
@@ -81,7 +84,7 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. Session detail remains deep-linked from issue work.
+The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. Workspace Settings lives behind the workspace menu entry and owns local automation policy such as automatic draft PR creation. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
@@ -305,8 +308,9 @@ Current implementation:
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
 - automatically checks preview status in the background when Issue Detail opens or refreshes an existing test environment, updating only the Test environment sidebar state and `Checked` time instead of exposing a separate Probe button or adding timeline evidence;
+- exposes a Resources tab for the issue's current test namespace, refreshed on tab entry or manual refresh, with cluster/context/lifecycle/exposure/cleanup/preview metadata plus Pods, Services, Deployments, Ingresses, and Events;
 - separates source review from execution evidence: Commits shows code changes and diffs, while Evidence shows compact commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state;
-- shows issue-level branch / PR handoff state on the Commits tab and sidebar, with actions to create one PR for the issue from the selected source branch, auto-detect an existing PR for that branch through `gh`, and refresh PR state;
+- shows issue-level branch / PR handoff state on the Commits tab and sidebar, with actions to create one PR for the issue from the selected source branch, auto-detect an existing PR for that branch through `gh`, refresh PR state, and optionally let Workspace Settings create draft PRs after source commit capture;
 - keeps raw command trails collapsed in session logs, with exploratory commands excluded from persisted review evidence;
 - shows a compact Project runbook entry in the Workflow sidebar; clicking it opens a read-only TipTap runbook modal;
 - renders the issue creator, human comments, system comments, Codex-backed agent turns, and actor-authored status changes with their current display names and avatar sources;
@@ -379,6 +383,19 @@ Current implementation:
 - exposes the project runbook from Issue Detail as a read-only TipTap modal so users can inspect runbook knowledge without leaving the issue;
 - only allows deletion before issues or sessions exist;
 - stores runbook history in `project_runbooks` and `project_runbook_revisions`, plus the default reusable cluster id.
+
+## Workspace Settings
+
+### Purpose
+
+Workspace Settings owns local runtime automation policy for the current workspace.
+
+### Current implementation
+
+- opens from the workspace identity menu, not from the main navigation rail;
+- keeps source commit capture always on for issue review and deploy continuation;
+- lets the user toggle automatic draft PR creation after source commit capture;
+- explains that MVP PR automation uses the local `gh` identity, while hosted GitHub App automation is future work.
 
 ## Sessions
 
@@ -467,12 +484,13 @@ Must-have for MVP:
 - Stop queued or running sessions
 - Agent turns inline on the issue timeline
 - Evidence tab plus Test environment sidebar state, without health-check noise in the issue timeline
-- Project settings and runtime defaults
+- Project settings, workspace automation policy, and runtime defaults
 - Local session startup with git worktree isolation
 - Manual cleanup for retained local session worktrees
 - Session detail with logs and workspace evidence
 - local session startup with cluster and namespace visibility
 - manual issue test deployment with issue namespace lifecycle state
+- narrow Resources tab for the current issue namespace
 
 Can wait until later:
 
@@ -483,7 +501,7 @@ Can wait until later:
 - custom dashboard analytics
 - cluster-wide observability
 - generated scoped kubeconfig and ServiceAccount lifecycle
-- full Kubernetes namespace resource browser
+- full Kubernetes namespace resource browser beyond the current issue-scoped Pods, Services, Deployments, Ingresses, and Events view
 
 ## Design Guidance
 
@@ -520,6 +538,7 @@ Implemented as of 2026-05-11:
 15. Issue-level branch / PR handoff records, including local PR creation, existing PR auto-detection by source branch, status refresh, source commits, preview URL, and evidence summary.
 16. Structured `session_failures` records that surface failed sessions, deploy-time preview verification failures, agent interruption, and cleanup failures as continueable Issue Detail timeline and Evidence entries.
 17. Preview status refreshes that update Test environment state and `Checked` time without adding healthy snapshot cards to the Overview timeline.
+18. Issue Resources tab for the fixed test namespace, using live Kubernetes resource reads without exposing cross-namespace browsing.
 
 Next build steps:
 

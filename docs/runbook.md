@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-11
+> Status: local MVP operations guide, updated 2026-05-12
 
 ## Local Data
 
@@ -15,7 +15,7 @@
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional session review artifact. The runner imports compact commands, tests, build/deploy results, agent summary, risks, and follow-ups into `session_review_evidence`. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-learned project runbook artifact. When present after a successful session, the runner stores it as the current project runbook. |
 
-Reusable cluster configs are stored in `clusters`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Review snapshots are stored in `session_review_evidence`; continueable failed-session and failed-environment records are stored in `session_failures`; branch and PR delivery records are stored in `issue_handoffs`; raw execution trails stay in `session_logs`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Comment reactions are stored in `comment_reactions` so reaction counts do not mutate comment Markdown. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `trigger_comment_id`, `agent_token`, `cleanup_status`, and `cleaned_at`.
+Reusable cluster configs are stored in `clusters`. Workspace automation policy is stored in `workspace_settings`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Review snapshots are stored in `session_review_evidence`; continueable failed-session and failed-environment records are stored in `session_failures`; branch and PR delivery records are stored in `issue_handoffs`; raw execution trails stay in `session_logs`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Comment reactions are stored in `comment_reactions` so reaction counts do not mutate comment Markdown. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `trigger_comment_id`, `agent_token`, `cleanup_status`, and `cleaned_at`.
 
 The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
 
@@ -225,6 +225,15 @@ Issue branch or PR handoff records:
 sqlite3 ~/.mspace/mspace.db "select issue_id,kind,branch,pr_url,pr_state,error,updated_at from issue_handoffs order by updated_at desc limit 10;"
 ```
 
+Workspace automation policy:
+
+```bash
+curl http://127.0.0.1:7788/api/workspace/settings
+sqlite3 ~/.mspace/mspace.db "select id,auto_create_draft_pr,updated_at from workspace_settings;"
+```
+
+Source commit capture is always on. `auto_create_draft_pr` only controls whether the runner automatically creates or refreshes the current issue-level draft PR after a source commit is captured.
+
 Issue labels:
 
 ```bash
@@ -338,6 +347,15 @@ curl -X POST http://127.0.0.1:7788/api/issues/<issue-id>/test-environment/probe
 
 Use that route for debugging or automation only. In the product UI, users should open the preview link; mspace refreshes status without a separate Probe button. A preview status check updates `issue_test_environments` and the Test environment sidebar `Checked` state only; it should not create deployment/review evidence rows, failure rows, or top-level issue status events.
 
+Fetch the live namespace resources shown by the Issue Detail Resources tab:
+
+```bash
+curl http://127.0.0.1:7788/api/issues/<issue-id>/test-environment/resources \
+  -H "Authorization: Bearer <msp-token>"
+```
+
+The route derives the namespace from the issue test environment. If `?namespace=...` is present, it returns `400 Bad Request`; use this as a quick safety check when debugging the resource tab. The payload is intentionally limited to Pods, Services, Deployments, Ingresses, Events, and per-section errors.
+
 Record or trigger namespace cleanup:
 
 ```bash
@@ -374,6 +392,7 @@ Expected shadcn/ui source components currently include:
 - scroll-area
 - separator
 - select
+- switch
 - textarea
 
 ## Common Troubleshooting

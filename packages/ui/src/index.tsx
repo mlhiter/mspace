@@ -23,6 +23,7 @@ import {
   MessageSquareText,
   Plus,
   Search,
+  Settings,
   Sparkles,
   SquareTerminal,
 } from "lucide-react";
@@ -122,6 +123,7 @@ export {
 } from "./components/ui/select";
 export { ScrollArea, ScrollBar } from "./components/ui/scroll-area";
 export { Separator } from "./components/ui/separator";
+export { Switch } from "./components/ui/switch";
 export { Textarea as ShadcnTextarea } from "./components/ui/textarea";
 
 const sidebarItems = [
@@ -515,30 +517,48 @@ function WorkspaceMenu(props: { brandLogoSrc?: string; account?: ShellAccount; o
       {open ? (
         <div
           role="menu"
-          className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 rounded-[10px] bg-[color:var(--paper)] p-1.5 shadow-[0_10px_30px_rgba(0,0,0,0.10),inset_0_0_0_1px_var(--line)]"
+          className="absolute left-0 top-[calc(100%+8px)] z-30 w-[244px] overflow-hidden rounded-[12px] bg-[color:var(--paper)] p-1.5 shadow-[0_18px_45px_rgba(0,0,0,0.13),inset_0_0_0_1px_var(--line)]"
         >
-          <div className="px-2 py-2">
-            <div className="text-[11px] leading-4 text-[color:var(--faint)]">Workspace</div>
-            <div className="truncate text-[13px] font-medium leading-5">{workspaceLabel}</div>
+          <div className="flex min-w-0 items-center gap-2.5 rounded-[9px] px-2.5 py-2.5">
+            <div className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-[color:var(--block)] text-[color:var(--ink)] shadow-[inset_0_0_0_1px_var(--line)]">
+              {props.brandLogoSrc ? (
+                <img src={props.brandLogoSrc} alt="" className="h-5 w-7 object-contain" />
+              ) : (
+                <span className="text-[13px] font-semibold">m</span>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-semibold leading-5 text-[color:var(--text)]">{workspaceLabel}</div>
+              <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
+                {isSignedIn ? "Signed in workspace" : "Local workspace"}
+              </div>
+            </div>
           </div>
-          <div className="mx-2 my-1 h-px bg-[color:var(--line)]" />
+
+          <Link
+            to="/settings"
+            role="menuitem"
+            className="group flex min-h-9 items-center gap-2 rounded-[8px] px-2.5 text-[12px] font-medium text-[color:var(--muted-strong)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99] [&_[data-icon]]:size-3.5"
+            onClick={() => setOpen(false)}
+          >
+            <Settings data-icon className="text-[color:var(--faint)]" />
+            <span className="min-w-0 flex-1 truncate">Workspace settings</span>
+            <ChevronRight data-icon className="text-[color:var(--faint)] opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+          </Link>
 
           {isSignedIn ? (
-            <div className="px-2 py-2">
-              <div className="flex min-w-0 items-center gap-2.5">
-                <UserAvatar name={account.name} avatarUrl={account.avatarUrl} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[12px] font-medium">{account.name || "mspace user"}</div>
-                  <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
-                    {account.email || "GitHub connected"}
-                  </div>
+            <div className="mt-1 border-t border-[color:var(--line)] pt-1">
+              <div className="mx-1 flex min-w-0 items-center gap-2.5 rounded-[8px] px-2 py-2">
+                <UserAvatar name={account.name} avatarUrl={account.avatarUrl} size="sm" />
+                <div className="min-w-0 flex-1 text-left">
+                  <div className="truncate text-[12px] font-medium leading-5 text-[color:var(--text)]">{account.name || "mspace user"}</div>
+                  <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{account.email || "GitHub connected"}</div>
                 </div>
               </div>
-              <div className="mx-0 my-1.5 h-px bg-[color:var(--line)]" />
               <button
                 type="button"
                 role="menuitem"
-                className="flex h-7 w-full items-center gap-2 rounded-[7px] px-2 text-[12px] font-medium text-[color:var(--muted)] transition-[background-color,color] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] [&_[data-icon]]:size-3.5"
+                className="group flex min-h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-[12px] font-medium text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99] [&_[data-icon]]:size-3.5"
                 onClick={() => {
                   setOpen(false);
                   props.onSignOut?.();
@@ -549,8 +569,8 @@ function WorkspaceMenu(props: { brandLogoSrc?: string; account?: ShellAccount; o
               </button>
             </div>
           ) : (
-            <div className="px-2 py-2">
-              <div className="mb-2 flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
+            <div className="mt-1 border-t border-[color:var(--line)] px-1 pt-2">
+              <div className="mb-2 flex items-center gap-2 px-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
                 {isBusy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
                 <span>{isBusy ? "Waiting for GitHub callback" : "GitHub identity not connected"}</span>
               </div>
@@ -569,7 +589,7 @@ function WorkspaceMenu(props: { brandLogoSrc?: string; account?: ShellAccount; o
                 <span>{actionLabel}</span>
               </ShadcnButton>
               {account.status === "error" && account.error ? (
-                <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-[color:var(--danger)]">{account.error}</p>
+                <p className="mt-2 line-clamp-2 px-1 text-[11px] leading-4 text-[color:var(--danger)]">{account.error}</p>
               ) : null}
             </div>
           )}
@@ -579,16 +599,17 @@ function WorkspaceMenu(props: { brandLogoSrc?: string; account?: ShellAccount; o
   );
 }
 
-function UserAvatar(props: { name?: string; avatarUrl?: string }) {
+function UserAvatar(props: { name?: string; avatarUrl?: string; size?: "sm" | "md" }) {
   const [failed, setFailed] = useState(false);
   const initial = props.name?.trim().slice(0, 1).toUpperCase() || "M";
+  const sizeClass = props.size === "sm" ? "size-7 text-[11px]" : "size-8 text-[12px]";
 
   useEffect(() => {
     setFailed(false);
   }, [props.avatarUrl]);
 
   return (
-    <div className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--selection)] text-[12px] font-semibold text-[color:var(--muted)]">
+    <div className={cn("grid shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--selection)] font-semibold text-[color:var(--muted)]", sizeClass)}>
       {props.avatarUrl && !failed ? (
         <img src={props.avatarUrl} alt="" className="size-full object-cover" onError={() => setFailed(true)} />
       ) : (

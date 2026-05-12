@@ -217,6 +217,14 @@ CREATE TABLE IF NOT EXISTS project_runbook_revisions (
 
 CREATE INDEX IF NOT EXISTS idx_project_runbook_revisions_project_created ON project_runbook_revisions(project_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS workspace_settings (
+  id TEXT PRIMARY KEY,
+  auto_create_draft_pr INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK(id = 'default')
+);
+
 CREATE TABLE IF NOT EXISTS deployment_evidence (
   id TEXT PRIMARY KEY,
   issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,

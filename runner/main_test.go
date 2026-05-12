@@ -1046,6 +1046,24 @@ func TestRetainIssueTestEnvironmentRejectsActiveSession(t *testing.T) {
 	}
 }
 
+func TestListIssueTestEnvironmentResourcesRejectsNamespaceOverride(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	insertAuthTestIssue(t, db, "issue-1", "", "Inspect namespace", "ready_for_test")
+
+	router := chi.NewRouter()
+	router.Get("/api/issues/{issueID}/test-environment/resources", application.handleListIssueTestEnvironmentResources)
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, authRequest(http.MethodGet, "/api/issues/issue-1/test-environment/resources?namespace=other-ns", "", humanToken))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected namespace override to return 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "namespace is fixed by the issue test environment") {
+		t.Fatalf("expected fixed namespace error, got %s", recorder.Body.String())
+	}
+}
+
 func TestCancelOrphanedRunningSessionAllowsStop(t *testing.T) {
 	application, db := newAuthTestApp(t)
 	humanToken := configureTestHumanAuth(t, application)
@@ -1583,6 +1601,61 @@ func TestEnsureIssueHandoffTablesCreatesTable(t *testing.T) {
 	}
 	if !tableIndexExists(t, db, "issue_handoffs", "idx_issue_handoffs_issue_updated") {
 		t.Fatal("expected issue handoff issue index to exist")
+	}
+}
+
+func TestEnsureWorkspaceSettingsTablesCreatesDefault(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db}
+	if err := application.ensureWorkspaceSettingsTables(); err != nil {
+		t.Fatalf("ensure workspace settings tables failed: %v", err)
+	}
+	if err := application.ensureWorkspaceSettingsTables(); err != nil {
+		t.Fatalf("ensure workspace settings tables should be idempotent: %v", err)
+	}
+	for _, column := range []string{"id", "auto_create_draft_pr", "created_at", "updated_at"} {
+		if !tableColumnExists(t, db, "workspace_settings", column) {
+			t.Fatalf("expected workspace_settings.%s to exist", column)
+		}
+	}
+	settings, err := application.loadWorkspaceSettings()
+	if err != nil {
+		t.Fatalf("load workspace settings: %v", err)
+	}
+	if settings.AutoCreateDraftPR {
+		t.Fatal("expected automatic draft PRs to be disabled by default")
+	}
+}
+
+func TestUpdateWorkspaceSettingsRoundTrip(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db}
+	if err := application.ensureWorkspaceSettingsTables(); err != nil {
+		t.Fatalf("ensure workspace settings tables failed: %v", err)
+	}
+	settings, err := application.updateWorkspaceSettings(workspaceSettingsInput{AutoCreateDraftPR: true})
+	if err != nil {
+		t.Fatalf("update workspace settings: %v", err)
+	}
+	if !settings.AutoCreateDraftPR {
+		t.Fatal("expected automatic draft PRs to be enabled")
+	}
+	loaded, err := application.loadWorkspaceSettings()
+	if err != nil {
+		t.Fatalf("load workspace settings: %v", err)
+	}
+	if !loaded.AutoCreateDraftPR {
+		t.Fatal("expected loaded workspace settings to preserve automatic draft PRs")
 	}
 }
 

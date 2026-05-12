@@ -12,7 +12,7 @@ mspace is for engineering and platform teams that already use coding agents and 
 
 mspace is an Inbox and Issue workspace for coding agents. It turns a fragmented workflow of local agent edits, chat notes, issue trackers, reusable test cluster config, and test-cluster validation into one document-style workspace where an issue can hold the problem statement, discussion, agent session, branch state, selected cluster, issue test namespace, preview URL, Kubernetes evidence, and final review trail.
 
-The product succeeds when a team can create or route an issue, assign a local-first agent session, let that agent modify code, then manually trigger PR generation or an issue-scoped Kubernetes test deployment with enough preview and evidence to decide what happens next.
+The product succeeds when a team can create or route an issue, assign a local-first agent session, let that agent modify code, then use a manual or workspace-automated PR handoff and an issue-scoped Kubernetes test deployment with enough preview and evidence to decide what happens next.
 
 ## Brand Personality
 

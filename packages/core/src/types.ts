@@ -71,6 +71,16 @@ export interface ActiveWorkItem {
   updatedAt: string;
 }
 
+export interface WorkspaceSettings {
+  autoCreateDraftPr: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpdateWorkspaceSettingsInput {
+  autoCreateDraftPr: boolean;
+}
+
 export interface InboxItem {
   id: string;
   issueId: string;
@@ -424,6 +434,107 @@ export interface IssueTestEnvironment {
   sourceCommitSha: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface IssueTestEnvironmentResources {
+  issueId: string;
+  clusterId: string;
+  clusterName: string;
+  context: string;
+  namespace: string;
+  namespaceStatus: string;
+  cleanupStatus: string;
+  exposureMode: string;
+  previewUrl: string;
+  nodeHost: string;
+  refreshedAt: string;
+  pods: KubernetesPodResource[];
+  services: KubernetesServiceResource[];
+  deployments: KubernetesDeploymentResource[];
+  ingresses: KubernetesIngressResource[];
+  events: KubernetesEventResource[];
+  errors: KubernetesResourceFetchError[];
+}
+
+export interface KubernetesResourceFetchError {
+  section: string;
+  message: string;
+}
+
+export interface KubernetesPodResource {
+  name: string;
+  phase: string;
+  readyContainers: number;
+  totalContainers: number;
+  restarts: number;
+  nodeName: string;
+  podIp: string;
+  hostIp: string;
+  createdAt: string;
+  containers: KubernetesPodContainer[];
+}
+
+export interface KubernetesPodContainer {
+  name: string;
+  ready: boolean;
+  restartCount: number;
+  state: string;
+  reason: string;
+}
+
+export interface KubernetesServiceResource {
+  name: string;
+  type: string;
+  clusterIp: string;
+  externalIp: string;
+  createdAt: string;
+  ports: KubernetesServicePort[];
+}
+
+export interface KubernetesServicePort {
+  name: string;
+  protocol: string;
+  port: number;
+  targetPort: string;
+  nodePort: number;
+  url: string;
+}
+
+export interface KubernetesDeploymentResource {
+  name: string;
+  replicas: number;
+  readyReplicas: number;
+  updatedReplicas: number;
+  availableReplicas: number;
+  createdAt: string;
+  conditions: KubernetesCondition[];
+}
+
+export interface KubernetesCondition {
+  type: string;
+  status: string;
+  reason: string;
+  message: string;
+}
+
+export interface KubernetesIngressResource {
+  name: string;
+  className: string;
+  hosts: string[];
+  addresses: string[];
+  createdAt: string;
+}
+
+export interface KubernetesEventResource {
+  type: string;
+  reason: string;
+  message: string;
+  involvedKind: string;
+  involvedName: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  createdAt: string;
 }
 
 export interface IssueDetail {

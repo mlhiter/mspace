@@ -1,6 +1,6 @@
 # mspace Design System
 
-> Status: design system baseline, updated 2026-05-11
+> Status: design system baseline, updated 2026-05-12
 
 ## Visual Thesis
 
@@ -46,6 +46,7 @@ Current installed shadcn/ui primitives:
 - `scroll-area`
 - `separator`
 - `select`
+- `switch`
 - `textarea`
 
 Project-facing wrappers, app shell components, and compatibility exports live in `packages/ui/src/index.tsx` and are consumed through `@mspace/ui`.
@@ -197,7 +198,7 @@ Screen priorities:
 - Status badges must use readable labels, not storage values: `Needs review`, `Ready for test`, and `Closed` are acceptable; `needs_review` and `ready_for_test` are not. Runtime badges may still use readable progress labels such as `Running` or `Deploying`.
 - Use GitHub-adjacent status semantics for issues: `Open` is green and `Closed` is purple. Other handoff states should use restrained semantic colors that help scanning without turning the issue header or timeline into a dashboard. The Issue sidebar status is a read-only badge. Human lifecycle actions belong inside the Issue Detail comment composer footer: keep the primary action visible, hide less common close reasons such as `Close as not planned` in a compact dropdown, and do not repeat the current issue status there. Do not use a generic Issue status selector, and do not put transient session or test-deploy progress there.
 - Status-change timeline rows should be one-line actor events with from/to badges. Hide compatibility prose from the stored comment body unless the user is inspecting raw data.
-- Avoid decorative badges that do not change behavior or scanning.
+- Avoid decorative badges that do not change behavior or scanning. In the Issue Resources tab, prefer static semantic icons, counts, and resource facts over repeating status pills next to every Kubernetes object name.
 
 ### Alerts And Empty States
 

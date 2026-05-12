@@ -26,6 +26,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 	_ "modernc.org/sqlite"
 )
 
@@ -404,6 +410,107 @@ type issueTestEnvironment struct {
 	UpdatedAt            string `json:"updatedAt"`
 }
 
+type issueTestEnvironmentResources struct {
+	IssueID         string                         `json:"issueId"`
+	ClusterID       string                         `json:"clusterId"`
+	ClusterName     string                         `json:"clusterName"`
+	Context         string                         `json:"context"`
+	Namespace       string                         `json:"namespace"`
+	NamespaceStatus string                         `json:"namespaceStatus"`
+	CleanupStatus   string                         `json:"cleanupStatus"`
+	ExposureMode    string                         `json:"exposureMode"`
+	PreviewURL      string                         `json:"previewUrl"`
+	NodeHost        string                         `json:"nodeHost"`
+	RefreshedAt     string                         `json:"refreshedAt"`
+	Pods            []kubernetesPodResource        `json:"pods"`
+	Services        []kubernetesServiceResource    `json:"services"`
+	Deployments     []kubernetesDeploymentResource `json:"deployments"`
+	Ingresses       []kubernetesIngressResource    `json:"ingresses"`
+	Events          []kubernetesEventResource      `json:"events"`
+	Errors          []kubernetesResourceFetchError `json:"errors"`
+}
+
+type kubernetesResourceFetchError struct {
+	Section string `json:"section"`
+	Message string `json:"message"`
+}
+
+type kubernetesPodResource struct {
+	Name            string                   `json:"name"`
+	Phase           string                   `json:"phase"`
+	ReadyContainers int                      `json:"readyContainers"`
+	TotalContainers int                      `json:"totalContainers"`
+	Restarts        int32                    `json:"restarts"`
+	NodeName        string                   `json:"nodeName"`
+	PodIP           string                   `json:"podIp"`
+	HostIP          string                   `json:"hostIp"`
+	CreatedAt       string                   `json:"createdAt"`
+	Containers      []kubernetesPodContainer `json:"containers"`
+}
+
+type kubernetesPodContainer struct {
+	Name         string `json:"name"`
+	Ready        bool   `json:"ready"`
+	RestartCount int32  `json:"restartCount"`
+	State        string `json:"state"`
+	Reason       string `json:"reason"`
+}
+
+type kubernetesServiceResource struct {
+	Name       string                  `json:"name"`
+	Type       string                  `json:"type"`
+	ClusterIP  string                  `json:"clusterIp"`
+	ExternalIP string                  `json:"externalIp"`
+	CreatedAt  string                  `json:"createdAt"`
+	Ports      []kubernetesServicePort `json:"ports"`
+}
+
+type kubernetesServicePort struct {
+	Name       string `json:"name"`
+	Protocol   string `json:"protocol"`
+	Port       int32  `json:"port"`
+	TargetPort string `json:"targetPort"`
+	NodePort   int32  `json:"nodePort"`
+	URL        string `json:"url"`
+}
+
+type kubernetesDeploymentResource struct {
+	Name              string                `json:"name"`
+	Replicas          int32                 `json:"replicas"`
+	ReadyReplicas     int32                 `json:"readyReplicas"`
+	UpdatedReplicas   int32                 `json:"updatedReplicas"`
+	AvailableReplicas int32                 `json:"availableReplicas"`
+	CreatedAt         string                `json:"createdAt"`
+	Conditions        []kubernetesCondition `json:"conditions"`
+}
+
+type kubernetesCondition struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+type kubernetesIngressResource struct {
+	Name      string   `json:"name"`
+	ClassName string   `json:"className"`
+	Hosts     []string `json:"hosts"`
+	Addresses []string `json:"addresses"`
+	CreatedAt string   `json:"createdAt"`
+}
+
+type kubernetesEventResource struct {
+	Type         string `json:"type"`
+	Reason       string `json:"reason"`
+	Message      string `json:"message"`
+	InvolvedKind string `json:"involvedKind"`
+	InvolvedName string `json:"involvedName"`
+	Count        int32  `json:"count"`
+	FirstSeen    string `json:"firstSeen"`
+	LastSeen     string `json:"lastSeen"`
+	CreatedAt    string `json:"createdAt"`
+}
+
 type issueChangeNode struct {
 	ID             string            `json:"id"`
 	IssueID        string            `json:"issueId"`
@@ -484,6 +591,16 @@ type activeWorkItem struct {
 	CleanupStatus   string `json:"cleanupStatus"`
 	SessionStatus   string `json:"sessionStatus"`
 	UpdatedAt       string `json:"updatedAt"`
+}
+
+type workspaceSettings struct {
+	AutoCreateDraftPR bool   `json:"autoCreateDraftPr"`
+	CreatedAt         string `json:"createdAt"`
+	UpdatedAt         string `json:"updatedAt"`
+}
+
+type workspaceSettingsInput struct {
+	AutoCreateDraftPR bool `json:"autoCreateDraftPr"`
 }
 
 type workspaceSnapshot struct {
@@ -769,6 +886,8 @@ func main() {
 		writeJSON(w, runnerHealthPayload())
 	})
 	router.Post("/api/control-plane/session", application.handleConfigureControlPlaneSession)
+	router.Get("/api/workspace/settings", application.handleGetWorkspaceSettings)
+	router.Put("/api/workspace/settings", application.handleUpdateWorkspaceSettings)
 	router.Get("/api/inbox", application.handleListInbox)
 	router.Post("/api/inbox/issues/{issueID}/read", application.handleMarkInboxIssueRead)
 	router.Get("/api/inbox/stream", application.handleInboxStream)
@@ -808,6 +927,7 @@ func main() {
 	router.Post("/api/issues/{issueID}/test-deploy", application.handleStartIssueTestDeploy)
 	router.Post("/api/issues/{issueID}/test-environment/cleanup", application.handleRequestIssueTestEnvironmentCleanup)
 	router.Post("/api/issues/{issueID}/test-environment/retain", application.handleRetainIssueTestEnvironment)
+	router.Get("/api/issues/{issueID}/test-environment/resources", application.handleListIssueTestEnvironmentResources)
 	router.Post("/api/issues/{issueID}/test-environment/probe", application.handleProbeIssueTestEnvironment)
 	router.Post("/api/issues/{issueID}/handoffs/create-pr", application.handleCreateIssuePullRequest)
 	router.Post("/api/issues/{issueID}/handoffs/{handoffID}/refresh", application.handleRefreshIssueHandoff)
@@ -847,6 +967,9 @@ func (a *app) migrate() error {
 		return err
 	}
 	if err := a.ensureProjectRunbookTables(); err != nil {
+		return err
+	}
+	if err := a.ensureWorkspaceSettingsTables(); err != nil {
 		return err
 	}
 	if err := a.ensureIssueColumns(); err != nil {
@@ -1140,6 +1263,36 @@ func (a *app) ensureProjectRunbookTables() error {
 		CREATE INDEX IF NOT EXISTS idx_project_runbook_revisions_project_created ON project_runbook_revisions(project_id, created_at DESC)
 	`); err != nil {
 		return fmt.Errorf("create project_runbook_revisions project index: %w", err)
+	}
+	return nil
+}
+
+func (a *app) ensureWorkspaceSettingsTables() error {
+	if _, err := a.db.Exec(`
+		CREATE TABLE IF NOT EXISTS workspace_settings (
+			id TEXT PRIMARY KEY,
+			auto_create_draft_pr INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			CHECK(id = 'default')
+		)
+	`); err != nil {
+		return fmt.Errorf("create workspace_settings: %w", err)
+	}
+	if err := a.ensureTableColumns("workspace_settings", map[string]string{
+		"auto_create_draft_pr": "INTEGER NOT NULL DEFAULT 0",
+		"created_at":           "TEXT NOT NULL DEFAULT ''",
+		"updated_at":           "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	now := nowString()
+	if _, err := a.db.Exec(`
+		INSERT INTO workspace_settings (id, auto_create_draft_pr, created_at, updated_at)
+		VALUES ('default', 0, ?, ?)
+		ON CONFLICT(id) DO NOTHING
+	`, now, now); err != nil {
+		return fmt.Errorf("seed workspace_settings: %w", err)
 	}
 	return nil
 }
@@ -1859,6 +2012,68 @@ func (a *app) handleConfigureControlPlaneSession(w http.ResponseWriter, r *http.
 	a.controlPlaneWorkspaceID = input.WorkspaceID
 	a.mu.Unlock()
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (a *app) handleGetWorkspaceSettings(w http.ResponseWriter, _ *http.Request) {
+	settings, err := a.loadWorkspaceSettings()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, settings)
+}
+
+func (a *app) handleUpdateWorkspaceSettings(w http.ResponseWriter, r *http.Request) {
+	var input workspaceSettingsInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	settings, err := a.updateWorkspaceSettings(input)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, settings)
+}
+
+func (a *app) loadWorkspaceSettings() (workspaceSettings, error) {
+	settings := workspaceSettings{}
+	var autoCreateDraftPR int
+	err := a.db.QueryRow(`
+		SELECT auto_create_draft_pr, created_at, updated_at
+		FROM workspace_settings
+		WHERE id = 'default'
+	`).Scan(&autoCreateDraftPR, &settings.CreatedAt, &settings.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		if ensureErr := a.ensureWorkspaceSettingsTables(); ensureErr != nil {
+			return workspaceSettings{}, ensureErr
+		}
+		err = a.db.QueryRow(`
+			SELECT auto_create_draft_pr, created_at, updated_at
+			FROM workspace_settings
+			WHERE id = 'default'
+		`).Scan(&autoCreateDraftPR, &settings.CreatedAt, &settings.UpdatedAt)
+	}
+	if err != nil {
+		return workspaceSettings{}, err
+	}
+	settings.AutoCreateDraftPR = autoCreateDraftPR == 1
+	return settings, nil
+}
+
+func (a *app) updateWorkspaceSettings(input workspaceSettingsInput) (workspaceSettings, error) {
+	now := nowString()
+	if _, err := a.db.Exec(`
+		INSERT INTO workspace_settings (id, auto_create_draft_pr, created_at, updated_at)
+		VALUES ('default', ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			auto_create_draft_pr = excluded.auto_create_draft_pr,
+			updated_at = excluded.updated_at
+	`, boolToInt(input.AutoCreateDraftPR), now, now); err != nil {
+		return workspaceSettings{}, err
+	}
+	return a.loadWorkspaceSettings()
 }
 
 func (a *app) handleMarkInboxIssueRead(w http.ResponseWriter, r *http.Request) {
@@ -3795,6 +4010,423 @@ func (a *app) handleRetainIssueTestEnvironment(w http.ResponseWriter, r *http.Re
 	writeJSON(w, environment)
 }
 
+func (a *app) handleListIssueTestEnvironmentResources(w http.ResponseWriter, r *http.Request) {
+	issueID := chi.URLParam(r, "issueID")
+	if _, ok := a.requireHumanActor(w, r); !ok {
+		return
+	}
+	if _, ok := r.URL.Query()["namespace"]; ok {
+		writeError(w, http.StatusBadRequest, errors.New("namespace is fixed by the issue test environment"))
+		return
+	}
+	if _, err := a.loadIssue(issueID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			err = errors.New("issue not found")
+		}
+		writeError(w, status, err)
+		return
+	}
+	environment, err := a.loadIssueTestEnvironment(issueID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if environment == nil || strings.TrimSpace(environment.Namespace) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("issue has no test namespace to inspect"))
+		return
+	}
+
+	resolvedEnvironment := *environment
+	clusterName := ""
+	if strings.TrimSpace(resolvedEnvironment.ClusterID) != "" {
+		cluster, err := a.loadCluster(resolvedEnvironment.ClusterID)
+		if err == nil {
+			clusterName = cluster.Name
+			if strings.TrimSpace(resolvedEnvironment.KubeconfigPath) == "" {
+				resolvedEnvironment.KubeconfigPath = cluster.KubeconfigPath
+			}
+			if strings.TrimSpace(resolvedEnvironment.KubeContext) == "" {
+				resolvedEnvironment.KubeContext = cluster.KubeContext
+			}
+			if strings.TrimSpace(resolvedEnvironment.NodeHost) == "" {
+				resolvedEnvironment.NodeHost = cluster.NodeHost
+			}
+			if strings.TrimSpace(resolvedEnvironment.ExposureMode) == "" {
+				resolvedEnvironment.ExposureMode = cluster.ExposureMode
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+
+	resources, err := listIssueTestEnvironmentResources(r.Context(), resolvedEnvironment, clusterName)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, resources)
+}
+
+func listIssueTestEnvironmentResources(ctx context.Context, environment issueTestEnvironment, clusterName string) (issueTestEnvironmentResources, error) {
+	namespace := strings.TrimSpace(environment.Namespace)
+	if namespace == "" {
+		return issueTestEnvironmentResources{}, errors.New("issue test namespace is empty")
+	}
+	clientset, err := issueTestEnvironmentKubernetesClient(environment)
+	if err != nil {
+		return issueTestEnvironmentResources{}, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	resources := issueTestEnvironmentResources{
+		IssueID:         environment.IssueID,
+		ClusterID:       environment.ClusterID,
+		ClusterName:     clusterName,
+		Context:         environment.KubeContext,
+		Namespace:       namespace,
+		NamespaceStatus: environment.NamespaceStatus,
+		CleanupStatus:   environment.CleanupStatus,
+		ExposureMode:    environment.ExposureMode,
+		PreviewURL:      environment.PreviewURL,
+		NodeHost:        environment.NodeHost,
+		RefreshedAt:     nowString(),
+		Pods:            []kubernetesPodResource{},
+		Services:        []kubernetesServiceResource{},
+		Deployments:     []kubernetesDeploymentResource{},
+		Ingresses:       []kubernetesIngressResource{},
+		Events:          []kubernetesEventResource{},
+		Errors:          []kubernetesResourceFetchError{},
+	}
+
+	if pods, err := listKubernetesPods(ctx, clientset, namespace); err != nil {
+		resources.Errors = append(resources.Errors, kubernetesResourceFetchError{Section: "pods", Message: err.Error()})
+	} else {
+		resources.Pods = pods
+	}
+	if services, err := listKubernetesServices(ctx, clientset, namespace, environment.NodeHost); err != nil {
+		resources.Errors = append(resources.Errors, kubernetesResourceFetchError{Section: "services", Message: err.Error()})
+	} else {
+		resources.Services = services
+	}
+	if deployments, err := listKubernetesDeployments(ctx, clientset, namespace); err != nil {
+		resources.Errors = append(resources.Errors, kubernetesResourceFetchError{Section: "deployments", Message: err.Error()})
+	} else {
+		resources.Deployments = deployments
+	}
+	if ingresses, err := listKubernetesIngresses(ctx, clientset, namespace); err != nil {
+		resources.Errors = append(resources.Errors, kubernetesResourceFetchError{Section: "ingresses", Message: err.Error()})
+	} else {
+		resources.Ingresses = ingresses
+	}
+	if events, err := listKubernetesEvents(ctx, clientset, namespace); err != nil {
+		resources.Errors = append(resources.Errors, kubernetesResourceFetchError{Section: "events", Message: err.Error()})
+	} else {
+		resources.Events = events
+	}
+	return resources, nil
+}
+
+func issueTestEnvironmentKubernetesClient(environment issueTestEnvironment) (*kubernetes.Clientset, error) {
+	kubeconfigPath, err := normalizeKubeconfigPath(environment.KubeconfigPath)
+	if err != nil {
+		return nil, err
+	}
+	overrides := &clientcmd.ConfigOverrides{}
+	if kubeContext := strings.TrimSpace(environment.KubeContext); kubeContext != "" {
+		overrides.CurrentContext = kubeContext
+	}
+	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath},
+		overrides,
+	).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load kubeconfig: %w", err)
+	}
+	config.UserAgent = "mspace-runner/test-environment-resources"
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("create kubernetes client: %w", err)
+	}
+	return clientset, nil
+}
+
+func listKubernetesPods(ctx context.Context, clientset *kubernetes.Clientset, namespace string) ([]kubernetesPodResource, error) {
+	list, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	pods := make([]kubernetesPodResource, 0, len(list.Items))
+	for _, pod := range list.Items {
+		pods = append(pods, mapKubernetesPod(pod))
+	}
+	sort.Slice(pods, func(i, j int) bool {
+		return pods[i].Name < pods[j].Name
+	})
+	return pods, nil
+}
+
+func mapKubernetesPod(pod corev1.Pod) kubernetesPodResource {
+	resource := kubernetesPodResource{
+		Name:      pod.Name,
+		Phase:     string(pod.Status.Phase),
+		NodeName:  pod.Spec.NodeName,
+		PodIP:     pod.Status.PodIP,
+		HostIP:    pod.Status.HostIP,
+		CreatedAt: kubernetesTimeString(pod.CreationTimestamp),
+	}
+	statusesByName := map[string]corev1.ContainerStatus{}
+	for _, status := range pod.Status.ContainerStatuses {
+		statusesByName[status.Name] = status
+	}
+	for _, container := range pod.Spec.Containers {
+		status, ok := statusesByName[container.Name]
+		item := kubernetesPodContainer{Name: container.Name, State: "waiting"}
+		if ok {
+			state, reason := kubernetesContainerState(status.State)
+			item.Ready = status.Ready
+			item.RestartCount = status.RestartCount
+			item.State = state
+			item.Reason = reason
+			resource.Restarts += status.RestartCount
+			if status.Ready {
+				resource.ReadyContainers++
+			}
+		}
+		resource.Containers = append(resource.Containers, item)
+	}
+	resource.TotalContainers = len(pod.Spec.Containers)
+	if resource.Containers == nil {
+		resource.Containers = []kubernetesPodContainer{}
+	}
+	return resource
+}
+
+func kubernetesContainerState(state corev1.ContainerState) (string, string) {
+	if state.Waiting != nil {
+		return "waiting", state.Waiting.Reason
+	}
+	if state.Running != nil {
+		return "running", ""
+	}
+	if state.Terminated != nil {
+		return "terminated", firstNonEmpty(state.Terminated.Reason, fmt.Sprintf("exit %d", state.Terminated.ExitCode))
+	}
+	return "unknown", ""
+}
+
+func listKubernetesServices(ctx context.Context, clientset *kubernetes.Clientset, namespace, nodeHost string) ([]kubernetesServiceResource, error) {
+	list, err := clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	services := make([]kubernetesServiceResource, 0, len(list.Items))
+	for _, service := range list.Items {
+		services = append(services, mapKubernetesService(service, nodeHost))
+	}
+	sort.Slice(services, func(i, j int) bool {
+		return services[i].Name < services[j].Name
+	})
+	return services, nil
+}
+
+func mapKubernetesService(service corev1.Service, nodeHost string) kubernetesServiceResource {
+	externalIPs := append([]string{}, service.Spec.ExternalIPs...)
+	for _, ingress := range service.Status.LoadBalancer.Ingress {
+		if strings.TrimSpace(ingress.IP) != "" {
+			externalIPs = append(externalIPs, ingress.IP)
+		}
+		if strings.TrimSpace(ingress.Hostname) != "" {
+			externalIPs = append(externalIPs, ingress.Hostname)
+		}
+	}
+	resource := kubernetesServiceResource{
+		Name:       service.Name,
+		Type:       string(service.Spec.Type),
+		ClusterIP:  service.Spec.ClusterIP,
+		ExternalIP: strings.Join(uniqueStrings(externalIPs), ", "),
+		CreatedAt:  kubernetesTimeString(service.CreationTimestamp),
+		Ports:      []kubernetesServicePort{},
+	}
+	for _, port := range service.Spec.Ports {
+		item := kubernetesServicePort{
+			Name:       port.Name,
+			Protocol:   string(port.Protocol),
+			Port:       port.Port,
+			TargetPort: port.TargetPort.String(),
+			NodePort:   port.NodePort,
+		}
+		if service.Spec.Type == corev1.ServiceTypeNodePort || service.Spec.Type == corev1.ServiceTypeLoadBalancer {
+			item.URL = nodePortPreviewURL(nodeHost, port.NodePort)
+		}
+		resource.Ports = append(resource.Ports, item)
+	}
+	return resource
+}
+
+func nodePortPreviewURL(nodeHost string, nodePort int32) string {
+	host := strings.TrimSpace(nodeHost)
+	if host == "" || nodePort <= 0 {
+		return ""
+	}
+	scheme := "http"
+	if parsed, err := url.Parse(host); err == nil && parsed.Scheme != "" {
+		scheme = parsed.Scheme
+		host = parsed.Hostname()
+	}
+	if strings.Count(host, ":") > 1 && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	return fmt.Sprintf("%s://%s:%d", scheme, host, nodePort)
+}
+
+func listKubernetesDeployments(ctx context.Context, clientset *kubernetes.Clientset, namespace string) ([]kubernetesDeploymentResource, error) {
+	list, err := clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	deployments := make([]kubernetesDeploymentResource, 0, len(list.Items))
+	for _, deployment := range list.Items {
+		deployments = append(deployments, mapKubernetesDeployment(deployment))
+	}
+	sort.Slice(deployments, func(i, j int) bool {
+		return deployments[i].Name < deployments[j].Name
+	})
+	return deployments, nil
+}
+
+func mapKubernetesDeployment(deployment appsv1.Deployment) kubernetesDeploymentResource {
+	resource := kubernetesDeploymentResource{
+		Name:              deployment.Name,
+		Replicas:          deployment.Status.Replicas,
+		ReadyReplicas:     deployment.Status.ReadyReplicas,
+		UpdatedReplicas:   deployment.Status.UpdatedReplicas,
+		AvailableReplicas: deployment.Status.AvailableReplicas,
+		CreatedAt:         kubernetesTimeString(deployment.CreationTimestamp),
+		Conditions:        []kubernetesCondition{},
+	}
+	for _, condition := range deployment.Status.Conditions {
+		resource.Conditions = append(resource.Conditions, kubernetesCondition{
+			Type:    string(condition.Type),
+			Status:  string(condition.Status),
+			Reason:  condition.Reason,
+			Message: condition.Message,
+		})
+	}
+	return resource
+}
+
+func listKubernetesIngresses(ctx context.Context, clientset *kubernetes.Clientset, namespace string) ([]kubernetesIngressResource, error) {
+	list, err := clientset.NetworkingV1().Ingresses(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	ingresses := make([]kubernetesIngressResource, 0, len(list.Items))
+	for _, ingress := range list.Items {
+		ingresses = append(ingresses, mapKubernetesIngress(ingress))
+	}
+	sort.Slice(ingresses, func(i, j int) bool {
+		return ingresses[i].Name < ingresses[j].Name
+	})
+	return ingresses, nil
+}
+
+func mapKubernetesIngress(ingress networkingv1.Ingress) kubernetesIngressResource {
+	className := ""
+	if ingress.Spec.IngressClassName != nil {
+		className = *ingress.Spec.IngressClassName
+	}
+	hosts := []string{}
+	for _, rule := range ingress.Spec.Rules {
+		if strings.TrimSpace(rule.Host) != "" {
+			hosts = append(hosts, rule.Host)
+		}
+	}
+	for _, tls := range ingress.Spec.TLS {
+		hosts = append(hosts, tls.Hosts...)
+	}
+	addresses := []string{}
+	for _, item := range ingress.Status.LoadBalancer.Ingress {
+		if strings.TrimSpace(item.IP) != "" {
+			addresses = append(addresses, item.IP)
+		}
+		if strings.TrimSpace(item.Hostname) != "" {
+			addresses = append(addresses, item.Hostname)
+		}
+	}
+	return kubernetesIngressResource{
+		Name:      ingress.Name,
+		ClassName: className,
+		Hosts:     uniqueStrings(hosts),
+		Addresses: uniqueStrings(addresses),
+		CreatedAt: kubernetesTimeString(ingress.CreationTimestamp),
+	}
+}
+
+func listKubernetesEvents(ctx context.Context, clientset *kubernetes.Clientset, namespace string) ([]kubernetesEventResource, error) {
+	list, err := clientset.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(list.Items, func(i, j int) bool {
+		return kubernetesEventSortTime(list.Items[i]).After(kubernetesEventSortTime(list.Items[j]))
+	})
+	limit := len(list.Items)
+	if limit > 50 {
+		limit = 50
+	}
+	events := make([]kubernetesEventResource, 0, limit)
+	for _, event := range list.Items[:limit] {
+		events = append(events, mapKubernetesEvent(event))
+	}
+	return events, nil
+}
+
+func mapKubernetesEvent(event corev1.Event) kubernetesEventResource {
+	return kubernetesEventResource{
+		Type:         event.Type,
+		Reason:       event.Reason,
+		Message:      event.Message,
+		InvolvedKind: event.InvolvedObject.Kind,
+		InvolvedName: event.InvolvedObject.Name,
+		Count:        event.Count,
+		FirstSeen:    kubernetesEventTimeString(event.FirstTimestamp.Time),
+		LastSeen:     kubernetesEventTimeString(kubernetesEventSortTime(event)),
+		CreatedAt:    kubernetesTimeString(event.CreationTimestamp),
+	}
+}
+
+func kubernetesEventSortTime(event corev1.Event) time.Time {
+	if !event.EventTime.Time.IsZero() {
+		return event.EventTime.Time
+	}
+	if !event.LastTimestamp.Time.IsZero() {
+		return event.LastTimestamp.Time
+	}
+	if !event.FirstTimestamp.Time.IsZero() {
+		return event.FirstTimestamp.Time
+	}
+	return event.CreationTimestamp.Time
+}
+
+func kubernetesTimeString(value metav1.Time) string {
+	if value.Time.IsZero() {
+		return ""
+	}
+	return value.Time.UTC().Format(time.RFC3339)
+}
+
+func kubernetesEventTimeString(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
 func (a *app) handleProbeIssueTestEnvironment(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "issueID")
 	if _, ok := a.requireHumanActor(w, r); !ok {
@@ -3914,6 +4546,68 @@ func (a *app) handleRefreshIssueHandoff(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, handoff)
+}
+
+func (a *app) maybeAutoCreateIssuePullRequest(session agentSession, project project, changeNode *issueChangeNode) {
+	if changeNode == nil {
+		return
+	}
+	settings, err := a.loadWorkspaceSettings()
+	if err != nil {
+		a.appendSessionLog(session.ID, "system", "Auto PR skipped: workspace settings could not be loaded: "+err.Error())
+		return
+	}
+	if !settings.AutoCreateDraftPR {
+		return
+	}
+
+	detail, err := a.loadIssueDetail(session.IssueID)
+	if err != nil {
+		a.appendSessionLog(session.ID, "system", "Auto PR skipped: issue detail could not be loaded: "+err.Error())
+		return
+	}
+	if current := currentIssuePullRequestHandoff(detail.Handoffs); current != nil && strings.TrimSpace(current.PRURL) != "" {
+		handoff := *current
+		if err := refreshIssueHandoffPRStatus(project, &handoff); err != nil {
+			handoff.Error = err.Error()
+			handoff.LastCheckedAt = nowString()
+		}
+		if _, err := a.storeIssueHandoff(handoff); err != nil {
+			a.appendSessionLog(session.ID, "system", "Auto PR refresh failed: "+err.Error())
+			return
+		}
+		a.appendSessionLog(session.ID, "system", fmt.Sprintf("Auto PR refreshed existing issue pull request %s.", valueOrUnset(handoff.PRURL)))
+		a.publishInboxEvent(session.IssueID, "handoff")
+		return
+	}
+
+	handoff, err := a.buildIssueHandoff(detail, issueHandoffRequest{
+		SourceSessionID: changeNode.SessionID,
+		SourceCommitSHA: changeNode.CommitSHA,
+		Kind:            "pr",
+	}, "auto")
+	if err != nil {
+		a.appendSessionLog(session.ID, "system", "Auto PR skipped: "+err.Error())
+		return
+	}
+	if err := a.createPullRequestForHandoff(detail, &handoff, "", true); err != nil {
+		handoff.Error = err.Error()
+		if _, storeErr := a.storeIssueHandoff(handoff); storeErr != nil {
+			a.appendSessionLog(session.ID, "system", "Auto PR failed and handoff state could not be stored: "+storeErr.Error())
+			return
+		}
+		a.appendSessionLog(session.ID, "system", "Auto PR failed: "+err.Error())
+		a.publishInboxEvent(session.IssueID, "handoff")
+		return
+	}
+	handoff, err = a.storeIssueHandoff(handoff)
+	if err != nil {
+		a.appendSessionLog(session.ID, "system", "Auto PR created but handoff state could not be stored: "+err.Error())
+		return
+	}
+	a.addSystemComment(session.IssueID, issueHandoffComment(handoff))
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Auto PR handoff ready: %s.", valueOrUnset(handoff.PRURL)))
+	a.publishInboxEvent(session.IssueID, "handoff")
 }
 
 func (a *app) buildIssueHandoff(detail issueDetail, input issueHandoffRequest, createdVia string) (issueHandoff, error) {
@@ -5128,6 +5822,7 @@ func (a *app) runSession(session agentSession, project project) {
 	a.collectEvidence(session, project)
 	a.updateIssueTestEnvironmentForSession(session, true)
 	a.recordSessionReviewEvidence(session, project, changeNode, true)
+	a.maybeAutoCreateIssuePullRequest(session, project, changeNode)
 }
 
 func (a *app) recordSourceChangeNode(session agentSession, project project) (*issueChangeNode, error) {
@@ -5721,12 +6416,15 @@ func (a *app) reconcileIssueTestEnvironmentForSession(session agentSession, proj
 	}
 
 	targetProject := a.evidenceTargetProject(session, project)
-	a.appendDeployStage(session.ID, "capture-evidence", "Capture Kubernetes evidence", "running", "Reading namespace resources and recent events.")
-	evidence := a.collectEvidenceSnapshot(session, targetProject)
-	if evidence != nil {
-		a.appendDeployStage(session.ID, "capture-evidence", "Capture Kubernetes evidence", "passed", evidence.Summary)
-	} else {
-		a.appendDeployStage(session.ID, "capture-evidence", "Capture Kubernetes evidence", "skipped", "No namespace evidence was available.")
+	var evidence *deploymentEvidence
+	if outcome != "probe" {
+		a.appendDeployStage(session.ID, "capture-evidence", "Capture Kubernetes evidence", "running", "Reading namespace resources and recent events.")
+		evidence = a.collectEvidenceSnapshot(session, targetProject)
+		if evidence != nil {
+			a.appendDeployStage(session.ID, "capture-evidence", "Capture Kubernetes evidence", "passed", evidence.Summary)
+		} else {
+			a.appendDeployStage(session.ID, "capture-evidence", "Capture Kubernetes evidence", "skipped", "No namespace evidence was available.")
+		}
 	}
 
 	a.appendDeployStage(session.ID, "discover-preview", "Discover preview URL", "running", "Looking for artifact, ingress, HTTPRoute, and NodePort candidates.")
@@ -5802,6 +6500,11 @@ func (a *app) reconcileIssueTestEnvironmentForSession(session agentSession, proj
 	}
 
 	summary := deploymentReconcileSummary(*environment, resourcesReady, probe, outcome)
+	a.appendDeployStage(session.ID, "reconcile", "Finalize deployment state", deployStageStatusForNamespace(environment.NamespaceStatus), summary)
+	if outcome == "probe" {
+		return nil
+	}
+
 	details := buildDeploymentReconcileDetails(discoverySummary, candidates, probe, evidence)
 	record := deploymentEvidence{
 		ID:        uuid.NewString(),
@@ -5813,13 +6516,10 @@ func (a *app) reconcileIssueTestEnvironmentForSession(session agentSession, proj
 		Details:   truncate(details, 12000),
 		CreatedAt: nowString(),
 	}
-	if outcome != "probe" {
-		a.storeEvidence(record, true)
-	}
-	if outcome != "probe" && shouldRecordFailureForNamespaceStatus(environment.NamespaceStatus) {
+	a.storeEvidence(record, true)
+	if shouldRecordFailureForNamespaceStatus(environment.NamespaceStatus) {
 		a.recordSessionFailure(session, targetProject, errors.New(summary), &record, failurePhaseForNamespaceStatus(environment.NamespaceStatus), failureStatusForSession(session))
 	}
-	a.appendDeployStage(session.ID, "reconcile", "Finalize deployment state", deployStageStatusForNamespace(environment.NamespaceStatus), summary)
 	return &record
 }
 

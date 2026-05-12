@@ -1,6 +1,6 @@
 # mspace Local API Integration Guide
 
-> Status: local MVP API guide, updated 2026-05-11
+> Status: local MVP API guide, updated 2026-05-12
 
 This guide is for local tools or future desktop integrations that need to call the mspace runner directly. The API is local-first and currently served by the Go runner, normally on `http://127.0.0.1:7788`.
 
@@ -192,6 +192,21 @@ curl -X DELETE "$MSPACE_API_BASE/api/issues/<issue-id>/tasks/<task-id>" \
   -H "Authorization: Bearer ${MSPACE_AGENT_TOKEN:-<msp-token>}"
 ```
 
+## Workspace Settings APIs
+
+Workspace settings are local MVP runtime policy. Source commit capture is always on. `autoCreateDraftPr` controls whether the runner tries to create or refresh an issue-level draft PR after a source commit is captured.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/workspace/settings` | Read local workspace automation policy. |
+| `PUT` | `/api/workspace/settings` | Update local workspace automation policy. |
+
+```bash
+curl -X PUT "$MSPACE_API_BASE/api/workspace/settings" \
+  -H 'Content-Type: application/json' \
+  -d '{"autoCreateDraftPr":true}'
+```
+
 ## Issue Label APIs
 
 Issue labels are constrained by the built-in label definitions. The current dimensions are `type` and `priority`. Type uses Conventional Commit names and is normally assigned asynchronously by the internal triage agent after issue creation. Priority is manual and should be set from Issue Detail.
@@ -263,6 +278,7 @@ Issue test deployments, retain decisions, and cleanup turns are manually trigger
 | `POST` | `/api/issues/{issueID}/test-environment/retain` | Record that the namespace should be retained. |
 | `POST` | `/api/issues/{issueID}/test-environment/cleanup` | Queue a cleanup agent turn for the issue namespace. |
 | `POST` | `/api/issues/{issueID}/test-environment/probe` | Internal preview status check used by Issue Detail and debugging tools; updates test-environment state only and should not be presented as a primary product action. |
+| `GET` | `/api/issues/{issueID}/test-environment/resources` | List live resources from the issue's fixed test namespace. |
 
 Queue a NodePort deploy/test turn:
 
@@ -283,6 +299,15 @@ curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/test-deploy" \
 The deploy/test session receives the selected source commit, source session, kubeconfig, context, issue namespace, registry prefix, exposure mode, and preview routing values through environment variables. The runner prepares the deploy worktree at the selected commit so the agent deploys the selected change node instead of implicitly using the latest session. After deploy, the runner captures Kubernetes evidence, discovers preview candidates, checks the preview URL, and stores the result as `active`, `preview_unverified`, `deploy_failed`, or `deploy_interrupted`. If any completed continuation session writes `$MSPACE_SESSION_ARTIFACT_DIR/test-environment.json` with `previewUrl`, the runner can copy that URL back and adopt the session as the issue's current deploy session.
 
 If the runner process restarts while a deploy or cleanup session is active, the next startup marks the interrupted session `failed` with `agentStatus="interrupted"`. A deploy session linked through `lastDeploySessionId` moves the environment to `namespaceStatus="deploy_interrupted"`; a cleanup session linked through `lastCleanupSessionId` moves it to `namespaceStatus="cleanup_failed"` and `cleanupStatus="cleanup_failed"`.
+
+Fetch the live Resources tab payload:
+
+```bash
+curl "$MSPACE_API_BASE/api/issues/<issue-id>/test-environment/resources" \
+  -H "Authorization: Bearer <msp-token>"
+```
+
+The response includes cluster/context metadata, namespace lifecycle and cleanup state, preview URL, refreshed time, and arrays for `pods`, `services`, `deployments`, `ingresses`, `events`, plus per-section `errors`. The namespace is always derived from `issue_test_environments.namespace`; callers must not pass `?namespace=...`, and the runner rejects namespace overrides with `400 Bad Request`. The first implementation uses Kubernetes `client-go` typed clients and intentionally limits the view to namespaced resources needed for issue debugging. It does not list Secrets, Nodes, or cluster-wide inventory.
 
 ## Error Notes
 

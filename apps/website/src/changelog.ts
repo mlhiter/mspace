@@ -7,6 +7,19 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-05-12",
+    title: "Workspace automation and namespace resources",
+    summary:
+      "mspace clarified the delivery loop and made issue test environments easier to inspect after deployment.",
+    items: [
+      "Added Workspace Settings for automation policy.",
+      "Kept source commit capture as an always-on review and deploy anchor.",
+      "Added an optional workspace switch for automatic draft PR creation and PR status refresh after source commits.",
+      "Added an Issue Detail Resources tab for the current test namespace.",
+      "Showed Pods, Services, Deployments, Ingresses, Events, and NodePort mappings without requiring a separate Kubernetes console.",
+    ],
+  },
+  {
     date: "2026-05-11",
     title: "Website, runbooks, review evidence, and session recovery",
     summary:

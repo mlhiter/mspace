@@ -14,12 +14,14 @@ import {
 import {
   AgentsPage,
   ClustersPage,
+  IssueCommitDetailPage,
   InboxPage,
   IssueDetailPage,
   IssuesPage,
   MspaceAuthProvider,
   ProjectsPage,
   SessionDetailPage,
+  WorkspaceSettingsPage,
 } from "@mspace/views";
 import { api, AUTH_TOKEN_STORAGE_KEY, controlPlaneApi, getControlPlaneBaseUrl, queryKeys, setStoredAuthIdentity } from "@mspace/core";
 import { AppShell, type ShellSearchItem } from "@mspace/ui";
@@ -238,6 +240,12 @@ const issueDetailRoute = createRoute({
   component: IssueDetailPage,
 });
 
+const issueCommitDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/issues/$issueId/commits/$commitSha",
+  component: IssueCommitDetailPage,
+});
+
 const agentsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/agents",
@@ -256,6 +264,12 @@ const projectsRoute = createRoute({
   component: ProjectsPage,
 });
 
+const workspaceSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: WorkspaceSettingsPage,
+});
+
 const sessionDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId",
@@ -266,10 +280,12 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   inboxRoute,
   issuesRoute,
+  issueCommitDetailRoute,
   issueDetailRoute,
   agentsRoute,
   clustersRoute,
   projectsRoute,
+  workspaceSettingsRoute,
   sessionDetailRoute,
 ]);
 

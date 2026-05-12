@@ -78,11 +78,13 @@ Production deployment uses the root `vercel.json`:
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Project default cluster selection.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, reconcile Kubernetes evidence, and check preview status in the background.
+- Issue Resources tab for the current test namespace, showing Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events without accepting cross-namespace input.
 - Issue-level branch / PR handoff records that keep one current PR with source commit, head commit, commit list, preview URL, evidence summary, local preflight errors, and refreshable PR state.
+- Workspace automation settings keep source commit capture always on and let users opt into automatic draft PR creation after captured source commits.
 - Structured failure evidence for failed sessions, deploy reconciliation, preview checks, agent interruption, and cleanup failures, shown from Issue Detail Overview and Evidence so users can continue, retry deploy, stop, retain, or clean up instead of treating failure as terminal.
 
 > [!IMPORTANT]
-> Generated scoped kubeconfigs, ServiceAccounts, automatic PR capture, and Kubernetes-hosted agent runtime are future work. The MVP trusts the kubeconfig path configured on the selected cluster.
+> Generated scoped kubeconfigs, ServiceAccounts, server-owned GitHub App automation, and Kubernetes-hosted agent runtime are future work. The MVP trusts the kubeconfig path configured on the selected cluster and uses the local `gh` identity for optional PR creation.
 
 ## Architecture
 
@@ -143,7 +145,9 @@ The server automatically loads `.env.local` from the project root. Keep `MSPACE_
 5. Use checklist rows such as `- [ ] Add tests` when the issue needs child tasks, or paste/drop screenshots when the issue needs visual context.
 6. Mention an enabled agent profile, such as `@codex`, in a rich issue comment.
 7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
-8. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
+8. Open the Commits tab to review the issue-level PR card plus the captured commit list, then create or refresh the issue PR from the selected source branch when ready.
+9. Optionally enable automatic draft PRs from Workspace Settings in the workspace menu if this workspace should refresh a draft PR after future source commits.
+10. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
 
 ## Configuration
 

@@ -24,6 +24,7 @@ import type {
   IssueLabelDefinition,
   IssueListItem,
   IssueTestEnvironment,
+  IssueTestEnvironmentResources,
   KubeconfigDiscoveryResult,
   KubeconfigImportResult,
   MspaceUser,
@@ -37,6 +38,8 @@ import type {
   UpdateIssueInput,
   UpdateProjectInput,
   UpdateProjectRunbookInput,
+  UpdateWorkspaceSettingsInput,
+  WorkspaceSettings,
 } from "./types";
 
 export const AUTH_TOKEN_STORAGE_KEY = "mspace.authToken";
@@ -56,6 +59,7 @@ export const queryKeys = {
   authMe: (token: string) => ["auth-me", token] as const,
   authPoll: (state: string) => ["auth-github-result", state] as const,
   teamInbox: (workspaceId: string, token: string) => ["team-inbox", workspaceId, token] as const,
+  workspaceSettings: ["workspace-settings"] as const,
   clusters: ["clusters"] as const,
   inbox: ["inbox"] as const,
   issueLabelDefinitions: ["issue-label-definitions"] as const,
@@ -63,6 +67,7 @@ export const queryKeys = {
   projects: ["projects"] as const,
   projectRunbook: (projectId: string) => ["project-runbook", projectId] as const,
   issue: (issueId: string) => ["issue", issueId] as const,
+  issueResources: (issueId: string) => ["issue-resources", issueId] as const,
   session: (sessionId: string) => ["session", sessionId] as const,
 };
 
@@ -227,6 +232,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  getWorkspaceSettings: () => request<WorkspaceSettings>("/api/workspace/settings"),
+  updateWorkspaceSettings: (input: UpdateWorkspaceSettingsInput) =>
+    request<WorkspaceSettings>("/api/workspace/settings", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
   listActiveWork: () => request<ActiveWorkItem[]>("/api/active-work"),
   listAgents: () => request<AgentProfile[]>("/api/agents"),
   createAgent: (input: AgentProfileInput) =>
@@ -371,6 +382,8 @@ export const api = {
     request<IssueTestEnvironment>(`/api/issues/${issueId}/test-environment/retain`, {
       method: "POST",
     }),
+  getIssueTestEnvironmentResources: (issueId: string) =>
+    request<IssueTestEnvironmentResources>(`/api/issues/${issueId}/test-environment/resources`),
   probeTestEnvironment: (issueId: string) =>
     request<IssueTestEnvironment>(`/api/issues/${issueId}/test-environment/probe`, {
       method: "POST",

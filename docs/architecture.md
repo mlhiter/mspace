@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: local MVP implementation snapshot, updated 2026-05-11
+> Status: local MVP implementation snapshot, updated 2026-05-12
 
 ## Current Implementation Snapshot
 
@@ -24,7 +24,8 @@ The repository currently contains a runnable local-first desktop MVP:
 - Runner startup reconciles persisted `queued` or `running` sessions left behind by a previous runner process. Because the Codex app-server process and in-memory cancellation handle cannot be recovered, these sessions become `failed` with `agent_status='interrupted'`, get a system log and issue comment, move the issue to `blocked`, and move any linked issue test environment out of active progress: deploy turns become `deploy_interrupted`, while cleanup turns become `cleanup_failed`.
 - Agent profiles live in `agent_profiles` and are exposed through the Agents module. Default Codex-backed agents are seeded, but new sessions resolve profile instructions from SQLite rather than hardcoded profile switches.
 - Finished local session worktrees can be cleaned through `POST /api/sessions/{sessionID}/cleanup`; active sessions are rejected, the stored workdir must stay under the mspace workdir root, and session records remain for review.
-- Source changes, delivery handoff, review evidence, and failure evidence are split deliberately. `issue_change_nodes` backs the Commits tab for commit metadata and diffs; source capture records an existing ahead-of-base session HEAD commit when the agent has already committed, or stages the worktree, excludes `.mspace`, retries transient `.git/index.lock` conflicts, and creates a captured source commit when the worktree still has uncommitted changes. `issue_handoffs` stores the current branch or PR delivery artifact for an issue. `session_review_evidence` backs the Evidence tab for compact commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state. `session_failures` stores continueable failed-session and failed-environment evidence. The runner stores only evidence-worthy commands in `commands_json`; raw command trails and exploratory output remain in `session_logs`. Changed-file UI uses Material Icon Theme file icons and filters directory-only placeholder paths while preserving concrete file paths under those directories.
+- Source changes, delivery handoff, live namespace resources, review evidence, and failure evidence are split deliberately. `issue_change_nodes` backs the Commits tab for commit metadata and diffs; source capture records an existing ahead-of-base session HEAD commit when the agent has already committed, or stages the worktree, excludes `.mspace`, retries transient `.git/index.lock` conflicts, and creates a captured source commit when the worktree still has uncommitted changes. `issue_handoffs` stores the current branch or PR delivery artifact for an issue. `GET /api/issues/{issueID}/test-environment/resources` powers the Resources tab with a live namespace-scoped read of Pods, Services, Deployments, Ingresses, and Events. `session_review_evidence` backs the Evidence tab for compact commands, tests, build/deploy results, preview URL, Kubernetes state, agent summary, risks/follow-ups, and cleanup/retain state. `session_failures` stores continueable failed-session and failed-environment evidence. The runner stores only evidence-worthy commands in `commands_json`; raw command trails and exploratory output remain in `session_logs`. Changed-file UI uses Material Icon Theme file icons and filters directory-only placeholder paths while preserving concrete file paths under those directories.
+- Workspace Settings is exposed at `/settings` from the workspace identity menu. It stores local automation policy in `workspace_settings`: source commit capture remains always on, while `auto_create_draft_pr` controls whether the runner automatically creates or refreshes the issue's current draft PR after source capture.
 - Session branch defaults to `mspace/<issue-short-id>/<session-short-id>` when the user does not provide one.
 - Project import supports existing local folders and GitHub repository URLs. Local repositories auto-detect git remote metadata when available.
 - Inbox is an unread review feed. Signed-in team state is built from server `issue_events` and per-user `issue_event_receipts`; the local runner `inbox_items.unread` plus `/api/inbox/stream` remains a fallback and invalidation path.
@@ -38,7 +39,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Kubernetes is currently represented by reusable cluster configs plus issue-level test environment records. Clusters can be imported from selected kubeconfig files or discovered from regular files under `~/.kube`; each imported context stores `kubeconfig_path`, optional `kube_context`, `image_registry_prefix`, default `exposure_mode`, optional `preview_domain`, optional `ingress_class`, optional `node_host`, and a readiness status from a read-only API check.
 - Projects store `default_cluster_id` so issue deploys can use known test cluster access without asking for kubeconfig or registry values each time.
 - Each issue can have one `issue_test_environments` record. It stores the selected cluster id, reserved issue namespace, namespace state, cleanup state, preview URL, deployment session id, cleanup session id, and the resolved registry/kubeconfig/routing values used for that issue.
-- Test deployment is a manual Issue Detail action. It queues a Codex deploy/test turn; the agent creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when configured, and writes `test-environment.json` into the session artifact directory when it has a URL to record. The runner then reconciles Kubernetes evidence, discovers preview candidates, checks preview reachability, updates the test environment to `active`, `preview_unverified`, `deploy_failed`, or `deploy_interrupted`, and records failure evidence when the environment needs attention. Issue Detail automatically refreshes preview status in the background instead of showing a manual Probe action; that refresh updates only the issue test environment state/sidebar, not review evidence, deployment evidence, failure records, or top-level issue status.
+- Test deployment is a manual Issue Detail action. It queues a Codex deploy/test turn; the agent creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default or Ingress when configured, and writes `test-environment.json` into the session artifact directory when it has a URL to record. The runner then reconciles Kubernetes evidence, discovers preview candidates, checks preview reachability, updates the test environment to `active`, `preview_unverified`, `deploy_failed`, or `deploy_interrupted`, and records failure evidence when the environment needs attention. Issue Detail automatically refreshes preview status in the background instead of showing a manual Probe action; that refresh updates only the issue test environment state/sidebar, not review evidence, deployment evidence, failure records, or top-level issue status. The Resources tab refreshes live Kubernetes objects only when the user opens that tab or presses Refresh, and the namespace is fixed from the issue test environment rather than accepted from the frontend.
 - Scoped kubeconfig and ServiceAccount generation are still future work. The MVP trusts the kubeconfig path stored in the selected cluster.
 - Sessions also receive `MSPACE_API_BASE_URL`, `MSPACE_ISSUE_ID`, `MSPACE_SESSION_ID`, `MSPACE_AGENT_TOKEN`, `MSPACE_AGENT_PROFILE`, `MSPACE_SESSION_BRANCH`, `MSPACE_SESSION_WORKDIR`, `MSPACE_SESSION_CONTEXT`, `MSPACE_SESSION_ARTIFACT_DIR`, and resolved cluster/test-environment variables when the issue has a test environment.
 - Current desktop visual language is a Notion-like paper workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, and restrained icon actions.
@@ -56,6 +57,7 @@ Current shadcn/ui component source:
 - `packages/ui/src/components/ui/scroll-area.tsx`
 - `packages/ui/src/components/ui/separator.tsx`
 - `packages/ui/src/components/ui/select.tsx`
+- `packages/ui/src/components/ui/switch.tsx`
 - `packages/ui/src/components/ui/textarea.tsx`
 
 Implemented desktop routes:
@@ -63,9 +65,11 @@ Implemented desktop routes:
 - `/inbox`
 - `/issues`
 - `/issues/:issueId`
+- `/issues/:issueId/commits/:commitSha`
 - `/agents`
 - `/clusters`
 - `/projects`
+- `/settings`
 - `/sessions/:sessionId`
 
 Implemented server control-plane API:
@@ -103,6 +107,8 @@ Implemented runner API:
 | `POST` | `/api/clusters/import-defaults` | Scan `~/.kube`, import kubeconfig contexts, and check API reachability. |
 | `PUT` | `/api/clusters/{clusterID}` | Update a reusable test cluster config. |
 | `DELETE` | `/api/clusters/{clusterID}` | Delete a cluster config when no project or test env references it. |
+| `GET` | `/api/workspace/settings` | Read local workspace automation policy. |
+| `PUT` | `/api/workspace/settings` | Update local workspace automation policy. |
 | `GET` | `/api/projects` | List projects with issue/session counts. |
 | `POST` | `/api/projects` | Create a project. |
 | `PUT` | `/api/projects/{projectID}` | Update a project. |
@@ -126,6 +132,7 @@ Implemented runner API:
 | `POST` | `/api/issues/{issueID}/test-environment/cleanup` | Manually queue an agent turn to clean the issue test namespace. |
 | `POST` | `/api/issues/{issueID}/test-environment/retain` | Record that the issue test namespace should be retained. |
 | `POST` | `/api/issues/{issueID}/test-environment/probe` | Internal preview status check used by Issue Detail, debugging, and automation; updates test-environment state only. |
+| `GET` | `/api/issues/{issueID}/test-environment/resources` | List live resources from the issue's fixed test namespace: Pods, Services, Deployments, Ingresses, and Events. Rejects namespace overrides. |
 | `POST` | `/api/issues/{issueID}/handoffs/create-pr` | Create or update the issue's current PR handoff from selected source evidence, after local git/gitleaks/gh preflight. |
 | `POST` | `/api/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh PR URL, number, title, state, and any local refresh error for an existing handoff. |
 | `GET` | `/api/sessions/{sessionID}` | Load session detail, logs, evidence, and workspace snapshot. |
@@ -242,6 +249,17 @@ Current implemented fields:
 - status (`configured`, `ready`, or `unreachable`);
 - last checked time;
 - project and test-environment reference counts.
+
+### Workspace Settings
+
+A Workspace Settings record stores local automation policy for the current workspace.
+
+Current implemented fields:
+
+- stable singleton id;
+- `auto_create_draft_pr`;
+- created time;
+- updated time.
 
 ### Issue
 
@@ -526,6 +544,12 @@ project_runbook_revisions
   content_hash
   status
   created_at
+
+workspace_settings
+  id
+  auto_create_draft_pr
+  created_at
+  updated_at
 
 issues
   id
@@ -957,8 +981,9 @@ For the first version, keep this narrow:
 - Services;
 - Ingress;
 - Events;
-- recent logs for selected pod;
 - rollout status for deployments.
+
+The implemented Resources tab is this narrow namespace view. It uses the issue test environment's stored namespace, not user-supplied namespace text, and intentionally excludes Secrets, Nodes, and cluster-wide objects. Recent logs for a selected pod are still future work.
 
 ## Technical Reference Decisions
 
@@ -970,9 +995,9 @@ Do not let Kubernetes details leak into every product object. Inbox items and is
 
 Do not depend on Sealos UI APIs as the primary workflow contract. They may be useful later for integration, but the Kubernetes validation environment should operate against Kubernetes resources because the product is specifically about namespace-scoped deployment and test environments.
 
-### Start with `kubectl`, Graduate to Dynamic Client
+### Use Structured Kubernetes Clients For Product Reads
 
-`kubectl` is acceptable for the prototype because it mirrors the current manual workflow. The production path should move critical environment operations to Kubernetes clients and structured JSON outputs:
+`kubectl` is acceptable inside agent deploy/test sessions because it mirrors the current manual workflow and gives the agent flexibility. Product-owned resource inspection should use Kubernetes clients and structured JSON outputs. The current Resources tab uses `client-go` typed clients for namespace-scoped reads rather than shelling out or building direct API-server HTTP calls:
 
 - less fragile than shell text;
 - easier to audit;
