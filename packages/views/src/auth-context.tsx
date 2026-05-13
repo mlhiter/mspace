@@ -4,7 +4,10 @@ import type { MspaceUser, MspaceWorkspace } from "@mspace/core";
 export interface MspaceAuthContextValue {
   token: string;
   user?: MspaceUser;
+  workspaces?: MspaceWorkspace[];
   workspace?: MspaceWorkspace;
+  selectedWorkspaceId?: string;
+  selectWorkspace?: (workspaceId: string) => void;
   status: "signed-in" | "signed-out" | "loading" | "error";
 }
 

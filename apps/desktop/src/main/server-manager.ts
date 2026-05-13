@@ -6,7 +6,7 @@ import { join } from "node:path";
 const DEFAULT_SERVER_PORT = 8787;
 const DEFAULT_START_TIMEOUT_MS = 30_000;
 const EXPECTED_SERVER_PROTOCOL = 1;
-const EXPECTED_SERVER_CAPABILITIES = ["teamInboxIssueGrouping"] as const;
+const EXPECTED_SERVER_CAPABILITIES = ["teamInboxIssueGrouping", "workspaceInvitations", "runtimeWorkerRegistration", "runtimeTaskQueue"] as const;
 
 function readServerPort(): number {
   if (process.env.MSPACE_SERVER_ADDR) {

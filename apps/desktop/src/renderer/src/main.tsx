@@ -24,14 +24,14 @@ import {
   ProjectsPage,
   SessionDetailPage,
   WorkspaceSettingsPage,
+  WorkspaceInvitePage,
 } from "@mspace/views";
-import { api, AUTH_TOKEN_STORAGE_KEY, controlPlaneApi, getControlPlaneBaseUrl, queryKeys, setStoredAuthIdentity } from "@mspace/core";
+import { api, AUTH_TOKEN_STORAGE_KEY, controlPlaneApi, getControlPlaneBaseUrl, queryKeys, SELECTED_WORKSPACE_STORAGE_KEY, setStoredAuthIdentity } from "@mspace/core";
 import { AppShell, type ShellSearchItem } from "@mspace/ui";
 import mspaceLogoUrl from "../../../assets/brand/mspace-logo.svg";
 import "./globals.css";
 
 const queryClient = new QueryClient();
-
 function joinSearchSubtitle(values: Array<string | number | null | undefined>): string {
   return values
     .map((value) => String(value || "").trim())
@@ -41,6 +41,7 @@ function joinSearchSubtitle(values: Array<string | number | null | undefined>): 
 
 function RootShell() {
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "");
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(() => window.localStorage.getItem(SELECTED_WORKSPACE_STORAGE_KEY) || "");
   const [pendingAuthState, setPendingAuthState] = useState("");
 
   const activeWorkQuery = useQuery({
@@ -91,6 +92,11 @@ function RootShell() {
     window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, pollQuery.data.token);
     setStoredAuthIdentity(pollQuery.data.user);
     setAuthToken(pollQuery.data.token);
+    const firstWorkspaceId = pollQuery.data.workspaces[0]?.id || "";
+    if (firstWorkspaceId) {
+      window.localStorage.setItem(SELECTED_WORKSPACE_STORAGE_KEY, firstWorkspaceId);
+      setSelectedWorkspaceId(firstWorkspaceId);
+    }
     setPendingAuthState("");
   }, [pollQuery.data]);
 
@@ -100,7 +106,19 @@ function RootShell() {
     }
   }, [meQuery.data?.user]);
 
-  const currentWorkspace = meQuery.data?.workspaces[0];
+  const workspaces = meQuery.data?.workspaces || [];
+  const currentWorkspace = useMemo(() => {
+    if (workspaces.length === 0) return undefined;
+    return workspaces.find((workspace) => workspace.id === selectedWorkspaceId) || workspaces[0];
+  }, [selectedWorkspaceId, workspaces]);
+
+  useEffect(() => {
+    if (workspaces.length === 0) return;
+    if (currentWorkspace?.id && currentWorkspace.id !== selectedWorkspaceId) {
+      window.localStorage.setItem(SELECTED_WORKSPACE_STORAGE_KEY, currentWorkspace.id);
+      setSelectedWorkspaceId(currentWorkspace.id);
+    }
+  }, [currentWorkspace?.id, selectedWorkspaceId, workspaces.length]);
   const teamInboxEnabled = authToken !== "" && Boolean(currentWorkspace?.id);
   const teamInboxQuery = useQuery({
     queryKey: queryKeys.teamInbox(currentWorkspace?.id || "", authToken),
@@ -121,9 +139,16 @@ function RootShell() {
 
   const handleSignOut = () => {
     window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    window.localStorage.removeItem(SELECTED_WORKSPACE_STORAGE_KEY);
     setStoredAuthIdentity(null);
     setAuthToken("");
+    setSelectedWorkspaceId("");
     setPendingAuthState("");
+  };
+
+  const handleSelectWorkspace = (workspaceId: string) => {
+    window.localStorage.setItem(SELECTED_WORKSPACE_STORAGE_KEY, workspaceId);
+    setSelectedWorkspaceId(workspaceId);
   };
 
   const authError = signInMutation.error || pollQuery.error || (authToken !== "" ? meQuery.error : null);
@@ -188,7 +213,10 @@ function RootShell() {
       value={{
         token: authToken,
         user: meQuery.data?.user,
+        workspaces,
         workspace: currentWorkspace,
+        selectedWorkspaceId: currentWorkspace?.id,
+        selectWorkspace: handleSelectWorkspace,
         status: accountStatus,
       }}
     >
@@ -203,12 +231,16 @@ function RootShell() {
           name: meQuery.data?.user.name,
           email: meQuery.data?.user.email,
           avatarUrl: meQuery.data?.user.avatarUrl,
+          workspaceId: currentWorkspace?.id,
           workspaceName: currentWorkspace?.name,
+          workspaceRole: currentWorkspace?.role,
+          workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, role: workspace.role })),
           error: authError instanceof Error ? authError.message : undefined,
           actionLabel: pendingAuthState ? "Waiting for GitHub" : undefined,
         }}
         onSignIn={() => signInMutation.mutate()}
         onSignOut={handleSignOut}
+        onSelectWorkspace={handleSelectWorkspace}
       />
     </MspaceAuthProvider>
   );
@@ -284,6 +316,12 @@ const workspaceSettingsRoute = createRoute({
   component: WorkspaceSettingsPage,
 });
 
+const workspaceInviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/invite/$token",
+  component: WorkspaceInvitePage,
+});
+
 const sessionDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sessions/$sessionId",
@@ -302,6 +340,7 @@ const routeTree = rootRoute.addChildren([
   clustersRoute,
   projectsRoute,
   workspaceSettingsRoute,
+  workspaceInviteRoute,
   sessionDetailRoute,
 ]);
 

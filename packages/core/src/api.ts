@@ -5,16 +5,20 @@ import type {
   AuthMeResult,
   AuthPollResult,
   AuthStartResult,
+	CancelRuntimeTaskInput,
   Cluster,
   Comment,
-  ClusterInput,
-  CreateCommentInput,
-  CreateIssueInput,
-  CreateIssueTaskInput,
-  CreateProjectInput,
-  CreatePullRequestInput,
-  CreateSessionInput,
-  CreateTeamIssueEventInput,
+	ClusterInput,
+	CreateCommentInput,
+	CreateIssueInput,
+	CreateIssueTaskInput,
+	CreateProjectInput,
+	CreatePullRequestInput,
+	CreateRuntimeRegistrationTokenInput,
+	CreateRuntimeTaskInput,
+	CreateWorkspaceInvitationInput,
+	CreateSessionInput,
+	CreateTeamIssueEventInput,
   InboxItem,
   Issue,
   IssueAttachment,
@@ -29,8 +33,14 @@ import type {
   KubeconfigImportResult,
   MspaceUser,
   Project,
-  ProjectRunbook,
-  SessionDetail,
+	ProjectRunbook,
+	RuntimeRegistrationToken,
+	RuntimeRegistrationTokenResult,
+	RuntimeTask,
+	RuntimeTaskEvent,
+	RuntimeTaskLog,
+	RuntimeWorker,
+	SessionDetail,
   StartTestDeployInput,
   TeamInboxItem,
   UpdateCommentInput,
@@ -40,10 +50,15 @@ import type {
   UpdateProjectRunbookInput,
   UpdateWorkspaceSettingsInput,
   WorkspaceSettings,
+	WorkspaceInvitation,
+	WorkspaceInvitationResult,
+	WorkspaceMember,
+	AcceptWorkspaceInvitationResult,
 } from "./types";
 
 export const AUTH_TOKEN_STORAGE_KEY = "mspace.authToken";
 export const AUTH_IDENTITY_STORAGE_KEY = "mspace.authIdentity";
+export const SELECTED_WORKSPACE_STORAGE_KEY = "mspace.selectedWorkspaceId";
 const defaultActorName = "mlhiter";
 
 export interface StoredAuthIdentity {
@@ -58,8 +73,15 @@ export const queryKeys = {
   agents: ["agents"] as const,
   authMe: (token: string) => ["auth-me", token] as const,
   authPoll: (state: string) => ["auth-github-result", state] as const,
-  teamInbox: (workspaceId: string, token: string) => ["team-inbox", workspaceId, token] as const,
-  workspaceSettings: ["workspace-settings"] as const,
+	teamInbox: (workspaceId: string, token: string) => ["team-inbox", workspaceId, token] as const,
+	workspaceMembers: (workspaceId: string, token: string) => ["workspace-members", workspaceId, token] as const,
+	workspaceInvitations: (workspaceId: string, token: string) => ["workspace-invitations", workspaceId, token] as const,
+	runtimeRegistrationTokens: (workspaceId: string, token: string) => ["runtime-registration-tokens", workspaceId, token] as const,
+	runtimeWorkers: (workspaceId: string, token: string) => ["runtime-workers", workspaceId, token] as const,
+	runtimeTasks: (workspaceId: string, token: string) => ["runtime-tasks", workspaceId, token] as const,
+	runtimeTaskEvents: (workspaceId: string, taskId: string, token: string) => ["runtime-task-events", workspaceId, taskId, token] as const,
+	runtimeTaskLogs: (workspaceId: string, taskId: string, token: string) => ["runtime-task-logs", workspaceId, taskId, token] as const,
+	workspaceSettings: ["workspace-settings"] as const,
   clusters: ["clusters"] as const,
   inbox: ["inbox"] as const,
   issueLabelDefinitions: ["issue-label-definitions"] as const,
@@ -422,6 +444,31 @@ export const controlPlaneApi = {
     requestControlPlane<AuthMeResult["workspaces"]>("/api/workspaces", {
       headers: authHeaders(token),
     }),
+  listWorkspaceMembers: (token: string, workspaceId: string) =>
+    requestControlPlane<WorkspaceMember[]>(`/api/workspaces/${workspaceId}/members`, {
+      headers: authHeaders(token),
+    }),
+  createWorkspaceInvitation: (token: string, workspaceId: string, input: CreateWorkspaceInvitationInput) =>
+    requestControlPlane<WorkspaceInvitationResult>(`/api/workspaces/${workspaceId}/invitations`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  listWorkspaceInvitations: (token: string, workspaceId: string) =>
+    requestControlPlane<WorkspaceInvitation[]>(`/api/workspaces/${workspaceId}/invitations`, {
+      headers: authHeaders(token),
+    }),
+  revokeWorkspaceInvitation: (token: string, workspaceId: string, invitationId: string) =>
+    requestControlPlane<WorkspaceInvitation>(`/api/workspaces/${workspaceId}/invitations/${invitationId}`, {
+      method: "DELETE",
+      headers: authHeaders(token),
+    }),
+  acceptWorkspaceInvitation: (token: string, inviteToken: string) =>
+    requestControlPlane<AcceptWorkspaceInvitationResult>("/api/workspace-invitations/accept", {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ token: inviteToken }),
+    }),
   listInbox: (token: string, workspaceId: string) =>
     requestControlPlane<TeamInboxItem[]>(`/api/workspaces/${workspaceId}/inbox`, {
       headers: authHeaders(token),
@@ -437,10 +484,53 @@ export const controlPlaneApi = {
       method: "POST",
       headers: authHeaders(token),
     }),
-  markIssueReadThrough: (token: string, workspaceId: string, issueId: string, throughEventId?: string) =>
-    requestControlPlane<{ ok: boolean; readCount: number }>(`/api/workspaces/${workspaceId}/issues/${issueId}/read-through`, {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify({ throughEventId: throughEventId || "" }),
-    }),
+	markIssueReadThrough: (token: string, workspaceId: string, issueId: string, throughEventId?: string) =>
+		requestControlPlane<{ ok: boolean; readCount: number }>(`/api/workspaces/${workspaceId}/issues/${issueId}/read-through`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify({ throughEventId: throughEventId || "" }),
+		}),
+	createRuntimeRegistrationToken: (token: string, workspaceId: string, input: CreateRuntimeRegistrationTokenInput) =>
+		requestControlPlane<RuntimeRegistrationTokenResult>(`/api/workspaces/${workspaceId}/runtime-registration-tokens`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	listRuntimeRegistrationTokens: (token: string, workspaceId: string) =>
+		requestControlPlane<RuntimeRegistrationToken[]>(`/api/workspaces/${workspaceId}/runtime-registration-tokens`, {
+			headers: authHeaders(token),
+		}),
+	revokeRuntimeRegistrationToken: (token: string, workspaceId: string, tokenId: string) =>
+		requestControlPlane<RuntimeRegistrationToken>(`/api/workspaces/${workspaceId}/runtime-registration-tokens/${tokenId}`, {
+			method: "DELETE",
+			headers: authHeaders(token),
+		}),
+	listRuntimeWorkers: (token: string, workspaceId: string) =>
+		requestControlPlane<RuntimeWorker[]>(`/api/workspaces/${workspaceId}/runtime-workers`, {
+			headers: authHeaders(token),
+		}),
+	createRuntimeTask: (token: string, workspaceId: string, input: CreateRuntimeTaskInput) =>
+		requestControlPlane<RuntimeTask>(`/api/workspaces/${workspaceId}/runtime-tasks`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	listRuntimeTasks: (token: string, workspaceId: string) =>
+		requestControlPlane<RuntimeTask[]>(`/api/workspaces/${workspaceId}/runtime-tasks`, {
+			headers: authHeaders(token),
+		}),
+	listRuntimeTaskEvents: (token: string, workspaceId: string, taskId: string) =>
+		requestControlPlane<RuntimeTaskEvent[]>(`/api/workspaces/${workspaceId}/runtime-tasks/${taskId}/events`, {
+			headers: authHeaders(token),
+		}),
+	listRuntimeTaskLogs: (token: string, workspaceId: string, taskId: string) =>
+		requestControlPlane<RuntimeTaskLog[]>(`/api/workspaces/${workspaceId}/runtime-tasks/${taskId}/logs`, {
+			headers: authHeaders(token),
+		}),
+	cancelRuntimeTask: (token: string, workspaceId: string, taskId: string, input: CancelRuntimeTaskInput = {}) =>
+		requestControlPlane<RuntimeTask>(`/api/workspaces/${workspaceId}/runtime-tasks/${taskId}/cancel`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
 };

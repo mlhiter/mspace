@@ -72,9 +72,9 @@ export interface ActiveWorkItem {
 }
 
 export interface WorkspaceSettings {
-  autoCreateDraftPr: boolean;
-  createdAt: string;
-  updatedAt: string;
+	autoCreateDraftPr: boolean;
+	createdAt: string;
+	updatedAt: string;
 }
 
 export interface UpdateWorkspaceSettingsInput {
@@ -108,17 +108,112 @@ export interface TeamInboxItem {
 }
 
 export interface CreateTeamIssueEventInput {
-  issueId: string;
-  actorUserId?: string;
-  kind: string;
+	issueId: string;
+	actorUserId?: string;
+	kind: string;
   summary?: string;
   payload?: Record<string, unknown>;
-  recipientUserIds?: string[];
+	recipientUserIds?: string[];
+}
+
+export interface RuntimeRegistrationToken {
+	id: string;
+	workspaceId: string;
+	name: string;
+	tokenPrefix: string;
+	expiresAt: string;
+	lastUsedAt: string;
+	revoked: boolean;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface CreateRuntimeRegistrationTokenInput {
+	name: string;
+	expiresInHours: number;
+}
+
+export interface RuntimeRegistrationTokenResult {
+	token: string;
+	registrationToken: RuntimeRegistrationToken;
+}
+
+export interface RuntimeWorker {
+	id: string;
+	workspaceId: string;
+	name: string;
+	mode: string;
+	status: string;
+	version: string;
+	currentLoad: number;
+	capabilities: Record<string, unknown>;
+	labels: Record<string, unknown>;
+	lastSeenAt: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface RuntimeTask {
+	id: string;
+	workspaceId: string;
+	issueId: string;
+	sessionId: string;
+	projectId: string;
+	kind: string;
+	status: string;
+	priority: number;
+	runtimeMode: string;
+	requiredCapabilities: Record<string, unknown>;
+	payload: Record<string, unknown>;
+	result: Record<string, unknown>;
+	claimedByWorkerId: string;
+	claimedAt: string;
+	startedAt: string;
+	finishedAt: string;
+	error: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface CancelRuntimeTaskInput {
+	reason?: string;
+}
+
+export interface RuntimeTaskEvent {
+	id: string;
+	workspaceId: string;
+	taskId: string;
+	workerId: string;
+	actorUserId: string;
+	kind: string;
+	payload: Record<string, unknown>;
+	createdAt: string;
+}
+
+export interface RuntimeTaskLog {
+	id: string;
+	workspaceId: string;
+	taskId: string;
+	workerId: string;
+	stream: string;
+	message: string;
+	createdAt: string;
+}
+
+export interface CreateRuntimeTaskInput {
+	issueId?: string;
+	sessionId?: string;
+	projectId?: string;
+	kind: string;
+	priority?: number;
+	runtimeMode?: "personal" | "team" | string;
+	requiredCapabilities?: Record<string, unknown>;
+	payload?: Record<string, unknown>;
 }
 
 export interface IssueListItem {
-  id: string;
-  projectId: string;
+	id: string;
+	projectId: string;
   projectName: string;
   parentIssueId: string;
   sortOrder: number;
@@ -234,6 +329,7 @@ export interface AgentSession {
   provider: string;
   agentProfile: string;
   runtimeMode: string;
+  runtimeTaskId: string;
   command: string;
   status: string;
   branch: string;
@@ -383,6 +479,9 @@ export interface IssueChangeNode {
   diffPreview: string;
   diffTruncated: boolean;
   error: string;
+  source: string;
+  remoteWorkdir: string;
+  artifactDir: string;
   createdAt: string;
 }
 
@@ -631,6 +730,7 @@ export interface UpdateCommentInput {
 export interface CreateSessionInput {
   provider: string;
   agentProfile?: string;
+  runtimeMode?: "local" | "team" | string;
   command?: string;
   branch?: string;
   sourceSessionId?: string;
@@ -725,6 +825,52 @@ export interface MspaceWorkspace {
   role: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface WorkspaceMember {
+  id: string;
+  workspaceId: string;
+  userId: string;
+  role: string;
+  name: string;
+  email: string;
+  avatarUrl: string;
+  identityLogin: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceInvitation {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  email: string;
+  role: string;
+  tokenPrefix: string;
+  invitedByUserId: string;
+  acceptedByUserId: string;
+  acceptedAt: string;
+  expiresAt: string;
+  revoked: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateWorkspaceInvitationInput {
+  email?: string;
+  role: "member" | "admin";
+  expiresInHours: number;
+}
+
+export interface WorkspaceInvitationResult {
+  token: string;
+  invitation: WorkspaceInvitation;
+}
+
+export interface AcceptWorkspaceInvitationResult {
+  workspace: MspaceWorkspace;
+  invitation: WorkspaceInvitation;
+  workspaces: MspaceWorkspace[];
 }
 
 export interface AuthStartResult {

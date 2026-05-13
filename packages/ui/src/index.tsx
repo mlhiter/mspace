@@ -164,6 +164,9 @@ export type ShellAccount = {
   email?: string;
   avatarUrl?: string;
   workspaceName?: string;
+  workspaceId?: string;
+  workspaceRole?: string;
+  workspaces?: Array<{ id: string; name: string; role?: string }>;
   error?: string;
   actionLabel?: string;
 };
@@ -189,6 +192,7 @@ export function AppShell(
     account?: ShellAccount;
     onSignIn?: () => void;
     onSignOut?: () => void;
+    onSelectWorkspace?: (workspaceId: string) => void;
   } = {},
 ) {
   const activeWorkItems = props.activeWorkItems || [];
@@ -215,6 +219,7 @@ export function AppShell(
           account={props.account}
           onSignIn={props.onSignIn}
           onSignOut={props.onSignOut}
+          onSelectWorkspace={props.onSelectWorkspace}
         />
 
         <button
@@ -462,7 +467,13 @@ function GlobalSearchResult(props: {
   );
 }
 
-function WorkspaceMenu(props: { brandLogoSrc?: string; account?: ShellAccount; onSignIn?: () => void; onSignOut?: () => void }) {
+function WorkspaceMenu(props: {
+  brandLogoSrc?: string;
+  account?: ShellAccount;
+  onSignIn?: () => void;
+  onSignOut?: () => void;
+  onSelectWorkspace?: (workspaceId: string) => void;
+}) {
   const account = props.account || { status: "signed-out" as const };
   const isBusy = account.status === "loading";
   const isSignedIn = account.status === "signed-in";
@@ -471,6 +482,7 @@ function WorkspaceMenu(props: { brandLogoSrc?: string; account?: ShellAccount; o
   const rootRef = useRef<HTMLDivElement>(null);
   const workspaceLabel = account.workspaceName || (isSignedIn ? "Personal workspace" : "Local workspace");
   const statusLabel = isSignedIn ? account.name || account.email || "Signed in" : isBusy ? "GitHub login pending" : "Not signed in";
+  const workspaces = account.workspaces || [];
 
   useEffect(() => {
     if (!open) return;
@@ -534,6 +546,37 @@ function WorkspaceMenu(props: { brandLogoSrc?: string; account?: ShellAccount; o
               </div>
             </div>
           </div>
+
+          {isSignedIn && workspaces.length > 1 ? (
+            <div className="mt-1 border-t border-[color:var(--line)] pt-1">
+              <div className="px-2 py-1 text-[11px] font-medium leading-4 text-[color:var(--faint)]">Workspaces</div>
+              <div className="grid gap-0.5">
+                {workspaces.map((workspace) => {
+                  const selected = workspace.id === account.workspaceId;
+                  return (
+                    <button
+                      key={workspace.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={selected}
+                      className={cn(
+                        "group flex min-h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-[12px] font-medium transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99]",
+                        selected ? "bg-[color:var(--selection)] text-[color:var(--text)]" : "text-[color:var(--muted-strong)]",
+                      )}
+                      onClick={() => {
+                        setOpen(false);
+                        props.onSelectWorkspace?.(workspace.id);
+                      }}
+                    >
+                      {selected ? <CheckCircle2 data-icon className="text-[color:var(--success)]" /> : <Circle data-icon className="text-[color:var(--faint)]" />}
+                      <span className="min-w-0 flex-1 truncate">{workspace.name}</span>
+                      <span className="shrink-0 text-[11px] font-normal text-[color:var(--muted)]">{workspace.role || "member"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           <Link
             to="/settings"
@@ -937,7 +980,7 @@ export function StatusBadge(props: { value: string; className?: string; label?: 
             : normalizedValue === "cancelled" || normalizedValue === "retained" || normalizedValue === "cleaned"
               ? "bg-[color:var(--block)] text-[color:var(--muted)]"
               : "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
-  const isRunning = normalizedValue === "running" || normalizedValue === "in_progress" || normalizedValue === "test_in_progress" || normalizedValue === "deploying";
+  const isRunning = normalizedValue === "running" || normalizedValue === "in_progress" || normalizedValue === "test_in_progress" || normalizedValue === "deploying" || normalizedValue.startsWith("team_runtime_");
 
   return (
     <Badge variant="outline" className={cn("h-auto max-w-full gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium", tone, props.className)}>
@@ -981,6 +1024,9 @@ function statusLabel(value: string) {
     cleanup_failed: "Cleanup failed",
     cleaned: "Cleaned",
     retained: "Retained",
+    team_runtime_queued: "Team queued",
+    team_runtime_claimed: "Team claimed",
+    team_runtime_running: "Team running",
   };
   if (labels[value]) return labels[value];
   return value
