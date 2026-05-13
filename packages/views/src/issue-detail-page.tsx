@@ -86,6 +86,7 @@ import {
 import { FileTypeIcon } from "./file-type-icon";
 import { IssueDocumentEditor } from "./issue-document-editor";
 import { codexAvatarDataUrl } from "./agent-avatar";
+import { useMspaceAuth } from "./auth-context";
 import {
   buildIssueLabelSelectionInput,
   issueLabelMatchesDimension,
@@ -925,8 +926,18 @@ function SessionStatusMark(props: { status: string }) {
   return <StatusBadge value={props.status} />;
 }
 
-function WorkingSessionLine(props: { status: string; agentName: string }) {
-  const label = props.status === "queued" ? "Waiting to start." : "Working...";
+function WorkingSessionLine(props: { status: string; agentName: string; runtimeMode?: string; agentStatus?: string; runtimeTaskId?: string }) {
+  const team = props.runtimeMode === "team";
+  const status = (props.agentStatus || props.status).trim().toLowerCase();
+  const label = team
+    ? status === "team-runtime-queued" || props.status === "queued"
+      ? "waiting for a team worker."
+      : status === "team-runtime-claimed"
+        ? "claimed by a team worker."
+        : "running on a team worker."
+    : props.status === "queued"
+      ? "waiting to start."
+      : "working...";
   return (
     <div className="inline-flex min-w-0 items-center gap-2 text-[13px] leading-6 text-[color:var(--muted)]">
       <span className="relative flex size-2 shrink-0">
@@ -935,6 +946,7 @@ function WorkingSessionLine(props: { status: string; agentName: string }) {
       </span>
       <span className="truncate">
         <span className="font-medium text-[color:var(--muted-strong)]">{props.agentName}</span> {label}
+        {team && props.runtimeTaskId ? <span className="ml-2 font-mono text-[12px] text-[color:var(--faint)]">{props.runtimeTaskId.slice(0, 8)}</span> : null}
       </span>
     </div>
   );
@@ -3522,7 +3534,7 @@ function SessionTimelineItem(props: {
       {isActive ? (
         <div>
           <div className="flex min-w-0 items-center justify-between gap-3">
-            <WorkingSessionLine status={session.status} agentName={agent.name} />
+            <WorkingSessionLine status={session.status} agentName={agent.name} runtimeMode={session.runtimeMode} agentStatus={session.agentStatus} runtimeTaskId={session.runtimeTaskId} />
             {props.onStop ? <StopSessionButton isStopping={props.isStopping} onStop={props.onStop} /> : null}
           </div>
           {props.stopError ? <div className="mt-1 text-[12px] leading-5 text-[color:var(--danger)]">{props.stopError.message}</div> : null}
@@ -4638,9 +4650,11 @@ export function IssueDetailPage() {
   const navigate = useNavigate();
   const searchTab = isIssueTab(search.tab) ? search.tab : "overview";
   const queryClient = useQueryClient();
+  const auth = useMspaceAuth();
   const [composerEditor, setComposerEditor] = useState<Editor | null>(null);
   const [composerBody, setComposerBody] = useState("");
   const [composerAttachmentIds, setComposerAttachmentIds] = useState<string[]>([]);
+  const [composerRuntimeMode, setComposerRuntimeMode] = useState<"local" | "team">("local");
   const [composerFocused, setComposerFocused] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentBody, setEditingCommentBody] = useState("");
@@ -4758,6 +4772,16 @@ export function IssueDetailPage() {
       ? "Agent is working"
       : `Save & send to ${editingMentionedAgentConfig?.name}`
     : "Save edit";
+  const canUseTeamRuntime = auth.status === "signed-in" && Boolean(auth.token && auth.workspace?.id);
+  const composerRuntimeModeEffective = canUseTeamRuntime ? composerRuntimeMode : "local";
+  const composerAgentTargetLabel = composerRuntimeModeEffective === "team" ? "team worker" : "local runner";
+  const composerHelperText = isSupportedAgentMention
+    ? hasActiveSession
+      ? `${mentionedAgentConfig?.name} is already working.`
+      : `This comment will be saved and sent to ${mentionedAgentConfig?.name} on the ${composerAgentTargetLabel}.`
+    : isUnsupportedAgentMention
+      ? `@${mentionedAgent} is not available yet.`
+      : "Comments stay on the issue. Mention an agent when you want a turn.";
   const syncEditingCommentEditorSnapshot = useCallback((editor: Editor) => {
     const match = mentionMatchInEditor(editor);
     setEditingCommentMentionMatch(match);
@@ -4879,6 +4903,7 @@ export function IssueDetailPage() {
         await api.assignAgent(issueId, {
           provider: agentConfig.provider,
           agentProfile: agentConfig.id,
+          runtimeMode: composerRuntimeModeEffective,
           command: command || trimmedBody,
           triggerCommentId: comment.commentId,
         });
@@ -4887,6 +4912,7 @@ export function IssueDetailPage() {
     onSuccess: async () => {
       setComposerBody("");
       setComposerAttachmentIds([]);
+      setComposerRuntimeMode("local");
       composerEditor?.commands.clearContent(false);
       setComposerMentionMatch(null);
       await Promise.all([
@@ -4913,6 +4939,7 @@ export function IssueDetailPage() {
         await api.assignAgent(issueId, {
           provider: input.agentConfig.provider,
           agentProfile: input.agentConfig.id,
+          runtimeMode: "local",
           command: command || trimmedBody,
           triggerCommentId: input.commentId,
         });
@@ -5612,12 +5639,22 @@ export function IssueDetailPage() {
                   </div>
                   {updateIssueStatus.error ? <div className="border-t border-[color:var(--line)] px-3 py-2"><Notice tone="danger">{updateIssueStatus.error.message}</Notice></div> : null}
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[color:var(--line)] px-3 py-2">
-                    <div className="min-w-[220px] flex-1 text-[12px] leading-5 text-[color:var(--muted)]">
-                      {isSupportedAgentMention
-                        ? `This comment will be saved and sent to ${mentionedAgentConfig?.name}.`
-                        : isUnsupportedAgentMention
-                          ? `@${mentionedAgent} is not available yet.`
-                          : "Comments stay on the issue. Mention an agent when you want a turn."}
+                    <div className="flex min-w-[220px] flex-1 flex-wrap items-center gap-2 text-[12px] leading-5 text-[color:var(--muted)]">
+                      {isSupportedAgentMention ? (
+                        <Select
+                          value={composerRuntimeMode}
+                          onValueChange={(value) => setComposerRuntimeMode(value === "team" ? "team" : "local")}
+                        >
+                          <SelectTrigger className="h-8 w-[150px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="local">Local runner</SelectItem>
+                            <SelectItem value="team" disabled={!canUseTeamRuntime}>Team worker</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : null}
+                      <span className="min-w-[180px] flex-1">{composerHelperText}</span>
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
                       <IssueLifecycleActions

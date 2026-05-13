@@ -2758,6 +2758,239 @@ func TestPrepareSessionWorkspaceChecksOutSourceCommit(t *testing.T) {
 	}
 }
 
+func TestQueueAgentSessionRoutesTeamRuntimeThroughControlPlane(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for team runtime session test")
+	}
+
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init", "-b", "main")
+	runGit(t, repoDir, "config", "user.name", "mspace test")
+	runGit(t, repoDir, "config", "user.email", "mspace@example.com")
+	writeFile(t, filepath.Join(repoDir, "README.md"), "# demo\n")
+	runGit(t, repoDir, "add", "README.md")
+	runGit(t, repoDir, "commit", "-m", "base")
+	insertAuthTestIssue(t, db, "issue-1", "", "Team runtime issue", "open")
+	if _, err := db.Exec(`UPDATE projects SET repo_path = ?, default_branch = 'main' WHERE id = 'project-1'`, repoDir); err != nil {
+		t.Fatalf("update project repo: %v", err)
+	}
+
+	controlPlaneToken := "human-token"
+	workspaceID := "workspace-1"
+	taskCreated := false
+	taskPollCount := 0
+	var taskPayload struct {
+		IssueID              string          `json:"issueId"`
+		SessionID            string          `json:"sessionId"`
+		ProjectID            string          `json:"projectId"`
+		Kind                 string          `json:"kind"`
+		RuntimeMode          string          `json:"runtimeMode"`
+		RequiredCapabilities map[string]bool `json:"requiredCapabilities"`
+		Payload              struct {
+			Workdir         string            `json:"workdir"`
+			Prompt          string            `json:"prompt"`
+			Env             map[string]string `json:"env"`
+			Branch          string            `json:"branch"`
+			ContextMarkdown string            `json:"contextMarkdown"`
+			Repository      struct {
+				URL           string `json:"url"`
+				DefaultBranch string `json:"defaultBranch"`
+			} `json:"repository"`
+		} `json:"payload"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+controlPlaneToken {
+			writeError(w, http.StatusUnauthorized, errUnauthorized)
+			return
+		}
+		switch {
+		case r.URL.Path == "/api/auth/me":
+			writeJSON(w, map[string]any{
+				"user":       map[string]string{"id": "user-1", "name": "Test Human"},
+				"workspaces": []map[string]string{{"id": workspaceID}},
+			})
+		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks" && r.Method == http.MethodPost:
+			if err := json.NewDecoder(r.Body).Decode(&taskPayload); err != nil {
+				t.Fatalf("decode runtime task: %v", err)
+			}
+			taskCreated = true
+			writeJSONStatus(t, w, http.StatusCreated, runtimeTask{ID: "runtime-task-1", Status: "queued"})
+		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks" && r.Method == http.MethodGet:
+			taskPollCount++
+			result := json.RawMessage(`{
+					"threadId":"thread-team",
+					"turnId":"turn-team",
+					"status":"completed",
+					"workdir":"/worker/workdirs/project-1/session-1",
+					"artifactDir":"/worker/workdirs/project-1/session-1/.mspace/session",
+					"source":{
+						"commitSha":"1111111111111111111111111111111111111111",
+						"shortCommitSha":"111111111111",
+						"branch":"mspace/issue/session",
+						"subject":"mspace: Team runtime issue",
+						"filesChanged":1,
+						"changes":[{"statusCode":"A","path":"worker-output.txt"}],
+						"diffPreview":"commit 1111111111111111111111111111111111111111\nAuthor: mspace\n\n    mspace: Team runtime issue\n\n diff --git a/worker-output.txt b/worker-output.txt\n new file mode 100644\n",
+						"diffTruncated":false
+					}
+				}`)
+			writeJSON(w, []runtimeTask{{ID: "runtime-task-1", Status: "completed", Result: result}})
+		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks/runtime-task-1/logs":
+			writeJSON(w, []runtimeTaskLog{
+				{ID: "log-1", Stream: "agent", Message: "Team runtime completed.", CreatedAt: nowString()},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	application.controlPlaneBaseURL = server.URL
+	application.controlPlaneToken = controlPlaneToken
+	application.controlPlaneWorkspaceID = workspaceID
+
+	router := chi.NewRouter()
+	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
+	create := httptest.NewRecorder()
+	router.ServeHTTP(create, authRequest(http.MethodPost, "/api/issues/issue-1/assign-agent", `{"provider":"codex","agentProfile":"codex","runtimeMode":"team","command":"make a small change"}`, humanToken))
+	if create.Code != http.StatusOK {
+		t.Fatalf("expected team session create to return 200, got %d body=%s", create.Code, create.Body.String())
+	}
+	var response struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		var status, agentStatus string
+		_ = db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus)
+		return status == "completed" && agentStatus == "completed"
+	}, func() string {
+		var status, agentStatus string
+		_ = db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus)
+		rows, _ := db.Query(`SELECT stream, message FROM session_logs WHERE session_id = ? ORDER BY id`, response.SessionID)
+		defer func() {
+			if rows != nil {
+				_ = rows.Close()
+			}
+		}()
+		var logs []string
+		if rows != nil {
+			for rows.Next() {
+				var stream, message string
+				_ = rows.Scan(&stream, &message)
+				logs = append(logs, stream+": "+message)
+			}
+		}
+		return "status=" + status + " agentStatus=" + agentStatus + " logs=" + strings.Join(logs, " | ")
+	})
+	if !taskCreated || taskPollCount == 0 {
+		t.Fatalf("expected control-plane task creation and polling, created=%v polls=%d", taskCreated, taskPollCount)
+	}
+	if taskPayload.Kind != "agent_session" || taskPayload.RuntimeMode != "team" || !taskPayload.RequiredCapabilities["codex"] {
+		t.Fatalf("unexpected runtime task payload: %+v", taskPayload)
+	}
+	if taskPayload.IssueID != "issue-1" || taskPayload.SessionID != response.SessionID || taskPayload.ProjectID != "project-1" {
+		t.Fatalf("runtime task lost issue/session/project identity: %+v", taskPayload)
+	}
+	if !strings.Contains(taskPayload.Payload.Prompt, "make a small change") || taskPayload.Payload.Workdir != "" || taskPayload.Payload.Env["MSPACE_SESSION_ID"] != response.SessionID {
+		t.Fatalf("unexpected agent payload: %+v", taskPayload.Payload)
+	}
+	if taskPayload.Payload.Repository.URL == "" || taskPayload.Payload.Repository.DefaultBranch != "main" || taskPayload.Payload.Branch == "" || !strings.Contains(taskPayload.Payload.ContextMarkdown, "Team runtime issue") {
+		t.Fatalf("team runtime payload did not include repo/session bootstrap spec: %+v", taskPayload.Payload)
+	}
+	var runtimeMode, threadID, turnID string
+	if err := db.QueryRow(`SELECT runtime_mode, codex_thread_id, codex_turn_id FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&runtimeMode, &threadID, &turnID); err != nil {
+		t.Fatalf("query session: %v", err)
+	}
+	if runtimeMode != "team" || threadID != "thread-team" || turnID != "turn-team" {
+		t.Fatalf("unexpected session runtime metadata mode=%q thread=%q turn=%q", runtimeMode, threadID, turnID)
+	}
+	assertSessionLogContains(t, db, response.SessionID, "Team runtime completed.")
+	var commitSHA, changesJSON, diffPreview, source, remoteWorkdir string
+	if err := db.QueryRow(`SELECT commit_sha, changes_json, diff_preview, source, remote_workdir FROM issue_change_nodes WHERE session_id = ?`, response.SessionID).Scan(&commitSHA, &changesJSON, &diffPreview, &source, &remoteWorkdir); err != nil {
+		t.Fatalf("query remote change node: %v", err)
+	}
+	if commitSHA != "1111111111111111111111111111111111111111" || source != "team-runtime" || remoteWorkdir == "" || !strings.Contains(changesJSON, "worker-output.txt") || !strings.Contains(diffPreview, "worker-output.txt") {
+		t.Fatalf("unexpected remote change node commit=%q source=%q remoteWorkdir=%q changes=%s diff=%s", commitSHA, source, remoteWorkdir, changesJSON, diffPreview)
+	}
+}
+
+func TestCancelTeamRuntimeSessionRequestsControlPlaneCancellation(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	_ = configureTestHumanAuth(t, application)
+	now := nowString()
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES ('project-1', 'Demo', '/tmp/demo', 'local', '', '', '', '', 'main', '', '', '', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
+			VALUES ('issue-1', 'project-1', 'Team cancel issue', '', 'open', 'codex', 'agent', '', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, runtime_task_id, command, status, branch, workdir, agent_status, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES ('session-team', 'issue-1', 'codex', 'codex', 'team', 'runtime-task-1', 'run it', 'running', 'mspace/issue/session-team', ?, 'team-runtime-running', 'retained', '', ?, ?)
+	`, t.TempDir(), now, now); err != nil {
+		t.Fatalf("insert team session: %v", err)
+	}
+
+	controlPlaneToken := "human-token"
+	workspaceID := "workspace-1"
+	var cancelPayload cancelRuntimeTaskInput
+	cancelRequested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+controlPlaneToken {
+			writeError(w, http.StatusUnauthorized, errUnauthorized)
+			return
+		}
+		switch {
+		case r.URL.Path == "/api/auth/me":
+			writeJSON(w, map[string]any{
+				"user":       map[string]string{"id": "user-1", "name": "Test Human"},
+				"workspaces": []map[string]string{{"id": workspaceID}},
+			})
+		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks/runtime-task-1/cancel" && r.Method == http.MethodPost:
+			cancelRequested = true
+			if err := json.NewDecoder(r.Body).Decode(&cancelPayload); err != nil {
+				t.Fatalf("decode cancel task payload: %v", err)
+			}
+			writeJSONStatus(t, w, http.StatusOK, runtimeTask{ID: "runtime-task-1", Status: "cancelled", Error: cancelPayload.Reason})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	application.controlPlaneBaseURL = server.URL
+	application.controlPlaneToken = controlPlaneToken
+	application.controlPlaneWorkspaceID = workspaceID
+
+	router := chi.NewRouter()
+	router.Post("/api/sessions/{sessionID}/cancel", application.handleCancelSession)
+	cancel := httptest.NewRecorder()
+	router.ServeHTTP(cancel, authRequest(http.MethodPost, "/api/sessions/session-team/cancel", `{}`, controlPlaneToken))
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("expected cancel to return 200, got %d body=%s", cancel.Code, cancel.Body.String())
+	}
+	if !cancelRequested || !strings.Contains(cancelPayload.Reason, "Stopped session") {
+		t.Fatalf("expected control-plane cancellation request, requested=%v payload=%+v", cancelRequested, cancelPayload)
+	}
+	var status, agentStatus string
+	if err := db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = 'session-team'`).Scan(&status, &agentStatus); err != nil {
+		t.Fatalf("query cancelled session: %v", err)
+	}
+	if status != "cancelled" || agentStatus != "cancelled" {
+		t.Fatalf("expected local team session cancelled, got status=%q agentStatus=%q", status, agentStatus)
+	}
+	assertSessionLogContains(t, db, "session-team", "Requested cancellation for team runtime task runtime-task-1.")
+}
+
 func TestNormalizeIssueLabelKeys(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
 	if err != nil {
@@ -3189,6 +3422,30 @@ func assertSessionLogContains(t *testing.T, db *sql.DB, sessionID, expected stri
 	if count == 0 {
 		t.Fatalf("expected session log on %s containing %q", sessionID, expected)
 	}
+}
+
+func writeJSONStatus(t *testing.T, w http.ResponseWriter, status int, payload any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		t.Fatalf("write json response: %v", err)
+	}
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool, details ...func() string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(details) > 0 && details[0] != nil {
+		t.Fatalf("condition was not met within %s: %s", timeout, details[0]())
+	}
+	t.Fatalf("condition was not met within %s", timeout)
 }
 
 func projectColumnExists(t *testing.T, db *sql.DB, column string) bool {

@@ -47,6 +47,7 @@ var (
 	errUnsafeSessionWorkdir = errors.New("session workdir is outside the mspace workdir root")
 	errUnauthorized         = errors.New("unauthorized")
 	errForbidden            = errors.New("forbidden")
+	errInvalidRuntimeMode   = errors.New("runtimeMode must be local or team")
 )
 
 const defaultImportedClusterImageRegistryPrefix = "crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter"
@@ -287,6 +288,7 @@ type agentSession struct {
 	Provider         string `json:"provider"`
 	AgentProfile     string `json:"agentProfile"`
 	RuntimeMode      string `json:"runtimeMode"`
+	RuntimeTaskID    string `json:"runtimeTaskId"`
 	Command          string `json:"command"`
 	Status           string `json:"status"`
 	Branch           string `json:"branch"`
@@ -524,6 +526,9 @@ type issueChangeNode struct {
 	DiffPreview    string            `json:"diffPreview"`
 	DiffTruncated  bool              `json:"diffTruncated"`
 	Error          string            `json:"error"`
+	Source         string            `json:"source"`
+	RemoteWorkdir  string            `json:"remoteWorkdir"`
+	ArtifactDir    string            `json:"artifactDir"`
 	CreatedAt      string            `json:"createdAt"`
 }
 
@@ -578,6 +583,47 @@ type sessionDetail struct {
 	Evidence  []deploymentEvidence `json:"evidence"`
 	Failures  []sessionFailure     `json:"failures"`
 	Workspace workspaceSnapshot    `json:"workspace"`
+}
+
+type runtimeTask struct {
+	ID                string          `json:"id"`
+	Status            string          `json:"status"`
+	Result            json.RawMessage `json:"result"`
+	Error             string          `json:"error"`
+	ClaimedByWorkerID string          `json:"claimedByWorkerId"`
+	StartedAt         string          `json:"startedAt"`
+	FinishedAt        string          `json:"finishedAt"`
+}
+
+type runtimeTaskLog struct {
+	ID        string `json:"id"`
+	Stream    string `json:"stream"`
+	Message   string `json:"message"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type runtimeTaskResult struct {
+	ThreadID    string `json:"threadId"`
+	TurnID      string `json:"turnId"`
+	Status      string `json:"status"`
+	CompletedAt string `json:"completedAt"`
+	DryRun      bool   `json:"dryRun"`
+	Workdir     string `json:"workdir"`
+	ArtifactDir string `json:"artifactDir"`
+	Source      struct {
+		CommitSHA      string            `json:"commitSha"`
+		ShortCommitSHA string            `json:"shortCommitSha"`
+		Branch         string            `json:"branch"`
+		Subject        string            `json:"subject"`
+		FilesChanged   int               `json:"filesChanged"`
+		Changes        []workspaceChange `json:"changes"`
+		DiffPreview    string            `json:"diffPreview"`
+		DiffTruncated  bool              `json:"diffTruncated"`
+	} `json:"source"`
+}
+
+type cancelRuntimeTaskInput struct {
+	Reason string `json:"reason"`
 }
 
 type activeWorkItem struct {
@@ -766,6 +812,7 @@ type kubeconfigImportSkip struct {
 type sessionRequest struct {
 	Provider         string `json:"provider"`
 	AgentProfile     string `json:"agentProfile"`
+	RuntimeMode      string `json:"runtimeMode"`
 	Command          string `json:"command"`
 	Branch           string `json:"branch"`
 	SourceSessionID  string `json:"sourceSessionId"`
@@ -1019,7 +1066,7 @@ func (a *app) migrate() error {
 
 func (a *app) reconcileInterruptedSessionsOnStartup() error {
 	rows, err := a.db.Query(`
-		SELECT id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at
+		SELECT id, issue_id, provider, agent_profile, runtime_mode, runtime_task_id, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at
 		FROM agent_sessions
 		WHERE status IN ('queued', 'running')
 		ORDER BY updated_at ASC
@@ -1032,7 +1079,7 @@ func (a *app) reconcileInterruptedSessionsOnStartup() error {
 	sessions := make([]agentSession, 0)
 	for rows.Next() {
 		var session agentSession
-		if err := rows.Scan(&session.ID, &session.IssueID, &session.Provider, &session.AgentProfile, &session.RuntimeMode, &session.Command, &session.Status, &session.Branch, &session.Workdir, &session.CodexThreadID, &session.CodexTurnID, &session.AgentStatus, &session.ArtifactDir, &session.SourceSessionID, &session.SourceCommitSHA, &session.TriggerCommentID, &session.AgentToken, &session.CleanupStatus, &session.CleanedAt, &session.CreatedAt, &session.UpdatedAt); err != nil {
+		if err := rows.Scan(&session.ID, &session.IssueID, &session.Provider, &session.AgentProfile, &session.RuntimeMode, &session.RuntimeTaskID, &session.Command, &session.Status, &session.Branch, &session.Workdir, &session.CodexThreadID, &session.CodexTurnID, &session.AgentStatus, &session.ArtifactDir, &session.SourceSessionID, &session.SourceCommitSHA, &session.TriggerCommentID, &session.AgentToken, &session.CleanupStatus, &session.CleanedAt, &session.CreatedAt, &session.UpdatedAt); err != nil {
 			return err
 		}
 		sessions = append(sessions, session)
@@ -1767,6 +1814,7 @@ func (a *app) ensureSessionColumns() error {
 		"agent_status":       "TEXT NOT NULL DEFAULT ''",
 		"artifact_dir":       "TEXT NOT NULL DEFAULT ''",
 		"agent_profile":      "TEXT NOT NULL DEFAULT ''",
+		"runtime_task_id":    "TEXT NOT NULL DEFAULT ''",
 		"source_session_id":  "TEXT NOT NULL DEFAULT ''",
 		"source_commit_sha":  "TEXT NOT NULL DEFAULT ''",
 		"trigger_comment_id": "TEXT NOT NULL DEFAULT ''",
@@ -1803,9 +1851,15 @@ func (a *app) ensureIssueChangeNodeTables() error {
 		return fmt.Errorf("create issue_change_nodes: %w", err)
 	}
 	if err := a.ensureTableColumns("issue_change_nodes", map[string]string{
-		"branch":        "TEXT NOT NULL DEFAULT ''",
-		"subject":       "TEXT NOT NULL DEFAULT ''",
-		"files_changed": "INTEGER NOT NULL DEFAULT 0",
+		"branch":         "TEXT NOT NULL DEFAULT ''",
+		"subject":        "TEXT NOT NULL DEFAULT ''",
+		"files_changed":  "INTEGER NOT NULL DEFAULT 0",
+		"changes_json":   "TEXT NOT NULL DEFAULT '[]'",
+		"diff_preview":   "TEXT NOT NULL DEFAULT ''",
+		"diff_truncated": "INTEGER NOT NULL DEFAULT 0",
+		"source":         "TEXT NOT NULL DEFAULT 'local'",
+		"remote_workdir": "TEXT NOT NULL DEFAULT ''",
+		"artifact_dir":   "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}
@@ -3786,7 +3840,7 @@ func (a *app) handleAssignIssueToAgent(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, sql.ErrNoRows) {
 			status = http.StatusNotFound
 			err = errors.New("issue not found")
-		} else if errors.Is(err, errUnknownAgentProfile) {
+		} else if errors.Is(err, errUnknownAgentProfile) || errors.Is(err, errInvalidRuntimeMode) {
 			status = http.StatusBadRequest
 		}
 		writeError(w, status, err)
@@ -3814,7 +3868,7 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, sql.ErrNoRows) {
 			status = http.StatusNotFound
 			err = errors.New("issue not found")
-		} else if errors.Is(err, errUnknownAgentProfile) {
+		} else if errors.Is(err, errUnknownAgentProfile) || errors.Is(err, errInvalidRuntimeMode) {
 			status = http.StatusBadRequest
 		}
 		writeError(w, status, err)
@@ -5189,11 +5243,18 @@ func probeSessionForIssue(detail issueDetail) *agentSession {
 func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issueActor) (agentSession, error) {
 	input.Provider = strings.TrimSpace(input.Provider)
 	input.AgentProfile = strings.TrimSpace(input.AgentProfile)
+	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
 	input.Command = strings.TrimSpace(input.Command)
 	input.Branch = strings.TrimSpace(input.Branch)
 	input.SourceSessionID = strings.TrimSpace(input.SourceSessionID)
 	input.SourceCommitSHA = strings.TrimSpace(input.SourceCommitSHA)
 	input.TriggerCommentID = strings.TrimSpace(input.TriggerCommentID)
+	if input.RuntimeMode == "" {
+		input.RuntimeMode = "local"
+	}
+	if input.RuntimeMode != "local" && input.RuntimeMode != "team" {
+		return agentSession{}, errInvalidRuntimeMode
+	}
 	if input.Provider != "" && !strings.EqualFold(input.Provider, "codex") && input.AgentProfile == "" {
 		if profile, err := a.resolveEnabledAgentProfile(input.Provider); err == nil {
 			input.AgentProfile = profile.ID
@@ -5236,7 +5297,7 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 		IssueID:          issueID,
 		Provider:         input.Provider,
 		AgentProfile:     input.AgentProfile,
-		RuntimeMode:      "local",
+		RuntimeMode:      input.RuntimeMode,
 		Command:          command,
 		Status:           "queued",
 		Branch:           branch,
@@ -5252,9 +5313,9 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 	}
 
 	if _, err := a.db.Exec(`
-		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, session.ID, session.IssueID, session.Provider, session.AgentProfile, session.RuntimeMode, session.Command, session.Status, session.Branch, session.Workdir, session.CodexThreadID, session.CodexTurnID, session.AgentStatus, session.ArtifactDir, session.SourceSessionID, session.SourceCommitSHA, session.TriggerCommentID, session.AgentToken, session.CleanupStatus, session.CleanedAt, session.CreatedAt, session.UpdatedAt); err != nil {
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, runtime_task_id, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, session.ID, session.IssueID, session.Provider, session.AgentProfile, session.RuntimeMode, session.RuntimeTaskID, session.Command, session.Status, session.Branch, session.Workdir, session.CodexThreadID, session.CodexTurnID, session.AgentStatus, session.ArtifactDir, session.SourceSessionID, session.SourceCommitSHA, session.TriggerCommentID, session.AgentToken, session.CleanupStatus, session.CleanedAt, session.CreatedAt, session.UpdatedAt); err != nil {
 		return agentSession{}, err
 	}
 
@@ -5266,12 +5327,17 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 	if profile.Name != "" {
 		displayAgent = profile.Name
 	}
-	if err := a.updateIssueAssignment(issueID, assignee, "agent", normalizeIssueStatus(detail.Issue.Status), actor, fmt.Sprintf("Assigned to agent `%s` and queued local session `%s`.", displayAgent, shortID(session.ID))); err != nil {
+	modeLabel := "local"
+	if session.RuntimeMode == "team" {
+		modeLabel = "team runtime"
+	}
+	if err := a.updateIssueAssignment(issueID, assignee, "agent", normalizeIssueStatus(detail.Issue.Status), actor, fmt.Sprintf("Assigned to agent `%s` and queued %s session `%s`.", displayAgent, modeLabel, shortID(session.ID))); err != nil {
 		return agentSession{}, err
 	}
 	a.addSystemComment(issueID, fmt.Sprintf(
-		"Assigned to agent `%s` and queued local session `%s` on branch `%s`.\n\nPlanned workspace: `%s`",
+		"Assigned to agent `%s` and queued %s session `%s` on branch `%s`.\n\nPlanned workspace: `%s`",
 		displayAgent,
+		modeLabel,
 		shortID(session.ID),
 		session.Branch,
 		session.Workdir,
@@ -5619,6 +5685,27 @@ func (a *app) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	detail, detailErr := a.loadSessionDetail(sessionID)
+	if detailErr != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(detailErr, sql.ErrNoRows) {
+			status = http.StatusNotFound
+			detailErr = errors.New("session not found")
+		}
+		writeError(w, status, detailErr)
+		return
+	}
+	if detail.Session.RuntimeMode == "team" && strings.TrimSpace(detail.Session.RuntimeTaskID) != "" && (detail.Session.Status == "queued" || detail.Session.Status == "running") {
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		err := a.cancelTeamRuntimeTask(ctx, detail.Session.RuntimeTaskID, "Stopped session "+shortID(sessionID)+" by "+commentActorName(actor)+".")
+		cancel()
+		if err != nil {
+			a.appendSessionLog(sessionID, "system", "Unable to request team runtime cancellation: "+err.Error())
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		a.appendSessionLog(sessionID, "system", "Requested cancellation for team runtime task "+detail.Session.RuntimeTaskID+".")
+	}
 	a.mu.Lock()
 	canceller := a.cancellers[sessionID]
 	if canceller.cancel != nil {
@@ -5627,21 +5714,15 @@ func (a *app) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	if canceller.cancel == nil {
-		detail, err := a.loadSessionDetail(sessionID)
-		if err != nil {
-			status := http.StatusInternalServerError
-			if errors.Is(err, sql.ErrNoRows) {
-				status = http.StatusNotFound
-				err = errors.New("session not found")
-			}
-			writeError(w, status, err)
-			return
-		}
 		if detail.Session.Status == "queued" || detail.Session.Status == "running" {
 			a.updateSessionStatus(sessionID, "cancelled")
 			a.updateSessionAgentStatus(sessionID, "cancelled")
 			if detail.Session.Status == "running" {
-				a.appendSessionLog(sessionID, "system", "Stop requested after the runner lost its in-memory handle for this session. No live process was attached in the current runner.")
+				if detail.Session.RuntimeMode == "team" && strings.TrimSpace(detail.Session.RuntimeTaskID) != "" {
+					a.appendSessionLog(sessionID, "system", "Stop requested after the runner lost its in-memory wait handle. The matching team runtime task has been asked to cancel.")
+				} else {
+					a.appendSessionLog(sessionID, "system", "Stop requested after the runner lost its in-memory handle for this session. No live process was attached in the current runner.")
+				}
 			}
 			a.markIssueTestEnvironmentSessionInterrupted(detail.Session)
 			detail.Session.Status = "cancelled"
@@ -5724,6 +5805,11 @@ func (a *app) runSession(session agentSession, project project) {
 		return
 	}
 
+	if session.RuntimeMode == "team" {
+		a.runTeamRuntimeSession(ctx, session, project)
+		return
+	}
+
 	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Preparing workspace for branch %s", session.Branch))
 	preparedSession, err := a.prepareSessionWorkspace(session, project)
 	if err != nil {
@@ -5792,6 +5878,85 @@ func (a *app) runSession(session agentSession, project project) {
 		a.failSession(session, &project, fmt.Errorf("record source commit: %w", err))
 		return
 	}
+	a.completeSuccessfulSession(session, project, changeNode)
+}
+
+func (a *app) runTeamRuntimeSession(ctx context.Context, session agentSession, project project) {
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Preparing team runtime context for branch %s", session.Branch))
+	contextPath, err := a.writeSessionContext(session, project)
+	if err != nil {
+		a.failSession(session, &project, fmt.Errorf("write session context: %w", err))
+		return
+	}
+	artifactDir := filepath.Join(a.workdir, "_team_artifacts", session.ID)
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		a.failSession(session, &project, fmt.Errorf("create session artifact dir: %w", err))
+		return
+	}
+	session.ArtifactDir = artifactDir
+	a.updateSessionArtifactDir(session.ID, artifactDir)
+
+	prompt := session.Command
+	if isCodexProvider(session.Provider) {
+		prompt, err = a.buildCodexSessionPrompt(session, project, contextPath, artifactDir)
+		if err != nil {
+			a.failSession(session, &project, fmt.Errorf("build codex prompt: %w", err))
+			return
+		}
+	}
+
+	a.updateSessionStatus(session.ID, "running")
+	a.updateSessionAgentStatus(session.ID, "team-runtime-queued")
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Queueing team runtime task for %s session. The server worker will prepare its own workspace.", session.Provider))
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Source repository: %s", remoteURLForTeamRuntime(project)))
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Session branch: %s", session.Branch))
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Session context: %s", contextPath))
+	a.addSystemComment(session.IssueID, fmt.Sprintf(
+		"Started team runtime session `%s` on branch `%s`.\n\nServer Worker will prepare an isolated workspace from `%s`.\nContext: `%s`",
+		shortID(session.ID),
+		session.Branch,
+		remoteURLForTeamRuntime(project),
+		contextPath,
+	))
+
+	task, err := a.createTeamRuntimeAgentTask(ctx, session, project, prompt)
+	if err != nil {
+		a.failSession(session, &project, fmt.Errorf("queue team runtime task: %w", err))
+		return
+	}
+	session.RuntimeTaskID = task.ID
+	a.updateSessionRuntimeTaskID(session.ID, task.ID)
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Team runtime task queued: %s", task.ID))
+	err = a.waitTeamRuntimeTask(ctx, session, task.ID)
+	if ctx.Err() == context.Canceled || errors.Is(err, context.Canceled) {
+		cancelActor := a.sessionCancelActor(session.ID)
+		a.updateSessionStatus(session.ID, "cancelled")
+		a.updateSessionAgentStatus(session.ID, "cancelled")
+		session.Status = "cancelled"
+		session.AgentStatus = "cancelled"
+		a.appendSessionLog(session.ID, "system", "Team runtime session cancelled.")
+		a.recordSessionFailure(session, project, errors.New("Session stopped by "+commentActorName(cancelActor)+"."), nil, "agent_interrupted", "stopped")
+		a.addSystemComment(session.IssueID, fmt.Sprintf("Stopped session `%s` by %s.", shortID(session.ID), commentActorName(cancelActor)))
+		return
+	}
+	if err != nil {
+		a.failSession(session, &project, err)
+		return
+	}
+
+	result, _ := a.loadTeamRuntimeTaskResult(ctx, task.ID)
+	a.applyTeamRuntimeResult(session.ID, result)
+	session = a.sessionWithTeamRuntimeResult(session, result)
+	a.importProjectRunbookArtifact(session, project)
+	changeNode, err := a.recordTeamRuntimeSourceChangeNode(session, project, result)
+	if err != nil {
+		a.failSession(session, &project, fmt.Errorf("record source commit: %w", err))
+		return
+	}
+	a.completeSuccessfulSession(session, project, changeNode)
+}
+
+func (a *app) completeSuccessfulSession(session agentSession, project project, changeNode *issueChangeNode) {
 	a.updateSessionStatus(session.ID, "completed")
 	a.updateSessionAgentStatus(session.ID, "completed")
 	if changeNode != nil {
@@ -5823,6 +5988,305 @@ func (a *app) runSession(session agentSession, project project) {
 	a.updateIssueTestEnvironmentForSession(session, true)
 	a.recordSessionReviewEvidence(session, project, changeNode, true)
 	a.maybeAutoCreateIssuePullRequest(session, project, changeNode)
+}
+
+func (a *app) createTeamRuntimeAgentTask(ctx context.Context, session agentSession, project project, prompt string) (runtimeTask, error) {
+	contextPath := filepath.Join(a.workdir, "_contexts", session.ID+".md")
+	contextMarkdown := ""
+	if data, err := os.ReadFile(contextPath); err == nil {
+		contextMarkdown = string(data)
+	}
+	repoURL := remoteURLForTeamRuntime(project)
+	if strings.TrimSpace(repoURL) == "" {
+		return runtimeTask{}, errors.New("team runtime requires a project remote URL or a repository path reachable from the worker")
+	}
+	payload := map[string]any{
+		"prompt":                prompt,
+		"developerInstructions": buildMspaceCodexDeveloperInstructions(),
+		"approvalPolicy":        "never",
+		"sandbox":               "danger-full-access",
+		"env":                   envSliceToMap(a.buildSessionEnv(session, project, contextPath)),
+		"issueId":               session.IssueID,
+		"sessionId":             session.ID,
+		"projectId":             project.ID,
+		"branch":                session.Branch,
+		"sourceCommitSha":       session.SourceCommitSHA,
+		"contextMarkdown":       contextMarkdown,
+		"artifactDir":           session.ArtifactDir,
+		"repository": map[string]any{
+			"url":           repoURL,
+			"defaultBranch": project.DefaultBranch,
+			"sourceType":    project.SourceType,
+			"provider":      project.GitProvider,
+			"owner":         project.GitOwner,
+			"repo":          project.GitRepo,
+		},
+	}
+	body := map[string]any{
+		"issueId":              session.IssueID,
+		"sessionId":            session.ID,
+		"projectId":            project.ID,
+		"kind":                 "agent_session",
+		"runtimeMode":          "team",
+		"requiredCapabilities": map[string]bool{"codex": true},
+		"payload":              payload,
+	}
+	var task runtimeTask
+	if err := a.controlPlaneJSON(ctx, http.MethodPost, "/api/workspaces/{workspaceID}/runtime-tasks", body, http.StatusCreated, &task); err != nil {
+		return runtimeTask{}, err
+	}
+	return task, nil
+}
+
+func remoteURLForTeamRuntime(project project) string {
+	if strings.TrimSpace(project.RemoteURL) != "" {
+		return strings.TrimSpace(project.RemoteURL)
+	}
+	return strings.TrimSpace(project.RepoPath)
+}
+
+func (a *app) waitTeamRuntimeTask(ctx context.Context, session agentSession, taskID string) error {
+	seenLogs := map[string]bool{}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		task, err := a.loadTeamRuntimeTask(ctx, taskID)
+		if err != nil {
+			return err
+		}
+		a.importTeamRuntimeLogs(ctx, session.ID, taskID, seenLogs)
+		a.updateSessionAgentStatus(session.ID, teamRuntimeAgentStatus(task.Status))
+		switch task.Status {
+		case "completed":
+			a.importTeamRuntimeTaskResult(session.ID, task)
+			a.importTeamRuntimeLogs(ctx, session.ID, taskID, seenLogs)
+			return nil
+		case "failed":
+			a.importTeamRuntimeTaskResult(session.ID, task)
+			if strings.TrimSpace(task.Error) != "" {
+				return errors.New(task.Error)
+			}
+			return errors.New("team runtime task failed")
+		case "cancelled":
+			return context.Canceled
+		}
+
+		select {
+		case <-ctx.Done():
+			return context.Canceled
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *app) loadTeamRuntimeTask(ctx context.Context, taskID string) (runtimeTask, error) {
+	var tasks []runtimeTask
+	if err := a.controlPlaneJSON(ctx, http.MethodGet, "/api/workspaces/{workspaceID}/runtime-tasks", nil, http.StatusOK, &tasks); err != nil {
+		return runtimeTask{}, err
+	}
+	for _, task := range tasks {
+		if task.ID == taskID {
+			return task, nil
+		}
+	}
+	return runtimeTask{}, fmt.Errorf("team runtime task %s was not found", taskID)
+}
+
+func (a *app) cancelTeamRuntimeTask(ctx context.Context, taskID, reason string) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil
+	}
+	var task runtimeTask
+	if err := a.controlPlaneJSON(ctx, http.MethodPost, "/api/workspaces/{workspaceID}/runtime-tasks/"+url.PathEscape(taskID)+"/cancel", cancelRuntimeTaskInput{Reason: reason}, http.StatusOK, &task); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *app) importTeamRuntimeLogs(ctx context.Context, sessionID, taskID string, seen map[string]bool) {
+	var logs []runtimeTaskLog
+	if err := a.controlPlaneJSON(ctx, http.MethodGet, "/api/workspaces/{workspaceID}/runtime-tasks/"+url.PathEscape(taskID)+"/logs", nil, http.StatusOK, &logs); err != nil {
+		if len(seen) == 0 {
+			a.appendSessionLog(sessionID, "system", "Unable to read team runtime logs yet: "+err.Error())
+		}
+		return
+	}
+	for _, log := range logs {
+		if seen[log.ID] {
+			continue
+		}
+		seen[log.ID] = true
+		stream := strings.TrimSpace(log.Stream)
+		if stream == "" {
+			stream = "runtime"
+		}
+		a.appendSessionLog(sessionID, stream, log.Message)
+	}
+}
+
+func (a *app) importTeamRuntimeTaskResult(sessionID string, task runtimeTask) {
+	if len(task.Result) == 0 {
+		return
+	}
+	var result runtimeTaskResult
+	if err := json.Unmarshal(task.Result, &result); err != nil {
+		return
+	}
+	a.updateSessionCodexThread(sessionID, result.ThreadID)
+	a.updateSessionCodexTurn(sessionID, result.TurnID)
+}
+
+func (a *app) loadTeamRuntimeTaskResult(ctx context.Context, taskID string) (runtimeTaskResult, error) {
+	task, err := a.loadTeamRuntimeTask(ctx, taskID)
+	if err != nil {
+		return runtimeTaskResult{}, err
+	}
+	if len(task.Result) == 0 {
+		return runtimeTaskResult{}, nil
+	}
+	var result runtimeTaskResult
+	if err := json.Unmarshal(task.Result, &result); err != nil {
+		return runtimeTaskResult{}, err
+	}
+	return result, nil
+}
+
+func (a *app) applyTeamRuntimeResult(sessionID string, result runtimeTaskResult) {
+	a.updateSessionCodexThread(sessionID, result.ThreadID)
+	a.updateSessionCodexTurn(sessionID, result.TurnID)
+	if strings.TrimSpace(result.Workdir) != "" {
+		a.updateSessionWorkdir(sessionID, result.Workdir)
+	}
+	if strings.TrimSpace(result.ArtifactDir) != "" {
+		a.updateSessionArtifactDir(sessionID, result.ArtifactDir)
+	}
+}
+
+func (a *app) sessionWithTeamRuntimeResult(session agentSession, result runtimeTaskResult) agentSession {
+	if strings.TrimSpace(result.Workdir) != "" {
+		session.Workdir = strings.TrimSpace(result.Workdir)
+	}
+	if strings.TrimSpace(result.ArtifactDir) != "" {
+		session.ArtifactDir = strings.TrimSpace(result.ArtifactDir)
+	}
+	return session
+}
+
+func (a *app) recordTeamRuntimeSourceChangeNode(session agentSession, project project, result runtimeTaskResult) (*issueChangeNode, error) {
+	if !shouldRecordSourceChangeNode(session) {
+		return nil, nil
+	}
+	if strings.TrimSpace(result.Source.CommitSHA) == "" {
+		a.appendSessionLog(session.ID, "system", "Team runtime completed with no source changes to commit.")
+		return nil, nil
+	}
+	node := issueChangeNode{
+		ID:             uuid.NewString(),
+		IssueID:        session.IssueID,
+		SessionID:      session.ID,
+		CommitSHA:      strings.TrimSpace(result.Source.CommitSHA),
+		ShortCommitSHA: firstNonEmpty(result.Source.ShortCommitSHA, shortCommitSHA(result.Source.CommitSHA)),
+		Branch:         firstNonEmpty(result.Source.Branch, session.Branch),
+		Subject:        strings.TrimSpace(result.Source.Subject),
+		FilesChanged:   result.Source.FilesChanged,
+		Changes:        result.Source.Changes,
+		DiffPreview:    strings.TrimSpace(result.Source.DiffPreview),
+		DiffTruncated:  result.Source.DiffTruncated,
+		Source:         "team-runtime",
+		RemoteWorkdir:  strings.TrimSpace(result.Workdir),
+		ArtifactDir:    strings.TrimSpace(result.ArtifactDir),
+		CreatedAt:      nowString(),
+	}
+	if node.FilesChanged == 0 {
+		node.FilesChanged = len(node.Changes)
+	}
+	if err := a.saveIssueChangeNode(node); err != nil {
+		return nil, err
+	}
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Captured team runtime source commit %s with %d changed files.", shortCommitSHA(node.CommitSHA), node.FilesChanged))
+	a.broker.publish(session.ID, sessionEvent{Type: "status", Payload: "source-commit"})
+	return &node, nil
+}
+
+func teamRuntimeAgentStatus(status string) string {
+	switch status {
+	case "queued":
+		return "team-runtime-queued"
+	case "claimed":
+		return "team-runtime-claimed"
+	case "running":
+		return "team-runtime-running"
+	case "completed":
+		return "completed"
+	case "failed":
+		return "failed"
+	case "cancelled":
+		return "cancelled"
+	default:
+		if strings.TrimSpace(status) == "" {
+			return "team-runtime"
+		}
+		return "team-runtime-" + status
+	}
+}
+
+func (a *app) controlPlaneJSON(ctx context.Context, method, path string, input any, expectedStatus int, output any) error {
+	baseURL, token, workspaceID := a.controlPlaneSession()
+	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(token) == "" || strings.TrimSpace(workspaceID) == "" {
+		return errors.New("sign in to mspace and select a workspace before using team runtime")
+	}
+	path = strings.ReplaceAll(path, "{workspaceID}", url.PathEscape(workspaceID))
+	var body io.Reader
+	if input != nil {
+		payload, err := json.Marshal(input)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(baseURL, "/")+path, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	if input != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != expectedStatus {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = fmt.Sprintf("control plane returned HTTP %d", res.StatusCode)
+		}
+		if res.StatusCode == http.StatusNotFound && method == http.MethodPost && strings.HasSuffix(path, "/cancel") {
+			message = "team runtime task is already final or unavailable for cancellation: " + message
+		}
+		return errors.New(message)
+	}
+	if output == nil {
+		return nil
+	}
+	return json.NewDecoder(res.Body).Decode(output)
+}
+
+func envSliceToMap(values []string) map[string]string {
+	env := map[string]string{}
+	for _, value := range values {
+		key, val, ok := strings.Cut(value, "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			continue
+		}
+		env[key] = val
+	}
+	return env
 }
 
 func (a *app) recordSourceChangeNode(session agentSession, project project) (*issueChangeNode, error) {
@@ -5959,23 +6423,60 @@ func (a *app) recordIssueChangeNodeForCommit(session agentSession, project proje
 		Subject:        commitSubject,
 		FilesChanged:   len(changes),
 		Changes:        changes,
+		Source:         "local",
+		RemoteWorkdir:  "",
+		ArtifactDir:    session.ArtifactDir,
 		CreatedAt:      nowString(),
 	}
-	if _, err := a.db.Exec(`
-		INSERT INTO issue_change_nodes (id, issue_id, session_id, commit_sha, branch, subject, files_changed, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(session_id) DO UPDATE SET
-			commit_sha = excluded.commit_sha,
-			branch = excluded.branch,
-			subject = excluded.subject,
-			files_changed = excluded.files_changed,
-			created_at = excluded.created_at
-	`, node.ID, node.IssueID, node.SessionID, node.CommitSHA, node.Branch, node.Subject, node.FilesChanged, node.CreatedAt); err != nil {
+	if err := a.saveIssueChangeNode(node); err != nil {
 		return nil, err
 	}
 
 	hydrateIssueChangeNode(&node, project)
 	return &node, nil
+}
+
+func (a *app) saveIssueChangeNode(node issueChangeNode) error {
+	if node.ID == "" {
+		node.ID = uuid.NewString()
+	}
+	if node.ShortCommitSHA == "" {
+		node.ShortCommitSHA = shortCommitSHA(node.CommitSHA)
+	}
+	if node.Source == "" {
+		node.Source = "local"
+	}
+	if node.CreatedAt == "" {
+		node.CreatedAt = nowString()
+	}
+	if node.FilesChanged == 0 {
+		node.FilesChanged = len(node.Changes)
+	}
+	changesJSON, err := json.Marshal(node.Changes)
+	if err != nil {
+		return err
+	}
+	diffTruncated := 0
+	if node.DiffTruncated {
+		diffTruncated = 1
+	}
+	_, err = a.db.Exec(`
+		INSERT INTO issue_change_nodes (id, issue_id, session_id, commit_sha, branch, subject, files_changed, changes_json, diff_preview, diff_truncated, source, remote_workdir, artifact_dir, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(session_id) DO UPDATE SET
+			commit_sha = excluded.commit_sha,
+			branch = excluded.branch,
+			subject = excluded.subject,
+			files_changed = excluded.files_changed,
+			changes_json = excluded.changes_json,
+			diff_preview = excluded.diff_preview,
+			diff_truncated = excluded.diff_truncated,
+			source = excluded.source,
+			remote_workdir = excluded.remote_workdir,
+			artifact_dir = excluded.artifact_dir,
+			created_at = excluded.created_at
+	`, node.ID, node.IssueID, node.SessionID, node.CommitSHA, node.Branch, node.Subject, node.FilesChanged, string(changesJSON), node.DiffPreview, diffTruncated, node.Source, node.RemoteWorkdir, node.ArtifactDir, node.CreatedAt)
+	return err
 }
 
 func shouldRecordSourceChangeNode(session agentSession) bool {
@@ -8355,7 +8856,7 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 		},
 	}
 	row := a.db.QueryRow(`
-		SELECT s.id, s.issue_id, s.provider, s.agent_profile, s.runtime_mode, s.command, s.status, s.branch, s.workdir, s.codex_thread_id, s.codex_turn_id, s.agent_status, s.artifact_dir, s.source_session_id, s.source_commit_sha, s.trigger_comment_id, s.agent_token, s.cleanup_status, s.cleaned_at, s.created_at, s.updated_at,
+		SELECT s.id, s.issue_id, s.provider, s.agent_profile, s.runtime_mode, s.runtime_task_id, s.command, s.status, s.branch, s.workdir, s.codex_thread_id, s.codex_turn_id, s.agent_status, s.artifact_dir, s.source_session_id, s.source_commit_sha, s.trigger_comment_id, s.agent_token, s.cleanup_status, s.cleaned_at, s.created_at, s.updated_at,
 		       i.id, i.project_id, COALESCE(i.parent_issue_id, ''), i.sort_order, i.title, i.body, i.status, i.close_reason, i.triage_status, i.assignee, i.assignee_type, i.creator_name, i.creator_avatar_url, i.environment_url, i.created_at, i.updated_at,
 		       p.id, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id,
 		       COALESCE(r.status, 'empty'), COALESCE(r.source, ''), COALESCE(r.source_session_id, ''), COALESCE(r.updated_at, ''),
@@ -8367,7 +8868,7 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 		WHERE s.id = ?
 	`, sessionID)
 	if err := row.Scan(
-		&detail.Session.ID, &detail.Session.IssueID, &detail.Session.Provider, &detail.Session.AgentProfile, &detail.Session.RuntimeMode, &detail.Session.Command, &detail.Session.Status, &detail.Session.Branch, &detail.Session.Workdir, &detail.Session.CodexThreadID, &detail.Session.CodexTurnID, &detail.Session.AgentStatus, &detail.Session.ArtifactDir, &detail.Session.SourceSessionID, &detail.Session.SourceCommitSHA, &detail.Session.TriggerCommentID, &detail.Session.AgentToken, &detail.Session.CleanupStatus, &detail.Session.CleanedAt, &detail.Session.CreatedAt, &detail.Session.UpdatedAt,
+		&detail.Session.ID, &detail.Session.IssueID, &detail.Session.Provider, &detail.Session.AgentProfile, &detail.Session.RuntimeMode, &detail.Session.RuntimeTaskID, &detail.Session.Command, &detail.Session.Status, &detail.Session.Branch, &detail.Session.Workdir, &detail.Session.CodexThreadID, &detail.Session.CodexTurnID, &detail.Session.AgentStatus, &detail.Session.ArtifactDir, &detail.Session.SourceSessionID, &detail.Session.SourceCommitSHA, &detail.Session.TriggerCommentID, &detail.Session.AgentToken, &detail.Session.CleanupStatus, &detail.Session.CleanedAt, &detail.Session.CreatedAt, &detail.Session.UpdatedAt,
 		&detail.Issue.ID, &detail.Issue.ProjectID, &detail.Issue.ParentIssueID, &detail.Issue.SortOrder, &detail.Issue.Title, &detail.Issue.Body, &detail.Issue.Status, &detail.Issue.CloseReason, &detail.Issue.TriageStatus, &detail.Issue.Assignee, &detail.Issue.AssigneeType, &detail.Issue.CreatorName, &detail.Issue.CreatorAvatar, &detail.Issue.EnvironmentURL, &detail.Issue.CreatedAt, &detail.Issue.UpdatedAt,
 		&detail.Project.ID, &detail.Project.Name, &detail.Project.RepoPath, &detail.Project.SourceType, &detail.Project.RemoteURL, &detail.Project.GitProvider, &detail.Project.GitOwner, &detail.Project.GitRepo, &detail.Project.DefaultBranch, &detail.Project.DeployCommand, &detail.Project.ValidationCommand, &detail.Project.KubeContext, &detail.Project.KubeconfigPath, &detail.Project.Namespace, &detail.Project.ImageRegistryPrefix, &detail.Project.PreviewDomain, &detail.Project.IngressClass, &detail.Project.NodeHost, &detail.Project.DefaultClusterID, &detail.Project.RunbookStatus, &detail.Project.RunbookSource, &detail.Project.RunbookSourceSessionID, &detail.Project.RunbookUpdatedAt, &detail.Project.CreatedAt, &detail.Project.UpdatedAt,
 	); err != nil {
@@ -8685,7 +9186,7 @@ func (a *app) listIssueLabels(issueID string) ([]issueLabel, error) {
 
 func (a *app) listSessions(issueID string) ([]agentSession, error) {
 	rows, err := a.db.Query(`
-		SELECT id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at
+		SELECT id, issue_id, provider, agent_profile, runtime_mode, runtime_task_id, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at
 		FROM agent_sessions
 		WHERE issue_id = ?
 		ORDER BY created_at DESC
@@ -8697,7 +9198,7 @@ func (a *app) listSessions(issueID string) ([]agentSession, error) {
 	sessions := make([]agentSession, 0)
 	for rows.Next() {
 		var s agentSession
-		if err := rows.Scan(&s.ID, &s.IssueID, &s.Provider, &s.AgentProfile, &s.RuntimeMode, &s.Command, &s.Status, &s.Branch, &s.Workdir, &s.CodexThreadID, &s.CodexTurnID, &s.AgentStatus, &s.ArtifactDir, &s.SourceSessionID, &s.SourceCommitSHA, &s.TriggerCommentID, &s.AgentToken, &s.CleanupStatus, &s.CleanedAt, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.IssueID, &s.Provider, &s.AgentProfile, &s.RuntimeMode, &s.RuntimeTaskID, &s.Command, &s.Status, &s.Branch, &s.Workdir, &s.CodexThreadID, &s.CodexTurnID, &s.AgentStatus, &s.ArtifactDir, &s.SourceSessionID, &s.SourceCommitSHA, &s.TriggerCommentID, &s.AgentToken, &s.CleanupStatus, &s.CleanedAt, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			return nil, err
 		}
 		sessions = append(sessions, s)
@@ -9003,7 +9504,7 @@ func decodeReviewJSON(value string, target any) {
 
 func (a *app) listIssueChangeNodes(issueID string, project project) ([]issueChangeNode, error) {
 	rows, err := a.db.Query(`
-		SELECT id, issue_id, session_id, commit_sha, branch, subject, files_changed, created_at
+		SELECT id, issue_id, session_id, commit_sha, branch, subject, files_changed, changes_json, diff_preview, diff_truncated, source, remote_workdir, artifact_dir, created_at
 		FROM issue_change_nodes
 		WHERE issue_id = ?
 		ORDER BY created_at DESC
@@ -9016,9 +9517,13 @@ func (a *app) listIssueChangeNodes(issueID string, project project) ([]issueChan
 	nodes := []issueChangeNode{}
 	for rows.Next() {
 		var node issueChangeNode
-		if err := rows.Scan(&node.ID, &node.IssueID, &node.SessionID, &node.CommitSHA, &node.Branch, &node.Subject, &node.FilesChanged, &node.CreatedAt); err != nil {
+		var changesJSON string
+		var diffTruncated int
+		if err := rows.Scan(&node.ID, &node.IssueID, &node.SessionID, &node.CommitSHA, &node.Branch, &node.Subject, &node.FilesChanged, &changesJSON, &node.DiffPreview, &diffTruncated, &node.Source, &node.RemoteWorkdir, &node.ArtifactDir, &node.CreatedAt); err != nil {
 			return nil, err
 		}
+		node.DiffTruncated = diffTruncated != 0
+		decodeReviewJSON(changesJSON, &node.Changes)
 		hydrateIssueChangeNode(&node, project)
 		nodes = append(nodes, node)
 	}
@@ -9031,18 +9536,22 @@ func (a *app) loadIssueChangeNodeByCommit(issueID, commitSHA string, project pro
 		return nil, nil
 	}
 	var node issueChangeNode
+	var changesJSON string
+	var diffTruncated int
 	err := a.db.QueryRow(`
-		SELECT id, issue_id, session_id, commit_sha, branch, subject, files_changed, created_at
+		SELECT id, issue_id, session_id, commit_sha, branch, subject, files_changed, changes_json, diff_preview, diff_truncated, source, remote_workdir, artifact_dir, created_at
 		FROM issue_change_nodes
 		WHERE issue_id = ? AND commit_sha = ?
 		LIMIT 1
-	`, issueID, commitSHA).Scan(&node.ID, &node.IssueID, &node.SessionID, &node.CommitSHA, &node.Branch, &node.Subject, &node.FilesChanged, &node.CreatedAt)
+	`, issueID, commitSHA).Scan(&node.ID, &node.IssueID, &node.SessionID, &node.CommitSHA, &node.Branch, &node.Subject, &node.FilesChanged, &changesJSON, &node.DiffPreview, &diffTruncated, &node.Source, &node.RemoteWorkdir, &node.ArtifactDir, &node.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	node.DiffTruncated = diffTruncated != 0
+	decodeReviewJSON(changesJSON, &node.Changes)
 	hydrateIssueChangeNode(&node, project)
 	return &node, nil
 }
@@ -9082,9 +9591,17 @@ func (a *app) loadIssueChangeNodeForDeploy(issueID, sourceCommitSHA, sourceSessi
 func hydrateIssueChangeNode(node *issueChangeNode, project project) {
 	node.CommitSHA = strings.TrimSpace(node.CommitSHA)
 	node.ShortCommitSHA = shortCommitSHA(node.CommitSHA)
-	node.Changes = []workspaceChange{}
+	if node.Changes == nil {
+		node.Changes = []workspaceChange{}
+	}
 	if node.CommitSHA == "" {
 		node.Error = "Source commit is empty."
+		return
+	}
+	if strings.TrimSpace(node.Source) == "team-runtime" && strings.TrimSpace(node.DiffPreview) != "" {
+		if node.FilesChanged == 0 {
+			node.FilesChanged = len(node.Changes)
+		}
 		return
 	}
 
@@ -9111,6 +9628,7 @@ func hydrateIssueChangeNode(node *issueChangeNode, project project) {
 		node.Error = err.Error()
 		return
 	}
+	node.Changes = []workspaceChange{}
 	for _, line := range splitNonEmptyLines(nameStatusOutput) {
 		node.Changes = append(node.Changes, parseNameStatusChange(line))
 	}
@@ -9296,6 +9814,28 @@ func (a *app) updateSessionArtifactDir(sessionID, artifactDir string) {
 		UPDATE agent_sessions SET artifact_dir = ?, updated_at = ? WHERE id = ?
 	`, artifactDir, nowString(), sessionID)
 	a.broker.publish(sessionID, sessionEvent{Type: "status", Payload: "artifacts"})
+}
+
+func (a *app) updateSessionWorkdir(sessionID, workdir string) {
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return
+	}
+	_, _ = a.db.Exec(`
+		UPDATE agent_sessions SET workdir = ?, updated_at = ? WHERE id = ?
+	`, workdir, nowString(), sessionID)
+	a.broker.publish(sessionID, sessionEvent{Type: "status", Payload: "workdir"})
+}
+
+func (a *app) updateSessionRuntimeTaskID(sessionID, taskID string) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return
+	}
+	_, _ = a.db.Exec(`
+		UPDATE agent_sessions SET runtime_task_id = ?, updated_at = ? WHERE id = ?
+	`, taskID, nowString(), sessionID)
+	a.broker.publish(sessionID, sessionEvent{Type: "status", Payload: "runtime-task"})
 }
 
 func (a *app) updateIssueStatus(issueID, status string) {
