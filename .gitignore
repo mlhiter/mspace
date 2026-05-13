@@ -10,4 +10,6 @@ out/
 .DS_Store
 *.tsbuildinfo
 runner/runner
+worker/worker
+.tmp/
 .vercel

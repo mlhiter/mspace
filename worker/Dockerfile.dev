@@ -1,0 +1,17 @@
+FROM golang:1.24-bookworm
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates python3 \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+COPY worker/go.mod ./worker/go.mod
+RUN cd worker && go mod download
+
+COPY worker ./worker
+RUN cd worker && go build -o /usr/local/bin/mspace-worker .
+
+ENV MSPACE_WORKER_WORK_ROOT=/var/lib/mspace-worker
+
+ENTRYPOINT ["/usr/local/bin/mspace-worker"]
