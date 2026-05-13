@@ -276,7 +276,7 @@ Current implemented fields:
 
 ### Workspace Settings
 
-A Workspace Settings record stores local automation policy for the current workspace. The Workspace Settings page also exposes the Team access and Team Runtime control-plane surfaces for team workspaces: members, invitations, registration tokens, worker liveness/capability snapshots, and recent runtime task records. Personal workspaces show a create-team-workspace entry instead of team panels. This keeps collaboration and execution policy at the workspace boundary instead of mixing it into the Agents prompt/profile route.
+A Workspace Settings record stores local automation policy for the current workspace. The Workspace Settings page also exposes the Team access and Team Runtime control-plane surfaces for team workspaces: members, invitations, registration tokens, worker liveness/capability snapshots, and recent runtime task records. Team workspace creation lives in the left workspace menu with workspace switching, keeping Settings focused on the currently selected workspace and avoiding a parallel creation path inside policy configuration.
 
 Current implemented fields:
 

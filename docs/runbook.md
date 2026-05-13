@@ -74,9 +74,9 @@ To test team collaboration through the UI only:
 
 1. Sign in with GitHub from the workspace menu.
 2. Confirm the workspace menu labels the current workspace as Personal.
-3. Open Workspace Settings and create a team workspace from the Team workspace section.
-4. Use the workspace menu to switch into the team workspace if it is not selected automatically.
-5. Use Team access to create an invite link.
+3. Create a team workspace from the workspace menu.
+4. Confirm the new team workspace is selected, or use the workspace menu to switch into it.
+5. Open Workspace Settings and use Team access to create an invite link.
 6. Copy the invite link and open it as another signed-in GitHub identity.
 7. Accept the invite from the Join workspace page.
 8. Confirm Workspace Settings shows both members, then continue with Team Runtime token, worker, task, and Issue Detail team-session testing.

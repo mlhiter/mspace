@@ -86,7 +86,7 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. Workspace Settings lives behind the workspace menu entry and owns local automation policy such as automatic draft PR creation. Session detail remains deep-linked from issue work.
+The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. The workspace menu owns workspace switching, team workspace creation, and the entry into Workspace Settings. Workspace Settings owns local automation policy such as automatic draft PR creation and team-only access/runtime controls for the selected workspace. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 

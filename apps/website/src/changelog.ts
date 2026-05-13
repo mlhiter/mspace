@@ -13,7 +13,7 @@ export const changelog: ChangelogEntry[] = [
       "mspace made team collaboration explicit so local single-user work and shared team execution no longer blur together.",
     items: [
       "Made GitHub sign-in land in a personal workspace by default.",
-      "Added team workspace creation from Workspace Settings before invitations, worker tokens, and team runtime queues are available.",
+      "Moved team workspace creation into the left workspace menu beside workspace switching.",
       "Limited Team worker routing, server Inbox receipts, invitations, runtime registration, workers, and task queues to team workspaces.",
       "Updated the workspace menu so users can see whether they are operating in a Personal or Team workspace.",
     ],

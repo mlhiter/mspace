@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   createHashHistory,
@@ -11,6 +11,7 @@ import {
   Navigate,
   RouterProvider,
 } from "@tanstack/react-router";
+import { UsersRound, X } from "lucide-react";
 import {
   AgentsPage,
   ClustersPage,
@@ -26,12 +27,27 @@ import {
   WorkspaceSettingsPage,
   WorkspaceInvitePage,
 } from "@mspace/views";
-import { api, AUTH_TOKEN_STORAGE_KEY, controlPlaneApi, getControlPlaneBaseUrl, queryKeys, SELECTED_WORKSPACE_STORAGE_KEY, setStoredAuthIdentity } from "@mspace/core";
-import { AppShell, type ShellSearchItem } from "@mspace/ui";
+import {
+  api,
+  AUTH_TOKEN_STORAGE_KEY,
+  controlPlaneApi,
+  getControlPlaneBaseUrl,
+  queryKeys,
+  SELECTED_WORKSPACE_STORAGE_KEY,
+  setStoredAuthIdentity,
+  type AuthMeResult,
+  type CreateWorkspaceInput,
+} from "@mspace/core";
+import { AppShell, Button, Field, Input, Notice, type ShellSearchItem } from "@mspace/ui";
 import mspaceLogoUrl from "../../../assets/brand/mspace-logo.svg";
 import "./globals.css";
 
 const queryClient = new QueryClient();
+function defaultTeamWorkspaceName(name: string | undefined) {
+  const owner = name?.trim();
+  return owner ? `${owner}'s team` : "Engineering team";
+}
+
 function joinSearchSubtitle(values: Array<string | number | null | undefined>): string {
   return values
     .map((value) => String(value || "").trim())
@@ -43,6 +59,8 @@ function RootShell() {
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(() => window.localStorage.getItem(SELECTED_WORKSPACE_STORAGE_KEY) || "");
   const [pendingAuthState, setPendingAuthState] = useState("");
+  const [teamWorkspaceModalOpen, setTeamWorkspaceModalOpen] = useState(false);
+  const [teamWorkspaceName, setTeamWorkspaceName] = useState("");
 
   const activeWorkQuery = useQuery({
     queryKey: queryKeys.activeWork,
@@ -106,6 +124,11 @@ function RootShell() {
     }
   }, [meQuery.data?.user]);
 
+  useEffect(() => {
+    if (!meQuery.data?.user?.name) return;
+    setTeamWorkspaceName((value) => value.trim() || defaultTeamWorkspaceName(meQuery.data?.user.name));
+  }, [meQuery.data?.user?.name]);
+
   const workspaces = meQuery.data?.workspaces || [];
   const currentWorkspace = useMemo(() => {
     if (workspaces.length === 0) return undefined;
@@ -151,6 +174,28 @@ function RootShell() {
     window.localStorage.setItem(SELECTED_WORKSPACE_STORAGE_KEY, workspaceId);
     setSelectedWorkspaceId(workspaceId);
   };
+
+  const createTeamWorkspace = useMutation({
+    mutationFn: (input: CreateWorkspaceInput) => controlPlaneApi.createWorkspace(authToken, input),
+    onSuccess: async (result) => {
+      queryClient.setQueryData<AuthMeResult | undefined>(queryKeys.authMe(authToken), (current) =>
+        current ? { ...current, workspaces: result.workspaces } : current,
+      );
+      handleSelectWorkspace(result.workspace.id);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.authMe(authToken) });
+      setTeamWorkspaceModalOpen(false);
+      setTeamWorkspaceName(defaultTeamWorkspaceName(meQuery.data?.user.name));
+    },
+  });
+
+  function submitTeamWorkspace(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!authToken) return;
+    createTeamWorkspace.mutate({
+      name: teamWorkspaceName.trim(),
+      kind: "team",
+    });
+  }
 
   const authError = signInMutation.error || pollQuery.error || (authToken !== "" ? meQuery.error : null);
   const accountStatus =
@@ -243,8 +288,59 @@ function RootShell() {
         onSignIn={() => signInMutation.mutate()}
         onSignOut={handleSignOut}
         onSelectWorkspace={handleSelectWorkspace}
+        onCreateTeamWorkspace={() => {
+          setTeamWorkspaceName((value) => value.trim() || defaultTeamWorkspaceName(meQuery.data?.user.name));
+          setTeamWorkspaceModalOpen(true);
+        }}
       />
+      {teamWorkspaceModalOpen ? (
+        <Modal
+          title="Create team workspace"
+          description="Team workspaces enable member invitations, shared Inbox receipts, worker registration, and team-mode sessions."
+          onClose={() => setTeamWorkspaceModalOpen(false)}
+        >
+          <form className="grid gap-4" onSubmit={submitTeamWorkspace}>
+            {createTeamWorkspace.error ? <Notice tone="danger">{createTeamWorkspace.error.message}</Notice> : null}
+            <Field label="Workspace name">
+              <Input
+                value={teamWorkspaceName}
+                onChange={(event) => setTeamWorkspaceName(event.target.value)}
+                placeholder="Engineering team"
+                autoFocus
+              />
+            </Field>
+            <div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
+              <Button type="button" variant="secondary" onClick={() => setTeamWorkspaceModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!authToken || createTeamWorkspace.isPending || teamWorkspaceName.trim() === ""}>
+                <UsersRound data-icon />
+                {createTeamWorkspace.isPending ? "Creating" : "Create workspace"}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
     </MspaceAuthProvider>
+  );
+}
+
+function Modal(props: { title: string; description: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/20 px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="workspace-shell-modal-title">
+      <div className="w-full max-w-[640px] rounded-[12px] bg-[color:var(--paper)] shadow-[0_24px_80px_rgba(0,0,0,0.18),inset_0_0_0_1px_var(--line)]">
+        <div className="flex items-start justify-between gap-4 border-b border-[color:var(--line)] px-5 py-4">
+          <div className="min-w-0">
+            <h2 id="workspace-shell-modal-title" className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">{props.title}</h2>
+            <p className="mt-1 text-[13px] leading-5 text-[color:var(--muted)] text-pretty">{props.description}</p>
+          </div>
+          <Button type="button" variant="ghost" size="icon" aria-label="Close" onClick={props.onClose}>
+            <X data-icon />
+          </Button>
+        </div>
+        <div className="px-5 py-5">{props.children}</div>
+      </div>
+    </div>
   );
 }
 

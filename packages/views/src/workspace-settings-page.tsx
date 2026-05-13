@@ -28,10 +28,8 @@ import {
 	api,
 	controlPlaneApi,
 	queryKeys,
-	type AuthMeResult,
 	type CreateRuntimeRegistrationTokenInput,
 	type CreateRuntimeTaskInput,
-	type CreateWorkspaceInput,
 	type CreateWorkspaceInvitationInput,
 	type RuntimeRegistrationToken,
 	type RuntimeRegistrationTokenResult,
@@ -143,8 +141,6 @@ export function WorkspaceSettingsPage() {
 	});
 
 	const [form, setForm] = useState<UpdateWorkspaceSettingsInput>(defaultSettingsForm);
-	const [teamWorkspaceModalOpen, setTeamWorkspaceModalOpen] = useState(false);
-	const [teamWorkspaceName, setTeamWorkspaceName] = useState(() => defaultTeamWorkspaceName(auth.user?.name));
 	const [invitationModalOpen, setInvitationModalOpen] = useState(false);
 	const [invitationForm, setInvitationForm] = useState<CreateWorkspaceInvitationInput>(defaultInvitationForm);
 	const [createdInvitation, setCreatedInvitation] = useState<WorkspaceInvitationResult | null>(null);
@@ -164,28 +160,11 @@ export function WorkspaceSettingsPage() {
 		});
 	}, [settingsQuery.data]);
 
-	useEffect(() => {
-		if (!auth.user?.name) return;
-		setTeamWorkspaceName((value) => value.trim() || defaultTeamWorkspaceName(auth.user?.name));
-	}, [auth.user?.name]);
-
 	const saveSettings = useMutation({
 		mutationFn: api.updateWorkspaceSettings,
 		onSuccess: async (settings) => {
 			setForm({ autoCreateDraftPr: settings.autoCreateDraftPr });
 			await queryClient.invalidateQueries({ queryKey: queryKeys.workspaceSettings });
-		},
-	});
-	const createTeamWorkspace = useMutation({
-		mutationFn: (input: CreateWorkspaceInput) => controlPlaneApi.createWorkspace(auth.token, input),
-		onSuccess: async (result) => {
-			queryClient.setQueryData<AuthMeResult | undefined>(queryKeys.authMe(auth.token), (current) =>
-				current ? { ...current, workspaces: result.workspaces } : current,
-			);
-			auth.selectWorkspace?.(result.workspace.id);
-			await queryClient.invalidateQueries({ queryKey: queryKeys.authMe(auth.token) });
-			setTeamWorkspaceModalOpen(false);
-			setTeamWorkspaceName(defaultTeamWorkspaceName(auth.user?.name));
 		},
 	});
 	const createInvitation = useMutation({
@@ -258,15 +237,6 @@ export function WorkspaceSettingsPage() {
 
 	function refreshRuntime() {
 		void Promise.all([membersQuery.refetch(), invitationsQuery.refetch(), tokensQuery.refetch(), workersQuery.refetch(), tasksQuery.refetch()]);
-	}
-
-	function submitTeamWorkspace(event: FormEvent<HTMLFormElement>) {
-		event.preventDefault();
-		if (!isSignedIn) return;
-		createTeamWorkspace.mutate({
-			name: teamWorkspaceName.trim(),
-			kind: "team",
-		});
 	}
 
 	function submitInvitation(event: FormEvent<HTMLFormElement>) {
@@ -355,7 +325,6 @@ export function WorkspaceSettingsPage() {
 				{settingsQuery.error ? <Notice tone="danger">{settingsQuery.error.message}</Notice> : null}
 				{saveSettings.error ? <Notice tone="danger">{saveSettings.error.message}</Notice> : null}
 				{runtimeError ? <Notice tone="danger">{runtimeError.message}</Notice> : null}
-				{createTeamWorkspace.error ? <Notice tone="danger">{createTeamWorkspace.error.message}</Notice> : null}
 				{createInvitation.error ? <Notice tone="danger">{createInvitation.error.message}</Notice> : null}
 				{revokeInvitation.error ? <Notice tone="danger">{revokeInvitation.error.message}</Notice> : null}
 
@@ -515,13 +484,7 @@ export function WorkspaceSettingsPage() {
 							/>
 						</RuntimePanel>
 					</>
-				) : (
-					<TeamWorkspaceGate
-						signedIn={isSignedIn}
-						workspaceName={auth.workspace?.name}
-						onCreate={() => setTeamWorkspaceModalOpen(true)}
-					/>
-				)}
+				) : null}
 				{cancelTask.error ? <Notice tone="danger">{cancelTask.error.message}</Notice> : null}
 
 				<SettingsSection
@@ -536,35 +499,6 @@ export function WorkspaceSettingsPage() {
 					/>
 				</SettingsSection>
 			</div>
-
-			{teamWorkspaceModalOpen ? (
-				<Modal
-					title="Create team workspace"
-					description="Team workspaces enable member invitations, shared Inbox receipts, worker registration, and team-mode sessions."
-					onClose={() => setTeamWorkspaceModalOpen(false)}
-				>
-					<form className="grid gap-4" onSubmit={submitTeamWorkspace}>
-						{createTeamWorkspace.error ? <Notice tone="danger">{createTeamWorkspace.error.message}</Notice> : null}
-						<Field label="Workspace name">
-							<Input
-								value={teamWorkspaceName}
-								onChange={(event) => setTeamWorkspaceName(event.target.value)}
-								placeholder="Engineering team"
-								autoFocus
-							/>
-						</Field>
-						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
-							<Button type="button" variant="secondary" onClick={() => setTeamWorkspaceModalOpen(false)}>
-								Cancel
-							</Button>
-							<Button type="submit" disabled={!isSignedIn || createTeamWorkspace.isPending || teamWorkspaceName.trim() === ""}>
-								<UsersRound data-icon />
-								{createTeamWorkspace.isPending ? "Creating" : "Create workspace"}
-							</Button>
-						</div>
-					</form>
-				</Modal>
-			) : null}
 
 			{invitationModalOpen ? (
 				<Modal title="Invite workspace member" description="Create a one-time invite link for this workspace. The invited user must sign in before accepting it." onClose={() => setInvitationModalOpen(false)}>
@@ -835,39 +769,6 @@ function SettingsRow(props: {
 			</span>
 			<div className="justify-self-start md:justify-self-end">{props.control}</div>
 		</div>
-	);
-}
-
-function TeamWorkspaceGate(props: {
-	signedIn: boolean;
-	workspaceName?: string;
-	onCreate: () => void;
-}) {
-	return (
-		<SettingsSection
-			title="Team workspace"
-			description="Create or switch to a team workspace before inviting members or running shared workers."
-			meta={props.signedIn ? "Personal workspace" : "GitHub sign-in required"}
-			actions={
-				<Button type="button" variant="secondary" size="sm" disabled={!props.signedIn} onClick={props.onCreate}>
-					<UsersRound data-icon />
-					Create team workspace
-				</Button>
-			}
-		>
-			<div className="grid gap-3 p-4 md:grid-cols-3">
-				<RuntimeSummaryCard icon={SquareTerminal} label="Current workspace" value="Personal" meta={props.workspaceName || "Local-first"} />
-				<RuntimeSummaryCard icon={UsersRound} label="Members" value="Not enabled" meta="Requires team workspace" />
-				<RuntimeSummaryCard icon={ServerCog} label="Team workers" value="Not enabled" meta="Create a team workspace first" />
-			</div>
-			<div className="border-t border-[color:var(--line)] p-4">
-				{props.signedIn ? (
-					<Notice>Personal workspace uses the local runner. Team access, worker tokens, registered workers, and runtime tasks appear after you create or switch to a team workspace.</Notice>
-				) : (
-					<Notice>Sign in with GitHub before creating a team workspace.</Notice>
-				)}
-			</div>
-		</SettingsSection>
 	);
 }
 
@@ -1348,11 +1249,6 @@ function invitationStatus(invitation: WorkspaceInvitation) {
 
 function activeInvitationCount(invitations: WorkspaceInvitation[]) {
 	return invitations.filter((invitation) => invitationStatus(invitation) === "pending").length;
-}
-
-function defaultTeamWorkspaceName(name: string | undefined) {
-	const owner = name?.trim();
-	return owner ? `${owner}'s team` : "Engineering team";
 }
 
 function buildInviteLink(token: string) {

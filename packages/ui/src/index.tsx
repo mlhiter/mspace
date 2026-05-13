@@ -194,6 +194,7 @@ export function AppShell(
     onSignIn?: () => void;
     onSignOut?: () => void;
     onSelectWorkspace?: (workspaceId: string) => void;
+    onCreateTeamWorkspace?: () => void;
   } = {},
 ) {
   const activeWorkItems = props.activeWorkItems || [];
@@ -221,6 +222,7 @@ export function AppShell(
           onSignIn={props.onSignIn}
           onSignOut={props.onSignOut}
           onSelectWorkspace={props.onSelectWorkspace}
+          onCreateTeamWorkspace={props.onCreateTeamWorkspace}
         />
 
         <button
@@ -474,6 +476,7 @@ function WorkspaceMenu(props: {
   onSignIn?: () => void;
   onSignOut?: () => void;
   onSelectWorkspace?: (workspaceId: string) => void;
+  onCreateTeamWorkspace?: () => void;
 }) {
   const account = props.account || { status: "signed-out" as const };
   const isBusy = account.status === "loading";
@@ -533,18 +536,18 @@ function WorkspaceMenu(props: {
       {open ? (
         <div
           role="menu"
-          className="absolute left-0 top-[calc(100%+8px)] z-30 w-[244px] overflow-hidden rounded-[12px] bg-[color:var(--paper)] p-1.5 shadow-[0_18px_45px_rgba(0,0,0,0.13),inset_0_0_0_1px_var(--line)]"
+          className="absolute left-0 top-[calc(100%+7px)] z-30 w-[232px] overflow-hidden rounded-[10px] bg-[color:var(--paper)] p-1 shadow-[0_16px_36px_rgba(0,0,0,0.12),inset_0_0_0_1px_var(--line)]"
         >
-          <div className="flex min-w-0 items-center gap-2.5 rounded-[9px] px-2.5 py-2.5">
-            <div className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-[color:var(--block)] text-[color:var(--ink)] shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="flex min-w-0 items-center gap-2 rounded-[8px] px-2 py-2">
+            <div className="grid size-7 shrink-0 place-items-center overflow-hidden rounded-[7px] bg-[color:var(--block)] text-[color:var(--ink)] shadow-[inset_0_0_0_1px_var(--line)]">
               {props.brandLogoSrc ? (
-                <img src={props.brandLogoSrc} alt="" className="h-5 w-7 object-contain" />
+                <img src={props.brandLogoSrc} alt="" className="h-4 w-6 object-contain" />
               ) : (
-                <span className="text-[13px] font-semibold">m</span>
+                <span className="text-[12px] font-semibold">m</span>
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[13px] font-semibold leading-5 text-[color:var(--text)]">{workspaceLabel}</div>
+              <div className="truncate text-[12px] font-semibold leading-5 text-[color:var(--text)]">{workspaceLabel}</div>
               <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
                 {isSignedIn ? `${workspaceKindLabel || "Workspace"} · ${account.workspaceRole || "member"}` : "Local workspace"}
               </div>
@@ -552,9 +555,9 @@ function WorkspaceMenu(props: {
           </div>
 
           {isSignedIn && workspaces.length > 1 ? (
-            <div className="mt-1 border-t border-[color:var(--line)] pt-1">
-              <div className="px-2 py-1 text-[11px] font-medium leading-4 text-[color:var(--faint)]">Workspaces</div>
-              <div className="grid gap-0.5">
+            <div className="border-t border-[color:var(--line)] px-1 py-1">
+              <div className="px-1.5 pb-1 pt-0.5 text-[11px] font-medium leading-4 text-[color:var(--faint)]">Workspaces</div>
+              <div className="grid gap-px">
                 {workspaces.map((workspace) => {
                   const selected = workspace.id === account.workspaceId;
                   return (
@@ -564,7 +567,7 @@ function WorkspaceMenu(props: {
                       role="menuitemradio"
                       aria-checked={selected}
                       className={cn(
-                        "group flex min-h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-left text-[12px] font-medium transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99]",
+                        "group flex min-h-8 w-full items-center gap-2 rounded-[7px] px-1.5 text-left text-[12px] font-medium transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99] [&_[data-icon]]:size-3.5",
                         selected ? "bg-[color:var(--selection)] text-[color:var(--text)]" : "text-[color:var(--muted-strong)]",
                       )}
                       onClick={() => {
@@ -586,42 +589,57 @@ function WorkspaceMenu(props: {
             </div>
           ) : null}
 
-          <Link
-            to="/settings"
-            role="menuitem"
-            className="group flex min-h-9 items-center gap-2 rounded-[8px] px-2.5 text-[12px] font-medium text-[color:var(--muted-strong)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99] [&_[data-icon]]:size-3.5"
-            onClick={() => setOpen(false)}
-          >
-            <Settings data-icon className="text-[color:var(--faint)]" />
-            <span className="min-w-0 flex-1 truncate">Workspace settings</span>
-            <ChevronRight data-icon className="text-[color:var(--faint)] opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
-          </Link>
+          {isSignedIn ? (
+            <div className="grid gap-px border-t border-[color:var(--line)] px-1 py-1">
+              <WorkspaceMenuAction
+                icon={Plus}
+                label="Create team workspace"
+                onClick={() => {
+                  setOpen(false);
+                  props.onCreateTeamWorkspace?.();
+                }}
+              />
+              <WorkspaceMenuLink
+                to="/settings"
+                icon={Settings}
+                label="Workspace settings"
+                trailingIcon={ChevronRight}
+                onClick={() => setOpen(false)}
+              />
+            </div>
+          ) : (
+            <WorkspaceMenuLink
+              to="/settings"
+              icon={Settings}
+              label="Workspace settings"
+              trailingIcon={ChevronRight}
+              className="mx-1"
+              onClick={() => setOpen(false)}
+            />
+          )}
 
           {isSignedIn ? (
-            <div className="mt-1 border-t border-[color:var(--line)] pt-1">
-              <div className="mx-1 flex min-w-0 items-center gap-2.5 rounded-[8px] px-2 py-2">
+            <div className="mt-1 border-t border-[color:var(--line)] px-1 py-1">
+              <div className="flex min-w-0 items-center gap-2 rounded-[7px] px-1.5 py-1.5">
                 <UserAvatar name={account.name} avatarUrl={account.avatarUrl} size="sm" />
                 <div className="min-w-0 flex-1 text-left">
                   <div className="truncate text-[12px] font-medium leading-5 text-[color:var(--text)]">{account.name || "mspace user"}</div>
                   <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{account.email || "GitHub connected"}</div>
                 </div>
               </div>
-              <button
-                type="button"
-                role="menuitem"
-                className="group flex min-h-9 w-full items-center gap-2 rounded-[8px] px-2.5 text-[12px] font-medium text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99] [&_[data-icon]]:size-3.5"
+              <WorkspaceMenuAction
+                icon={LogOut}
+                label="Sign out"
+                muted
                 onClick={() => {
                   setOpen(false);
                   props.onSignOut?.();
                 }}
-              >
-                <LogOut data-icon className="text-[color:var(--faint)]" />
-                <span>Sign out</span>
-              </button>
+              />
             </div>
           ) : (
-            <div className="mt-1 border-t border-[color:var(--line)] px-1 pt-2">
-              <div className="mb-2 flex items-center gap-2 px-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
+            <div className="mt-1 border-t border-[color:var(--line)] px-1 py-1">
+              <div className="mb-1 flex items-center gap-2 px-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
                 {isBusy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
                 <span>{isBusy ? "Waiting for GitHub callback" : "GitHub identity not connected"}</span>
               </div>
@@ -648,6 +666,72 @@ function WorkspaceMenu(props: {
       ) : null}
     </div>
   );
+}
+
+function WorkspaceMenuAction(props: {
+  icon: LucideIcon;
+  label: string;
+  muted?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className={cn(
+        "group grid min-h-8 w-full grid-cols-[24px_minmax(0,1fr)_16px] items-center rounded-[7px] px-1 text-left transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99]",
+        props.muted ? "text-[color:var(--muted)]" : "text-[color:var(--muted-strong)]",
+      )}
+      onClick={props.onClick}
+    >
+      <WorkspaceMenuIcon icon={props.icon} />
+      <WorkspaceMenuLabel>{props.label}</WorkspaceMenuLabel>
+      <span aria-hidden="true" />
+    </button>
+  );
+}
+
+function WorkspaceMenuLink(props: {
+  to: string;
+  icon: LucideIcon;
+  label: string;
+  trailingIcon?: LucideIcon;
+  className?: string;
+  onClick: () => void;
+}) {
+  const TrailingIcon = props.trailingIcon;
+  return (
+    <Link
+      to={props.to}
+      role="menuitem"
+      className={cn(
+        "group grid min-h-8 grid-cols-[24px_minmax(0,1fr)_16px] items-center rounded-[7px] px-1 text-[color:var(--muted-strong)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99]",
+        props.className,
+      )}
+      onClick={props.onClick}
+    >
+      <WorkspaceMenuIcon icon={props.icon} />
+      <WorkspaceMenuLabel>{props.label}</WorkspaceMenuLabel>
+      {TrailingIcon ? (
+        <TrailingIcon data-icon className="size-3.5 justify-self-center text-[color:var(--faint)] opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+      ) : (
+        <span aria-hidden="true" />
+      )}
+    </Link>
+  );
+}
+
+function WorkspaceMenuIcon(props: { icon: LucideIcon }) {
+  const Icon = props.icon;
+  return (
+    <span className="grid size-6 place-items-center text-[color:var(--faint)]">
+      <Icon data-icon className="size-3.5" />
+    </span>
+  );
+}
+
+function WorkspaceMenuLabel(props: PropsWithChildren) {
+  return <span className="min-w-0 truncate text-[12px] font-medium leading-4">{props.children}</span>;
 }
 
 function workspaceKindLabelFor(kind: string | undefined) {
