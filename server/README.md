@@ -54,11 +54,43 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 | `GET` | `/api/auth/github/result` | Poll the state-bound login result from the desktop app. Returns `202` while pending and consumes the result once ready. |
 | `GET` | `/api/auth/me` | Return the current mspace user and workspaces for a bearer token. |
 | `GET` | `/api/workspaces` | List the authenticated user's workspaces. |
+| `GET` | `/api/workspaces/{workspaceID}/members` | List workspace members with role and display identity. |
+| `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time `msi_...` workspace invitation link. Owner/admin only. |
+| `GET` | `/api/workspaces/{workspaceID}/invitations` | List recent workspace invitations without raw tokens. Owner/admin only. |
+| `DELETE` | `/api/workspaces/{workspaceID}/invitations/{invitationID}` | Revoke a workspace invitation. Owner/admin only. |
+| `POST` | `/api/workspace-invitations/accept` | Accept a workspace invitation as the current authenticated user. |
 | `GET` | `/api/workspaces/{workspaceID}/inbox` | List unread issue-event receipts for the authenticated user. |
 | `POST` | `/api/workspaces/{workspaceID}/issue-events` | Append a reviewable issue event and create per-user receipts. |
 | `POST` | `/api/workspaces/{workspaceID}/issue-events/{eventID}/read` | Mark one event receipt read for the authenticated user. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/read-through` | Mark unread receipts for one issue read through an optional event boundary. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived worker registration token. Owner/admin only. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration token metadata without raw token values. Owner/admin only. |
+| `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. Owner/admin only. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and their latest heartbeat state. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a runtime task for the workspace. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-tasks` | List recent runtime tasks for the workspace. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/logs` | List worker-appended logs for one runtime task. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/cancel` | Request cancellation for a queued, claimed, or running runtime task. |
+| `POST` | `/api/runtime/workers/register` | Register or refresh a worker using `Authorization: Bearer msw_...`. |
+| `POST` | `/api/runtime/workers/{workerID}/heartbeat` | Update worker liveness, status, load, and optional capability metadata. |
+| `POST` | `/api/runtime/workers/{workerID}/tasks/claim` | Claim the next queued task that matches the worker mode and required capabilities. |
+| `GET` | `/api/runtime/workers/{workerID}/tasks/{taskID}` | Let the claiming worker inspect its task status while executing. |
+| `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/logs` | Append a log line to a claimed/running worker-owned task. |
+| `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/status` | Move a claimed task to `running`, `completed`, `failed`, or `cancelled`. |
 
 ## Team Inbox Model
 
 The team Inbox is event-based. `issue_events` stores the append-only review fact, `issue_event_receipts` stores each recipient user's unread/read/archive state, and `issue_watchers` stores the issue-level recipient set. Opening or polling an issue must not clear unread state; clients should call the read-through endpoint after the user intentionally reviews an Inbox row.
+
+## Workspace Invitations
+
+Workspace Settings exposes the first UI-testable collaboration loop. Owners and admins can create one-time `msi_...` invite links, copy the link, inspect pending/accepted/revoked invitations, and revoke unused invitations. A signed-in teammate opens the invite route, accepts it through the UI, and then sees the shared workspace in the workspace switcher. The accepted member can inspect shared members, Inbox receipts, workers, and runtime tasks according to their workspace role.
+
+## Runtime Worker Registry
+
+Runtime registration tokens use the `msw_` prefix and are returned only once. The server stores a hash and prefix, then workers use the token to register, heartbeat, claim eligible tasks, and report task status.
+
+The current queue is intentionally narrow: it records workspace task metadata, required capability JSON, payload/result JSON, claim ownership, timestamps, a compact audit event stream, and worker-appended task logs. Workers can stream Codex app-server status and output back through the log endpoint without the server needing direct network access to the worker environment. Workspace users can request task cancellation; workers poll their claimed task while executing and interrupt Codex app-server when cancellation is requested.
+
+The first worker-side implementation lives in `../worker`. It uses only the server HTTP contract: register with `Authorization: Bearer msw_...`, send heartbeat updates, claim matching tasks, inspect its claimed task for cancellation, append logs, and report status. It completes `protocol_smoke` and `noop` tasks, and it can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Issue Detail can now route an agent turn to Team worker through the local runner bridge and adopt returned worker source commit metadata, changed files, and diff preview; remaining hardening is stronger artifact transfer, remote credential policy, and Kubernetes-provider parity.

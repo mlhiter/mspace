@@ -9,10 +9,11 @@ The repository currently contains a runnable local-first desktop MVP:
 - Electron desktop shell built with electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
 - Public website in `apps/website`, built with Vite, React 19, Tailwind CSS 4, and lucide-react, deployed as a static Vercel site from the root `vercel.json`. It has a homepage plus a static `Changelog` navigation view backed by `apps/website/src/changelog.ts`.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
-- Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`. It owns users, workspaces, membership, GitHub identity, mspace auth sessions, and future GitHub App installation state.
+- Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`. It owns users, workspaces, membership, GitHub identity, mspace auth sessions, runtime worker registration, and future GitHub App installation state.
 - Desktop GitHub sign-in uses the server OAuth flow, stores an `msp_...` session token, and caches a lightweight display identity for local runner writes while collaboration data still lives in SQLite.
 - Issue creation, the Issue Detail reply composer, the Project runbook editor, and the Issue Detail runbook modal use a local TipTap-backed `IssueDocumentEditor` that emits or renders Markdown. This preserves document-like writing surfaces while keeping runner-side checklist extraction, runbook storage, and comment storage text-based. The Issue Detail runbook modal uses the read-only `runbook-viewer` variant rather than ReactMarkdown or the editable runbook shell. Images can be uploaded, pasted, or dropped into the editor; Markdown stores stable `/api/attachments/<id>` image URLs backed by runner attachment records rather than loose local files, and the renderer shows them as thumbnail node views.
 - Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless `/health` is healthy and advertises the expected runner protocol capabilities; in desktop development, stale local runners on `127.0.0.1:7788` are replaced before startup continues.
+- Go team runtime worker in `worker/`. It is a standalone daemon that registers with an `msw_...` token, sends heartbeat/load/capability updates, claims matching tasks, completes protocol smoke/noop tasks, and can execute `agent_session` tasks by starting `codex app-server --listen stdio://` in a payload-specified workdir.
 - SQLite state lives at `~/.mspace/mspace.db`, including local MVP issue image attachment blobs in `issue_attachments`.
 - Imported GitHub repositories are cached under `~/.mspace/repos/<owner>/<repo>`.
 - Session worktrees live under `~/.mspace/workdirs/<project-id>/<session-id>`.
@@ -86,6 +87,26 @@ Implemented server control-plane API:
 | `POST` | `/api/workspaces/{workspaceID}/issue-events` | Append a reviewable issue event and create per-user receipts. |
 | `POST` | `/api/workspaces/{workspaceID}/issue-events/{eventID}/read` | Mark one event receipt read for the authenticated user. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/read-through` | Mark unread receipts for one issue read through an optional event boundary. |
+| `GET` | `/api/workspaces/{workspaceID}/members` | List workspace members with role and display identity. |
+| `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time workspace invitation link. |
+| `GET` | `/api/workspaces/{workspaceID}/invitations` | List recent invitations without raw token values. |
+| `DELETE` | `/api/workspaces/{workspaceID}/invitations/{invitationID}` | Revoke a workspace invitation. |
+| `POST` | `/api/workspace-invitations/accept` | Accept a workspace invitation as the authenticated user. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived runtime worker registration token. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List runtime worker registration token metadata without exposing raw token values. |
+| `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a runtime worker registration token. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and their latest heartbeat state. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a workspace runtime task with kind, mode, capability requirements, and payload metadata. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-tasks` | List recent runtime tasks for the workspace. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List task audit events for create, claim, and status transitions. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/logs` | List worker-appended logs for one runtime task. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/cancel` | Request cancellation of a queued, claimed, or running runtime task. |
+| `POST` | `/api/runtime/workers/register` | Register or refresh a runtime worker with an `msw_...` registration token. |
+| `POST` | `/api/runtime/workers/{workerID}/heartbeat` | Update worker liveness, status, load, and optional capability metadata. |
+| `POST` | `/api/runtime/workers/{workerID}/tasks/claim` | Claim the next queued task that matches the worker mode and capability snapshot. |
+| `GET` | `/api/runtime/workers/{workerID}/tasks/{taskID}` | Let the claiming worker inspect its task status while executing so it can notice cancellation. |
+| `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/logs` | Append a log line to a claimed/running worker-owned runtime task. |
+| `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/status` | Advance a worker-owned task to `running`, `completed`, `failed`, or `cancelled`. |
 
 Implemented runner API:
 
@@ -144,7 +165,7 @@ Implemented runner API:
 
 mspace should separate the control plane, collaboration layer, runtime layer, and validation layer.
 
-The control plane is the durable multiplayer authority: users, workspaces, members, auth sessions, GitHub identity, and future GitHub App installations. The collaboration layer is the product entry point: Inbox, Issue, comments, subscribers, agent sessions, and evidence. The runtime layer is where the agent edits and runs code. The validation environment layer is where the changed project gets deployed and inspected. In the MVP, the runtime should be local-first and the validation environment should be namespace-scoped Kubernetes.
+The control plane is the durable multiplayer authority: users, workspaces, members, auth sessions, GitHub identity, future GitHub App installations, and runtime worker registration. The collaboration layer is the product entry point: Inbox, Issue, comments, subscribers, agent sessions, and evidence. The runtime layer is where the agent edits and runs code. The validation environment layer is where the changed project gets deployed and inspected. In the MVP, the runtime should be local-first and the validation environment should be namespace-scoped Kubernetes.
 
 The public website is not part of the runtime path. It is a static brand surface for the issue-to-evidence story and should not own product state, auth, runner calls, or Kubernetes actions. Its changelog is repository-authored static content, not a live audit log from the runner or control plane.
 
@@ -165,8 +186,8 @@ Desktop / Web UI
           -> Session Service
           -> Runtime Registry
               -> Local Runner Client
-              -> Remote Runtime Provider
-              -> Future Kubernetes Runtime Provider
+              -> Server Worker Runtime
+              -> Kubernetes Runtime Provider
           -> Validation Environment Manager
               -> Kubernetes Cluster
                   -> Namespace
@@ -252,7 +273,7 @@ Current implemented fields:
 
 ### Workspace Settings
 
-A Workspace Settings record stores local automation policy for the current workspace.
+A Workspace Settings record stores local automation policy for the current workspace. The Workspace Settings page also exposes the Team access and Team Runtime control-plane surfaces: members, invitations, registration tokens, worker liveness/capability snapshots, and recent runtime task records. This keeps collaboration and execution policy at the workspace boundary instead of mixing it into the Agents prompt/profile route.
 
 Current implemented fields:
 
@@ -346,14 +367,20 @@ A Runtime Provider starts the actual agent environment.
 Provider options in the product model:
 
 - local runtime for development and bring-your-own CLI operation;
-- remote runtime for hosted or cluster-adjacent execution only when it preserves the same operational contract;
+- server worker runtime for teams that do not use Kubernetes or want a fixed shared execution server;
+- Kubernetes runtime provider for teams that want stronger per-session isolation inside a cluster;
 - DevBox-like runtime if available internally;
-- future Kubernetes-hosted runtime when the product grows into that model;
 - local daemon bridge only as an adapter, not as the primary product model.
 
 The first production-grade MVP path should be local runtime because it keeps iteration simple and matches the current intended workflow.
 
 The implemented MVP uses a desktop-managed local runner process, not a long-running daemon. The runner owns SQLite, HTTP APIs, session process execution, log capture, git worktree preparation, and issue test-environment bookkeeping.
+
+Team mode deliberately supports two deployment forms behind the same control-plane protocol. A Server Worker is a long-lived worker daemon on a fixed server, VM, DevBox, or shared development machine; it is the right fit for teams that do not use Kubernetes or want the shortest managed execution path. A Kubernetes Runtime Provider is the advanced form for cluster-native teams; it should create an isolated per-session Pod or Job, collect logs/artifacts/status, and report through the same `runtime_tasks`, `runtime_task_events`, and `runtime_task_logs` objects. The desktop UI, issue/session model, cancellation flow, evidence capture, and PR handoff should not fork by runtime backend.
+
+The first team-mode runtime slice is the server runtime registry plus queue. Workspace owners/admins create short-lived `msw_...` runtime registration tokens, a worker daemon registers itself with a name/mode/version/capability snapshot, and the worker keeps itself live through heartbeat updates. Authenticated workspace users can queue `runtime_tasks`; online providers can claim the next queued task only when mode, provider kind, labels, and required capabilities match. The current worker completes `protocol_smoke` / `noop` tasks and can execute `agent_session` payloads with `workdir` and `prompt` by starting Codex app-server over stdio, forwarding agent/status/tool/command logs to `runtime_task_logs`, polling the server for cancellation, interrupting Codex when cancellation is requested, and completing/failing/cancelling the claimed task honestly.
+
+Issue Detail now has an explicit Local runner / Team worker selector for agent mentions. The runner prepares the same local worktree/context/artifact directory, queues an `agent_session` runtime task, imports worker logs into local session logs, records returned Codex thread/turn ids, and then runs the existing source-change and review-evidence capture path. This closes the MVP control-plane loop for a server worker that can see the prepared workdir. The remaining product gaps are worker-side repo/workspace provisioning, hardening remote cancellation latency, moving durable artifact adoption out of the local bridge, and adding the Kubernetes provider as a second backend without changing the issue/session protocol.
 
 ### Validation Environment
 
@@ -822,6 +849,75 @@ issue_watchers
   muted
   created_at
   updated_at
+
+runtime_registration_tokens
+  id
+  workspace_id
+  name
+  token_hash
+  token_prefix
+  created_by_user_id
+  expires_at
+  last_used_at
+  revoked
+  created_at
+  updated_at
+
+runtime_workers
+  id
+  workspace_id
+  registration_token_id
+  name
+  mode
+  status
+  version
+  current_load
+  capabilities
+  labels
+  last_seen_at
+  created_at
+  updated_at
+
+runtime_tasks
+  id
+  workspace_id
+  issue_id
+  session_id
+  project_id
+  kind
+  status
+  priority
+  runtime_mode
+  required_capabilities
+  payload
+  result
+  claimed_by_worker_id
+  claimed_at
+  started_at
+  finished_at
+  error
+  created_by_user_id
+  created_at
+  updated_at
+
+runtime_task_events
+  id
+  workspace_id
+  task_id
+  worker_id
+  actor_user_id
+  kind
+  payload
+  created_at
+
+runtime_task_logs
+  id
+  workspace_id
+  task_id
+  worker_id
+  stream
+  message
+  created_at
 
 projects
   id

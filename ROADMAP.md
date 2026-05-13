@@ -56,26 +56,28 @@ Build in order:
 - Branch and PR output: expose PR generation as a manual action by default, with a workspace setting for automatic draft PR creation after source commit capture.
 - Cleanup controls: let the user retain or clean session worktrees now, and record retain/cleanup decisions for issue test namespaces.
 
-### Stage 2: Kubernetes-Hosted Agent Runtime
+### Stage 2: Team Runtime Providers
 
 Target: 1-2 additional weeks after Stage 1 is usable.
 
 Goal:
 
-- Allocate cluster resources for hosted agent runtime later, after issue-scoped local-to-Kubernetes deployment is usable.
+- Make Team Runtime production-usable first as a fixed Server Worker, then add Kubernetes-hosted execution as a second backend behind the same runtime task protocol.
 
 Build in order:
 
-- Namespace allocator with labels, TTL, ResourceQuota, LimitRange, and project/session ownership metadata.
-- Scoped ServiceAccount, Role, RoleBinding, and kubeconfig generation for each session.
-- Kubernetes Job runtime for one-shot agent sessions.
+- Server Worker repo/workspace provisioning so the worker can clone or reuse a repository, prepare its own workdir, run Codex, and return artifacts without relying on the desktop runner's filesystem.
+- Durable source-change and artifact adoption from remote workers back into the issue/session model.
+- Runtime provider labels and capabilities for routing tasks to fixed Server Workers or future Kubernetes providers.
+- Kubernetes namespace allocator with labels, TTL, ResourceQuota, LimitRange, and project/session ownership metadata.
+- Scoped ServiceAccount, Role, RoleBinding, and kubeconfig generation for each Kubernetes runtime session.
+- Kubernetes Pod/Job runtime for isolated one-shot agent sessions, using the same `runtime_tasks`, log, cancellation, session/evidence, and PR handoff protocol as Server Worker.
 - Optional Deployment, Service, and Ingress runtime mode when an interactive runtime URL is required.
-- Runtime URL and project environment URL extraction back into Issue Detail.
 - Namespace and runtime cleanup lifecycle.
 
 Decision:
 
-- Stage 1 remains first. Kubernetes-hosted agent runtime starts only after the local issue-to-test-namespace loop can complete one real internal project without manual reconstruction.
+- Stage 1 remains first. Kubernetes-hosted agent runtime starts only after Server Worker can complete the team execution loop without desktop filesystem coupling. Kubernetes is a backend upgrade, not a separate issue/session product.
 
 ## Milestone 0: Product Surface Baseline
 

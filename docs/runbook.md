@@ -50,6 +50,35 @@ cp .env.example .env.local
 pnpm run server
 ```
 
+Run a Server Worker separately after creating a worker token from Workspace Settings:
+
+```bash
+export MSPACE_RUNTIME_TOKEN="msw_..."
+pnpm worker
+```
+
+The worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, and can execute `agent_session` tasks by preparing its own repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, then starting `codex app-server --listen stdio://` there. Worker logs are appended to the server task log stream. Issue Detail team sessions queue an `agent_session` task with repository and session metadata, import worker logs back into the local session timeline, record returned Codex thread/turn ids, and adopt returned source commit metadata, changed files, and diff preview into the issue's Commits view.
+
+To simulate a fixed development server without using the local machine environment, run the worker in Docker:
+
+```bash
+export MSPACE_RUNTIME_TOKEN="msw_..."
+scripts/run-server-worker-dev.sh
+```
+
+The script builds `worker/Dockerfile.dev`, runs `mspace-worker` inside a container, and stores worker-managed repos/workdirs/artifacts in the `mspace-worker-dev-root` Docker volume. The container connects to the host control plane through `http://host.docker.internal:8787` by default. It advertises `codex:true,dryRun:true` so UI-triggered Team sessions can complete a full control-plane loop without local Codex credentials: the worker clones the repository, creates an isolated worktree, writes `TEAM_RUNTIME_DRY_RUN.md`, commits it, and returns commit/diff metadata to the issue. Real Codex execution still requires Codex CLI/auth to be available inside the worker image or a mounted worker environment; set `MSPACE_WORKER_CAPABILITIES='{"protocolSmoke":true,"codex":true,"dryRun":false}'` only after that worker image is actually able to run `codex app-server`.
+
+Cancellation is cooperative. Stopping a Team worker session requests cancellation on the server task; the worker polls its claimed task and interrupts Codex app-server when it sees `cancelled`.
+
+To test team collaboration through the UI only:
+
+1. Sign in with GitHub from the workspace menu.
+2. Open Workspace Settings and use Team access to create an invite link.
+3. Copy the invite link and open it as another signed-in GitHub identity.
+4. Accept the invite from the Join workspace page.
+5. Use the workspace menu to switch into the shared workspace.
+6. Confirm Workspace Settings shows both members, then continue with Team Runtime token, worker, task, and Issue Detail team-session testing.
+
 ## Website
 
 Production site:
@@ -87,6 +116,13 @@ The root `vercel.json` uses `pnpm install --frozen-lockfile`, builds with `pnpm 
 | `MSPACE_SERVER_ADDR` | Server and Electron main process | `127.0.0.1:8787` | Address used when the server control plane listens or is started by desktop. |
 | `MSPACE_SERVER_URL` | Electron preload/renderer | `http://127.0.0.1:8787` | Server control-plane base URL exposed to the renderer. |
 | `MSPACE_SERVER_START_TIMEOUT_MS` | Electron main process | `30000` | How long the desktop waits for the server health check before startup fails. |
+| `MSPACE_RUNTIME_TOKEN` | Worker | none | Runtime registration token with `msw_` prefix. Required by `pnpm worker`. |
+| `MSPACE_WORKER_NAME` | Worker | host-derived | Stable worker name shown in Workspace Settings. |
+| `MSPACE_WORKER_MODE` | Worker | `team` | Runtime mode reported to the server; `team` or `personal`. |
+| `MSPACE_WORKER_CAPABILITIES` | Worker | `{"protocolSmoke":true,"codex":false,"dryRun":true}` | JSON object used by server-side capability matching. The Docker dev script overrides this to `{"protocolSmoke":true,"codex":true,"dryRun":true}` so UI-triggered Team sessions can be tested without Codex auth. Set `codex:true` and `dryRun:false` for workers intended to run real Codex `agent_session` tasks. |
+| `MSPACE_WORKER_LABELS` | Worker | `{}` | JSON object for placement or inventory labels. |
+| `MSPACE_WORKER_POLL_INTERVAL` | Worker | `5s` | How often the worker polls the runtime task queue. |
+| `MSPACE_WORKER_HEARTBEAT_INTERVAL` | Worker | `10s` | How often the worker reports liveness and load. |
 | `DATABASE_URL` | Server | none | Postgres connection string for control-plane storage. |
 | `MSPACE_GITHUB_CLIENT_ID` | Server | none | GitHub OAuth App client id. |
 | `MSPACE_GITHUB_CLIENT_SECRET` | Server | none | GitHub OAuth App client secret; keep it server-side only. |
@@ -168,6 +204,71 @@ Team Inbox receipt checks:
 ```bash
 curl -H "Authorization: Bearer <msp-token>" \
   http://127.0.0.1:8787/api/workspaces/<workspace-id>/inbox
+```
+
+Runtime worker smoke:
+
+```bash
+curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-registration-tokens" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"local worker","expiresInHours":12}'
+
+export MSPACE_RUNTIME_TOKEN="msw_..."
+pnpm worker -- -once
+```
+
+Queue a protocol task for that worker:
+
+```bash
+curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"kind":"protocol_smoke","runtimeMode":"team","requiredCapabilities":{"protocolSmoke":true},"payload":{"source":"curl"}}'
+```
+
+Inspect the task audit trail:
+
+```bash
+curl -H "Authorization: Bearer <msp-token>" \
+  "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks/<task-id>/events"
+```
+
+Inspect worker logs for a claimed or completed task:
+
+```bash
+curl -H "Authorization: Bearer <msp-token>" \
+  "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks/<task-id>/logs"
+```
+
+Cancel a queued, claimed, or running task:
+
+```bash
+curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks/<task-id>/cancel" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"manual stop"}'
+```
+
+Queue an agent-session task for a Codex-capable worker:
+
+```bash
+export MSPACE_WORKER_CAPABILITIES='{"protocolSmoke":true,"codex":true,"dryRun":false}'
+export MSPACE_RUNTIME_TOKEN="msw_..."
+pnpm worker
+
+curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "kind":"agent_session",
+    "runtimeMode":"team",
+    "requiredCapabilities":{"codex":true},
+    "payload":{
+      "workdir":"/absolute/path/to/repo",
+      "prompt":"Inspect the repository and report the current test command without changing files."
+    }
+  }'
 ```
 
 Runner health:
