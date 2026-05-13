@@ -169,6 +169,7 @@ func (s *MemoryStore) UpsertIdentity(_ Context, profile IdentityProfile) (User, 
 		ID:        "workspace-" + userID,
 		Name:      name + "'s workspace",
 		Slug:      defaultWorkspaceSlug(profile.Login, userID),
+		Kind:      "personal",
 		Role:      "owner",
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -209,6 +210,41 @@ func (s *MemoryStore) GetUserBySessionToken(_ Context, token string) (User, []Wo
 		return User{}, nil, ErrNotFound
 	}
 	return user, s.workspaces[session.UserID], nil
+}
+
+func (s *MemoryStore) CreateWorkspace(_ Context, userID string, input CreateWorkspaceInput) (Workspace, []Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return Workspace{}, nil, ErrNotFound
+	}
+	if _, ok := s.users[userID]; !ok {
+		return Workspace{}, nil, ErrNotFound
+	}
+	normalized, err := normalizeCreateWorkspaceInput(input)
+	if err != nil {
+		return Workspace{}, nil, err
+	}
+	s.nextID++
+	now := time.Now().UTC().Format(time.RFC3339)
+	workspaceID := fmt.Sprintf("workspace-%04d", s.nextID)
+	workspace := Workspace{
+		ID:        workspaceID,
+		Name:      normalized.Name,
+		Slug:      workspaceSlug(normalized.Name, strings.TrimPrefix(workspaceID, "workspace-")),
+		Kind:      normalized.Kind,
+		Role:      "owner",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	s.workspaces[userID] = append(s.workspaces[userID], workspace)
+	if s.workspaceMembers[workspace.ID] == nil {
+		s.workspaceMembers[workspace.ID] = map[string]string{}
+	}
+	s.workspaceMembers[workspace.ID][userID] = "owner"
+	return workspace, append([]Workspace(nil), s.workspaces[userID]...), nil
 }
 
 func (s *MemoryStore) ListWorkspaceMembers(_ Context, userID, workspaceID string) ([]WorkspaceMember, error) {
@@ -255,6 +291,12 @@ func (s *MemoryStore) CreateWorkspaceInvitation(_ Context, userID, workspaceID s
 	defer s.mu.Unlock()
 
 	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isTeamWorkspace(workspaceID) {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return WorkspaceInvitationResult{}, ErrNotFound
+		}
+		return WorkspaceInvitationResult{}, ErrForbidden
+	}
 	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
 		if !s.isWorkspaceMember(workspaceID, userID) {
 			return WorkspaceInvitationResult{}, ErrNotFound
@@ -293,6 +335,12 @@ func (s *MemoryStore) ListWorkspaceInvitations(_ Context, userID, workspaceID st
 	defer s.mu.Unlock()
 
 	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isTeamWorkspace(workspaceID) {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return nil, ErrNotFound
+		}
+		return nil, ErrForbidden
+	}
 	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
 		if !s.isWorkspaceMember(workspaceID, userID) {
 			return nil, ErrNotFound
@@ -317,6 +365,12 @@ func (s *MemoryStore) RevokeWorkspaceInvitation(_ Context, userID, workspaceID, 
 
 	workspaceID = strings.TrimSpace(workspaceID)
 	invitationID = strings.TrimSpace(invitationID)
+	if !s.isTeamWorkspace(workspaceID) {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return WorkspaceInvitation{}, ErrNotFound
+		}
+		return WorkspaceInvitation{}, ErrForbidden
+	}
 	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
 		if !s.isWorkspaceMember(workspaceID, userID) {
 			return WorkspaceInvitation{}, ErrNotFound
@@ -393,6 +447,9 @@ func (s *MemoryStore) ListInbox(_ Context, userID, workspaceID string) ([]InboxE
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return nil, ErrNotFound
 	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return nil, ErrForbidden
+	}
 	unreadByIssue := map[string]int{}
 	for _, receipt := range s.receipts {
 		if receipt.WorkspaceID == workspaceID && receipt.UserID == userID && receipt.State == "unread" {
@@ -456,6 +513,9 @@ func (s *MemoryStore) CreateIssueEvent(_ Context, requesterUserID string, input 
 	if !s.isWorkspaceMember(input.WorkspaceID, requesterUserID) {
 		return IssueEvent{}, ErrNotFound
 	}
+	if !s.isTeamWorkspace(input.WorkspaceID) {
+		return IssueEvent{}, ErrForbidden
+	}
 	if input.ActorUserID != "" && !s.isWorkspaceMember(input.WorkspaceID, input.ActorUserID) {
 		return IssueEvent{}, ErrNotFound
 	}
@@ -510,6 +570,9 @@ func (s *MemoryStore) MarkIssueEventRead(_ Context, userID, workspaceID, eventID
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return ErrNotFound
 	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return ErrForbidden
+	}
 	key := receiptKey(eventID, userID)
 	receipt, ok := s.receipts[key]
 	if !ok || receipt.WorkspaceID != workspaceID {
@@ -531,6 +594,9 @@ func (s *MemoryStore) MarkIssueReadThrough(_ Context, userID, workspaceID, issue
 
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return 0, ErrNotFound
+	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return 0, ErrForbidden
 	}
 	issueID = strings.TrimSpace(issueID)
 	if issueID == "" {
@@ -578,6 +644,9 @@ func (s *MemoryStore) CreateRuntimeRegistrationToken(_ Context, userID, workspac
 		}
 		return RuntimeRegistrationTokenResult{}, ErrForbidden
 	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return RuntimeRegistrationTokenResult{}, ErrForbidden
+	}
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
 		name = "Runtime worker token"
@@ -619,6 +688,9 @@ func (s *MemoryStore) ListRuntimeRegistrationTokens(_ Context, userID, workspace
 		}
 		return nil, ErrForbidden
 	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return nil, ErrForbidden
+	}
 	tokens := []RuntimeRegistrationToken{}
 	for _, token := range s.runtimeTokens {
 		if token.Record.WorkspaceID == strings.TrimSpace(workspaceID) {
@@ -639,6 +711,9 @@ func (s *MemoryStore) RevokeRuntimeRegistrationToken(_ Context, userID, workspac
 		if !s.isWorkspaceMember(workspaceID, userID) {
 			return RuntimeRegistrationToken{}, ErrNotFound
 		}
+		return RuntimeRegistrationToken{}, ErrForbidden
+	}
+	if !s.isTeamWorkspace(workspaceID) {
 		return RuntimeRegistrationToken{}, ErrForbidden
 	}
 	workspaceID = strings.TrimSpace(workspaceID)
@@ -665,6 +740,9 @@ func (s *MemoryStore) AuthenticateRuntimeRegistrationToken(_ Context, token stri
 	}
 	record, ok := s.runtimeTokens[tokenHash(token)]
 	if !ok || record.Record.Revoked {
+		return RuntimeRegistration{}, ErrNotFound
+	}
+	if !s.isTeamWorkspace(record.Record.WorkspaceID) {
 		return RuntimeRegistration{}, ErrNotFound
 	}
 	expiresAt, err := time.Parse(time.RFC3339, record.Record.ExpiresAt)
@@ -766,6 +844,9 @@ func (s *MemoryStore) ListRuntimeWorkers(_ Context, userID, workspaceID string) 
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return nil, ErrNotFound
 	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return nil, ErrForbidden
+	}
 	workers := []RuntimeWorker{}
 	for _, worker := range s.runtimeWorkers {
 		if worker.WorkspaceID == strings.TrimSpace(workspaceID) {
@@ -788,6 +869,9 @@ func (s *MemoryStore) CreateRuntimeTask(_ Context, userID, workspaceID string, i
 	workspaceID = strings.TrimSpace(workspaceID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return RuntimeTask{}, ErrNotFound
+	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return RuntimeTask{}, ErrForbidden
 	}
 	normalized, err := normalizeCreateRuntimeTaskInput(input)
 	if err != nil {
@@ -824,6 +908,9 @@ func (s *MemoryStore) ListRuntimeTasks(_ Context, userID, workspaceID string) ([
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return nil, ErrNotFound
 	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return nil, ErrForbidden
+	}
 	tasks := []RuntimeTask{}
 	for _, task := range s.runtimeTasks {
 		if task.WorkspaceID == workspaceID {
@@ -850,6 +937,9 @@ func (s *MemoryStore) ListRuntimeTaskEvents(_ Context, userID, workspaceID, task
 	taskID = strings.TrimSpace(taskID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return nil, ErrNotFound
+	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return nil, ErrForbidden
 	}
 	task, ok := s.runtimeTasks[taskID]
 	if !ok || task.WorkspaceID != workspaceID {
@@ -879,6 +969,9 @@ func (s *MemoryStore) ListRuntimeTaskLogs(_ Context, userID, workspaceID, taskID
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return nil, ErrNotFound
 	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return nil, ErrForbidden
+	}
 	task, ok := s.runtimeTasks[taskID]
 	if !ok || task.WorkspaceID != workspaceID {
 		return nil, ErrNotFound
@@ -906,6 +999,9 @@ func (s *MemoryStore) CancelRuntimeTask(_ Context, userID, workspaceID, taskID s
 	taskID = strings.TrimSpace(taskID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return RuntimeTask{}, ErrNotFound
+	}
+	if !s.isTeamWorkspace(workspaceID) {
+		return RuntimeTask{}, ErrForbidden
 	}
 	task, ok := s.runtimeTasks[taskID]
 	if !ok || task.WorkspaceID != workspaceID {
@@ -1138,6 +1234,18 @@ func (s *MemoryStore) workspaceName(workspaceID string) string {
 		}
 	}
 	return "Workspace"
+}
+
+func (s *MemoryStore) isTeamWorkspace(workspaceID string) bool {
+	workspaceID = strings.TrimSpace(workspaceID)
+	for _, workspaces := range s.workspaces {
+		for _, workspace := range workspaces {
+			if workspace.ID == workspaceID {
+				return workspace.Kind == "team"
+			}
+		}
+	}
+	return false
 }
 
 func (s *MemoryStore) addWorkspaceForUser(userID, workspaceID, role string) {

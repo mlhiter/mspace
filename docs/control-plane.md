@@ -1,6 +1,6 @@
 # mspace Control Plane
 
-> Status: architecture direction, runtime registry, and first task-queue skeleton, updated 2026-05-12
+> Status: architecture direction, runtime registry, and first task-queue skeleton, updated 2026-05-13
 
 ## Decision
 
@@ -76,6 +76,7 @@ The initial `server/` module provides:
 - `GET /api/auth/github/result`;
 - `GET /api/auth/me`;
 - `GET /api/workspaces`;
+- `POST /api/workspaces`;
 - `GET /api/workspaces/{workspaceID}/inbox`;
 - `POST /api/workspaces/{workspaceID}/issue-events`;
 - `POST /api/workspaces/{workspaceID}/issue-events/{eventID}/read`;
@@ -106,11 +107,13 @@ The initial `server/` module provides:
 - runtime registration tokens with `msw_` prefix, returned only at creation time;
 - a memory-backed store used only by tests.
 
-The desktop now has a lightweight GitHub sign-in entrypoint in the sidebar. Product issue/session data still talks to the local runner for the local MVP, but Inbox read state now has a server-backed team model. After sign-in, the renderer sends the current token and workspace id to the local runner so reviewable issue events can be reported to the control plane.
+Workspaces have an explicit `kind`: `personal` or `team`. The first GitHub sign-in creates a default personal workspace for local-first use. Team collaboration is opt-in: `POST /api/workspaces` currently creates team workspaces, and team-only collaboration/runtime APIs reject personal workspaces. This keeps the default single-user path from accidentally exposing invite, team Inbox receipt, worker registration, or runtime task behavior.
 
-The Workspace Settings page is the first UI surface for this server-side team state. It lets an owner/admin invite teammates, inspect workspace members, create and revoke worker registration tokens, inspect registered worker heartbeat/capability state, and inspect or queue protocol-level runtime tasks. The Agents route remains focused on Codex-backed profile behavior, not worker infrastructure.
+The desktop now has a lightweight GitHub sign-in entrypoint in the sidebar. Product issue/session data still talks to the local runner for the local MVP, but Inbox read state now has a server-backed team model for team workspaces. After sign-in, the renderer sends the current token and workspace id to the local runner so reviewable issue events can be reported to the control plane when the selected workspace supports team collaboration.
 
-Workspace invitations are deliberately narrow. They are one-time `msi_...` links scoped to one workspace and one role (`member` or `admin`). The raw token is shown once; the server stores a hash and prefix. Accepting an invite requires an authenticated mspace user and adds that user to `workspace_members`, then the desktop workspace switcher can select the shared workspace for UI-only testing.
+The Workspace Settings page is the first UI surface for this server-side team state. In a personal workspace it shows a create-team-workspace entry and hides team access/runtime panels. In a team workspace it lets an owner/admin invite teammates, inspect workspace members, create and revoke worker registration tokens, inspect registered worker heartbeat/capability state, and inspect or queue protocol-level runtime tasks. The Agents route remains focused on Codex-backed profile behavior, not worker infrastructure.
+
+Workspace invitations are deliberately narrow. They are one-time `msi_...` links scoped to one team workspace and one role (`member` or `admin`). The raw token is shown once; the server stores a hash and prefix. Accepting an invite requires an authenticated mspace user and adds that user to `workspace_members`, then the desktop workspace switcher can select the shared workspace for UI-only testing.
 
 ## Runtime Registry
 
@@ -130,7 +133,7 @@ Server
   -> lets online workers claim queued tasks that match mode and capabilities
 ```
 
-Registration tokens are not user sessions. They are workspace-scoped bootstrap secrets for worker daemons and should be short-lived. The token is returned only once when created; the server stores only its hash and prefix.
+Registration tokens are not user sessions. They are team-workspace-scoped bootstrap secrets for worker daemons and should be short-lived. The token is returned only once when created; the server stores only its hash and prefix.
 
 The registry and queue slice establishes the control-plane boundary needed for personal and team runtime modes:
 

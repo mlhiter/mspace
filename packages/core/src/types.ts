@@ -822,9 +822,20 @@ export interface MspaceWorkspace {
   id: string;
   name: string;
   slug: string;
+  kind: "personal" | "team" | string;
   role: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CreateWorkspaceInput {
+  name: string;
+  kind?: "team" | string;
+}
+
+export interface CreateWorkspaceResult {
+  workspace: MspaceWorkspace;
+  workspaces: MspaceWorkspace[];
 }
 
 export interface WorkspaceMember {

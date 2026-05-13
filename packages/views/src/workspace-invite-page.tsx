@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { CheckCircle2, MailPlus, ShieldCheck } from "lucide-react";
-import { controlPlaneApi, queryKeys, SELECTED_WORKSPACE_STORAGE_KEY } from "@mspace/core";
+import { controlPlaneApi, queryKeys, SELECTED_WORKSPACE_STORAGE_KEY, type AuthMeResult } from "@mspace/core";
 import { Button, Notice, PageFrame } from "@mspace/ui";
 import { useMspaceAuth } from "./auth-context";
 import { RelativeTime } from "./time";
@@ -16,6 +16,9 @@ export function WorkspaceInvitePage() {
 	const acceptInvite = useMutation({
 		mutationFn: () => controlPlaneApi.acceptWorkspaceInvitation(auth.token, token),
 		onSuccess: async (result) => {
+			queryClient.setQueryData<AuthMeResult | undefined>(queryKeys.authMe(auth.token), (current) =>
+				current ? { ...current, workspaces: result.workspaces } : current,
+			);
 			window.localStorage.setItem(SELECTED_WORKSPACE_STORAGE_KEY, result.workspace.id);
 			auth.selectWorkspace?.(result.workspace.id);
 			await queryClient.invalidateQueries({ queryKey: queryKeys.authMe(auth.token) });

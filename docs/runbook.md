@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-12
+> Status: local MVP operations guide, updated 2026-05-13
 
 ## Local Data
 
@@ -17,7 +17,7 @@
 
 Reusable cluster configs are stored in `clusters`. Workspace automation policy is stored in `workspace_settings`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Review snapshots are stored in `session_review_evidence`; continueable failed-session and failed-environment records are stored in `session_failures`; branch and PR delivery records are stored in `issue_handoffs`; raw execution trails stay in `session_logs`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Comment reactions are stored in `comment_reactions` so reaction counts do not mutate comment Markdown. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `trigger_comment_id`, `agent_token`, `cleanup_status`, and `cleaned_at`.
 
-The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
+The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. GitHub sign-in creates a personal workspace by default; team Inbox receipts, invitations, worker tokens, registered workers, and runtime tasks require an explicit team workspace. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
 
 ## Start The App
 
@@ -73,11 +73,13 @@ Cancellation is cooperative. Stopping a Team worker session requests cancellatio
 To test team collaboration through the UI only:
 
 1. Sign in with GitHub from the workspace menu.
-2. Open Workspace Settings and use Team access to create an invite link.
-3. Copy the invite link and open it as another signed-in GitHub identity.
-4. Accept the invite from the Join workspace page.
-5. Use the workspace menu to switch into the shared workspace.
-6. Confirm Workspace Settings shows both members, then continue with Team Runtime token, worker, task, and Issue Detail team-session testing.
+2. Confirm the workspace menu labels the current workspace as Personal.
+3. Open Workspace Settings and create a team workspace from the Team workspace section.
+4. Use the workspace menu to switch into the team workspace if it is not selected automatically.
+5. Use Team access to create an invite link.
+6. Copy the invite link and open it as another signed-in GitHub identity.
+7. Accept the invite from the Join workspace page.
+8. Confirm Workspace Settings shows both members, then continue with Team Runtime token, worker, task, and Issue Detail team-session testing.
 
 ## Website
 
@@ -191,6 +193,8 @@ Server health:
 curl http://127.0.0.1:8787/health
 ```
 
+The health response should include `serverProtocol: 1` and these capabilities: `teamInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceKinds`, `runtimeWorkerRegistration`, and `runtimeTaskQueue`. Electron treats a local server that lacks those capabilities as stale and replaces it during desktop development.
+
 GitHub auth start endpoint:
 
 ```bash
@@ -217,6 +221,8 @@ curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-regist
 export MSPACE_RUNTIME_TOKEN="msw_..."
 pnpm worker -- -once
 ```
+
+Use a team workspace id for the smoke checks above. Personal workspaces intentionally reject team Inbox, invitations, worker tokens, worker lists, and runtime task APIs with `403 Forbidden`.
 
 Queue a protocol task for that worker:
 
@@ -516,6 +522,8 @@ pnpm run server
 ```
 
 If the server is healthy but the renderer still fails, check that `MSPACE_SERVER_URL` points at the same origin exposed by Electron preload. For local desktop development the default is `http://127.0.0.1:8787`.
+
+If a newly added control-plane route returns `404` or `405`, inspect `curl http://127.0.0.1:8787/health`. A current server must advertise `capabilities.teamWorkspaceCreation=true` and `capabilities.workspaceKinds=true`; otherwise restart `pnpm run server` or relaunch the desktop so Electron can replace the stale server.
 
 ### User Or Agent Avatars Do Not Load
 

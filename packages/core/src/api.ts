@@ -16,7 +16,9 @@ import type {
 	CreatePullRequestInput,
 	CreateRuntimeRegistrationTokenInput,
 	CreateRuntimeTaskInput,
+	CreateWorkspaceInput,
 	CreateWorkspaceInvitationInput,
+	CreateWorkspaceResult,
 	CreateSessionInput,
 	CreateTeamIssueEventInput,
   InboxItem,
@@ -443,6 +445,12 @@ export const controlPlaneApi = {
   listWorkspaces: (token: string) =>
     requestControlPlane<AuthMeResult["workspaces"]>("/api/workspaces", {
       headers: authHeaders(token),
+    }),
+  createWorkspace: (token: string, input: CreateWorkspaceInput) =>
+    requestControlPlane<CreateWorkspaceResult>("/api/workspaces", {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
     }),
   listWorkspaceMembers: (token: string, workspaceId: string) =>
     requestControlPlane<WorkspaceMember[]>(`/api/workspaces/${workspaceId}/members`, {

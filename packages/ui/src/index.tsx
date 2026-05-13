@@ -165,8 +165,9 @@ export type ShellAccount = {
   avatarUrl?: string;
   workspaceName?: string;
   workspaceId?: string;
+  workspaceKind?: string;
   workspaceRole?: string;
-  workspaces?: Array<{ id: string; name: string; role?: string }>;
+  workspaces?: Array<{ id: string; name: string; role?: string; kind?: string }>;
   error?: string;
   actionLabel?: string;
 };
@@ -481,6 +482,7 @@ function WorkspaceMenu(props: {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const workspaceLabel = account.workspaceName || (isSignedIn ? "Personal workspace" : "Local workspace");
+  const workspaceKindLabel = workspaceKindLabelFor(account.workspaceKind);
   const statusLabel = isSignedIn ? account.name || account.email || "Signed in" : isBusy ? "GitHub login pending" : "Not signed in";
   const workspaces = account.workspaces || [];
 
@@ -518,7 +520,9 @@ function WorkspaceMenu(props: {
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-semibold leading-5">{workspaceLabel}</div>
-          <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{statusLabel}</div>
+          <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
+            {workspaceKindLabel ? `${workspaceKindLabel} · ${statusLabel}` : statusLabel}
+          </div>
         </div>
         <ChevronDown
           data-icon
@@ -542,7 +546,7 @@ function WorkspaceMenu(props: {
             <div className="min-w-0 flex-1">
               <div className="truncate text-[13px] font-semibold leading-5 text-[color:var(--text)]">{workspaceLabel}</div>
               <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
-                {isSignedIn ? "Signed in workspace" : "Local workspace"}
+                {isSignedIn ? `${workspaceKindLabel || "Workspace"} · ${account.workspaceRole || "member"}` : "Local workspace"}
               </div>
             </div>
           </div>
@@ -569,8 +573,12 @@ function WorkspaceMenu(props: {
                       }}
                     >
                       {selected ? <CheckCircle2 data-icon className="text-[color:var(--success)]" /> : <Circle data-icon className="text-[color:var(--faint)]" />}
-                      <span className="min-w-0 flex-1 truncate">{workspace.name}</span>
-                      <span className="shrink-0 text-[11px] font-normal text-[color:var(--muted)]">{workspace.role || "member"}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">{workspace.name}</span>
+                        <span className="block truncate text-[11px] font-normal leading-4 text-[color:var(--muted)]">
+                          {workspaceKindLabelFor(workspace.kind)} · {workspace.role || "member"}
+                        </span>
+                      </span>
                     </button>
                   );
                 })}
@@ -640,6 +648,14 @@ function WorkspaceMenu(props: {
       ) : null}
     </div>
   );
+}
+
+function workspaceKindLabelFor(kind: string | undefined) {
+  const normalized = kind?.trim().toLowerCase();
+  if (normalized === "team") return "Team";
+  if (normalized === "personal") return "Personal";
+  if (normalized) return statusLabel(normalized);
+  return "";
 }
 
 function UserAvatar(props: { name?: string; avatarUrl?: string; size?: "sm" | "md" }) {

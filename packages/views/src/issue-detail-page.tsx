@@ -4772,7 +4772,7 @@ export function IssueDetailPage() {
       ? "Agent is working"
       : `Save & send to ${editingMentionedAgentConfig?.name}`
     : "Save edit";
-  const canUseTeamRuntime = auth.status === "signed-in" && Boolean(auth.token && auth.workspace?.id);
+  const canUseTeamRuntime = auth.status === "signed-in" && Boolean(auth.token && auth.workspace?.id) && auth.workspace?.kind === "team";
   const composerRuntimeModeEffective = canUseTeamRuntime ? composerRuntimeMode : "local";
   const composerAgentTargetLabel = composerRuntimeModeEffective === "team" ? "team worker" : "local runner";
   const composerHelperText = isSupportedAgentMention

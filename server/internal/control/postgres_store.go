@@ -211,6 +211,56 @@ func (s *PostgresStore) GetUserBySessionToken(ctx Context, token string) (User, 
 	return user, workspaces, nil
 }
 
+func (s *PostgresStore) CreateWorkspace(ctx Context, userID string, input CreateWorkspaceInput) (Workspace, []Workspace, error) {
+	dbctx := asContext(ctx)
+	userID = strings.TrimSpace(userID)
+	normalized, err := normalizeCreateWorkspaceInput(input)
+	if err != nil {
+		return Workspace{}, nil, err
+	}
+	if userID == "" {
+		return Workspace{}, nil, ErrNotFound
+	}
+	slugSuffix, err := randomHex(4)
+	if err != nil {
+		return Workspace{}, nil, err
+	}
+	slug := workspaceSlug(normalized.Name, slugSuffix)
+
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return Workspace{}, nil, err
+	}
+	defer tx.Rollback(dbctx)
+
+	var workspace Workspace
+	var createdAt, updatedAt time.Time
+	err = tx.QueryRow(dbctx, `
+		WITH created_workspace AS (
+			INSERT INTO workspaces (name, slug, kind)
+			VALUES ($1, $2, $3)
+			RETURNING id, name, slug, kind, created_at, updated_at
+		), created_member AS (
+			INSERT INTO workspace_members (workspace_id, user_id, role)
+			SELECT id, $4, 'owner' FROM created_workspace
+		)
+		SELECT id::text, name, slug, kind, 'owner', created_at, updated_at FROM created_workspace
+	`, normalized.Name, slug, normalized.Kind, userID).Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &createdAt, &updatedAt)
+	if err != nil {
+		return Workspace{}, nil, err
+	}
+	workspace.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	workspace.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	workspaces, err := listWorkspaces(dbctx, tx, userID)
+	if err != nil {
+		return Workspace{}, nil, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return Workspace{}, nil, err
+	}
+	return workspace, workspaces, nil
+}
+
 func (s *PostgresStore) ListWorkspaceMembers(ctx Context, userID, workspaceID string) ([]WorkspaceMember, error) {
 	dbctx := asContext(ctx)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
@@ -270,6 +320,9 @@ func (s *PostgresStore) CreateWorkspaceInvitation(ctx Context, userID, workspace
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
 		return WorkspaceInvitationResult{}, err
 	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
+		return WorkspaceInvitationResult{}, err
+	}
 	token, err := newWorkspaceInvitationToken()
 	if err != nil {
 		return WorkspaceInvitationResult{}, err
@@ -304,6 +357,9 @@ func (s *PostgresStore) ListWorkspaceInvitations(ctx Context, userID, workspaceI
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return nil, err
+	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(dbctx, `
@@ -348,6 +404,9 @@ func (s *PostgresStore) RevokeWorkspaceInvitation(ctx Context, userID, workspace
 	workspaceID = strings.TrimSpace(workspaceID)
 	invitationID = strings.TrimSpace(invitationID)
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return WorkspaceInvitation{}, err
+	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
 		return WorkspaceInvitation{}, err
 	}
 	row := s.pool.QueryRow(dbctx, `
@@ -490,6 +549,9 @@ func (s *PostgresStore) ListInbox(ctx Context, userID, workspaceID string) ([]In
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return nil, err
 	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(dbctx, `
 			WITH unread AS (
 				SELECT
@@ -573,6 +635,9 @@ func (s *PostgresStore) CreateIssueEvent(ctx Context, requesterUserID string, in
 	if err := ensureWorkspaceMember(dbctx, tx, input.WorkspaceID, requesterUserID); err != nil {
 		return IssueEvent{}, err
 	}
+	if err := ensureTeamWorkspace(dbctx, tx, input.WorkspaceID); err != nil {
+		return IssueEvent{}, err
+	}
 	if input.ActorUserID != "" {
 		if err := ensureWorkspaceMember(dbctx, tx, input.WorkspaceID, input.ActorUserID); err != nil {
 			return IssueEvent{}, err
@@ -635,6 +700,9 @@ func (s *PostgresStore) MarkIssueEventRead(ctx Context, userID, workspaceID, eve
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return err
 	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
+		return err
+	}
 	_, err := s.pool.Exec(dbctx, `
 		UPDATE issue_event_receipts
 		SET state = 'read', read_at = COALESCE(read_at, now()), updated_at = now()
@@ -646,6 +714,9 @@ func (s *PostgresStore) MarkIssueEventRead(ctx Context, userID, workspaceID, eve
 func (s *PostgresStore) MarkIssueReadThrough(ctx Context, userID, workspaceID, issueID, throughEventID string) (int, error) {
 	dbctx := asContext(ctx)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return 0, err
+	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
 		return 0, err
 	}
 	issueID = strings.TrimSpace(issueID)
@@ -715,6 +786,9 @@ func (s *PostgresStore) CreateRuntimeRegistrationToken(ctx Context, userID, work
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
 		return RuntimeRegistrationTokenResult{}, err
 	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
+		return RuntimeRegistrationTokenResult{}, err
+	}
 
 	token, err := newRuntimeRegistrationToken()
 	if err != nil {
@@ -736,6 +810,9 @@ func (s *PostgresStore) CreateRuntimeRegistrationToken(ctx Context, userID, work
 func (s *PostgresStore) ListRuntimeRegistrationTokens(ctx Context, userID, workspaceID string) ([]RuntimeRegistrationToken, error) {
 	dbctx := asContext(ctx)
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return nil, err
+	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(dbctx, `
@@ -773,6 +850,9 @@ func (s *PostgresStore) RevokeRuntimeRegistrationToken(ctx Context, userID, work
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
 		return RuntimeRegistrationToken{}, err
 	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
+		return RuntimeRegistrationToken{}, err
+	}
 	row := s.pool.QueryRow(dbctx, `
 		UPDATE runtime_registration_tokens
 		SET revoked = true, updated_at = now()
@@ -796,9 +876,13 @@ func (s *PostgresStore) AuthenticateRuntimeRegistrationToken(ctx Context, token 
 	}
 	var registration RuntimeRegistration
 	err := s.pool.QueryRow(asContext(ctx), `
-		SELECT id::text, workspace_id::text
-		FROM runtime_registration_tokens
-		WHERE token_hash = $1 AND revoked = false AND expires_at > now()
+		SELECT rt.id::text, rt.workspace_id::text
+		FROM runtime_registration_tokens rt
+		JOIN workspaces w ON w.id = rt.workspace_id
+		WHERE rt.token_hash = $1
+			AND rt.revoked = false
+			AND rt.expires_at > now()
+			AND w.kind = 'team'
 	`, tokenHash(token)).Scan(&registration.TokenID, &registration.WorkspaceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RuntimeRegistration{}, ErrNotFound
@@ -909,6 +993,9 @@ func (s *PostgresStore) ListRuntimeWorkers(ctx Context, userID, workspaceID stri
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return nil, err
 	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(dbctx, `
 		SELECT id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, last_seen_at, created_at, updated_at
 		FROM runtime_workers
@@ -950,6 +1037,9 @@ func (s *PostgresStore) CreateRuntimeTask(ctx Context, userID, workspaceID strin
 	defer tx.Rollback(dbctx)
 
 	if err := ensureWorkspaceMember(dbctx, tx, workspaceID, userID); err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := ensureTeamWorkspace(dbctx, tx, workspaceID); err != nil {
 		return RuntimeTask{}, err
 	}
 	row := tx.QueryRow(dbctx, `
@@ -1009,6 +1099,9 @@ func (s *PostgresStore) ListRuntimeTasks(ctx Context, userID, workspaceID string
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return nil, err
 	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
+		return nil, err
+	}
 	rows, err := s.pool.Query(dbctx, `
 		SELECT
 			id::text,
@@ -1059,6 +1152,9 @@ func (s *PostgresStore) ListRuntimeTaskEvents(ctx Context, userID, workspaceID, 
 	workspaceID = strings.TrimSpace(workspaceID)
 	taskID = strings.TrimSpace(taskID)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
+		return nil, err
+	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
 		return nil, err
 	}
 	var exists bool
@@ -1112,6 +1208,9 @@ func (s *PostgresStore) ListRuntimeTaskLogs(ctx Context, userID, workspaceID, ta
 	workspaceID = strings.TrimSpace(workspaceID)
 	taskID = strings.TrimSpace(taskID)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
+		return nil, err
+	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
 		return nil, err
 	}
 	var exists bool
@@ -1176,6 +1275,9 @@ func (s *PostgresStore) CancelRuntimeTask(ctx Context, userID, workspaceID, task
 	defer tx.Rollback(dbctx)
 
 	if err := ensureWorkspaceMember(dbctx, tx, workspaceID, userID); err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := ensureTeamWorkspace(dbctx, tx, workspaceID); err != nil {
 		return RuntimeTask{}, err
 	}
 	row := tx.QueryRow(dbctx, `
@@ -1606,16 +1708,16 @@ func ensureDefaultWorkspace(ctx context.Context, q queryer, user User, login str
 	var workspace Workspace
 	var createdAt, updatedAt time.Time
 	err = q.QueryRow(ctx, `
-		WITH created_workspace AS (
-			INSERT INTO workspaces (name, slug)
-			VALUES ($1, $2)
-			RETURNING id, name, slug, created_at, updated_at
-		), created_member AS (
-			INSERT INTO workspace_members (workspace_id, user_id, role)
-			SELECT id, $3, 'owner' FROM created_workspace
-		)
-		SELECT id::text, name, slug, 'owner', created_at, updated_at FROM created_workspace
-	`, name+"'s workspace", slug, user.ID).Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Role, &createdAt, &updatedAt)
+			WITH created_workspace AS (
+				INSERT INTO workspaces (name, slug, kind)
+				VALUES ($1, $2, 'personal')
+				RETURNING id, name, slug, kind, created_at, updated_at
+			), created_member AS (
+				INSERT INTO workspace_members (workspace_id, user_id, role)
+				SELECT id, $3, 'owner' FROM created_workspace
+			)
+			SELECT id::text, name, slug, kind, 'owner', created_at, updated_at FROM created_workspace
+		`, name+"'s workspace", slug, user.ID).Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1626,7 +1728,7 @@ func ensureDefaultWorkspace(ctx context.Context, q queryer, user User, login str
 
 func listWorkspaces(ctx context.Context, q queryer, userID string) ([]Workspace, error) {
 	rows, err := q.Query(ctx, `
-		SELECT w.id::text, w.name, w.slug, wm.role, w.created_at, w.updated_at
+		SELECT w.id::text, w.name, w.slug, w.kind, wm.role, w.created_at, w.updated_at
 		FROM workspace_members wm
 		JOIN workspaces w ON w.id = wm.workspace_id
 		WHERE wm.user_id = $1
@@ -1641,7 +1743,7 @@ func listWorkspaces(ctx context.Context, q queryer, userID string) ([]Workspace,
 	for rows.Next() {
 		var workspace Workspace
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Role, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		workspace.CreatedAt = createdAt.UTC().Format(time.RFC3339)
@@ -1652,6 +1754,29 @@ func listWorkspaces(ctx context.Context, q queryer, userID string) ([]Workspace,
 		return nil, err
 	}
 	return workspaces, nil
+}
+
+func ensureTeamWorkspace(ctx context.Context, q queryer, workspaceID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return ErrNotFound
+	}
+	var kind string
+	err := q.QueryRow(ctx, `
+		SELECT kind
+		FROM workspaces
+		WHERE id = $1
+	`, workspaceID).Scan(&kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if kind != "team" {
+		return ErrForbidden
+	}
+	return nil
 }
 
 func ensureWorkspaceMember(ctx context.Context, q queryer, workspaceID, userID string) error {
@@ -2033,6 +2158,24 @@ func normalizeCreateWorkspaceInvitationInput(input CreateWorkspaceInvitationInpu
 	}
 	if input.ExpiresInHours > 24*90 {
 		return CreateWorkspaceInvitationInput{}, errors.New("expiresInHours must be 2160 or less")
+	}
+	return input, nil
+}
+
+func normalizeCreateWorkspaceInput(input CreateWorkspaceInput) (CreateWorkspaceInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" {
+		return CreateWorkspaceInput{}, errors.New("workspace name is required")
+	}
+	if len(input.Name) > 120 {
+		return CreateWorkspaceInput{}, errors.New("workspace name must be 120 characters or less")
+	}
+	input.Kind = strings.ToLower(strings.TrimSpace(input.Kind))
+	if input.Kind == "" {
+		input.Kind = "team"
+	}
+	if input.Kind != "team" {
+		return CreateWorkspaceInput{}, errors.New("only team workspaces can be created explicitly")
 	}
 	return input, nil
 }

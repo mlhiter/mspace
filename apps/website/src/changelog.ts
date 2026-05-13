@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-05-13",
+    title: "Personal and team workspace split",
+    summary:
+      "mspace made team collaboration explicit so local single-user work and shared team execution no longer blur together.",
+    items: [
+      "Made GitHub sign-in land in a personal workspace by default.",
+      "Added team workspace creation from Workspace Settings before invitations, worker tokens, and team runtime queues are available.",
+      "Limited Team worker routing, server Inbox receipts, invitations, runtime registration, workers, and task queues to team workspaces.",
+      "Updated the workspace menu so users can see whether they are operating in a Personal or Team workspace.",
+    ],
+  },
+  {
     date: "2026-05-12",
     title: "Workspace automation and namespace resources",
     summary:

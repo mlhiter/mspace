@@ -50,9 +50,20 @@ type Workspace struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Slug      string `json:"slug"`
+	Kind      string `json:"kind"`
 	Role      string `json:"role"`
 	CreatedAt string `json:"createdAt"`
 	UpdatedAt string `json:"updatedAt"`
+}
+
+type CreateWorkspaceInput struct {
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+type CreateWorkspaceResult struct {
+	Workspace  Workspace   `json:"workspace"`
+	Workspaces []Workspace `json:"workspaces"`
 }
 
 type WorkspaceMember struct {
@@ -307,6 +318,7 @@ type Store interface {
 	UpsertIdentity(ctx Context, profile IdentityProfile) (User, []Workspace, error)
 	CreateAuthSession(ctx Context, userID string, ttl time.Duration) (token string, expiresAt time.Time, err error)
 	GetUserBySessionToken(ctx Context, token string) (User, []Workspace, error)
+	CreateWorkspace(ctx Context, userID string, input CreateWorkspaceInput) (Workspace, []Workspace, error)
 	ListWorkspaceMembers(ctx Context, userID, workspaceID string) ([]WorkspaceMember, error)
 	CreateWorkspaceInvitation(ctx Context, userID, workspaceID string, input CreateWorkspaceInvitationInput) (WorkspaceInvitationResult, error)
 	ListWorkspaceInvitations(ctx Context, userID, workspaceID string) ([]WorkspaceInvitation, error)

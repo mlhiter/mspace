@@ -37,7 +37,7 @@ For local API-shape tests without Postgres, use the in-memory store from tests o
 1. Desktop starts GitHub login through `GET /api/auth/github/start`.
 2. Desktop opens the returned `authorizeUrl` in the browser.
 3. GitHub redirects to `GET /api/auth/github/callback`.
-4. The server validates OAuth state, exchanges the code with GitHub using the server-side client secret, upserts the mspace user, ensures a default workspace, issues an mspace session token, and stores a short-lived single-use login result for that OAuth state.
+4. The server validates OAuth state, exchanges the code with GitHub using the server-side client secret, upserts the mspace user, ensures a default personal workspace, issues an mspace session token, and stores a short-lived single-use login result for that OAuth state.
 5. The callback renders a success page. It does not return raw auth JSON.
 6. Desktop polls `GET /api/auth/github/result?state=...` and stores the returned `msp_...` token.
 7. Desktop and runner clients call mspace APIs with `Authorization: Bearer <msp_...>`.
@@ -54,6 +54,7 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 | `GET` | `/api/auth/github/result` | Poll the state-bound login result from the desktop app. Returns `202` while pending and consumes the result once ready. |
 | `GET` | `/api/auth/me` | Return the current mspace user and workspaces for a bearer token. |
 | `GET` | `/api/workspaces` | List the authenticated user's workspaces. |
+| `POST` | `/api/workspaces` | Create an explicit team workspace for the authenticated user. |
 | `GET` | `/api/workspaces/{workspaceID}/members` | List workspace members with role and display identity. |
 | `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time `msi_...` workspace invitation link. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/invitations` | List recent workspace invitations without raw tokens. Owner/admin only. |
@@ -82,6 +83,8 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 ## Team Inbox Model
 
 The team Inbox is event-based. `issue_events` stores the append-only review fact, `issue_event_receipts` stores each recipient user's unread/read/archive state, and `issue_watchers` stores the issue-level recipient set. Opening or polling an issue must not clear unread state; clients should call the read-through endpoint after the user intentionally reviews an Inbox row.
+
+Personal workspaces are the default result of GitHub sign-in and are local-first. Team Inbox, invitations, worker registration tokens, registered workers, and runtime task APIs require a workspace with `kind="team"`; those endpoints return `403 Forbidden` for personal workspaces.
 
 ## Workspace Invitations
 

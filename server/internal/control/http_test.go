@@ -59,8 +59,14 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	if payload.Capabilities["teamInboxIssueGrouping"] != true {
 		t.Fatalf("expected team inbox grouping capability, got %+v", payload.Capabilities)
 	}
+	if payload.Capabilities["teamWorkspaceCreation"] != true {
+		t.Fatalf("expected team workspace creation capability, got %+v", payload.Capabilities)
+	}
 	if payload.Capabilities["workspaceInvitations"] != true {
 		t.Fatalf("expected workspace invitations capability, got %+v", payload.Capabilities)
+	}
+	if payload.Capabilities["workspaceKinds"] != true {
+		t.Fatalf("expected workspace kinds capability, got %+v", payload.Capabilities)
 	}
 	if payload.Capabilities["runtimeWorkerRegistration"] != true {
 		t.Fatalf("expected runtime worker registration capability, got %+v", payload.Capabilities)
@@ -129,6 +135,27 @@ func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 	if auth.User.Email != "mlhiter@example.com" || len(auth.Workspaces) != 1 || auth.Workspaces[0].Role != "owner" {
 		t.Fatalf("unexpected auth result: %+v", auth)
 	}
+	if auth.Workspaces[0].Kind != "personal" {
+		t.Fatalf("default workspace should be personal, got %+v", auth.Workspaces[0])
+	}
+
+	createWorkspaceRecorder := httptest.NewRecorder()
+	createWorkspaceReq := httptest.NewRequest(http.MethodPost, "/api/workspaces", strings.NewReader(`{"name":"ML team","kind":"team"}`))
+	createWorkspaceReq.Header.Set("Authorization", "Bearer "+auth.Token)
+	router.ServeHTTP(createWorkspaceRecorder, createWorkspaceReq)
+	if createWorkspaceRecorder.Code != http.StatusCreated {
+		t.Fatalf("create team workspace status=%d body=%s", createWorkspaceRecorder.Code, createWorkspaceRecorder.Body.String())
+	}
+	var workspaceResult CreateWorkspaceResult
+	if err := json.Unmarshal(createWorkspaceRecorder.Body.Bytes(), &workspaceResult); err != nil {
+		t.Fatalf("parse create workspace result: %v", err)
+	}
+	if workspaceResult.Workspace.Kind != "team" || workspaceResult.Workspace.Role != "owner" || workspaceResult.Workspace.Name != "ML team" {
+		t.Fatalf("unexpected created workspace: %+v", workspaceResult.Workspace)
+	}
+	if len(workspaceResult.Workspaces) != 2 {
+		t.Fatalf("expected personal and team workspace, got %+v", workspaceResult.Workspaces)
+	}
 
 	meRecorder := httptest.NewRecorder()
 	meReq := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
@@ -138,7 +165,16 @@ func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 		t.Fatalf("me status=%d body=%s", meRecorder.Code, meRecorder.Body.String())
 	}
 
-	workspaceID := auth.Workspaces[0].ID
+	personalWorkspaceID := auth.Workspaces[0].ID
+	personalEventReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issue-events", strings.NewReader(`{"issueId":"issue-1","kind":"agent_completed"}`))
+	personalEventReq.Header.Set("Authorization", "Bearer "+auth.Token)
+	personalEventRecorder := httptest.NewRecorder()
+	router.ServeHTTP(personalEventRecorder, personalEventReq)
+	if personalEventRecorder.Code != http.StatusForbidden {
+		t.Fatalf("personal workspace event status=%d body=%s", personalEventRecorder.Code, personalEventRecorder.Body.String())
+	}
+
+	workspaceID := workspaceResult.Workspace.ID
 	eventBody := `{"issueId":"issue-1","kind":"agent_completed","summary":"Agent completed issue work.","payload":{"title":"Fix inbox","status":"closed","projectName":"mspace"}}`
 	createEventRecorder := httptest.NewRecorder()
 	createEventReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issue-events", strings.NewReader(eventBody))
@@ -273,7 +309,12 @@ func TestWorkspaceInvitationFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create owner session: %v", err)
 	}
-	workspaceID := workspaces[0].ID
+	personalWorkspaceID := workspaces[0].ID
+	teamWorkspace, workspaces, err := store.CreateWorkspace(context.Background(), owner.ID, CreateWorkspaceInput{Name: "Owner Team", Kind: "team"})
+	if err != nil {
+		t.Fatalf("create team workspace: %v", err)
+	}
+	workspaceID := teamWorkspace.ID
 
 	member, _, err := store.UpsertIdentity(context.Background(), IdentityProfile{
 		Provider:       "github",
@@ -292,6 +333,14 @@ func TestWorkspaceInvitationFlow(t *testing.T) {
 
 	server := NewServer(Config{}, store, fakeGitHubClient{})
 	router := server.Routes()
+
+	personalInviteRecorder := httptest.NewRecorder()
+	personalInviteReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/invitations", strings.NewReader(`{"email":"member@example.com","role":"member","expiresInHours":24}`))
+	personalInviteReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(personalInviteRecorder, personalInviteReq)
+	if personalInviteRecorder.Code != http.StatusForbidden {
+		t.Fatalf("personal workspace invitation should be forbidden, status=%d body=%s", personalInviteRecorder.Code, personalInviteRecorder.Body.String())
+	}
 
 	createRecorder := httptest.NewRecorder()
 	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/invitations", strings.NewReader(`{"email":"member@example.com","role":"member","expiresInHours":24}`))
@@ -403,9 +452,22 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create auth session: %v", err)
 	}
-	workspaceID := workspaces[0].ID
+	personalWorkspaceID := workspaces[0].ID
+	teamWorkspace, _, err := store.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Worker Team", Kind: "team"})
+	if err != nil {
+		t.Fatalf("create team workspace: %v", err)
+	}
+	workspaceID := teamWorkspace.ID
 	server := NewServer(Config{}, store, fakeGitHubClient{})
 	router := server.Routes()
+
+	personalTokenRecorder := httptest.NewRecorder()
+	personalTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"personal runner","expiresInHours":12}`))
+	personalTokenReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(personalTokenRecorder, personalTokenReq)
+	if personalTokenRecorder.Code != http.StatusForbidden {
+		t.Fatalf("personal runtime token should be forbidden, status=%d body=%s", personalTokenRecorder.Code, personalTokenRecorder.Body.String())
+	}
 
 	createTokenRecorder := httptest.NewRecorder()
 	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"team runner","expiresInHours":12}`))
@@ -517,9 +579,22 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create auth session: %v", err)
 	}
-	workspaceID := workspaces[0].ID
+	personalWorkspaceID := workspaces[0].ID
+	teamWorkspace, _, err := store.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Task Team", Kind: "team"})
+	if err != nil {
+		t.Fatalf("create team workspace: %v", err)
+	}
+	workspaceID := teamWorkspace.ID
 	server := NewServer(Config{}, store, fakeGitHubClient{})
 	router := server.Routes()
+
+	personalTaskRecorder := httptest.NewRecorder()
+	personalTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"agent_session","runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
+	personalTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(personalTaskRecorder, personalTaskReq)
+	if personalTaskRecorder.Code != http.StatusForbidden {
+		t.Fatalf("personal runtime task should be forbidden, status=%d body=%s", personalTaskRecorder.Code, personalTaskRecorder.Body.String())
+	}
 
 	createTokenRecorder := httptest.NewRecorder()
 	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"task worker","expiresInHours":12}`))

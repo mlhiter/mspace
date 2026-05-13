@@ -119,7 +119,8 @@ function RootShell() {
       setSelectedWorkspaceId(currentWorkspace.id);
     }
   }, [currentWorkspace?.id, selectedWorkspaceId, workspaces.length]);
-  const teamInboxEnabled = authToken !== "" && Boolean(currentWorkspace?.id);
+  const isTeamWorkspace = currentWorkspace?.kind === "team";
+  const teamInboxEnabled = authToken !== "" && Boolean(currentWorkspace?.id) && isTeamWorkspace;
   const teamInboxQuery = useQuery({
     queryKey: queryKeys.teamInbox(currentWorkspace?.id || "", authToken),
     queryFn: () => controlPlaneApi.listInbox(authToken, currentWorkspace?.id || ""),
@@ -233,8 +234,9 @@ function RootShell() {
           avatarUrl: meQuery.data?.user.avatarUrl,
           workspaceId: currentWorkspace?.id,
           workspaceName: currentWorkspace?.name,
+          workspaceKind: currentWorkspace?.kind,
           workspaceRole: currentWorkspace?.role,
-          workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, role: workspace.role })),
+          workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, role: workspace.role, kind: workspace.kind })),
           error: authError instanceof Error ? authError.message : undefined,
           actionLabel: pendingAuthState ? "Waiting for GitHub" : undefined,
         }}

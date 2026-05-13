@@ -25,7 +25,7 @@ mspace is a review Inbox and Issue workspace for software teams that want coding
 The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, inline child-issue tasks, comments, agent session, branch state, logs, deployment evidence, preview URL, and cleanup decision in one place.
 
 > [!NOTE]
-> mspace is currently a runnable local desktop MVP with a new server/control-plane skeleton. Agent execution is still local-first through Codex app-server, while the server is the target home for users, workspaces, membership, GitHub identity, auth sessions, and future GitHub App installation state.
+> mspace is currently a runnable local desktop MVP with a server/control-plane slice. GitHub sign-in creates a personal workspace by default; team collaboration is enabled by creating an explicit team workspace from Workspace Settings. Agent execution stays local-first by default, while team workspaces can route work through registered Server Workers.
 
 ## Screenshots
 
@@ -63,8 +63,9 @@ Production deployment uses the root `vercel.json`:
 ## Features
 
 - Electron desktop app with Inbox, Issues, Agents, Clusters, Projects, Issue Detail, and Session Detail screens.
-- Go server control plane with GitHub OAuth entrypoints, state-bound desktop login polling, Postgres migrations, mspace session tokens, users, workspaces, workspace membership, and per-user issue-event Inbox receipts.
+- Go server control plane with GitHub OAuth entrypoints, state-bound desktop login polling, Postgres migrations, mspace session tokens, personal/team workspaces, workspace membership, invitations, team Inbox receipts, runtime worker registration, and runtime task queues.
 - GitHub-authenticated sidebar account/workspace state, plus local issue creator and comment actor display snapshots with human and Codex avatars.
+- Workspace Settings creates team workspaces from the personal default, then exposes Team access and Team Runtime panels for members, one-time invites, worker tokens, workers, task events, and worker logs.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, Material Icon Theme file icons, and real shadcn/ui source components in `@mspace/ui`.
 - Sidebar global search with a `Command+K` palette for jumping to issues and projects.
 - Go local runner with HTTP APIs, SQLite storage, server-sent events, session logs, git-aware project import, and Codex app-server integration.
@@ -82,6 +83,7 @@ Production deployment uses the root `vercel.json`:
 - Issue Evidence tab for the current review packet, with separate full-width pages for previous attempts and Kubernetes snapshot history.
 - Issue-level branch / PR handoff records that keep one current PR with source commit, head commit, commit list, preview URL, evidence summary, local preflight errors, and refreshable PR state.
 - Workspace automation settings keep source commit capture always on and let users opt into automatic draft PR creation after captured source commits.
+- Issue Detail can route agent work to a Team worker when the selected workspace is a team workspace; personal workspaces keep Team worker routing disabled.
 - Structured failure evidence for failed sessions, deploy reconciliation, preview checks, agent interruption, and cleanup failures, shown from Issue Detail Overview and Evidence so users can continue, retry deploy, stop, retain, or clean up instead of treating failure as terminal.
 
 > [!IMPORTANT]
@@ -98,10 +100,11 @@ mspace separates collaboration, execution, and validation:
 | Control plane | Users, workspaces, membership, GitHub identity, mspace auth sessions, future GitHub App installations | Go server in `server/`, chi, PostgreSQL through `pgx` |
 | Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review | Electron, React, TanStack Router, React Query, shared `@mspace/ui` |
 | Local runner | API, SQLite state, SSE streams, worktree preparation, Codex session lifecycle | Go, chi, SQLite, `codex app-server --listen stdio://` |
-| Agent runtime | One issue-bound turn in an isolated working directory | Local git worktree under `~/.mspace/workdirs/<project-id>/<session-id>` |
+| Server Worker runtime | Team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
+| Agent runtime | One issue-bound turn in an isolated working directory | Local git worktree or worker-managed workdir under the selected runtime |
 | Validation target | Build, deploy, inspect, preview, and cleanup issue test environments | Namespace-scoped Kubernetes workflow triggered from Issue Detail |
 
-The desktop process starts the Go runner automatically on `127.0.0.1:7788` and the server control plane on `127.0.0.1:8787`. Runner reuse requires a healthy `/health` response with the expected protocol capabilities, so stale local runners are replaced during desktop development.
+The desktop process starts the Go runner automatically on `127.0.0.1:7788` and the server control plane on `127.0.0.1:8787`. Runner and server reuse both require a healthy `/health` response with the expected protocol capabilities, so stale local processes are replaced during desktop development.
 
 ## Quick Start
 
@@ -148,8 +151,9 @@ The server automatically loads `.env.local` from the project root. Keep `MSPACE_
 7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
 8. Open the Commits tab to review the issue-level PR card plus the captured commit list, then create or refresh the issue PR from the selected source branch when ready.
 9. Optionally enable automatic draft PRs from Workspace Settings in the workspace menu if this workspace should refresh a draft PR after future source commits.
-10. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
-11. Use Evidence for the current review packet and command evidence; open Previous attempts or Kubernetes snapshots only when reviewing historical blockers or namespace evidence.
+10. For team collaboration, sign in with GitHub, create a team workspace from Workspace Settings, invite members, then create a worker token and start a Server Worker before choosing Team worker from Issue Detail.
+11. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
+12. Use Evidence for the current review packet and command evidence; open Previous attempts or Kubernetes snapshots only when reviewing historical blockers or namespace evidence.
 
 ## Configuration
 
@@ -168,6 +172,8 @@ Runtime variables:
 | `MSPACE_GITHUB_CLIENT_ID` | none | GitHub OAuth client ID used by the server. |
 | `MSPACE_GITHUB_CLIENT_SECRET` | none | GitHub OAuth client secret; belongs on the server only. |
 | `MSPACE_GITHUB_REDIRECT_URI` | none | GitHub OAuth callback URL for the server. |
+| `MSPACE_RUNTIME_TOKEN` | none | `msw_...` runtime worker registration token used by `pnpm worker`. |
+| `MSPACE_WORKER_CAPABILITIES` | `{"protocolSmoke":true,"codex":false,"dryRun":true}` | Worker capability JSON used by server-side task matching. |
 
 Local data paths:
 
@@ -192,12 +198,15 @@ pnpm test:server
 (cd packages/ui && pnpm dlx shadcn@latest info --json)
 (cd runner && go test ./...)
 (cd runner && go build ./...)
+(cd worker && go test ./...)
+(cd worker && go build ./...)
 ```
 
 Runner health check:
 
 ```bash
 curl http://127.0.0.1:7788/health
+curl http://127.0.0.1:8787/health
 ```
 
 > [!TIP]

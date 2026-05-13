@@ -2809,7 +2809,7 @@ func TestQueueAgentSessionRoutesTeamRuntimeThroughControlPlane(t *testing.T) {
 		case r.URL.Path == "/api/auth/me":
 			writeJSON(w, map[string]any{
 				"user":       map[string]string{"id": "user-1", "name": "Test Human"},
-				"workspaces": []map[string]string{{"id": workspaceID}},
+				"workspaces": []map[string]string{{"id": workspaceID, "kind": "team"}},
 			})
 		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks" && r.Method == http.MethodPost:
 			if err := json.NewDecoder(r.Body).Decode(&taskPayload); err != nil {
@@ -2918,6 +2918,79 @@ func TestQueueAgentSessionRoutesTeamRuntimeThroughControlPlane(t *testing.T) {
 	}
 }
 
+func TestQueueAgentSessionRejectsTeamRuntimeFromPersonalWorkspace(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for team runtime session test")
+	}
+
+	application, db := newAuthTestApp(t)
+	humanToken := configureTestHumanAuth(t, application)
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init", "-b", "main")
+	runGit(t, repoDir, "config", "user.name", "mspace test")
+	runGit(t, repoDir, "config", "user.email", "mspace@example.com")
+	writeFile(t, filepath.Join(repoDir, "README.md"), "# demo\n")
+	runGit(t, repoDir, "add", "README.md")
+	runGit(t, repoDir, "commit", "-m", "base")
+	insertAuthTestIssue(t, db, "issue-1", "", "Personal runtime issue", "open")
+	if _, err := db.Exec(`UPDATE projects SET repo_path = ?, default_branch = 'main' WHERE id = 'project-1'`, repoDir); err != nil {
+		t.Fatalf("update project repo: %v", err)
+	}
+
+	controlPlaneToken := "human-token"
+	workspaceID := "workspace-1"
+	taskCreated := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+controlPlaneToken {
+			writeError(w, http.StatusUnauthorized, errUnauthorized)
+			return
+		}
+		switch {
+		case r.URL.Path == "/api/auth/me":
+			writeJSON(w, map[string]any{
+				"user":       map[string]string{"id": "user-1", "name": "Test Human"},
+				"workspaces": []map[string]string{{"id": workspaceID, "kind": "personal"}},
+			})
+		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks":
+			taskCreated = true
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	application.controlPlaneBaseURL = server.URL
+	application.controlPlaneToken = controlPlaneToken
+	application.controlPlaneWorkspaceID = workspaceID
+
+	router := chi.NewRouter()
+	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
+	create := httptest.NewRecorder()
+	router.ServeHTTP(create, authRequest(http.MethodPost, "/api/issues/issue-1/assign-agent", `{"provider":"codex","agentProfile":"codex","runtimeMode":"team","command":"make a small change"}`, humanToken))
+	if create.Code != http.StatusOK {
+		t.Fatalf("expected session create to return 200 before async runtime validation, got %d body=%s", create.Code, create.Body.String())
+	}
+	var response struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		var status, agentStatus string
+		_ = db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus)
+		return status == "failed" && agentStatus == "failed"
+	}, func() string {
+		var status, agentStatus string
+		_ = db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus)
+		return "status=" + status + " agentStatus=" + agentStatus
+	})
+	if taskCreated {
+		t.Fatalf("personal workspace should not create a team runtime task")
+	}
+	assertSessionLogContains(t, db, response.SessionID, "team runtime requires a team workspace")
+}
+
 func TestCancelTeamRuntimeSessionRequestsControlPlaneCancellation(t *testing.T) {
 	application, db := newAuthTestApp(t)
 	_ = configureTestHumanAuth(t, application)
@@ -2954,7 +3027,7 @@ func TestCancelTeamRuntimeSessionRequestsControlPlaneCancellation(t *testing.T) 
 		case r.URL.Path == "/api/auth/me":
 			writeJSON(w, map[string]any{
 				"user":       map[string]string{"id": "user-1", "name": "Test Human"},
-				"workspaces": []map[string]string{{"id": workspaceID}},
+				"workspaces": []map[string]string{{"id": workspaceID, "kind": "team"}},
 			})
 		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks/runtime-task-1/cancel" && r.Method == http.MethodPost:
 			cancelRequested = true
@@ -3299,7 +3372,7 @@ func configureTestHumanAuth(t *testing.T, application *app) string {
 				"email":     "test@example.com",
 				"avatarUrl": "https://example.com/avatar.png",
 			},
-			"workspaces": []map[string]string{{"id": workspaceID}},
+			"workspaces": []map[string]string{{"id": workspaceID, "kind": "team"}},
 		})
 	}))
 	t.Cleanup(server.Close)

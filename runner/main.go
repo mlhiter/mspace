@@ -626,6 +626,11 @@ type cancelRuntimeTaskInput struct {
 	Reason string `json:"reason"`
 }
 
+type controlPlaneWorkspaceRef struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+}
+
 type activeWorkItem struct {
 	IssueID         string `json:"issueId"`
 	ProjectID       string `json:"projectId"`
@@ -5882,6 +5887,10 @@ func (a *app) runSession(session agentSession, project project) {
 }
 
 func (a *app) runTeamRuntimeSession(ctx context.Context, session agentSession, project project) {
+	if err := a.requireTeamControlPlaneWorkspace(ctx); err != nil {
+		a.failSession(session, &project, err)
+		return
+	}
 	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Preparing team runtime context for branch %s", session.Branch))
 	contextPath, err := a.writeSessionContext(session, project)
 	if err != nil {
@@ -6274,6 +6283,47 @@ func (a *app) controlPlaneJSON(ctx context.Context, method, path string, input a
 		return nil
 	}
 	return json.NewDecoder(res.Body).Decode(output)
+}
+
+func (a *app) requireTeamControlPlaneWorkspace(ctx context.Context) error {
+	baseURL, token, workspaceID := a.controlPlaneSession()
+	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(token) == "" || strings.TrimSpace(workspaceID) == "" {
+		return errors.New("sign in to mspace and select a workspace before using team runtime")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/api/auth/me", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		message := strings.TrimSpace(string(body))
+		if message == "" {
+			message = fmt.Sprintf("control plane returned HTTP %d", res.StatusCode)
+		}
+		return errors.New(message)
+	}
+	var payload struct {
+		Workspaces []controlPlaneWorkspaceRef `json:"workspaces"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return err
+	}
+	for _, workspace := range payload.Workspaces {
+		if workspace.ID != workspaceID {
+			continue
+		}
+		if strings.TrimSpace(workspace.Kind) == "team" {
+			return nil
+		}
+		return errors.New("team runtime requires a team workspace; create or switch to a team workspace in Workspace Settings")
+	}
+	return errors.New("selected workspace is not available for team runtime")
 }
 
 func envSliceToMap(values []string) map[string]string {

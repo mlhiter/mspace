@@ -28,8 +28,10 @@ import {
 	api,
 	controlPlaneApi,
 	queryKeys,
+	type AuthMeResult,
 	type CreateRuntimeRegistrationTokenInput,
 	type CreateRuntimeTaskInput,
+	type CreateWorkspaceInput,
 	type CreateWorkspaceInvitationInput,
 	type RuntimeRegistrationToken,
 	type RuntimeRegistrationTokenResult,
@@ -100,7 +102,10 @@ export function WorkspaceSettingsPage() {
 	const queryClient = useQueryClient();
 	const auth = useMspaceAuth();
 	const workspaceID = auth.workspace?.id || "";
-	const runtimeEnabled = auth.status === "signed-in" && auth.token !== "" && workspaceID !== "";
+	const isSignedIn = auth.status === "signed-in" && auth.token !== "";
+	const isTeamWorkspace = auth.workspace?.kind === "team";
+	const runtimeEnabled = isSignedIn && workspaceID !== "";
+	const teamRuntimeEnabled = runtimeEnabled && isTeamWorkspace;
 
 	const settingsQuery = useQuery({
 		queryKey: queryKeys.workspaceSettings,
@@ -109,35 +114,37 @@ export function WorkspaceSettingsPage() {
 	const tokensQuery = useQuery({
 		queryKey: queryKeys.runtimeRegistrationTokens(workspaceID, auth.token),
 		queryFn: () => controlPlaneApi.listRuntimeRegistrationTokens(auth.token, workspaceID),
-		enabled: runtimeEnabled,
-		refetchInterval: runtimeEnabled ? 15_000 : false,
+		enabled: teamRuntimeEnabled,
+		refetchInterval: teamRuntimeEnabled ? 15_000 : false,
 	});
 	const membersQuery = useQuery({
 		queryKey: queryKeys.workspaceMembers(workspaceID, auth.token),
 		queryFn: () => controlPlaneApi.listWorkspaceMembers(auth.token, workspaceID),
-		enabled: runtimeEnabled,
-		refetchInterval: runtimeEnabled ? 15_000 : false,
+		enabled: teamRuntimeEnabled,
+		refetchInterval: teamRuntimeEnabled ? 15_000 : false,
 	});
 	const invitationsQuery = useQuery({
 		queryKey: queryKeys.workspaceInvitations(workspaceID, auth.token),
 		queryFn: () => controlPlaneApi.listWorkspaceInvitations(auth.token, workspaceID),
-		enabled: runtimeEnabled && (auth.workspace?.role === "owner" || auth.workspace?.role === "admin"),
-		refetchInterval: runtimeEnabled ? 15_000 : false,
+		enabled: teamRuntimeEnabled && (auth.workspace?.role === "owner" || auth.workspace?.role === "admin"),
+		refetchInterval: teamRuntimeEnabled ? 15_000 : false,
 	});
 	const workersQuery = useQuery({
 		queryKey: queryKeys.runtimeWorkers(workspaceID, auth.token),
 		queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceID),
-		enabled: runtimeEnabled,
-		refetchInterval: runtimeEnabled ? 5_000 : false,
+		enabled: teamRuntimeEnabled,
+		refetchInterval: teamRuntimeEnabled ? 5_000 : false,
 	});
 	const tasksQuery = useQuery({
 		queryKey: queryKeys.runtimeTasks(workspaceID, auth.token),
 		queryFn: () => controlPlaneApi.listRuntimeTasks(auth.token, workspaceID),
-		enabled: runtimeEnabled,
-		refetchInterval: runtimeEnabled ? 5_000 : false,
+		enabled: teamRuntimeEnabled,
+		refetchInterval: teamRuntimeEnabled ? 5_000 : false,
 	});
 
 	const [form, setForm] = useState<UpdateWorkspaceSettingsInput>(defaultSettingsForm);
+	const [teamWorkspaceModalOpen, setTeamWorkspaceModalOpen] = useState(false);
+	const [teamWorkspaceName, setTeamWorkspaceName] = useState(() => defaultTeamWorkspaceName(auth.user?.name));
 	const [invitationModalOpen, setInvitationModalOpen] = useState(false);
 	const [invitationForm, setInvitationForm] = useState<CreateWorkspaceInvitationInput>(defaultInvitationForm);
 	const [createdInvitation, setCreatedInvitation] = useState<WorkspaceInvitationResult | null>(null);
@@ -157,11 +164,28 @@ export function WorkspaceSettingsPage() {
 		});
 	}, [settingsQuery.data]);
 
+	useEffect(() => {
+		if (!auth.user?.name) return;
+		setTeamWorkspaceName((value) => value.trim() || defaultTeamWorkspaceName(auth.user?.name));
+	}, [auth.user?.name]);
+
 	const saveSettings = useMutation({
 		mutationFn: api.updateWorkspaceSettings,
 		onSuccess: async (settings) => {
 			setForm({ autoCreateDraftPr: settings.autoCreateDraftPr });
 			await queryClient.invalidateQueries({ queryKey: queryKeys.workspaceSettings });
+		},
+	});
+	const createTeamWorkspace = useMutation({
+		mutationFn: (input: CreateWorkspaceInput) => controlPlaneApi.createWorkspace(auth.token, input),
+		onSuccess: async (result) => {
+			queryClient.setQueryData<AuthMeResult | undefined>(queryKeys.authMe(auth.token), (current) =>
+				current ? { ...current, workspaces: result.workspaces } : current,
+			);
+			auth.selectWorkspace?.(result.workspace.id);
+			await queryClient.invalidateQueries({ queryKey: queryKeys.authMe(auth.token) });
+			setTeamWorkspaceModalOpen(false);
+			setTeamWorkspaceName(defaultTeamWorkspaceName(auth.user?.name));
 		},
 	});
 	const createInvitation = useMutation({
@@ -228,15 +252,26 @@ export function WorkspaceSettingsPage() {
 	const canManageWorkspace = auth.workspace?.role === "owner" || auth.workspace?.role === "admin";
 	const onlineWorkerCount = workers.filter((worker) => worker.status === "online").length;
 	const queuedTaskCount = tasks.filter((task) => task.status === "queued").length;
-	const runtimeError = membersQuery.error || invitationsQuery.error || tokensQuery.error || workersQuery.error || tasksQuery.error;
+	const runtimeError = isTeamWorkspace
+		? membersQuery.error || invitationsQuery.error || tokensQuery.error || workersQuery.error || tasksQuery.error
+		: null;
 
 	function refreshRuntime() {
 		void Promise.all([membersQuery.refetch(), invitationsQuery.refetch(), tokensQuery.refetch(), workersQuery.refetch(), tasksQuery.refetch()]);
 	}
 
+	function submitTeamWorkspace(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!isSignedIn) return;
+		createTeamWorkspace.mutate({
+			name: teamWorkspaceName.trim(),
+			kind: "team",
+		});
+	}
+
 	function submitInvitation(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!runtimeEnabled || !canManageWorkspace) return;
+		if (!teamRuntimeEnabled || !canManageWorkspace) return;
 		createInvitation.mutate({
 			email: invitationForm.email?.trim() || "",
 			role: invitationForm.role,
@@ -246,7 +281,7 @@ export function WorkspaceSettingsPage() {
 
 	function submitToken(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!runtimeEnabled) return;
+		if (!teamRuntimeEnabled) return;
 		createToken.mutate({
 			name: tokenForm.name.trim() || defaultTokenForm.name,
 			expiresInHours: tokenForm.expiresInHours,
@@ -255,7 +290,7 @@ export function WorkspaceSettingsPage() {
 
 	function submitTask(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!runtimeEnabled) return;
+		if (!teamRuntimeEnabled) return;
 		setTaskFormError("");
 		try {
 			createTask.mutate(normalizeRuntimeTaskForm(taskForm));
@@ -320,6 +355,7 @@ export function WorkspaceSettingsPage() {
 				{settingsQuery.error ? <Notice tone="danger">{settingsQuery.error.message}</Notice> : null}
 				{saveSettings.error ? <Notice tone="danger">{saveSettings.error.message}</Notice> : null}
 				{runtimeError ? <Notice tone="danger">{runtimeError.message}</Notice> : null}
+				{createTeamWorkspace.error ? <Notice tone="danger">{createTeamWorkspace.error.message}</Notice> : null}
 				{createInvitation.error ? <Notice tone="danger">{createInvitation.error.message}</Notice> : null}
 				{revokeInvitation.error ? <Notice tone="danger">{revokeInvitation.error.message}</Notice> : null}
 
@@ -349,133 +385,143 @@ export function WorkspaceSettingsPage() {
 					/>
 				</SettingsSection>
 
-				<SettingsSection
-					title="Team access"
-					description="Workspace members share the same control-plane runtime, Inbox receipts, and worker queue for team-mode sessions."
-					meta={runtimeEnabled ? `${members.length} members` : "GitHub sign-in required"}
-					actions={
-						<Button
-							type="button"
-							variant="secondary"
-							size="sm"
-							disabled={!runtimeEnabled || !canManageWorkspace}
-							onClick={() => setInvitationModalOpen(true)}
+				{isTeamWorkspace ? (
+					<>
+						<SettingsSection
+							title="Team access"
+							description="Workspace members share the same control-plane runtime, Inbox receipts, and worker queue for team-mode sessions."
+							meta={teamRuntimeEnabled ? `${members.length} members` : "GitHub sign-in required"}
+							actions={
+								<Button
+									type="button"
+									variant="secondary"
+									size="sm"
+									disabled={!teamRuntimeEnabled || !canManageWorkspace}
+									onClick={() => setInvitationModalOpen(true)}
+								>
+									<MailPlus data-icon />
+									Invite member
+								</Button>
+							}
 						>
-							<MailPlus data-icon />
-							Invite member
-						</Button>
-					}
-				>
-					{runtimeEnabled ? (
-						<div className="grid gap-0">
-							<div className="grid gap-3 border-b border-[color:var(--line)] p-4 md:grid-cols-3">
-								<RuntimeSummaryCard icon={UsersRound} label="Members" value={`${members.length}`} meta={`${canManageWorkspace ? "Invite link enabled" : "Invite link admin-only"}`} />
-								<RuntimeSummaryCard icon={MailPlus} label="Open invites" value={`${activeInvitationCount(invitations)}`} meta={`${invitations.length} recent invitations`} />
-								<RuntimeSummaryCard icon={ShieldCheck} label="Your role" value={auth.workspace?.role || "member"} meta={auth.workspace?.name || "Selected workspace"} />
-							</div>
-							<MemberList members={members} loading={membersQuery.isPending && runtimeEnabled} currentUserID={auth.user?.id || ""} />
-							<InvitationList
-								invitations={invitations}
-								loading={invitationsQuery.isPending && runtimeEnabled && canManageWorkspace}
-								canManage={canManageWorkspace}
-								disabled={revokeInvitation.isPending}
-								onRevoke={(invitationID) => revokeInvitation.mutate(invitationID)}
-							/>
-						</div>
-					) : (
-						<div className="p-4">
-							<Notice>Sign in with GitHub before inviting teammates or switching to a shared workspace.</Notice>
-						</div>
-					)}
-				</SettingsSection>
+							{teamRuntimeEnabled ? (
+								<div className="grid gap-0">
+									<div className="grid gap-3 border-b border-[color:var(--line)] p-4 md:grid-cols-3">
+										<RuntimeSummaryCard icon={UsersRound} label="Members" value={`${members.length}`} meta={`${canManageWorkspace ? "Invite link enabled" : "Invite link admin-only"}`} />
+										<RuntimeSummaryCard icon={MailPlus} label="Open invites" value={`${activeInvitationCount(invitations)}`} meta={`${invitations.length} recent invitations`} />
+										<RuntimeSummaryCard icon={ShieldCheck} label="Your role" value={auth.workspace?.role || "member"} meta={auth.workspace?.name || "Selected workspace"} />
+									</div>
+									<MemberList members={members} loading={membersQuery.isPending && teamRuntimeEnabled} currentUserID={auth.user?.id || ""} />
+									<InvitationList
+										invitations={invitations}
+										loading={invitationsQuery.isPending && teamRuntimeEnabled && canManageWorkspace}
+										canManage={canManageWorkspace}
+										disabled={revokeInvitation.isPending}
+										onRevoke={(invitationID) => revokeInvitation.mutate(invitationID)}
+									/>
+								</div>
+							) : (
+								<div className="p-4">
+									<Notice>Sign in with GitHub before inviting teammates or switching to a shared workspace.</Notice>
+								</div>
+							)}
+						</SettingsSection>
 
-				<SettingsSection
-					title="Team runtime"
-					description="Team mode uses a server queue and workers that pull tasks from their own execution environment."
-					meta={runtimeEnabled ? auth.workspace?.name : "GitHub sign-in required"}
-					actions={
-						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={refreshRuntime}>
-							<RefreshCw data-icon />
-							Refresh
-						</Button>
-					}
-				>
-					{runtimeEnabled ? (
-						<div className="grid gap-0">
-							<div className="grid gap-3 border-b border-[color:var(--line)] p-4 md:grid-cols-3">
-								<RuntimeSummaryCard icon={SquareTerminal} label="Personal runtime" value="Local runner" meta="Desktop-owned execution" />
-								<RuntimeSummaryCard icon={ServerCog} label="Team workers" value={`${onlineWorkerCount} online`} meta={`${workers.length} registered`} />
-								<RuntimeSummaryCard icon={ListChecks} label="Task queue" value={`${queuedTaskCount} queued`} meta={`${tasks.length} recent tasks`} />
-							</div>
-							<SettingsRow
-								icon={Settings2}
-								title="Control plane"
-								description="The server owns worker identity, registration tokens, task claims, and task status. Codex execution is still a worker-side responsibility."
-								control={<StatusPill>{auth.workspace?.role || "member"}</StatusPill>}
-							/>
-							<SettingsRow
-								icon={ServerCog}
-								title="Docker server worker"
-								description="For UI testing, run the dev worker in Docker. It uses a container work root, advertises codex dry-run capability, and returns a committed source diff without using the local machine runtime."
-								control={<StatusPill>dry run</StatusPill>}
-							/>
-						</div>
-					) : (
-						<div className="p-4">
-							<Notice>
-								Sign in with GitHub from the workspace menu before managing team worker tokens, registered workers, or queued runtime tasks.
-							</Notice>
-						</div>
-					)}
-				</SettingsSection>
+						<SettingsSection
+							title="Team runtime"
+							description="Team mode uses a server queue and workers that pull tasks from their own execution environment."
+							meta={teamRuntimeEnabled ? auth.workspace?.name : "GitHub sign-in required"}
+							actions={
+								<Button type="button" variant="secondary" size="sm" disabled={!teamRuntimeEnabled} onClick={refreshRuntime}>
+									<RefreshCw data-icon />
+									Refresh
+								</Button>
+							}
+						>
+							{teamRuntimeEnabled ? (
+								<div className="grid gap-0">
+									<div className="grid gap-3 border-b border-[color:var(--line)] p-4 md:grid-cols-3">
+										<RuntimeSummaryCard icon={SquareTerminal} label="Personal runtime" value="Local runner" meta="Desktop-owned execution" />
+										<RuntimeSummaryCard icon={ServerCog} label="Team workers" value={`${onlineWorkerCount} online`} meta={`${workers.length} registered`} />
+										<RuntimeSummaryCard icon={ListChecks} label="Task queue" value={`${queuedTaskCount} queued`} meta={`${tasks.length} recent tasks`} />
+									</div>
+									<SettingsRow
+										icon={Settings2}
+										title="Control plane"
+										description="The server owns worker identity, registration tokens, task claims, and task status. Codex execution is still a worker-side responsibility."
+										control={<StatusPill>{auth.workspace?.role || "member"}</StatusPill>}
+									/>
+									<SettingsRow
+										icon={ServerCog}
+										title="Docker server worker"
+										description="For UI testing, run the dev worker in Docker. It uses a container work root, advertises codex dry-run capability, and returns a committed source diff without using the local machine runtime."
+										control={<StatusPill>dry run</StatusPill>}
+									/>
+								</div>
+							) : (
+								<div className="p-4">
+									<Notice>
+										Sign in with GitHub from the workspace menu before managing team worker tokens, registered workers, or queued runtime tasks.
+									</Notice>
+								</div>
+							)}
+						</SettingsSection>
 
-				<RuntimePanel
-					title="Worker registration tokens"
-					description="Create short-lived bootstrap tokens for worker daemons. Raw token values are shown once."
-					actions={
-						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={() => setTokenModalOpen(true)}>
-							<Plus data-icon />
-							New token
-						</Button>
-					}
-				>
-					<RegistrationTokenList
-						tokens={tokens}
-						loading={tokensQuery.isPending && runtimeEnabled}
-						disabled={!runtimeEnabled || revokeToken.isPending}
-						onRevoke={(tokenID) => revokeToken.mutate(tokenID)}
+						<RuntimePanel
+							title="Worker registration tokens"
+							description="Create short-lived bootstrap tokens for worker daemons. Raw token values are shown once."
+							actions={
+								<Button type="button" variant="secondary" size="sm" disabled={!teamRuntimeEnabled} onClick={() => setTokenModalOpen(true)}>
+									<Plus data-icon />
+									New token
+								</Button>
+							}
+						>
+							<RegistrationTokenList
+								tokens={tokens}
+								loading={tokensQuery.isPending && teamRuntimeEnabled}
+								disabled={!teamRuntimeEnabled || revokeToken.isPending}
+								onRevoke={(tokenID) => revokeToken.mutate(tokenID)}
+							/>
+						</RuntimePanel>
+
+						<RuntimePanel
+							title="Workers"
+							description="Workers register from their own environment, then heartbeat with mode, load, capabilities, and labels."
+						>
+							<WorkerList workers={workers} loading={workersQuery.isPending && teamRuntimeEnabled} />
+						</RuntimePanel>
+
+						<RuntimePanel
+							title="Task queue"
+							description="Queued task records are claimed by matching online workers. Payloads should reference context, not carry credentials."
+							actions={
+								<Button type="button" variant="secondary" size="sm" disabled={!teamRuntimeEnabled} onClick={() => setTaskModalOpen(true)}>
+									<Plus data-icon />
+									Queue task
+								</Button>
+							}
+						>
+							<TaskList
+								tasks={tasks}
+								workers={workers}
+								loading={tasksQuery.isPending && teamRuntimeEnabled}
+								token={auth.token}
+								workspaceID={workspaceID}
+								selectedTaskID={selectedTaskID}
+								onSelectTask={setSelectedTaskID}
+								cancellingTaskID={cancelTask.variables || ""}
+								onCancelTask={(taskID) => cancelTask.mutate(taskID)}
+							/>
+						</RuntimePanel>
+					</>
+				) : (
+					<TeamWorkspaceGate
+						signedIn={isSignedIn}
+						workspaceName={auth.workspace?.name}
+						onCreate={() => setTeamWorkspaceModalOpen(true)}
 					/>
-				</RuntimePanel>
-
-				<RuntimePanel
-					title="Workers"
-					description="Workers register from their own environment, then heartbeat with mode, load, capabilities, and labels."
-				>
-					<WorkerList workers={workers} loading={workersQuery.isPending && runtimeEnabled} />
-				</RuntimePanel>
-
-				<RuntimePanel
-					title="Task queue"
-					description="Queued task records are claimed by matching online workers. Payloads should reference context, not carry credentials."
-					actions={
-						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={() => setTaskModalOpen(true)}>
-							<Plus data-icon />
-							Queue task
-						</Button>
-					}
-				>
-					<TaskList
-						tasks={tasks}
-						workers={workers}
-						loading={tasksQuery.isPending && runtimeEnabled}
-						token={auth.token}
-						workspaceID={workspaceID}
-						selectedTaskID={selectedTaskID}
-						onSelectTask={setSelectedTaskID}
-						cancellingTaskID={cancelTask.variables || ""}
-						onCancelTask={(taskID) => cancelTask.mutate(taskID)}
-					/>
-				</RuntimePanel>
+				)}
 				{cancelTask.error ? <Notice tone="danger">{cancelTask.error.message}</Notice> : null}
 
 				<SettingsSection
@@ -490,6 +536,35 @@ export function WorkspaceSettingsPage() {
 					/>
 				</SettingsSection>
 			</div>
+
+			{teamWorkspaceModalOpen ? (
+				<Modal
+					title="Create team workspace"
+					description="Team workspaces enable member invitations, shared Inbox receipts, worker registration, and team-mode sessions."
+					onClose={() => setTeamWorkspaceModalOpen(false)}
+				>
+					<form className="grid gap-4" onSubmit={submitTeamWorkspace}>
+						{createTeamWorkspace.error ? <Notice tone="danger">{createTeamWorkspace.error.message}</Notice> : null}
+						<Field label="Workspace name">
+							<Input
+								value={teamWorkspaceName}
+								onChange={(event) => setTeamWorkspaceName(event.target.value)}
+								placeholder="Engineering team"
+								autoFocus
+							/>
+						</Field>
+						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
+							<Button type="button" variant="secondary" onClick={() => setTeamWorkspaceModalOpen(false)}>
+								Cancel
+							</Button>
+							<Button type="submit" disabled={!isSignedIn || createTeamWorkspace.isPending || teamWorkspaceName.trim() === ""}>
+								<UsersRound data-icon />
+								{createTeamWorkspace.isPending ? "Creating" : "Create workspace"}
+							</Button>
+						</div>
+					</form>
+				</Modal>
+			) : null}
 
 			{invitationModalOpen ? (
 				<Modal title="Invite workspace member" description="Create a one-time invite link for this workspace. The invited user must sign in before accepting it." onClose={() => setInvitationModalOpen(false)}>
@@ -539,7 +614,7 @@ export function WorkspaceSettingsPage() {
 							<Button type="button" variant="secondary" onClick={() => setInvitationModalOpen(false)}>
 								Cancel
 							</Button>
-							<Button type="submit" disabled={!runtimeEnabled || !canManageWorkspace || createInvitation.isPending}>
+							<Button type="submit" disabled={!teamRuntimeEnabled || !canManageWorkspace || createInvitation.isPending}>
 								<MailPlus data-icon />
 								{createInvitation.isPending ? "Creating" : "Create invite"}
 							</Button>
@@ -608,7 +683,7 @@ export function WorkspaceSettingsPage() {
 							<Button type="button" variant="secondary" onClick={() => setTokenModalOpen(false)}>
 								Cancel
 							</Button>
-							<Button type="submit" disabled={!runtimeEnabled || createToken.isPending}>
+							<Button type="submit" disabled={!teamRuntimeEnabled || createToken.isPending}>
 								<KeyRound data-icon />
 								{createToken.isPending ? "Creating" : "Create token"}
 							</Button>
@@ -704,7 +779,7 @@ export function WorkspaceSettingsPage() {
 							<Button type="button" variant="secondary" onClick={() => setTaskModalOpen(false)}>
 								Cancel
 							</Button>
-							<Button type="submit" disabled={!runtimeEnabled || createTask.isPending}>
+							<Button type="submit" disabled={!teamRuntimeEnabled || createTask.isPending}>
 								<ListChecks data-icon />
 								{createTask.isPending ? "Queueing" : "Queue task"}
 							</Button>
@@ -760,6 +835,39 @@ function SettingsRow(props: {
 			</span>
 			<div className="justify-self-start md:justify-self-end">{props.control}</div>
 		</div>
+	);
+}
+
+function TeamWorkspaceGate(props: {
+	signedIn: boolean;
+	workspaceName?: string;
+	onCreate: () => void;
+}) {
+	return (
+		<SettingsSection
+			title="Team workspace"
+			description="Create or switch to a team workspace before inviting members or running shared workers."
+			meta={props.signedIn ? "Personal workspace" : "GitHub sign-in required"}
+			actions={
+				<Button type="button" variant="secondary" size="sm" disabled={!props.signedIn} onClick={props.onCreate}>
+					<UsersRound data-icon />
+					Create team workspace
+				</Button>
+			}
+		>
+			<div className="grid gap-3 p-4 md:grid-cols-3">
+				<RuntimeSummaryCard icon={SquareTerminal} label="Current workspace" value="Personal" meta={props.workspaceName || "Local-first"} />
+				<RuntimeSummaryCard icon={UsersRound} label="Members" value="Not enabled" meta="Requires team workspace" />
+				<RuntimeSummaryCard icon={ServerCog} label="Team workers" value="Not enabled" meta="Create a team workspace first" />
+			</div>
+			<div className="border-t border-[color:var(--line)] p-4">
+				{props.signedIn ? (
+					<Notice>Personal workspace uses the local runner. Team access, worker tokens, registered workers, and runtime tasks appear after you create or switch to a team workspace.</Notice>
+				) : (
+					<Notice>Sign in with GitHub before creating a team workspace.</Notice>
+				)}
+			</div>
+		</SettingsSection>
 	);
 }
 
@@ -1240,6 +1348,11 @@ function invitationStatus(invitation: WorkspaceInvitation) {
 
 function activeInvitationCount(invitations: WorkspaceInvitation[]) {
 	return invitations.filter((invitation) => invitationStatus(invitation) === "pending").length;
+}
+
+function defaultTeamWorkspaceName(name: string | undefined) {
+	const owner = name?.trim();
+	return owner ? `${owner}'s team` : "Engineering team";
 }
 
 function buildInviteLink(token: string) {

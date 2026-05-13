@@ -81,3 +81,16 @@ func defaultWorkspaceSlug(login, userID string) string {
 	}
 	return base + "-" + suffix
 }
+
+func workspaceSlug(name, suffix string) string {
+	base := strings.ToLower(strings.TrimSpace(name))
+	base = strings.Trim(slugUnsafePattern.ReplaceAllString(base, "-"), "-")
+	if base == "" {
+		base = "workspace"
+	}
+	suffix = strings.TrimSpace(suffix)
+	if suffix == "" {
+		return base
+	}
+	return base + "-" + suffix
+}

@@ -1,6 +1,6 @@
 # mspace Local API Integration Guide
 
-> Status: local MVP API guide, updated 2026-05-12
+> Status: local MVP API guide, updated 2026-05-13
 
 This guide is for local tools or future desktop integrations that need to call the mspace runner directly. The API is local-first and currently served by the Go runner, normally on `http://127.0.0.1:7788`.
 
@@ -14,6 +14,13 @@ curl "$MSPACE_API_BASE/health"
 ```
 
 The Electron preload exposes the same base URL to the renderer through `window.mspaceDesktop.apiBaseUrl`.
+
+The server control plane normally runs on `http://127.0.0.1:8787` and owns GitHub auth, personal/team workspaces, membership, invitations, team Inbox receipts, worker registration, and runtime task queues:
+
+```bash
+export MSPACE_SERVER_BASE="http://127.0.0.1:8787"
+curl "$MSPACE_SERVER_BASE/health"
+```
 
 Agent sessions also receive `MSPACE_API_BASE_URL` so they can update issue task state from the prepared worktree when needed.
 
@@ -122,6 +129,15 @@ curl -X POST "$MSPACE_API_BASE/api/control-plane/session" \
   -d '{"serverBaseUrl":"http://127.0.0.1:8787","token":"<msp-token>","workspaceId":"<workspace-id>"}'
 ```
 
+Personal workspaces are the default after GitHub sign-in. Team Inbox, invitations, worker registration tokens, registered workers, and runtime tasks require an explicit team workspace:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Engineering team","kind":"team"}'
+```
+
 The team Inbox endpoints live on the server base URL and require `Authorization: Bearer <msp-token>`:
 
 ```bash
@@ -134,6 +150,23 @@ curl -X POST \
   "http://127.0.0.1:8787/api/workspaces/<workspace-id>/issues/<issue-id>/read-through" \
   -d '{"throughEventId":"<event-id>"}'
 ```
+
+Create and accept a team workspace invitation:
+
+```bash
+invite_json="$(curl -sS -X POST "$MSPACE_SERVER_BASE/api/workspaces/<team-workspace-id>/invitations" \
+  -H "Authorization: Bearer <owner-or-admin-msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"teammate@example.com","role":"member","expiresInHours":168}')"
+invite_token="$(printf '%s' "$invite_json" | jq -r '.token')"
+
+curl -X POST "$MSPACE_SERVER_BASE/api/workspace-invitations/accept" \
+  -H "Authorization: Bearer <teammate-msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d "{\"token\":\"$invite_token\"}"
+```
+
+The raw `msi_...` invite token is returned only when the invitation is created. Listing invitations returns metadata and a token prefix only.
 
 Create an issue with a creator display snapshot:
 

@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: local MVP implementation snapshot, updated 2026-05-12
+> Status: local MVP implementation snapshot, updated 2026-05-13
 
 ## Current Implementation Snapshot
 
@@ -11,6 +11,7 @@ The repository currently contains a runnable local-first desktop MVP:
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`. It owns users, workspaces, membership, GitHub identity, mspace auth sessions, runtime worker registration, and future GitHub App installation state.
 - Desktop GitHub sign-in uses the server OAuth flow, stores an `msp_...` session token, and caches a lightweight display identity for local runner writes while collaboration data still lives in SQLite.
+- GitHub sign-in creates a personal workspace by default. Team collaboration features require an explicit team workspace created from Workspace Settings; personal workspaces keep team Inbox, invitations, worker tokens, worker registry, and runtime tasks disabled.
 - Issue creation, the Issue Detail reply composer, the Project runbook editor, and the Issue Detail runbook modal use a local TipTap-backed `IssueDocumentEditor` that emits or renders Markdown. This preserves document-like writing surfaces while keeping runner-side checklist extraction, runbook storage, and comment storage text-based. The Issue Detail runbook modal uses the read-only `runbook-viewer` variant rather than ReactMarkdown or the editable runbook shell. Images can be uploaded, pasted, or dropped into the editor; Markdown stores stable `/api/attachments/<id>` image URLs backed by runner attachment records rather than loose local files, and the renderer shows them as thumbnail node views.
 - Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless `/health` is healthy and advertises the expected runner protocol capabilities; in desktop development, stale local runners on `127.0.0.1:7788` are replaced before startup continues.
 - Go team runtime worker in `worker/`. It is a standalone daemon that registers with an `msw_...` token, sends heartbeat/load/capability updates, claims matching tasks, completes protocol smoke/noop tasks, and can execute `agent_session` tasks by starting `codex app-server --listen stdio://` in a payload-specified workdir.
@@ -83,14 +84,15 @@ Implemented server control-plane API:
 | `GET` | `/api/auth/github/result` | Desktop polling endpoint for the state-bound auth result. Returns `202` while pending and consumes the short-lived result once ready. |
 | `GET` | `/api/auth/me` | Load the authenticated user and workspaces from `Authorization: Bearer msp_...`. |
 | `GET` | `/api/workspaces` | List workspaces for the authenticated user. |
-| `GET` | `/api/workspaces/{workspaceID}/inbox` | List unread issue-event receipts for the authenticated user. |
-| `POST` | `/api/workspaces/{workspaceID}/issue-events` | Append a reviewable issue event and create per-user receipts. |
-| `POST` | `/api/workspaces/{workspaceID}/issue-events/{eventID}/read` | Mark one event receipt read for the authenticated user. |
-| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/read-through` | Mark unread receipts for one issue read through an optional event boundary. |
+| `POST` | `/api/workspaces` | Create a team workspace for the authenticated user. |
+| `GET` | `/api/workspaces/{workspaceID}/inbox` | List unread issue-event receipts for the authenticated user in a team workspace. |
+| `POST` | `/api/workspaces/{workspaceID}/issue-events` | Append a reviewable issue event and create per-user receipts in a team workspace. |
+| `POST` | `/api/workspaces/{workspaceID}/issue-events/{eventID}/read` | Mark one team workspace event receipt read for the authenticated user. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/read-through` | Mark unread team workspace receipts for one issue read through an optional event boundary. |
 | `GET` | `/api/workspaces/{workspaceID}/members` | List workspace members with role and display identity. |
-| `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time workspace invitation link. |
-| `GET` | `/api/workspaces/{workspaceID}/invitations` | List recent invitations without raw token values. |
-| `DELETE` | `/api/workspaces/{workspaceID}/invitations/{invitationID}` | Revoke a workspace invitation. |
+| `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time team workspace invitation link. |
+| `GET` | `/api/workspaces/{workspaceID}/invitations` | List recent team workspace invitations without raw token values. |
+| `DELETE` | `/api/workspaces/{workspaceID}/invitations/{invitationID}` | Revoke a team workspace invitation. |
 | `POST` | `/api/workspace-invitations/accept` | Accept a workspace invitation as the authenticated user. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived runtime worker registration token. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List runtime worker registration token metadata without exposing raw token values. |
@@ -205,12 +207,13 @@ Required fields:
 
 - name;
 - slug;
+- kind (`personal` or `team`);
 - members;
 - default agent providers;
 - runtime policy;
 - project list.
 
-The control plane implements `workspaces` and `workspace_members`. The local runner still behaves as a single local workspace for issue/session data until those collaboration APIs move behind the server.
+The control plane implements `workspaces` and `workspace_members`. A GitHub user gets a personal workspace by default; explicit team workspaces unlock shared members, server Inbox receipts, invitations, runtime worker registration, and runtime tasks. The local runner still behaves as a single local workspace for issue/session data until those collaboration APIs move behind the server.
 
 ### Inbox Event
 
@@ -273,7 +276,7 @@ Current implemented fields:
 
 ### Workspace Settings
 
-A Workspace Settings record stores local automation policy for the current workspace. The Workspace Settings page also exposes the Team access and Team Runtime control-plane surfaces: members, invitations, registration tokens, worker liveness/capability snapshots, and recent runtime task records. This keeps collaboration and execution policy at the workspace boundary instead of mixing it into the Agents prompt/profile route.
+A Workspace Settings record stores local automation policy for the current workspace. The Workspace Settings page also exposes the Team access and Team Runtime control-plane surfaces for team workspaces: members, invitations, registration tokens, worker liveness/capability snapshots, and recent runtime task records. Personal workspaces show a create-team-workspace entry instead of team panels. This keeps collaboration and execution policy at the workspace boundary instead of mixing it into the Agents prompt/profile route.
 
 Current implemented fields:
 
@@ -380,7 +383,7 @@ Team mode deliberately supports two deployment forms behind the same control-pla
 
 The first team-mode runtime slice is the server runtime registry plus queue. Workspace owners/admins create short-lived `msw_...` runtime registration tokens, a worker daemon registers itself with a name/mode/version/capability snapshot, and the worker keeps itself live through heartbeat updates. Authenticated workspace users can queue `runtime_tasks`; online providers can claim the next queued task only when mode, provider kind, labels, and required capabilities match. The current worker completes `protocol_smoke` / `noop` tasks and can execute `agent_session` payloads with `workdir` and `prompt` by starting Codex app-server over stdio, forwarding agent/status/tool/command logs to `runtime_task_logs`, polling the server for cancellation, interrupting Codex when cancellation is requested, and completing/failing/cancelling the claimed task honestly.
 
-Issue Detail now has an explicit Local runner / Team worker selector for agent mentions. The runner prepares the same local worktree/context/artifact directory, queues an `agent_session` runtime task, imports worker logs into local session logs, records returned Codex thread/turn ids, and then runs the existing source-change and review-evidence capture path. This closes the MVP control-plane loop for a server worker that can see the prepared workdir. The remaining product gaps are worker-side repo/workspace provisioning, hardening remote cancellation latency, moving durable artifact adoption out of the local bridge, and adding the Kubernetes provider as a second backend without changing the issue/session protocol.
+Issue Detail now has an explicit Local runner / Team worker selector for agent mentions. For Team worker sessions, the local runner writes the issue/session context, queues an `agent_session` runtime task with repository and session metadata, imports worker logs into local session logs, records returned Codex thread/turn ids, and adopts returned source commit metadata, changed files, and diff preview. The Server Worker prepares its own repo cache, session worktree, and artifact directory from the task payload, so a fixed VM, DevBox, or Docker worker can complete the MVP loop without sharing the desktop machine's workdir. The remaining product gaps are stronger artifact transfer, remote credential policy, lower-latency cancellation guarantees, and adding the Kubernetes provider as a second backend without changing the issue/session protocol.
 
 ### Validation Environment
 
@@ -817,6 +820,7 @@ workspaces
   id
   name
   slug
+  kind
   runtime_policy
 
 issue_events
