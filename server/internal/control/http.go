@@ -34,10 +34,30 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/auth/github/result", s.handleGitHubResult)
 	r.Get("/api/auth/me", s.handleMe)
 	r.Get("/api/workspaces", s.handleWorkspaces)
+	r.Post("/api/workspace-invitations/accept", s.handleAcceptWorkspaceInvitation)
+	r.Get("/api/workspaces/{workspaceID}/members", s.handleListWorkspaceMembers)
+	r.Post("/api/workspaces/{workspaceID}/invitations", s.handleCreateWorkspaceInvitation)
+	r.Get("/api/workspaces/{workspaceID}/invitations", s.handleListWorkspaceInvitations)
+	r.Delete("/api/workspaces/{workspaceID}/invitations/{invitationID}", s.handleRevokeWorkspaceInvitation)
 	r.Get("/api/workspaces/{workspaceID}/inbox", s.handleWorkspaceInbox)
 	r.Post("/api/workspaces/{workspaceID}/issue-events", s.handleCreateIssueEvent)
 	r.Post("/api/workspaces/{workspaceID}/issue-events/{eventID}/read", s.handleMarkIssueEventRead)
 	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/read-through", s.handleMarkIssueReadThrough)
+	r.Post("/api/workspaces/{workspaceID}/runtime-registration-tokens", s.handleCreateRuntimeRegistrationToken)
+	r.Get("/api/workspaces/{workspaceID}/runtime-registration-tokens", s.handleListRuntimeRegistrationTokens)
+	r.Delete("/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}", s.handleRevokeRuntimeRegistrationToken)
+	r.Get("/api/workspaces/{workspaceID}/runtime-workers", s.handleListRuntimeWorkers)
+	r.Post("/api/workspaces/{workspaceID}/runtime-tasks", s.handleCreateRuntimeTask)
+	r.Get("/api/workspaces/{workspaceID}/runtime-tasks", s.handleListRuntimeTasks)
+	r.Get("/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events", s.handleListRuntimeTaskEvents)
+	r.Get("/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/logs", s.handleListRuntimeTaskLogs)
+	r.Post("/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/cancel", s.handleCancelRuntimeTask)
+	r.Post("/api/runtime/workers/register", s.handleRegisterRuntimeWorker)
+	r.Post("/api/runtime/workers/{workerID}/heartbeat", s.handleRuntimeWorkerHeartbeat)
+	r.Post("/api/runtime/workers/{workerID}/tasks/claim", s.handleClaimRuntimeTask)
+	r.Get("/api/runtime/workers/{workerID}/tasks/{taskID}", s.handleGetRuntimeTaskForWorker)
+	r.Post("/api/runtime/workers/{workerID}/tasks/{taskID}/logs", s.handleAppendRuntimeTaskLog)
+	r.Post("/api/runtime/workers/{workerID}/tasks/{taskID}/status", s.handleUpdateRuntimeTaskStatus)
 	return r
 }
 
@@ -48,7 +68,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"version":        "0.1.0",
 		"serverProtocol": serverProtocolVersion,
 		"capabilities": map[string]bool{
-			"teamInboxIssueGrouping": true,
+			"teamInboxIssueGrouping":    true,
+			"workspaceInvitations":      true,
+			"runtimeWorkerRegistration": true,
+			"runtimeTaskQueue":          true,
 		},
 	})
 }
@@ -193,6 +216,86 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workspaces)
 }
 
+func (s *Server) handleListWorkspaceMembers(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	members, err := s.store.ListWorkspaceMembers(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, members)
+}
+
+func (s *Server) handleCreateWorkspaceInvitation(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateWorkspaceInvitationInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	result, err := s.store.CreateWorkspaceInvitation(r.Context(), user.ID, workspaceID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (s *Server) handleListWorkspaceInvitations(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	invitations, err := s.store.ListWorkspaceInvitations(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, invitations)
+}
+
+func (s *Server) handleRevokeWorkspaceInvitation(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	invitationID := strings.TrimSpace(chi.URLParam(r, "invitationID"))
+	invitation, err := s.store.RevokeWorkspaceInvitation(r.Context(), user.ID, workspaceID, invitationID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, invitation)
+}
+
+func (s *Server) handleAcceptWorkspaceInvitation(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := AcceptWorkspaceInvitationInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.store.AcceptWorkspaceInvitation(r.Context(), user.ID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleWorkspaceInbox(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.authenticate(w, r)
 	if !ok {
@@ -264,6 +367,261 @@ func (s *Server) handleMarkIssueReadThrough(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "readCount": count})
 }
 
+func (s *Server) handleCreateRuntimeRegistrationToken(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateRuntimeRegistrationTokenInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	result, err := s.store.CreateRuntimeRegistrationToken(r.Context(), user.ID, workspaceID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (s *Server) handleListRuntimeRegistrationTokens(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	tokens, err := s.store.ListRuntimeRegistrationTokens(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tokens)
+}
+
+func (s *Server) handleRevokeRuntimeRegistrationToken(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	tokenID := strings.TrimSpace(chi.URLParam(r, "tokenID"))
+	token, err := s.store.RevokeRuntimeRegistrationToken(r.Context(), user.ID, workspaceID, tokenID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, token)
+}
+
+func (s *Server) handleListRuntimeWorkers(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	workers, err := s.store.ListRuntimeWorkers(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, workers)
+}
+
+func (s *Server) handleCreateRuntimeTask(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateRuntimeTaskInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	task, err := s.store.CreateRuntimeTask(r.Context(), user.ID, workspaceID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, task)
+}
+
+func (s *Server) handleListRuntimeTasks(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	tasks, err := s.store.ListRuntimeTasks(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tasks)
+}
+
+func (s *Server) handleListRuntimeTaskEvents(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	taskID := strings.TrimSpace(chi.URLParam(r, "taskID"))
+	events, err := s.store.ListRuntimeTaskEvents(r.Context(), user.ID, workspaceID, taskID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, events)
+}
+
+func (s *Server) handleListRuntimeTaskLogs(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	taskID := strings.TrimSpace(chi.URLParam(r, "taskID"))
+	logs, err := s.store.ListRuntimeTaskLogs(r.Context(), user.ID, workspaceID, taskID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, logs)
+}
+
+func (s *Server) handleCancelRuntimeTask(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CancelRuntimeTaskInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	taskID := strings.TrimSpace(chi.URLParam(r, "taskID"))
+	task, err := s.store.CancelRuntimeTask(r.Context(), user.ID, workspaceID, taskID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+func (s *Server) handleRegisterRuntimeWorker(w http.ResponseWriter, r *http.Request) {
+	registration, ok := s.authenticateRuntimeRegistration(w, r)
+	if !ok {
+		return
+	}
+	input := RuntimeWorkerInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	worker, err := s.store.RegisterRuntimeWorker(r.Context(), registration, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, worker)
+}
+
+func (s *Server) handleRuntimeWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
+	registration, ok := s.authenticateRuntimeRegistration(w, r)
+	if !ok {
+		return
+	}
+	input := RuntimeWorkerInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workerID := strings.TrimSpace(chi.URLParam(r, "workerID"))
+	worker, err := s.store.UpdateRuntimeWorkerHeartbeat(r.Context(), registration, workerID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, worker)
+}
+
+func (s *Server) handleClaimRuntimeTask(w http.ResponseWriter, r *http.Request) {
+	registration, ok := s.authenticateRuntimeRegistration(w, r)
+	if !ok {
+		return
+	}
+	workerID := strings.TrimSpace(chi.URLParam(r, "workerID"))
+	task, err := s.store.ClaimRuntimeTask(r.Context(), registration, workerID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if task == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+func (s *Server) handleGetRuntimeTaskForWorker(w http.ResponseWriter, r *http.Request) {
+	registration, ok := s.authenticateRuntimeRegistration(w, r)
+	if !ok {
+		return
+	}
+	workerID := strings.TrimSpace(chi.URLParam(r, "workerID"))
+	taskID := strings.TrimSpace(chi.URLParam(r, "taskID"))
+	task, err := s.store.GetRuntimeTaskForWorker(r.Context(), registration, workerID, taskID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+func (s *Server) handleAppendRuntimeTaskLog(w http.ResponseWriter, r *http.Request) {
+	registration, ok := s.authenticateRuntimeRegistration(w, r)
+	if !ok {
+		return
+	}
+	input := AppendRuntimeTaskLogInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workerID := strings.TrimSpace(chi.URLParam(r, "workerID"))
+	taskID := strings.TrimSpace(chi.URLParam(r, "taskID"))
+	log, err := s.store.AppendRuntimeTaskLog(r.Context(), registration, workerID, taskID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, log)
+}
+
+func (s *Server) handleUpdateRuntimeTaskStatus(w http.ResponseWriter, r *http.Request) {
+	registration, ok := s.authenticateRuntimeRegistration(w, r)
+	if !ok {
+		return
+	}
+	input := UpdateRuntimeTaskStatusInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workerID := strings.TrimSpace(chi.URLParam(r, "workerID"))
+	taskID := strings.TrimSpace(chi.URLParam(r, "taskID"))
+	task, err := s.store.UpdateRuntimeTaskStatus(r.Context(), registration, workerID, taskID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
 func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (User, []Workspace, bool) {
 	token := bearerToken(r)
 	if token == "" {
@@ -278,6 +636,24 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (User, []W
 	return user, workspaces, true
 }
 
+func (s *Server) authenticateRuntimeRegistration(w http.ResponseWriter, r *http.Request) (RuntimeRegistration, bool) {
+	token := bearerToken(r)
+	if token == "" {
+		writeError(w, http.StatusUnauthorized, errors.New("missing runtime registration token"))
+		return RuntimeRegistration{}, false
+	}
+	registration, err := s.store.AuthenticateRuntimeRegistrationToken(r.Context(), token)
+	if err != nil {
+		status := http.StatusUnauthorized
+		if errors.Is(err, ErrNotFound) {
+			status = http.StatusUnauthorized
+		}
+		writeError(w, status, errors.New("invalid runtime registration token"))
+		return RuntimeRegistration{}, false
+	}
+	return registration, true
+}
+
 func bearerToken(r *http.Request) string {
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, "Bearer ") {
@@ -290,7 +666,7 @@ func jsonMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -315,7 +691,9 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	} else if errors.Is(err, ErrExpired) {
 		status = http.StatusUnauthorized
-	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "valid JSON") {
+	} else if errors.Is(err, ErrForbidden) {
+		status = http.StatusForbidden
+	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") {
 		status = http.StatusBadRequest
 	}
 	writeError(w, status, err)

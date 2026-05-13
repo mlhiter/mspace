@@ -35,6 +35,22 @@ func newSessionToken() (string, error) {
 	return "msp_" + value, nil
 }
 
+func newRuntimeRegistrationToken() (string, error) {
+	value, err := randomHex(32)
+	if err != nil {
+		return "", fmt.Errorf("generate runtime registration token: %w", err)
+	}
+	return "msw_" + value, nil
+}
+
+func newWorkspaceInvitationToken() (string, error) {
+	value, err := randomHex(32)
+	if err != nil {
+		return "", fmt.Errorf("generate workspace invitation token: %w", err)
+	}
+	return "msi_" + value, nil
+}
+
 func tokenHash(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])

@@ -59,6 +59,15 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	if payload.Capabilities["teamInboxIssueGrouping"] != true {
 		t.Fatalf("expected team inbox grouping capability, got %+v", payload.Capabilities)
 	}
+	if payload.Capabilities["workspaceInvitations"] != true {
+		t.Fatalf("expected workspace invitations capability, got %+v", payload.Capabilities)
+	}
+	if payload.Capabilities["runtimeWorkerRegistration"] != true {
+		t.Fatalf("expected runtime worker registration capability, got %+v", payload.Capabilities)
+	}
+	if payload.Capabilities["runtimeTaskQueue"] != true {
+		t.Fatalf("expected runtime task queue capability, got %+v", payload.Capabilities)
+	}
 }
 
 func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
@@ -245,5 +254,526 @@ func TestGitHubCallbackRejectsReusedState(t *testing.T) {
 		if i == 1 && recorder.Code != http.StatusBadRequest {
 			t.Fatalf("second callback should reject reused state, status=%d body=%s", recorder.Code, recorder.Body.String())
 		}
+	}
+}
+
+func TestWorkspaceInvitationFlow(t *testing.T) {
+	store := NewMemoryStore()
+	owner, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "owner-1",
+		Login:          "owner",
+		Name:           "Owner User",
+		Email:          "owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert owner: %v", err)
+	}
+	ownerToken, _, err := store.CreateAuthSession(context.Background(), owner.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create owner session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+
+	member, _, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "member-1",
+		Login:          "member",
+		Name:           "Member User",
+		Email:          "member@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert member: %v", err)
+	}
+	memberToken, _, err := store.CreateAuthSession(context.Background(), member.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create member session: %v", err)
+	}
+
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createRecorder := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/invitations", strings.NewReader(`{"email":"member@example.com","role":"member","expiresInHours":24}`))
+	createReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(createRecorder, createReq)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create invitation status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var inviteResult WorkspaceInvitationResult
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &inviteResult); err != nil {
+		t.Fatalf("parse invitation: %v", err)
+	}
+	if !strings.HasPrefix(inviteResult.Token, "msi_") || inviteResult.Invitation.WorkspaceID != workspaceID || inviteResult.Invitation.Role != "member" {
+		t.Fatalf("unexpected invite result: %+v", inviteResult)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/invitations", nil)
+	listReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(listRecorder, listReq)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list invitation status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var invitations []WorkspaceInvitation
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &invitations); err != nil {
+		t.Fatalf("parse invitations: %v", err)
+	}
+	if len(invitations) != 1 || invitations[0].ID != inviteResult.Invitation.ID || invitations[0].AcceptedAt != "" {
+		t.Fatalf("unexpected invitations: %+v", invitations)
+	}
+
+	acceptRecorder := httptest.NewRecorder()
+	acceptReq := httptest.NewRequest(http.MethodPost, "/api/workspace-invitations/accept", strings.NewReader(`{"token":"`+inviteResult.Token+`"}`))
+	acceptReq.Header.Set("Authorization", "Bearer "+memberToken)
+	router.ServeHTTP(acceptRecorder, acceptReq)
+	if acceptRecorder.Code != http.StatusOK {
+		t.Fatalf("accept invitation status=%d body=%s", acceptRecorder.Code, acceptRecorder.Body.String())
+	}
+	var acceptResult AcceptWorkspaceInvitationResult
+	if err := json.Unmarshal(acceptRecorder.Body.Bytes(), &acceptResult); err != nil {
+		t.Fatalf("parse accept result: %v", err)
+	}
+	if acceptResult.Workspace.ID != workspaceID || acceptResult.Workspace.Role != "member" || len(acceptResult.Workspaces) != 2 {
+		t.Fatalf("unexpected accept result: %+v", acceptResult)
+	}
+
+	membersRecorder := httptest.NewRecorder()
+	membersReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/members", nil)
+	membersReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(membersRecorder, membersReq)
+	if membersRecorder.Code != http.StatusOK {
+		t.Fatalf("list members status=%d body=%s", membersRecorder.Code, membersRecorder.Body.String())
+	}
+	var members []WorkspaceMember
+	if err := json.Unmarshal(membersRecorder.Body.Bytes(), &members); err != nil {
+		t.Fatalf("parse members: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("expected owner and invited member, got %+v", members)
+	}
+	if members[0].Role != "owner" || members[1].UserID != member.ID || members[1].Role != "member" {
+		t.Fatalf("unexpected members: %+v", members)
+	}
+
+	workspaceListRecorder := httptest.NewRecorder()
+	workspaceListReq := httptest.NewRequest(http.MethodGet, "/api/workspaces", nil)
+	workspaceListReq.Header.Set("Authorization", "Bearer "+memberToken)
+	router.ServeHTTP(workspaceListRecorder, workspaceListReq)
+	if workspaceListRecorder.Code != http.StatusOK {
+		t.Fatalf("member workspaces status=%d body=%s", workspaceListRecorder.Code, workspaceListRecorder.Body.String())
+	}
+	var memberWorkspaces []Workspace
+	if err := json.Unmarshal(workspaceListRecorder.Body.Bytes(), &memberWorkspaces); err != nil {
+		t.Fatalf("parse member workspaces: %v", err)
+	}
+	foundShared := false
+	for _, workspace := range memberWorkspaces {
+		if workspace.ID == workspaceID && workspace.Role == "member" {
+			foundShared = true
+			break
+		}
+	}
+	if !foundShared {
+		t.Fatalf("expected member to see accepted workspace, got %+v", memberWorkspaces)
+	}
+
+	reuseRecorder := httptest.NewRecorder()
+	reuseReq := httptest.NewRequest(http.MethodPost, "/api/workspace-invitations/accept", strings.NewReader(`{"token":"`+inviteResult.Token+`"}`))
+	reuseReq.Header.Set("Authorization", "Bearer "+memberToken)
+	router.ServeHTTP(reuseRecorder, reuseReq)
+	if reuseRecorder.Code != http.StatusNotFound {
+		t.Fatalf("accepted invitation should not be reusable, status=%d body=%s", reuseRecorder.Code, reuseRecorder.Body.String())
+	}
+}
+
+func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "worker-owner",
+		Login:          "worker-owner",
+		Name:           "Worker Owner",
+		Email:          "worker-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createTokenRecorder := httptest.NewRecorder()
+	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"team runner","expiresInHours":12}`))
+	createTokenReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createTokenRecorder, createTokenReq)
+	if createTokenRecorder.Code != http.StatusCreated {
+		t.Fatalf("create runtime token status=%d body=%s", createTokenRecorder.Code, createTokenRecorder.Body.String())
+	}
+	var tokenResult RuntimeRegistrationTokenResult
+	if err := json.Unmarshal(createTokenRecorder.Body.Bytes(), &tokenResult); err != nil {
+		t.Fatalf("parse runtime token: %v", err)
+	}
+	if !strings.HasPrefix(tokenResult.Token, "msw_") || tokenResult.RegistrationToken.WorkspaceID != workspaceID {
+		t.Fatalf("unexpected runtime token result: %+v", tokenResult)
+	}
+
+	listTokensRecorder := httptest.NewRecorder()
+	listTokensReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", nil)
+	listTokensReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(listTokensRecorder, listTokensReq)
+	if listTokensRecorder.Code != http.StatusOK {
+		t.Fatalf("list runtime tokens status=%d body=%s", listTokensRecorder.Code, listTokensRecorder.Body.String())
+	}
+	var tokens []RuntimeRegistrationToken
+	if err := json.Unmarshal(listTokensRecorder.Body.Bytes(), &tokens); err != nil {
+		t.Fatalf("parse runtime tokens: %v", err)
+	}
+	if len(tokens) != 1 || tokens[0].ID != tokenResult.RegistrationToken.ID || tokens[0].TokenPrefix == "" {
+		t.Fatalf("unexpected runtime tokens: %+v", tokens)
+	}
+
+	registerRecorder := httptest.NewRecorder()
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"team-worker-1","mode":"team","version":"0.1.0","capabilities":{"codex":true,"docker":true},"labels":{"region":"local"}}`))
+	registerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(registerRecorder, registerReq)
+	if registerRecorder.Code != http.StatusCreated {
+		t.Fatalf("register worker status=%d body=%s", registerRecorder.Code, registerRecorder.Body.String())
+	}
+	var worker RuntimeWorker
+	if err := json.Unmarshal(registerRecorder.Body.Bytes(), &worker); err != nil {
+		t.Fatalf("parse worker: %v", err)
+	}
+	if worker.ID == "" || worker.WorkspaceID != workspaceID || worker.Name != "team-worker-1" || worker.Status != "online" {
+		t.Fatalf("unexpected worker: %+v", worker)
+	}
+	if !strings.Contains(string(worker.Capabilities), `"codex":true`) {
+		t.Fatalf("expected codex capability, got %s", worker.Capabilities)
+	}
+
+	heartbeatRecorder := httptest.NewRecorder()
+	heartbeatReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/heartbeat", strings.NewReader(`{"status":"draining","currentLoad":2}`))
+	heartbeatReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(heartbeatRecorder, heartbeatReq)
+	if heartbeatRecorder.Code != http.StatusOK {
+		t.Fatalf("heartbeat status=%d body=%s", heartbeatRecorder.Code, heartbeatRecorder.Body.String())
+	}
+	if err := json.Unmarshal(heartbeatRecorder.Body.Bytes(), &worker); err != nil {
+		t.Fatalf("parse heartbeat worker: %v", err)
+	}
+	if worker.Status != "draining" || worker.CurrentLoad != 2 {
+		t.Fatalf("unexpected heartbeat worker: %+v", worker)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-workers", nil)
+	listReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(listRecorder, listReq)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list workers status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var workers []RuntimeWorker
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &workers); err != nil {
+		t.Fatalf("parse workers: %v", err)
+	}
+	if len(workers) != 1 || workers[0].ID != worker.ID || workers[0].Status != "draining" {
+		t.Fatalf("unexpected workers: %+v", workers)
+	}
+
+	revokeRecorder := httptest.NewRecorder()
+	revokeReq := httptest.NewRequest(http.MethodDelete, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens/"+tokenResult.RegistrationToken.ID, nil)
+	revokeReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(revokeRecorder, revokeReq)
+	if revokeRecorder.Code != http.StatusOK {
+		t.Fatalf("revoke token status=%d body=%s", revokeRecorder.Code, revokeRecorder.Body.String())
+	}
+
+	rejectedHeartbeatRecorder := httptest.NewRecorder()
+	rejectedHeartbeatReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/heartbeat", strings.NewReader(`{"status":"online"}`))
+	rejectedHeartbeatReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(rejectedHeartbeatRecorder, rejectedHeartbeatReq)
+	if rejectedHeartbeatRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked token heartbeat should be unauthorized, status=%d body=%s", rejectedHeartbeatRecorder.Code, rejectedHeartbeatRecorder.Body.String())
+	}
+}
+
+func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "task-owner",
+		Login:          "task-owner",
+		Name:           "Task Owner",
+		Email:          "task-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createTokenRecorder := httptest.NewRecorder()
+	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"task worker","expiresInHours":12}`))
+	createTokenReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createTokenRecorder, createTokenReq)
+	if createTokenRecorder.Code != http.StatusCreated {
+		t.Fatalf("create runtime token status=%d body=%s", createTokenRecorder.Code, createTokenRecorder.Body.String())
+	}
+	var tokenResult RuntimeRegistrationTokenResult
+	if err := json.Unmarshal(createTokenRecorder.Body.Bytes(), &tokenResult); err != nil {
+		t.Fatalf("parse runtime token: %v", err)
+	}
+
+	registerRecorder := httptest.NewRecorder()
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"task-worker-1","mode":"team","version":"0.1.0","capabilities":{"codex":true,"docker":true},"labels":{"host":"local"}}`))
+	registerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(registerRecorder, registerReq)
+	if registerRecorder.Code != http.StatusCreated {
+		t.Fatalf("register worker status=%d body=%s", registerRecorder.Code, registerRecorder.Body.String())
+	}
+	var worker RuntimeWorker
+	if err := json.Unmarshal(registerRecorder.Body.Bytes(), &worker); err != nil {
+		t.Fatalf("parse worker: %v", err)
+	}
+
+	createTaskRecorder := httptest.NewRecorder()
+	createTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-1","sessionId":"session-1","projectId":"project-1","kind":"agent_session","priority":5,"runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
+	createTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createTaskRecorder, createTaskReq)
+	if createTaskRecorder.Code != http.StatusCreated {
+		t.Fatalf("create runtime task status=%d body=%s", createTaskRecorder.Code, createTaskRecorder.Body.String())
+	}
+	var task RuntimeTask
+	if err := json.Unmarshal(createTaskRecorder.Body.Bytes(), &task); err != nil {
+		t.Fatalf("parse runtime task: %v", err)
+	}
+	if task.ID == "" || task.WorkspaceID != workspaceID || task.Status != "queued" || task.Kind != "agent_session" || task.RuntimeMode != "team" {
+		t.Fatalf("unexpected created task: %+v", task)
+	}
+
+	listTasksRecorder := httptest.NewRecorder()
+	listTasksReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks", nil)
+	listTasksReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(listTasksRecorder, listTasksReq)
+	if listTasksRecorder.Code != http.StatusOK {
+		t.Fatalf("list runtime tasks status=%d body=%s", listTasksRecorder.Code, listTasksRecorder.Body.String())
+	}
+	var tasks []RuntimeTask
+	if err := json.Unmarshal(listTasksRecorder.Body.Bytes(), &tasks); err != nil {
+		t.Fatalf("parse runtime tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != task.ID {
+		t.Fatalf("unexpected runtime tasks: %+v", tasks)
+	}
+
+	claimRecorder := httptest.NewRecorder()
+	claimReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	claimReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(claimRecorder, claimReq)
+	if claimRecorder.Code != http.StatusOK {
+		t.Fatalf("claim task status=%d body=%s", claimRecorder.Code, claimRecorder.Body.String())
+	}
+	if err := json.Unmarshal(claimRecorder.Body.Bytes(), &task); err != nil {
+		t.Fatalf("parse claimed task: %v", err)
+	}
+	if task.Status != "claimed" || task.ClaimedByWorkerID != worker.ID || task.ClaimedAt == "" {
+		t.Fatalf("unexpected claimed task: %+v", task)
+	}
+
+	secondClaimRecorder := httptest.NewRecorder()
+	secondClaimReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	secondClaimReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(secondClaimRecorder, secondClaimReq)
+	if secondClaimRecorder.Code != http.StatusNoContent {
+		t.Fatalf("second claim should find no task, status=%d body=%s", secondClaimRecorder.Code, secondClaimRecorder.Body.String())
+	}
+
+	runningRecorder := httptest.NewRecorder()
+	runningReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"running"}`))
+	runningReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(runningRecorder, runningReq)
+	if runningRecorder.Code != http.StatusOK {
+		t.Fatalf("running update status=%d body=%s", runningRecorder.Code, runningRecorder.Body.String())
+	}
+	if err := json.Unmarshal(runningRecorder.Body.Bytes(), &task); err != nil {
+		t.Fatalf("parse running task: %v", err)
+	}
+	if task.Status != "running" || task.StartedAt == "" {
+		t.Fatalf("unexpected running task: %+v", task)
+	}
+
+	getWorkerTaskRecorder := httptest.NewRecorder()
+	getWorkerTaskReq := httptest.NewRequest(http.MethodGet, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID, nil)
+	getWorkerTaskReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(getWorkerTaskRecorder, getWorkerTaskReq)
+	if getWorkerTaskRecorder.Code != http.StatusOK {
+		t.Fatalf("get claimed task status=%d body=%s", getWorkerTaskRecorder.Code, getWorkerTaskRecorder.Body.String())
+	}
+	var workerVisibleTask RuntimeTask
+	if err := json.Unmarshal(getWorkerTaskRecorder.Body.Bytes(), &workerVisibleTask); err != nil {
+		t.Fatalf("parse worker-visible task: %v", err)
+	}
+	if workerVisibleTask.ID != task.ID || workerVisibleTask.Status != "running" {
+		t.Fatalf("unexpected worker-visible task: %+v", workerVisibleTask)
+	}
+
+	logRecorder := httptest.NewRecorder()
+	logReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/logs", strings.NewReader(`{"stream":"agent","message":"Task is running on the worker."}`))
+	logReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(logRecorder, logReq)
+	if logRecorder.Code != http.StatusCreated {
+		t.Fatalf("append runtime task log status=%d body=%s", logRecorder.Code, logRecorder.Body.String())
+	}
+	var taskLog RuntimeTaskLog
+	if err := json.Unmarshal(logRecorder.Body.Bytes(), &taskLog); err != nil {
+		t.Fatalf("parse runtime task log: %v", err)
+	}
+	if taskLog.TaskID != task.ID || taskLog.WorkerID != worker.ID || taskLog.Stream != "agent" {
+		t.Fatalf("unexpected runtime task log: %+v", taskLog)
+	}
+
+	logsRecorder := httptest.NewRecorder()
+	logsReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks/"+task.ID+"/logs", nil)
+	logsReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(logsRecorder, logsReq)
+	if logsRecorder.Code != http.StatusOK {
+		t.Fatalf("list runtime task logs status=%d body=%s", logsRecorder.Code, logsRecorder.Body.String())
+	}
+	var taskLogs []RuntimeTaskLog
+	if err := json.Unmarshal(logsRecorder.Body.Bytes(), &taskLogs); err != nil {
+		t.Fatalf("parse runtime task logs: %v", err)
+	}
+	if len(taskLogs) != 1 || taskLogs[0].Message != "Task is running on the worker." {
+		t.Fatalf("unexpected runtime task logs: %+v", taskLogs)
+	}
+
+	cancelRecorder := httptest.NewRecorder()
+	cancelReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks/"+task.ID+"/cancel", strings.NewReader(`{"reason":"user stopped session"}`))
+	cancelReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(cancelRecorder, cancelReq)
+	if cancelRecorder.Code != http.StatusOK {
+		t.Fatalf("cancel runtime task status=%d body=%s", cancelRecorder.Code, cancelRecorder.Body.String())
+	}
+	var cancelledTask RuntimeTask
+	if err := json.Unmarshal(cancelRecorder.Body.Bytes(), &cancelledTask); err != nil {
+		t.Fatalf("parse cancelled task: %v", err)
+	}
+	if cancelledTask.Status != "cancelled" || cancelledTask.FinishedAt == "" || !strings.Contains(cancelledTask.Error, "user stopped") {
+		t.Fatalf("unexpected cancelled task: %+v", cancelledTask)
+	}
+
+	cancelledCompleteRecorder := httptest.NewRecorder()
+	cancelledCompleteReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"completed","result":{"exitCode":0}}`))
+	cancelledCompleteReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(cancelledCompleteRecorder, cancelledCompleteReq)
+	if cancelledCompleteRecorder.Code != http.StatusNotFound {
+		t.Fatalf("cancelled task should reject worker completion, status=%d body=%s", cancelledCompleteRecorder.Code, cancelledCompleteRecorder.Body.String())
+	}
+
+	createTask2Recorder := httptest.NewRecorder()
+	createTask2Req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-2","sessionId":"session-2","projectId":"project-1","kind":"agent_session","priority":5,"runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"finish it"}}`))
+	createTask2Req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createTask2Recorder, createTask2Req)
+	if createTask2Recorder.Code != http.StatusCreated {
+		t.Fatalf("create second runtime task status=%d body=%s", createTask2Recorder.Code, createTask2Recorder.Body.String())
+	}
+	if err := json.Unmarshal(createTask2Recorder.Body.Bytes(), &task); err != nil {
+		t.Fatalf("parse second runtime task: %v", err)
+	}
+
+	claim2Recorder := httptest.NewRecorder()
+	claim2Req := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	claim2Req.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(claim2Recorder, claim2Req)
+	if claim2Recorder.Code != http.StatusOK {
+		t.Fatalf("claim second task status=%d body=%s", claim2Recorder.Code, claim2Recorder.Body.String())
+	}
+	if err := json.Unmarshal(claim2Recorder.Body.Bytes(), &task); err != nil {
+		t.Fatalf("parse second claimed task: %v", err)
+	}
+
+	running2Recorder := httptest.NewRecorder()
+	running2Req := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"running"}`))
+	running2Req.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(running2Recorder, running2Req)
+	if running2Recorder.Code != http.StatusOK {
+		t.Fatalf("running second update status=%d body=%s", running2Recorder.Code, running2Recorder.Body.String())
+	}
+
+	completedRecorder := httptest.NewRecorder()
+	completedReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"completed","result":{"exitCode":0}}`))
+	completedReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(completedRecorder, completedReq)
+	if completedRecorder.Code != http.StatusOK {
+		t.Fatalf("completed update status=%d body=%s", completedRecorder.Code, completedRecorder.Body.String())
+	}
+	if err := json.Unmarshal(completedRecorder.Body.Bytes(), &task); err != nil {
+		t.Fatalf("parse completed task: %v", err)
+	}
+	if task.Status != "completed" || task.FinishedAt == "" || !strings.Contains(string(task.Result), `"exitCode":0`) {
+		t.Fatalf("unexpected completed task: %+v", task)
+	}
+
+	eventsRecorder := httptest.NewRecorder()
+	eventsReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks/"+task.ID+"/events", nil)
+	eventsReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(eventsRecorder, eventsReq)
+	if eventsRecorder.Code != http.StatusOK {
+		t.Fatalf("list runtime task events status=%d body=%s", eventsRecorder.Code, eventsRecorder.Body.String())
+	}
+	var events []RuntimeTaskEvent
+	if err := json.Unmarshal(eventsRecorder.Body.Bytes(), &events); err != nil {
+		t.Fatalf("parse runtime task events: %v", err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("expected 4 runtime task events, got %+v", events)
+	}
+	eventKinds := []string{events[0].Kind, events[1].Kind, events[2].Kind, events[3].Kind}
+	if strings.Join(eventKinds, ",") != "created,claimed,status_changed,status_changed" {
+		t.Fatalf("unexpected task event kinds: %+v", eventKinds)
+	}
+	if events[0].ActorUserID != user.ID || events[1].WorkerID != worker.ID {
+		t.Fatalf("unexpected task event actors: %+v", events)
+	}
+
+	repeatUpdateRecorder := httptest.NewRecorder()
+	repeatUpdateReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"failed","error":"too late"}`))
+	repeatUpdateReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(repeatUpdateRecorder, repeatUpdateReq)
+	if repeatUpdateRecorder.Code != http.StatusNotFound {
+		t.Fatalf("completed task should reject further updates, status=%d body=%s", repeatUpdateRecorder.Code, repeatUpdateRecorder.Body.String())
+	}
+
+	unmatchedTaskRecorder := httptest.NewRecorder()
+	unmatchedTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-2","kind":"agent_session","runtimeMode":"team","requiredCapabilities":{"kubectl":true},"payload":{"prompt":"deploy it"}}`))
+	unmatchedTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(unmatchedTaskRecorder, unmatchedTaskReq)
+	if unmatchedTaskRecorder.Code != http.StatusCreated {
+		t.Fatalf("create unmatched task status=%d body=%s", unmatchedTaskRecorder.Code, unmatchedTaskRecorder.Body.String())
+	}
+
+	unmatchedClaimRecorder := httptest.NewRecorder()
+	unmatchedClaimReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	unmatchedClaimReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(unmatchedClaimRecorder, unmatchedClaimReq)
+	if unmatchedClaimRecorder.Code != http.StatusNoContent {
+		t.Fatalf("worker without required capability should not claim task, status=%d body=%s", unmatchedClaimRecorder.Code, unmatchedClaimRecorder.Body.String())
+	}
+
+	invalidTokenClaimRecorder := httptest.NewRecorder()
+	invalidTokenClaimReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	invalidTokenClaimReq.Header.Set("Authorization", "Bearer msw_invalid")
+	router.ServeHTTP(invalidTokenClaimRecorder, invalidTokenClaimReq)
+	if invalidTokenClaimRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("invalid worker token should be unauthorized, status=%d body=%s", invalidTokenClaimRecorder.Code, invalidTokenClaimRecorder.Body.String())
 	}
 }

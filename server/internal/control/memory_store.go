@@ -3,6 +3,7 @@ package control
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -10,18 +11,24 @@ import (
 )
 
 type MemoryStore struct {
-	mu               sync.Mutex
-	states           map[string]OAuthState
-	results          map[string]memoryOAuthResult
-	users            map[string]User
-	identities       map[string]string
-	workspaces       map[string][]Workspace
-	workspaceMembers map[string]map[string]bool
-	events           map[string]IssueEvent
-	receipts         map[string]memoryReceipt
-	watchers         map[string]map[string]bool
-	sessionHash      map[string]memorySession
-	nextID           int
+	mu                   sync.Mutex
+	states               map[string]OAuthState
+	results              map[string]memoryOAuthResult
+	users                map[string]User
+	identities           map[string]string
+	workspaces           map[string][]Workspace
+	workspaceMembers     map[string]map[string]string
+	workspaceInvitations map[string]memoryWorkspaceInvitation
+	events               map[string]IssueEvent
+	receipts             map[string]memoryReceipt
+	watchers             map[string]map[string]bool
+	sessionHash          map[string]memorySession
+	runtimeTokens        map[string]memoryRuntimeRegistrationToken
+	runtimeWorkers       map[string]RuntimeWorker
+	runtimeTasks         map[string]RuntimeTask
+	runtimeTaskEvents    map[string]RuntimeTaskEvent
+	runtimeTaskLogs      map[string]RuntimeTaskLog
+	nextID               int
 }
 
 type memorySession struct {
@@ -47,18 +54,34 @@ type memoryReceipt struct {
 	UpdatedAt   string
 }
 
+type memoryRuntimeRegistrationToken struct {
+	TokenHash string
+	Record    RuntimeRegistrationToken
+}
+
+type memoryWorkspaceInvitation struct {
+	TokenHash string
+	Record    WorkspaceInvitation
+}
+
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		states:           map[string]OAuthState{},
-		results:          map[string]memoryOAuthResult{},
-		users:            map[string]User{},
-		identities:       map[string]string{},
-		workspaces:       map[string][]Workspace{},
-		workspaceMembers: map[string]map[string]bool{},
-		events:           map[string]IssueEvent{},
-		receipts:         map[string]memoryReceipt{},
-		watchers:         map[string]map[string]bool{},
-		sessionHash:      map[string]memorySession{},
+		states:               map[string]OAuthState{},
+		results:              map[string]memoryOAuthResult{},
+		users:                map[string]User{},
+		identities:           map[string]string{},
+		workspaces:           map[string][]Workspace{},
+		workspaceMembers:     map[string]map[string]string{},
+		workspaceInvitations: map[string]memoryWorkspaceInvitation{},
+		events:               map[string]IssueEvent{},
+		receipts:             map[string]memoryReceipt{},
+		watchers:             map[string]map[string]bool{},
+		sessionHash:          map[string]memorySession{},
+		runtimeTokens:        map[string]memoryRuntimeRegistrationToken{},
+		runtimeWorkers:       map[string]RuntimeWorker{},
+		runtimeTasks:         map[string]RuntimeTask{},
+		runtimeTaskEvents:    map[string]RuntimeTaskEvent{},
+		runtimeTaskLogs:      map[string]RuntimeTaskLog{},
 	}
 }
 
@@ -154,9 +177,9 @@ func (s *MemoryStore) UpsertIdentity(_ Context, profile IdentityProfile) (User, 
 	s.identities[key] = userID
 	s.workspaces[userID] = []Workspace{workspace}
 	if s.workspaceMembers[workspace.ID] == nil {
-		s.workspaceMembers[workspace.ID] = map[string]bool{}
+		s.workspaceMembers[workspace.ID] = map[string]string{}
 	}
-	s.workspaceMembers[workspace.ID][userID] = true
+	s.workspaceMembers[workspace.ID][userID] = "owner"
 	return user, s.workspaces[userID], nil
 }
 
@@ -186,6 +209,181 @@ func (s *MemoryStore) GetUserBySessionToken(_ Context, token string) (User, []Wo
 		return User{}, nil, ErrNotFound
 	}
 	return user, s.workspaces[session.UserID], nil
+}
+
+func (s *MemoryStore) ListWorkspaceMembers(_ Context, userID, workspaceID string) ([]WorkspaceMember, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	members := []WorkspaceMember{}
+	for memberUserID, role := range s.workspaceMembers[workspaceID] {
+		user, ok := s.users[memberUserID]
+		if !ok {
+			continue
+		}
+		member := WorkspaceMember{
+			ID:            workspaceID + ":" + memberUserID,
+			WorkspaceID:   workspaceID,
+			UserID:        memberUserID,
+			Role:          role,
+			Name:          user.Name,
+			Email:         user.Email,
+			AvatarURL:     user.AvatarURL,
+			IdentityLogin: s.identityLoginForUser(memberUserID),
+			CreatedAt:     user.CreatedAt,
+			UpdatedAt:     user.UpdatedAt,
+		}
+		members = append(members, member)
+	}
+	sort.Slice(members, func(i, j int) bool {
+		leftRank := workspaceRoleRank(members[i].Role)
+		rightRank := workspaceRoleRank(members[j].Role)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		return strings.ToLower(members[i].Name) < strings.ToLower(members[j].Name)
+	})
+	return members, nil
+}
+
+func (s *MemoryStore) CreateWorkspaceInvitation(_ Context, userID, workspaceID string, input CreateWorkspaceInvitationInput) (WorkspaceInvitationResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return WorkspaceInvitationResult{}, ErrNotFound
+		}
+		return WorkspaceInvitationResult{}, ErrForbidden
+	}
+	normalized, err := normalizeCreateWorkspaceInvitationInput(input)
+	if err != nil {
+		return WorkspaceInvitationResult{}, err
+	}
+	token, err := newWorkspaceInvitationToken()
+	if err != nil {
+		return WorkspaceInvitationResult{}, err
+	}
+	s.nextID++
+	now := time.Now().UTC()
+	record := WorkspaceInvitation{
+		ID:              fmt.Sprintf("workspace-invitation-%04d", s.nextID),
+		WorkspaceID:     workspaceID,
+		WorkspaceName:   s.workspaceName(workspaceID),
+		Email:           normalized.Email,
+		Role:            normalized.Role,
+		TokenPrefix:     tokenPrefix(token),
+		InvitedByUserID: strings.TrimSpace(userID),
+		ExpiresAt:       now.Add(time.Duration(normalized.ExpiresInHours) * time.Hour).Format(time.RFC3339),
+		Revoked:         false,
+		CreatedAt:       now.Format(time.RFC3339),
+		UpdatedAt:       now.Format(time.RFC3339),
+	}
+	s.workspaceInvitations[tokenHash(token)] = memoryWorkspaceInvitation{TokenHash: tokenHash(token), Record: record}
+	return WorkspaceInvitationResult{Token: token, Invitation: record}, nil
+}
+
+func (s *MemoryStore) ListWorkspaceInvitations(_ Context, userID, workspaceID string) ([]WorkspaceInvitation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return nil, ErrNotFound
+		}
+		return nil, ErrForbidden
+	}
+	invitations := []WorkspaceInvitation{}
+	for _, invitation := range s.workspaceInvitations {
+		if invitation.Record.WorkspaceID == workspaceID {
+			invitations = append(invitations, invitation.Record)
+		}
+	}
+	sort.Slice(invitations, func(i, j int) bool {
+		return invitations[i].CreatedAt > invitations[j].CreatedAt
+	})
+	return invitations, nil
+}
+
+func (s *MemoryStore) RevokeWorkspaceInvitation(_ Context, userID, workspaceID, invitationID string) (WorkspaceInvitation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	invitationID = strings.TrimSpace(invitationID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return WorkspaceInvitation{}, ErrNotFound
+		}
+		return WorkspaceInvitation{}, ErrForbidden
+	}
+	for key, invitation := range s.workspaceInvitations {
+		if invitation.Record.ID != invitationID || invitation.Record.WorkspaceID != workspaceID {
+			continue
+		}
+		invitation.Record.Revoked = true
+		invitation.Record.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		s.workspaceInvitations[key] = invitation
+		return invitation.Record, nil
+	}
+	return WorkspaceInvitation{}, ErrNotFound
+}
+
+func (s *MemoryStore) AcceptWorkspaceInvitation(_ Context, userID string, input AcceptWorkspaceInvitationInput) (AcceptWorkspaceInvitationResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	userID = strings.TrimSpace(userID)
+	token := strings.TrimSpace(input.Token)
+	if userID == "" || token == "" || !strings.HasPrefix(token, "msi_") {
+		return AcceptWorkspaceInvitationResult{}, ErrNotFound
+	}
+	invitation, ok := s.workspaceInvitations[tokenHash(token)]
+	if !ok {
+		return AcceptWorkspaceInvitationResult{}, ErrNotFound
+	}
+	if invitation.Record.Revoked || invitation.Record.AcceptedAt != "" {
+		return AcceptWorkspaceInvitationResult{}, ErrNotFound
+	}
+	expiresAt, err := time.Parse(time.RFC3339, invitation.Record.ExpiresAt)
+	if err != nil || time.Now().After(expiresAt) {
+		return AcceptWorkspaceInvitationResult{}, ErrExpired
+	}
+	if s.workspaceMembers[invitation.Record.WorkspaceID] == nil {
+		s.workspaceMembers[invitation.Record.WorkspaceID] = map[string]string{}
+	}
+	currentRole := s.workspaceMembers[invitation.Record.WorkspaceID][userID]
+	role := invitation.Record.Role
+	if currentRole == "owner" || (currentRole == "admin" && role == "member") {
+		role = currentRole
+	}
+	s.workspaceMembers[invitation.Record.WorkspaceID][userID] = role
+	s.addWorkspaceForUser(userID, invitation.Record.WorkspaceID, role)
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	invitation.Record.AcceptedByUserID = userID
+	invitation.Record.AcceptedAt = now
+	invitation.Record.UpdatedAt = now
+	s.workspaceInvitations[tokenHash(token)] = invitation
+
+	workspace := Workspace{}
+	for _, item := range s.workspaces[userID] {
+		if item.ID == invitation.Record.WorkspaceID {
+			workspace = item
+			break
+		}
+	}
+	return AcceptWorkspaceInvitationResult{
+		Workspace:  workspace,
+		Invitation: invitation.Record,
+		Workspaces: append([]Workspace(nil), s.workspaces[userID]...),
+	}, nil
 }
 
 func (s *MemoryStore) ListInbox(_ Context, userID, workspaceID string) ([]InboxEntry, error) {
@@ -370,8 +568,611 @@ func (s *MemoryStore) MarkIssueReadThrough(_ Context, userID, workspaceID, issue
 	return count, nil
 }
 
+func (s *MemoryStore) CreateRuntimeRegistrationToken(_ Context, userID, workspaceID string, input CreateRuntimeRegistrationTokenInput) (RuntimeRegistrationTokenResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return RuntimeRegistrationTokenResult{}, ErrNotFound
+		}
+		return RuntimeRegistrationTokenResult{}, ErrForbidden
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = "Runtime worker token"
+	}
+	expiresInHours := input.ExpiresInHours
+	if expiresInHours <= 0 {
+		expiresInHours = 24
+	}
+	if expiresInHours > 24*90 {
+		return RuntimeRegistrationTokenResult{}, fmt.Errorf("expiresInHours must be 2160 or less")
+	}
+	token, err := newRuntimeRegistrationToken()
+	if err != nil {
+		return RuntimeRegistrationTokenResult{}, err
+	}
+	s.nextID++
+	now := time.Now().UTC()
+	record := RuntimeRegistrationToken{
+		ID:          fmt.Sprintf("runtime-token-%04d", s.nextID),
+		WorkspaceID: strings.TrimSpace(workspaceID),
+		Name:        name,
+		TokenPrefix: tokenPrefix(token),
+		ExpiresAt:   now.Add(time.Duration(expiresInHours) * time.Hour).Format(time.RFC3339),
+		Revoked:     false,
+		CreatedAt:   now.Format(time.RFC3339),
+		UpdatedAt:   now.Format(time.RFC3339),
+	}
+	s.runtimeTokens[tokenHash(token)] = memoryRuntimeRegistrationToken{TokenHash: tokenHash(token), Record: record}
+	return RuntimeRegistrationTokenResult{Token: token, RegistrationToken: record}, nil
+}
+
+func (s *MemoryStore) ListRuntimeRegistrationTokens(_ Context, userID, workspaceID string) ([]RuntimeRegistrationToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return nil, ErrNotFound
+		}
+		return nil, ErrForbidden
+	}
+	tokens := []RuntimeRegistrationToken{}
+	for _, token := range s.runtimeTokens {
+		if token.Record.WorkspaceID == strings.TrimSpace(workspaceID) {
+			tokens = append(tokens, token.Record)
+		}
+	}
+	sort.Slice(tokens, func(i, j int) bool {
+		return tokens[i].CreatedAt > tokens[j].CreatedAt
+	})
+	return tokens, nil
+}
+
+func (s *MemoryStore) RevokeRuntimeRegistrationToken(_ Context, userID, workspaceID, tokenID string) (RuntimeRegistrationToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return RuntimeRegistrationToken{}, ErrNotFound
+		}
+		return RuntimeRegistrationToken{}, ErrForbidden
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	tokenID = strings.TrimSpace(tokenID)
+	for key, token := range s.runtimeTokens {
+		if token.Record.ID != tokenID || token.Record.WorkspaceID != workspaceID {
+			continue
+		}
+		token.Record.Revoked = true
+		token.Record.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		s.runtimeTokens[key] = token
+		return token.Record, nil
+	}
+	return RuntimeRegistrationToken{}, ErrNotFound
+}
+
+func (s *MemoryStore) AuthenticateRuntimeRegistrationToken(_ Context, token string) (RuntimeRegistration, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	token = strings.TrimSpace(token)
+	if !strings.HasPrefix(token, "msw_") {
+		return RuntimeRegistration{}, ErrNotFound
+	}
+	record, ok := s.runtimeTokens[tokenHash(token)]
+	if !ok || record.Record.Revoked {
+		return RuntimeRegistration{}, ErrNotFound
+	}
+	expiresAt, err := time.Parse(time.RFC3339, record.Record.ExpiresAt)
+	if err != nil || time.Now().After(expiresAt) {
+		return RuntimeRegistration{}, ErrExpired
+	}
+	return RuntimeRegistration{TokenID: record.Record.ID, WorkspaceID: record.Record.WorkspaceID}, nil
+}
+
+func (s *MemoryStore) RegisterRuntimeWorker(_ Context, registration RuntimeRegistration, input RuntimeWorkerInput) (RuntimeWorker, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalized, err := normalizeRuntimeWorkerInput(input)
+	if err != nil {
+		return RuntimeWorker{}, err
+	}
+	if registration.TokenID == "" || registration.WorkspaceID == "" {
+		return RuntimeWorker{}, ErrNotFound
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for key, token := range s.runtimeTokens {
+		if token.Record.ID == registration.TokenID && token.Record.WorkspaceID == registration.WorkspaceID {
+			token.Record.LastUsedAt = now
+			token.Record.UpdatedAt = now
+			s.runtimeTokens[key] = token
+			break
+		}
+	}
+
+	key := registration.WorkspaceID + ":" + normalized.Name
+	worker := s.runtimeWorkers[key]
+	if worker.ID == "" {
+		s.nextID++
+		worker.ID = fmt.Sprintf("worker-%04d", s.nextID)
+		worker.WorkspaceID = registration.WorkspaceID
+		worker.Name = normalized.Name
+		worker.CreatedAt = now
+	}
+	worker.Mode = normalized.Mode
+	worker.Status = normalized.Status
+	worker.Version = normalized.Version
+	worker.CurrentLoad = normalized.CurrentLoad
+	worker.Capabilities = copyRawMessage(normalized.Capabilities)
+	worker.Labels = copyRawMessage(normalized.Labels)
+	worker.LastSeenAt = now
+	worker.UpdatedAt = now
+	s.runtimeWorkers[key] = worker
+	return worker, nil
+}
+
+func (s *MemoryStore) UpdateRuntimeWorkerHeartbeat(_ Context, registration RuntimeRegistration, workerID string, input RuntimeWorkerInput) (RuntimeWorker, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if registration.TokenID == "" || registration.WorkspaceID == "" || strings.TrimSpace(workerID) == "" {
+		return RuntimeWorker{}, ErrNotFound
+	}
+	normalized, err := normalizeRuntimeHeartbeatInput(input)
+	if err != nil {
+		return RuntimeWorker{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for key, token := range s.runtimeTokens {
+		if token.Record.ID == registration.TokenID && token.Record.WorkspaceID == registration.WorkspaceID {
+			token.Record.LastUsedAt = now
+			token.Record.UpdatedAt = now
+			s.runtimeTokens[key] = token
+			break
+		}
+	}
+	for key, worker := range s.runtimeWorkers {
+		if worker.ID != strings.TrimSpace(workerID) || worker.WorkspaceID != registration.WorkspaceID {
+			continue
+		}
+		worker.Status = normalized.Status
+		if normalized.Version != "" {
+			worker.Version = normalized.Version
+		}
+		worker.CurrentLoad = normalized.CurrentLoad
+		if string(normalized.Capabilities) != "{}" {
+			worker.Capabilities = copyRawMessage(normalized.Capabilities)
+		}
+		if string(normalized.Labels) != "{}" {
+			worker.Labels = copyRawMessage(normalized.Labels)
+		}
+		worker.LastSeenAt = now
+		worker.UpdatedAt = now
+		s.runtimeWorkers[key] = worker
+		return worker, nil
+	}
+	return RuntimeWorker{}, ErrNotFound
+}
+
+func (s *MemoryStore) ListRuntimeWorkers(_ Context, userID, workspaceID string) ([]RuntimeWorker, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	workers := []RuntimeWorker{}
+	for _, worker := range s.runtimeWorkers {
+		if worker.WorkspaceID == strings.TrimSpace(workspaceID) {
+			workers = append(workers, worker)
+		}
+	}
+	sort.Slice(workers, func(i, j int) bool {
+		if workers[i].LastSeenAt == workers[j].LastSeenAt {
+			return workers[i].CreatedAt > workers[j].CreatedAt
+		}
+		return workers[i].LastSeenAt > workers[j].LastSeenAt
+	})
+	return workers, nil
+}
+
+func (s *MemoryStore) CreateRuntimeTask(_ Context, userID, workspaceID string, input CreateRuntimeTaskInput) (RuntimeTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return RuntimeTask{}, ErrNotFound
+	}
+	normalized, err := normalizeCreateRuntimeTaskInput(input)
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	s.nextID++
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := RuntimeTask{
+		ID:                   fmt.Sprintf("runtime-task-%04d", s.nextID),
+		WorkspaceID:          workspaceID,
+		IssueID:              normalized.IssueID,
+		SessionID:            normalized.SessionID,
+		ProjectID:            normalized.ProjectID,
+		Kind:                 normalized.Kind,
+		Status:               "queued",
+		Priority:             normalized.Priority,
+		RuntimeMode:          normalized.RuntimeMode,
+		RequiredCapabilities: copyRawMessage(normalized.RequiredCapabilities),
+		Payload:              copyRawMessage(normalized.Payload),
+		Result:               json.RawMessage(`{}`),
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	s.runtimeTasks[task.ID] = task
+	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, "", userID, "created", json.RawMessage(fmt.Sprintf(`{"kind":%q,"runtimeMode":%q,"status":%q}`, task.Kind, task.RuntimeMode, task.Status)))
+	return task, nil
+}
+
+func (s *MemoryStore) ListRuntimeTasks(_ Context, userID, workspaceID string) ([]RuntimeTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	tasks := []RuntimeTask{}
+	for _, task := range s.runtimeTasks {
+		if task.WorkspaceID == workspaceID {
+			tasks = append(tasks, task)
+		}
+	}
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].CreatedAt == tasks[j].CreatedAt {
+			return tasks[i].ID > tasks[j].ID
+		}
+		return tasks[i].CreatedAt > tasks[j].CreatedAt
+	})
+	if len(tasks) > 100 {
+		tasks = tasks[:100]
+	}
+	return tasks, nil
+}
+
+func (s *MemoryStore) ListRuntimeTaskEvents(_ Context, userID, workspaceID, taskID string) ([]RuntimeTaskEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	taskID = strings.TrimSpace(taskID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	task, ok := s.runtimeTasks[taskID]
+	if !ok || task.WorkspaceID != workspaceID {
+		return nil, ErrNotFound
+	}
+	events := []RuntimeTaskEvent{}
+	for _, event := range s.runtimeTaskEvents {
+		if event.WorkspaceID == workspaceID && event.TaskID == taskID {
+			events = append(events, event)
+		}
+	}
+	sort.Slice(events, func(i, j int) bool {
+		if events[i].CreatedAt == events[j].CreatedAt {
+			return events[i].ID < events[j].ID
+		}
+		return events[i].CreatedAt < events[j].CreatedAt
+	})
+	return events, nil
+}
+
+func (s *MemoryStore) ListRuntimeTaskLogs(_ Context, userID, workspaceID, taskID string) ([]RuntimeTaskLog, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	taskID = strings.TrimSpace(taskID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	task, ok := s.runtimeTasks[taskID]
+	if !ok || task.WorkspaceID != workspaceID {
+		return nil, ErrNotFound
+	}
+	logs := []RuntimeTaskLog{}
+	for _, log := range s.runtimeTaskLogs {
+		if log.WorkspaceID == workspaceID && log.TaskID == taskID {
+			logs = append(logs, log)
+		}
+	}
+	sort.Slice(logs, func(i, j int) bool {
+		if logs[i].CreatedAt == logs[j].CreatedAt {
+			return logs[i].ID < logs[j].ID
+		}
+		return logs[i].CreatedAt < logs[j].CreatedAt
+	})
+	return logs, nil
+}
+
+func (s *MemoryStore) CancelRuntimeTask(_ Context, userID, workspaceID, taskID string, input CancelRuntimeTaskInput) (RuntimeTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	taskID = strings.TrimSpace(taskID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return RuntimeTask{}, ErrNotFound
+	}
+	task, ok := s.runtimeTasks[taskID]
+	if !ok || task.WorkspaceID != workspaceID {
+		return RuntimeTask{}, ErrNotFound
+	}
+	if task.Status != "queued" && task.Status != "claimed" && task.Status != "running" {
+		return RuntimeTask{}, ErrNotFound
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	reason := normalizeRuntimeTaskCancelReason(input.Reason)
+	task.Status = "cancelled"
+	if task.StartedAt == "" && (task.ClaimedAt != "" || task.ClaimedByWorkerID != "") {
+		task.StartedAt = now
+	}
+	task.FinishedAt = now
+	task.Error = reason
+	task.UpdatedAt = now
+	s.runtimeTasks[task.ID] = task
+	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, "", userID, "cancel_requested", json.RawMessage(fmt.Sprintf(`{"status":%q,"reason":%q}`, task.Status, reason)))
+	return task, nil
+}
+
+func (s *MemoryStore) ClaimRuntimeTask(_ Context, registration RuntimeRegistration, workerID string) (*RuntimeTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workerID = strings.TrimSpace(workerID)
+	if registration.WorkspaceID == "" || workerID == "" {
+		return nil, ErrNotFound
+	}
+	worker, ok := s.runtimeWorkerByID(registration.WorkspaceID, workerID)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if worker.Status != "online" {
+		return nil, ErrForbidden
+	}
+	candidates := []RuntimeTask{}
+	for _, task := range s.runtimeTasks {
+		if task.WorkspaceID != registration.WorkspaceID ||
+			task.Status != "queued" ||
+			task.RuntimeMode != worker.Mode ||
+			!jsonObjectContains(worker.Capabilities, task.RequiredCapabilities) {
+			continue
+		}
+		candidates = append(candidates, task)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Priority == candidates[j].Priority {
+			if candidates[i].CreatedAt == candidates[j].CreatedAt {
+				return candidates[i].ID < candidates[j].ID
+			}
+			return candidates[i].CreatedAt < candidates[j].CreatedAt
+		}
+		return candidates[i].Priority > candidates[j].Priority
+	})
+	task := s.runtimeTasks[candidates[0].ID]
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task.Status = "claimed"
+	task.ClaimedByWorkerID = worker.ID
+	task.ClaimedAt = now
+	task.UpdatedAt = now
+	s.runtimeTasks[task.ID] = task
+	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, worker.ID, "", "claimed", json.RawMessage(fmt.Sprintf(`{"status":%q}`, task.Status)))
+	return &task, nil
+}
+
+func (s *MemoryStore) GetRuntimeTaskForWorker(_ Context, registration RuntimeRegistration, workerID, taskID string) (RuntimeTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workerID = strings.TrimSpace(workerID)
+	taskID = strings.TrimSpace(taskID)
+	if registration.WorkspaceID == "" || workerID == "" || taskID == "" {
+		return RuntimeTask{}, ErrNotFound
+	}
+	worker, ok := s.runtimeWorkerByID(registration.WorkspaceID, workerID)
+	if !ok {
+		return RuntimeTask{}, ErrNotFound
+	}
+	task, ok := s.runtimeTasks[taskID]
+	if !ok || task.WorkspaceID != registration.WorkspaceID || task.ClaimedByWorkerID != worker.ID {
+		return RuntimeTask{}, ErrNotFound
+	}
+	return task, nil
+}
+
+func (s *MemoryStore) AppendRuntimeTaskLog(_ Context, registration RuntimeRegistration, workerID, taskID string, input AppendRuntimeTaskLogInput) (RuntimeTaskLog, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workerID = strings.TrimSpace(workerID)
+	taskID = strings.TrimSpace(taskID)
+	if registration.WorkspaceID == "" || workerID == "" || taskID == "" {
+		return RuntimeTaskLog{}, ErrNotFound
+	}
+	worker, ok := s.runtimeWorkerByID(registration.WorkspaceID, workerID)
+	if !ok {
+		return RuntimeTaskLog{}, ErrNotFound
+	}
+	task, ok := s.runtimeTasks[taskID]
+	if !ok || task.WorkspaceID != registration.WorkspaceID || task.ClaimedByWorkerID != worker.ID {
+		return RuntimeTaskLog{}, ErrNotFound
+	}
+	normalized, err := normalizeAppendRuntimeTaskLogInput(input)
+	if err != nil {
+		return RuntimeTaskLog{}, err
+	}
+	s.nextID++
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	log := RuntimeTaskLog{
+		ID:          fmt.Sprintf("runtime-task-log-%04d", s.nextID),
+		WorkspaceID: task.WorkspaceID,
+		TaskID:      task.ID,
+		WorkerID:    worker.ID,
+		Stream:      normalized.Stream,
+		Message:     normalized.Message,
+		CreatedAt:   now,
+	}
+	s.runtimeTaskLogs[log.ID] = log
+	return log, nil
+}
+
+func (s *MemoryStore) UpdateRuntimeTaskStatus(_ Context, registration RuntimeRegistration, workerID, taskID string, input UpdateRuntimeTaskStatusInput) (RuntimeTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workerID = strings.TrimSpace(workerID)
+	taskID = strings.TrimSpace(taskID)
+	if registration.WorkspaceID == "" || workerID == "" || taskID == "" {
+		return RuntimeTask{}, ErrNotFound
+	}
+	worker, ok := s.runtimeWorkerByID(registration.WorkspaceID, workerID)
+	if !ok {
+		return RuntimeTask{}, ErrNotFound
+	}
+	normalized, resultProvided, err := normalizeUpdateRuntimeTaskStatusInput(input)
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	task, ok := s.runtimeTasks[taskID]
+	if !ok ||
+		task.WorkspaceID != registration.WorkspaceID ||
+		task.ClaimedByWorkerID != worker.ID ||
+		(task.Status != "claimed" && task.Status != "running") {
+		return RuntimeTask{}, ErrNotFound
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task.Status = normalized.Status
+	if task.StartedAt == "" && (normalized.Status == "running" || isFinalRuntimeTaskStatus(normalized.Status)) {
+		task.StartedAt = now
+	}
+	if isFinalRuntimeTaskStatus(normalized.Status) {
+		task.FinishedAt = now
+	}
+	if resultProvided {
+		task.Result = copyRawMessage(normalized.Result)
+	}
+	task.Error = normalized.Error
+	task.UpdatedAt = now
+	s.runtimeTasks[task.ID] = task
+	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, worker.ID, "", "status_changed", json.RawMessage(fmt.Sprintf(`{"status":%q,"error":%q}`, task.Status, task.Error)))
+	return task, nil
+}
+
+func (s *MemoryStore) appendRuntimeTaskEventLocked(workspaceID, taskID, workerID, actorUserID, kind string, payload json.RawMessage) {
+	s.nextID++
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	event := RuntimeTaskEvent{
+		ID:          fmt.Sprintf("runtime-task-event-%04d", s.nextID),
+		WorkspaceID: strings.TrimSpace(workspaceID),
+		TaskID:      strings.TrimSpace(taskID),
+		WorkerID:    strings.TrimSpace(workerID),
+		ActorUserID: strings.TrimSpace(actorUserID),
+		Kind:        strings.TrimSpace(kind),
+		Payload:     copyRawMessage(payload),
+		CreatedAt:   now,
+	}
+	s.runtimeTaskEvents[event.ID] = event
+}
+
 func (s *MemoryStore) isWorkspaceMember(workspaceID, userID string) bool {
-	return s.workspaceMembers[strings.TrimSpace(workspaceID)][strings.TrimSpace(userID)]
+	return s.workspaceMembers[strings.TrimSpace(workspaceID)][strings.TrimSpace(userID)] != ""
+}
+
+func (s *MemoryStore) runtimeWorkerByID(workspaceID, workerID string) (RuntimeWorker, bool) {
+	for _, worker := range s.runtimeWorkers {
+		if worker.WorkspaceID == strings.TrimSpace(workspaceID) && worker.ID == strings.TrimSpace(workerID) {
+			return worker, true
+		}
+	}
+	return RuntimeWorker{}, false
+}
+
+func (s *MemoryStore) hasWorkspaceRole(workspaceID, userID string, roles ...string) bool {
+	role := s.workspaceMembers[strings.TrimSpace(workspaceID)][strings.TrimSpace(userID)]
+	if role == "" {
+		return false
+	}
+	for _, allowed := range roles {
+		if role == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *MemoryStore) identityLoginForUser(userID string) string {
+	for key, identityUserID := range s.identities {
+		if identityUserID != userID {
+			continue
+		}
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) == 2 {
+			return parts[1]
+		}
+	}
+	return ""
+}
+
+func (s *MemoryStore) workspaceName(workspaceID string) string {
+	for _, workspaces := range s.workspaces {
+		for _, workspace := range workspaces {
+			if workspace.ID == workspaceID {
+				return workspace.Name
+			}
+		}
+	}
+	return "Workspace"
+}
+
+func (s *MemoryStore) addWorkspaceForUser(userID, workspaceID, role string) {
+	for index, workspace := range s.workspaces[userID] {
+		if workspace.ID != workspaceID {
+			continue
+		}
+		workspace.Role = role
+		s.workspaces[userID][index] = workspace
+		return
+	}
+	for _, workspaces := range s.workspaces {
+		for _, workspace := range workspaces {
+			if workspace.ID != workspaceID {
+				continue
+			}
+			workspace.Role = role
+			s.workspaces[userID] = append(s.workspaces[userID], workspace)
+			sort.Slice(s.workspaces[userID], func(i, j int) bool {
+				return s.workspaces[userID][i].CreatedAt < s.workspaces[userID][j].CreatedAt
+			})
+			return
+		}
+	}
+}
+
+func workspaceRoleRank(role string) int {
+	switch role {
+	case "owner":
+		return 0
+	case "admin":
+		return 1
+	default:
+		return 2
+	}
 }
 
 func (s *MemoryStore) resolveIssueEventRecipients(input CreateIssueEventInput) (map[string]bool, error) {
@@ -410,4 +1211,37 @@ func copyRawMessage(value json.RawMessage) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return append(json.RawMessage(nil), value...)
+}
+
+func jsonObjectContains(container, subset json.RawMessage) bool {
+	var containerMap map[string]any
+	var subsetMap map[string]any
+	if err := json.Unmarshal(container, &containerMap); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(subset, &subsetMap); err != nil {
+		return false
+	}
+	return mapContains(containerMap, subsetMap)
+}
+
+func mapContains(container, subset map[string]any) bool {
+	for key, subsetValue := range subset {
+		containerValue, ok := container[key]
+		if !ok {
+			return false
+		}
+		nestedSubset, subsetIsMap := subsetValue.(map[string]any)
+		nestedContainer, containerIsMap := containerValue.(map[string]any)
+		if subsetIsMap {
+			if !containerIsMap || !mapContains(nestedContainer, nestedSubset) {
+				return false
+			}
+			continue
+		}
+		if !reflect.DeepEqual(containerValue, subsetValue) {
+			return false
+		}
+	}
+	return true
 }

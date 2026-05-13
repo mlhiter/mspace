@@ -2,8 +2,10 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -207,6 +209,280 @@ func (s *PostgresStore) GetUserBySessionToken(ctx Context, token string) (User, 
 		return User{}, nil, err
 	}
 	return user, workspaces, nil
+}
+
+func (s *PostgresStore) ListWorkspaceMembers(ctx Context, userID, workspaceID string) ([]WorkspaceMember, error) {
+	dbctx := asContext(ctx)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT
+			wm.id::text,
+			wm.workspace_id::text,
+			wm.user_id::text,
+			wm.role,
+			u.name,
+			u.email,
+			u.avatar_url,
+			COALESCE(identity.login, ''),
+			wm.created_at,
+			wm.updated_at
+		FROM workspace_members wm
+		JOIN users u ON u.id = wm.user_id
+		LEFT JOIN LATERAL (
+			SELECT login
+			FROM user_identities
+			WHERE user_id = u.id AND login <> ''
+			ORDER BY updated_at DESC, created_at DESC
+			LIMIT 1
+		) identity ON true
+		WHERE wm.workspace_id = $1
+		ORDER BY
+			CASE wm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+			lower(u.name),
+			wm.created_at ASC
+	`, strings.TrimSpace(workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	members := []WorkspaceMember{}
+	for rows.Next() {
+		member, err := scanWorkspaceMember(rows)
+		if err != nil {
+			return nil, err
+		}
+		members = append(members, member)
+	}
+	return members, rows.Err()
+}
+
+func (s *PostgresStore) CreateWorkspaceInvitation(ctx Context, userID, workspaceID string, input CreateWorkspaceInvitationInput) (WorkspaceInvitationResult, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	normalized, err := normalizeCreateWorkspaceInvitationInput(input)
+	if err != nil {
+		return WorkspaceInvitationResult{}, err
+	}
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return WorkspaceInvitationResult{}, err
+	}
+	token, err := newWorkspaceInvitationToken()
+	if err != nil {
+		return WorkspaceInvitationResult{}, err
+	}
+	expiresAt := time.Now().UTC().Add(time.Duration(normalized.ExpiresInHours) * time.Hour)
+	row := s.pool.QueryRow(dbctx, `
+		INSERT INTO workspace_invitations (workspace_id, email, role, token_hash, token_prefix, invited_by_user_id, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING
+			id::text,
+			workspace_id::text,
+			(SELECT name FROM workspaces w WHERE w.id = workspace_invitations.workspace_id),
+			email,
+			role,
+			token_prefix,
+			COALESCE(invited_by_user_id::text, ''),
+			COALESCE(accepted_by_user_id::text, ''),
+			accepted_at,
+			expires_at,
+			revoked,
+			created_at,
+			updated_at
+	`, workspaceID, normalized.Email, normalized.Role, tokenHash(token), tokenPrefix(token), userID, expiresAt)
+	invitation, err := scanWorkspaceInvitation(row)
+	if err != nil {
+		return WorkspaceInvitationResult{}, err
+	}
+	return WorkspaceInvitationResult{Token: token, Invitation: invitation}, nil
+}
+
+func (s *PostgresStore) ListWorkspaceInvitations(ctx Context, userID, workspaceID string) ([]WorkspaceInvitation, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT
+			wi.id::text,
+			wi.workspace_id::text,
+			w.name,
+			wi.email,
+			wi.role,
+			wi.token_prefix,
+			COALESCE(wi.invited_by_user_id::text, ''),
+			COALESCE(wi.accepted_by_user_id::text, ''),
+			wi.accepted_at,
+			wi.expires_at,
+			wi.revoked,
+			wi.created_at,
+			wi.updated_at
+		FROM workspace_invitations wi
+		JOIN workspaces w ON w.id = wi.workspace_id
+		WHERE wi.workspace_id = $1
+		ORDER BY wi.created_at DESC
+		LIMIT 100
+	`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	invitations := []WorkspaceInvitation{}
+	for rows.Next() {
+		invitation, err := scanWorkspaceInvitation(rows)
+		if err != nil {
+			return nil, err
+		}
+		invitations = append(invitations, invitation)
+	}
+	return invitations, rows.Err()
+}
+
+func (s *PostgresStore) RevokeWorkspaceInvitation(ctx Context, userID, workspaceID, invitationID string) (WorkspaceInvitation, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	invitationID = strings.TrimSpace(invitationID)
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return WorkspaceInvitation{}, err
+	}
+	row := s.pool.QueryRow(dbctx, `
+		UPDATE workspace_invitations wi
+		SET revoked = true, updated_at = now()
+		FROM workspaces w
+		WHERE wi.workspace_id = w.id
+			AND wi.workspace_id = $1
+			AND wi.id = $2
+		RETURNING
+			wi.id::text,
+			wi.workspace_id::text,
+			w.name,
+			wi.email,
+			wi.role,
+			wi.token_prefix,
+			COALESCE(wi.invited_by_user_id::text, ''),
+			COALESCE(wi.accepted_by_user_id::text, ''),
+			wi.accepted_at,
+			wi.expires_at,
+			wi.revoked,
+			wi.created_at,
+			wi.updated_at
+	`, workspaceID, invitationID)
+	invitation, err := scanWorkspaceInvitation(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return WorkspaceInvitation{}, ErrNotFound
+	}
+	return invitation, err
+}
+
+func (s *PostgresStore) AcceptWorkspaceInvitation(ctx Context, userID string, input AcceptWorkspaceInvitationInput) (AcceptWorkspaceInvitationResult, error) {
+	dbctx := asContext(ctx)
+	userID = strings.TrimSpace(userID)
+	token := strings.TrimSpace(input.Token)
+	if userID == "" || token == "" || !strings.HasPrefix(token, "msi_") {
+		return AcceptWorkspaceInvitationResult{}, ErrNotFound
+	}
+
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return AcceptWorkspaceInvitationResult{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	row := tx.QueryRow(dbctx, `
+		SELECT
+			wi.id::text,
+			wi.workspace_id::text,
+			w.name,
+			wi.email,
+			wi.role,
+			wi.token_prefix,
+			COALESCE(wi.invited_by_user_id::text, ''),
+			COALESCE(wi.accepted_by_user_id::text, ''),
+			wi.accepted_at,
+			wi.expires_at,
+			wi.revoked,
+			wi.created_at,
+			wi.updated_at
+		FROM workspace_invitations wi
+		JOIN workspaces w ON w.id = wi.workspace_id
+		WHERE wi.token_hash = $1
+		FOR UPDATE OF wi
+	`, tokenHash(token))
+	invitation, err := scanWorkspaceInvitation(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AcceptWorkspaceInvitationResult{}, ErrNotFound
+	}
+	if err != nil {
+		return AcceptWorkspaceInvitationResult{}, err
+	}
+	if invitation.Revoked || invitation.AcceptedAt != "" {
+		return AcceptWorkspaceInvitationResult{}, ErrNotFound
+	}
+	expiresAt, err := time.Parse(time.RFC3339, invitation.ExpiresAt)
+	if err != nil || time.Now().After(expiresAt) {
+		return AcceptWorkspaceInvitationResult{}, ErrExpired
+	}
+
+	var role string
+	if err := tx.QueryRow(dbctx, `
+		INSERT INTO workspace_members (workspace_id, user_id, role)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (workspace_id, user_id) DO UPDATE
+		SET role = CASE
+			WHEN workspace_members.role = 'owner' THEN 'owner'
+			WHEN workspace_members.role = 'admin' AND EXCLUDED.role = 'member' THEN 'admin'
+			ELSE EXCLUDED.role
+		END,
+		updated_at = now()
+		RETURNING role
+	`, invitation.WorkspaceID, userID, invitation.Role).Scan(&role); err != nil {
+		return AcceptWorkspaceInvitationResult{}, err
+	}
+
+	row = tx.QueryRow(dbctx, `
+		UPDATE workspace_invitations wi
+		SET accepted_by_user_id = $2, accepted_at = now(), updated_at = now()
+		FROM workspaces w
+		WHERE wi.workspace_id = w.id AND wi.id = $1
+		RETURNING
+			wi.id::text,
+			wi.workspace_id::text,
+			w.name,
+			wi.email,
+			wi.role,
+			wi.token_prefix,
+			COALESCE(wi.invited_by_user_id::text, ''),
+			COALESCE(wi.accepted_by_user_id::text, ''),
+			wi.accepted_at,
+			wi.expires_at,
+			wi.revoked,
+			wi.created_at,
+			wi.updated_at
+	`, invitation.ID, userID)
+	invitation, err = scanWorkspaceInvitation(row)
+	if err != nil {
+		return AcceptWorkspaceInvitationResult{}, err
+	}
+	workspaces, err := listWorkspaces(dbctx, tx, userID)
+	if err != nil {
+		return AcceptWorkspaceInvitationResult{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return AcceptWorkspaceInvitationResult{}, err
+	}
+	workspace := Workspace{ID: invitation.WorkspaceID, Name: invitation.WorkspaceName, Role: role}
+	for _, item := range workspaces {
+		if item.ID == invitation.WorkspaceID {
+			workspace = item
+			break
+		}
+	}
+	return AcceptWorkspaceInvitationResult{Workspace: workspace, Invitation: invitation, Workspaces: workspaces}, nil
 }
 
 func (s *PostgresStore) ListInbox(ctx Context, userID, workspaceID string) ([]InboxEntry, error) {
@@ -421,6 +697,792 @@ func (s *PostgresStore) MarkIssueReadThrough(ctx Context, userID, workspaceID, i
 	return count, err
 }
 
+func (s *PostgresStore) CreateRuntimeRegistrationToken(ctx Context, userID, workspaceID string, input CreateRuntimeRegistrationTokenInput) (RuntimeRegistrationTokenResult, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = "Runtime worker token"
+	}
+	expiresInHours := input.ExpiresInHours
+	if expiresInHours <= 0 {
+		expiresInHours = 24
+	}
+	if expiresInHours > 24*90 {
+		return RuntimeRegistrationTokenResult{}, errors.New("expiresInHours must be 2160 or less")
+	}
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return RuntimeRegistrationTokenResult{}, err
+	}
+
+	token, err := newRuntimeRegistrationToken()
+	if err != nil {
+		return RuntimeRegistrationTokenResult{}, err
+	}
+	expiresAt := time.Now().UTC().Add(time.Duration(expiresInHours) * time.Hour)
+	row := s.pool.QueryRow(dbctx, `
+		INSERT INTO runtime_registration_tokens (workspace_id, name, token_hash, token_prefix, created_by_user_id, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id::text, workspace_id::text, name, token_prefix, expires_at, last_used_at, revoked, created_at, updated_at
+	`, workspaceID, name, tokenHash(token), tokenPrefix(token), userID, expiresAt)
+	record, err := scanRuntimeRegistrationToken(row)
+	if err != nil {
+		return RuntimeRegistrationTokenResult{}, err
+	}
+	return RuntimeRegistrationTokenResult{Token: token, RegistrationToken: record}, nil
+}
+
+func (s *PostgresStore) ListRuntimeRegistrationTokens(ctx Context, userID, workspaceID string) ([]RuntimeRegistrationToken, error) {
+	dbctx := asContext(ctx)
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT id::text, workspace_id::text, name, token_prefix, expires_at, last_used_at, revoked, created_at, updated_at
+		FROM runtime_registration_tokens
+		WHERE workspace_id = $1
+		ORDER BY created_at DESC
+	`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tokens := []RuntimeRegistrationToken{}
+	for rows.Next() {
+		record, err := scanRuntimeRegistrationToken(rows)
+		if err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tokens, nil
+}
+
+func (s *PostgresStore) RevokeRuntimeRegistrationToken(ctx Context, userID, workspaceID, tokenID string) (RuntimeRegistrationToken, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	tokenID = strings.TrimSpace(tokenID)
+	if tokenID == "" {
+		return RuntimeRegistrationToken{}, ErrNotFound
+	}
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return RuntimeRegistrationToken{}, err
+	}
+	row := s.pool.QueryRow(dbctx, `
+		UPDATE runtime_registration_tokens
+		SET revoked = true, updated_at = now()
+		WHERE id = $1 AND workspace_id = $2
+		RETURNING id::text, workspace_id::text, name, token_prefix, expires_at, last_used_at, revoked, created_at, updated_at
+	`, tokenID, workspaceID)
+	record, err := scanRuntimeRegistrationToken(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuntimeRegistrationToken{}, ErrNotFound
+	}
+	if err != nil {
+		return RuntimeRegistrationToken{}, err
+	}
+	return record, nil
+}
+
+func (s *PostgresStore) AuthenticateRuntimeRegistrationToken(ctx Context, token string) (RuntimeRegistration, error) {
+	token = strings.TrimSpace(token)
+	if !strings.HasPrefix(token, "msw_") {
+		return RuntimeRegistration{}, ErrNotFound
+	}
+	var registration RuntimeRegistration
+	err := s.pool.QueryRow(asContext(ctx), `
+		SELECT id::text, workspace_id::text
+		FROM runtime_registration_tokens
+		WHERE token_hash = $1 AND revoked = false AND expires_at > now()
+	`, tokenHash(token)).Scan(&registration.TokenID, &registration.WorkspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuntimeRegistration{}, ErrNotFound
+	}
+	return registration, err
+}
+
+func (s *PostgresStore) RegisterRuntimeWorker(ctx Context, registration RuntimeRegistration, input RuntimeWorkerInput) (RuntimeWorker, error) {
+	dbctx := asContext(ctx)
+	normalized, err := normalizeRuntimeWorkerInput(input)
+	if err != nil {
+		return RuntimeWorker{}, err
+	}
+	if registration.TokenID == "" || registration.WorkspaceID == "" {
+		return RuntimeWorker{}, ErrNotFound
+	}
+
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return RuntimeWorker{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	if _, err := tx.Exec(dbctx, `
+		UPDATE runtime_registration_tokens
+		SET last_used_at = now(), updated_at = now()
+		WHERE id = $1 AND workspace_id = $2 AND revoked = false AND expires_at > now()
+	`, registration.TokenID, registration.WorkspaceID); err != nil {
+		return RuntimeWorker{}, err
+	}
+	row := tx.QueryRow(dbctx, `
+		INSERT INTO runtime_workers (workspace_id, registration_token_id, name, mode, status, version, current_load, capabilities, labels, last_seen_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now())
+		ON CONFLICT (workspace_id, name) DO UPDATE SET
+			registration_token_id = EXCLUDED.registration_token_id,
+			mode = EXCLUDED.mode,
+			status = EXCLUDED.status,
+			version = EXCLUDED.version,
+			current_load = EXCLUDED.current_load,
+			capabilities = EXCLUDED.capabilities,
+			labels = EXCLUDED.labels,
+			last_seen_at = now(),
+			updated_at = now()
+		RETURNING id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, last_seen_at, created_at, updated_at
+	`, registration.WorkspaceID, registration.TokenID, normalized.Name, normalized.Mode, normalized.Status, normalized.Version, normalized.CurrentLoad, normalized.Capabilities, normalized.Labels)
+	worker, err := scanRuntimeWorker(row)
+	if err != nil {
+		return RuntimeWorker{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return RuntimeWorker{}, err
+	}
+	return worker, nil
+}
+
+func (s *PostgresStore) UpdateRuntimeWorkerHeartbeat(ctx Context, registration RuntimeRegistration, workerID string, input RuntimeWorkerInput) (RuntimeWorker, error) {
+	dbctx := asContext(ctx)
+	workerID = strings.TrimSpace(workerID)
+	if workerID == "" || registration.TokenID == "" || registration.WorkspaceID == "" {
+		return RuntimeWorker{}, ErrNotFound
+	}
+	normalized, err := normalizeRuntimeHeartbeatInput(input)
+	if err != nil {
+		return RuntimeWorker{}, err
+	}
+
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return RuntimeWorker{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	if _, err := tx.Exec(dbctx, `
+		UPDATE runtime_registration_tokens
+		SET last_used_at = now(), updated_at = now()
+		WHERE id = $1 AND workspace_id = $2 AND revoked = false AND expires_at > now()
+	`, registration.TokenID, registration.WorkspaceID); err != nil {
+		return RuntimeWorker{}, err
+	}
+	row := tx.QueryRow(dbctx, `
+		UPDATE runtime_workers
+		SET
+			status = $1,
+			version = CASE WHEN $2 <> '' THEN $2 ELSE version END,
+			current_load = $3,
+			capabilities = CASE WHEN $4::jsonb <> '{}'::jsonb THEN $4::jsonb ELSE capabilities END,
+			labels = CASE WHEN $5::jsonb <> '{}'::jsonb THEN $5::jsonb ELSE labels END,
+			last_seen_at = now(),
+			updated_at = now()
+		WHERE id = $6 AND workspace_id = $7
+		RETURNING id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, last_seen_at, created_at, updated_at
+	`, normalized.Status, normalized.Version, normalized.CurrentLoad, normalized.Capabilities, normalized.Labels, workerID, registration.WorkspaceID)
+	worker, err := scanRuntimeWorker(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuntimeWorker{}, ErrNotFound
+	}
+	if err != nil {
+		return RuntimeWorker{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return RuntimeWorker{}, err
+	}
+	return worker, nil
+}
+
+func (s *PostgresStore) ListRuntimeWorkers(ctx Context, userID, workspaceID string) ([]RuntimeWorker, error) {
+	dbctx := asContext(ctx)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, last_seen_at, created_at, updated_at
+		FROM runtime_workers
+		WHERE workspace_id = $1
+		ORDER BY last_seen_at DESC, created_at DESC
+	`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	workers := []RuntimeWorker{}
+	for rows.Next() {
+		worker, err := scanRuntimeWorker(rows)
+		if err != nil {
+			return nil, err
+		}
+		workers = append(workers, worker)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return workers, nil
+}
+
+func (s *PostgresStore) CreateRuntimeTask(ctx Context, userID, workspaceID string, input CreateRuntimeTaskInput) (RuntimeTask, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	normalized, err := normalizeCreateRuntimeTaskInput(input)
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	if err := ensureWorkspaceMember(dbctx, tx, workspaceID, userID); err != nil {
+		return RuntimeTask{}, err
+	}
+	row := tx.QueryRow(dbctx, `
+		INSERT INTO runtime_tasks (
+			workspace_id,
+			issue_id,
+			session_id,
+			project_id,
+			kind,
+			priority,
+			runtime_mode,
+			required_capabilities,
+			payload,
+			created_by_user_id
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING
+			id::text,
+			workspace_id::text,
+			issue_id,
+			session_id,
+			project_id,
+			kind,
+			status,
+			priority,
+			runtime_mode,
+			required_capabilities,
+			payload,
+			result,
+			COALESCE(claimed_by_worker_id::text, ''),
+			claimed_at,
+			started_at,
+			finished_at,
+			error,
+			created_at,
+			updated_at
+	`, workspaceID, normalized.IssueID, normalized.SessionID, normalized.ProjectID, normalized.Kind, normalized.Priority, normalized.RuntimeMode, normalized.RequiredCapabilities, normalized.Payload, userID)
+	task, err := scanRuntimeTask(row)
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := insertRuntimeTaskEvent(dbctx, tx, task.WorkspaceID, task.ID, "", userID, "created", map[string]any{
+		"kind":        task.Kind,
+		"runtimeMode": task.RuntimeMode,
+		"status":      task.Status,
+	}); err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return RuntimeTask{}, err
+	}
+	return task, nil
+}
+
+func (s *PostgresStore) ListRuntimeTasks(ctx Context, userID, workspaceID string) ([]RuntimeTask, error) {
+	dbctx := asContext(ctx)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT
+			id::text,
+			workspace_id::text,
+			issue_id,
+			session_id,
+			project_id,
+			kind,
+			status,
+			priority,
+			runtime_mode,
+			required_capabilities,
+			payload,
+			result,
+			COALESCE(claimed_by_worker_id::text, ''),
+			claimed_at,
+			started_at,
+			finished_at,
+			error,
+			created_at,
+			updated_at
+		FROM runtime_tasks
+		WHERE workspace_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT 100
+	`, strings.TrimSpace(workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tasks := []RuntimeTask{}
+	for rows.Next() {
+		task, err := scanRuntimeTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
+func (s *PostgresStore) ListRuntimeTaskEvents(ctx Context, userID, workspaceID, taskID string) ([]RuntimeTaskEvent, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	taskID = strings.TrimSpace(taskID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
+		return nil, err
+	}
+	var exists bool
+	if err := s.pool.QueryRow(dbctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM runtime_tasks
+			WHERE workspace_id = $1 AND id = $2
+		)
+	`, workspaceID, taskID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrNotFound
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT
+			id::text,
+			workspace_id::text,
+			task_id::text,
+			COALESCE(worker_id::text, ''),
+			COALESCE(actor_user_id::text, ''),
+			kind,
+			payload,
+			created_at
+		FROM runtime_task_events
+		WHERE workspace_id = $1 AND task_id = $2
+		ORDER BY created_at ASC, id ASC
+	`, workspaceID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	events := []RuntimeTaskEvent{}
+	for rows.Next() {
+		event, err := scanRuntimeTaskEvent(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+func (s *PostgresStore) ListRuntimeTaskLogs(ctx Context, userID, workspaceID, taskID string) ([]RuntimeTaskLog, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	taskID = strings.TrimSpace(taskID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
+		return nil, err
+	}
+	var exists bool
+	if err := s.pool.QueryRow(dbctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM runtime_tasks
+			WHERE workspace_id = $1 AND id = $2
+		)
+	`, workspaceID, taskID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrNotFound
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT
+			id::text,
+			workspace_id::text,
+			task_id::text,
+			COALESCE(worker_id::text, ''),
+			stream,
+			message,
+			created_at
+		FROM runtime_task_logs
+		WHERE workspace_id = $1 AND task_id = $2
+		ORDER BY created_at ASC, id ASC
+	`, workspaceID, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	logs := []RuntimeTaskLog{}
+	for rows.Next() {
+		log, err := scanRuntimeTaskLog(rows)
+		if err != nil {
+			return nil, err
+		}
+		logs = append(logs, log)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return logs, nil
+}
+
+func (s *PostgresStore) CancelRuntimeTask(ctx Context, userID, workspaceID, taskID string, input CancelRuntimeTaskInput) (RuntimeTask, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	taskID = strings.TrimSpace(taskID)
+	userID = strings.TrimSpace(userID)
+	if workspaceID == "" || taskID == "" || userID == "" {
+		return RuntimeTask{}, ErrNotFound
+	}
+	reason := normalizeRuntimeTaskCancelReason(input.Reason)
+
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	if err := ensureWorkspaceMember(dbctx, tx, workspaceID, userID); err != nil {
+		return RuntimeTask{}, err
+	}
+	row := tx.QueryRow(dbctx, `
+		UPDATE runtime_tasks
+		SET
+			status = 'cancelled',
+			started_at = CASE
+				WHEN status IN ('claimed', 'running') THEN COALESCE(started_at, now())
+				ELSE started_at
+			END,
+			finished_at = now(),
+			error = $1,
+			updated_at = now()
+		WHERE id = $2
+			AND workspace_id = $3
+			AND status IN ('queued', 'claimed', 'running')
+		RETURNING
+			id::text,
+			workspace_id::text,
+			issue_id,
+			session_id,
+			project_id,
+			kind,
+			status,
+			priority,
+			runtime_mode,
+			required_capabilities,
+			payload,
+			result,
+			COALESCE(claimed_by_worker_id::text, ''),
+			claimed_at,
+			started_at,
+			finished_at,
+			error,
+			created_at,
+			updated_at
+	`, reason, taskID, workspaceID)
+	task, err := scanRuntimeTask(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuntimeTask{}, ErrNotFound
+	}
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := insertRuntimeTaskEvent(dbctx, tx, task.WorkspaceID, task.ID, "", userID, "cancel_requested", map[string]any{
+		"status": task.Status,
+		"reason": reason,
+	}); err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return RuntimeTask{}, err
+	}
+	return task, nil
+}
+
+func (s *PostgresStore) ClaimRuntimeTask(ctx Context, registration RuntimeRegistration, workerID string) (*RuntimeTask, error) {
+	dbctx := asContext(ctx)
+	workerID = strings.TrimSpace(workerID)
+	if registration.WorkspaceID == "" || workerID == "" {
+		return nil, ErrNotFound
+	}
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(dbctx)
+
+	var workerStatus string
+	if err := tx.QueryRow(dbctx, `
+		SELECT status
+		FROM runtime_workers
+		WHERE id = $1 AND workspace_id = $2
+	`, workerID, registration.WorkspaceID).Scan(&workerStatus); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if workerStatus != "online" {
+		return nil, ErrForbidden
+	}
+
+	row := tx.QueryRow(dbctx, `
+		WITH next_task AS (
+			SELECT t.id
+			FROM runtime_tasks t
+			JOIN runtime_workers w ON w.id = $1 AND w.workspace_id = t.workspace_id
+			WHERE t.workspace_id = $2
+				AND t.status = 'queued'
+				AND t.runtime_mode = w.mode
+				AND w.status = 'online'
+				AND w.capabilities @> t.required_capabilities
+			ORDER BY t.priority DESC, t.created_at ASC, t.id ASC
+			FOR UPDATE OF t SKIP LOCKED
+			LIMIT 1
+		)
+		UPDATE runtime_tasks t
+		SET
+			status = 'claimed',
+			claimed_by_worker_id = $1,
+			claimed_at = now(),
+			updated_at = now()
+		FROM next_task
+		WHERE t.id = next_task.id
+		RETURNING
+			t.id::text,
+			t.workspace_id::text,
+			t.issue_id,
+			t.session_id,
+			t.project_id,
+			t.kind,
+			t.status,
+			t.priority,
+			t.runtime_mode,
+			t.required_capabilities,
+			t.payload,
+			t.result,
+			COALESCE(t.claimed_by_worker_id::text, ''),
+			t.claimed_at,
+			t.started_at,
+			t.finished_at,
+			t.error,
+			t.created_at,
+			t.updated_at
+	`, workerID, registration.WorkspaceID)
+	task, err := scanRuntimeTask(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := tx.Commit(dbctx); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := insertRuntimeTaskEvent(dbctx, tx, task.WorkspaceID, task.ID, workerID, "", "claimed", map[string]any{
+		"status": task.Status,
+	}); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (s *PostgresStore) GetRuntimeTaskForWorker(ctx Context, registration RuntimeRegistration, workerID, taskID string) (RuntimeTask, error) {
+	dbctx := asContext(ctx)
+	workerID = strings.TrimSpace(workerID)
+	taskID = strings.TrimSpace(taskID)
+	if registration.WorkspaceID == "" || workerID == "" || taskID == "" {
+		return RuntimeTask{}, ErrNotFound
+	}
+	row := s.pool.QueryRow(dbctx, `
+		SELECT
+			t.id::text,
+			t.workspace_id::text,
+			t.issue_id,
+			t.session_id,
+			t.project_id,
+			t.kind,
+			t.status,
+			t.priority,
+			t.runtime_mode,
+			t.required_capabilities,
+			t.payload,
+			t.result,
+			COALESCE(t.claimed_by_worker_id::text, ''),
+			t.claimed_at,
+			t.started_at,
+			t.finished_at,
+			t.error,
+			t.created_at,
+			t.updated_at
+		FROM runtime_tasks t
+		JOIN runtime_workers w ON w.id = $1 AND w.workspace_id = t.workspace_id
+		WHERE t.id = $2
+			AND t.workspace_id = $3
+			AND t.claimed_by_worker_id = w.id
+	`, workerID, taskID, registration.WorkspaceID)
+	task, err := scanRuntimeTask(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuntimeTask{}, ErrNotFound
+	}
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	return task, nil
+}
+
+func (s *PostgresStore) AppendRuntimeTaskLog(ctx Context, registration RuntimeRegistration, workerID, taskID string, input AppendRuntimeTaskLogInput) (RuntimeTaskLog, error) {
+	dbctx := asContext(ctx)
+	workerID = strings.TrimSpace(workerID)
+	taskID = strings.TrimSpace(taskID)
+	if registration.WorkspaceID == "" || workerID == "" || taskID == "" {
+		return RuntimeTaskLog{}, ErrNotFound
+	}
+	normalized, err := normalizeAppendRuntimeTaskLogInput(input)
+	if err != nil {
+		return RuntimeTaskLog{}, err
+	}
+	row := s.pool.QueryRow(dbctx, `
+		INSERT INTO runtime_task_logs (workspace_id, task_id, worker_id, stream, message)
+		SELECT t.workspace_id, t.id, w.id, $4, $5
+		FROM runtime_tasks t
+		JOIN runtime_workers w ON w.id = $3 AND w.workspace_id = t.workspace_id
+		WHERE t.id = $1
+			AND t.workspace_id = $2
+			AND t.claimed_by_worker_id = w.id
+			AND t.status IN ('claimed', 'running')
+		RETURNING id::text, workspace_id::text, task_id::text, COALESCE(worker_id::text, ''), stream, message, created_at
+	`, taskID, registration.WorkspaceID, workerID, normalized.Stream, normalized.Message)
+	log, err := scanRuntimeTaskLog(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuntimeTaskLog{}, ErrNotFound
+	}
+	if err != nil {
+		return RuntimeTaskLog{}, err
+	}
+	return log, nil
+}
+
+func (s *PostgresStore) UpdateRuntimeTaskStatus(ctx Context, registration RuntimeRegistration, workerID, taskID string, input UpdateRuntimeTaskStatusInput) (RuntimeTask, error) {
+	dbctx := asContext(ctx)
+	workerID = strings.TrimSpace(workerID)
+	taskID = strings.TrimSpace(taskID)
+	if registration.WorkspaceID == "" || workerID == "" || taskID == "" {
+		return RuntimeTask{}, ErrNotFound
+	}
+	normalized, resultProvided, err := normalizeUpdateRuntimeTaskStatusInput(input)
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	var resultValue any
+	if resultProvided {
+		resultValue = normalized.Result
+	}
+
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	row := tx.QueryRow(dbctx, `
+		UPDATE runtime_tasks
+		SET
+			status = $1,
+			started_at = CASE
+				WHEN $1 IN ('running', 'completed', 'failed', 'cancelled') THEN COALESCE(started_at, now())
+				ELSE started_at
+			END,
+			finished_at = CASE
+				WHEN $1 IN ('completed', 'failed', 'cancelled') THEN now()
+				ELSE finished_at
+			END,
+			result = CASE
+				WHEN $2::jsonb IS NULL THEN result
+				ELSE $2::jsonb
+			END,
+			error = $3,
+			updated_at = now()
+		WHERE id = $4
+			AND workspace_id = $5
+			AND claimed_by_worker_id = $6
+			AND status IN ('claimed', 'running')
+		RETURNING
+			id::text,
+			workspace_id::text,
+			issue_id,
+			session_id,
+			project_id,
+			kind,
+			status,
+			priority,
+			runtime_mode,
+			required_capabilities,
+			payload,
+			result,
+			COALESCE(claimed_by_worker_id::text, ''),
+			claimed_at,
+			started_at,
+			finished_at,
+			error,
+			created_at,
+			updated_at
+	`, normalized.Status, resultValue, normalized.Error, taskID, registration.WorkspaceID, workerID)
+	task, err := scanRuntimeTask(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuntimeTask{}, ErrNotFound
+	}
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := insertRuntimeTaskEvent(dbctx, tx, task.WorkspaceID, task.ID, workerID, "", "status_changed", map[string]any{
+		"status": task.Status,
+		"error":  task.Error,
+	}); err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return RuntimeTask{}, err
+	}
+	return task, nil
+}
+
 type queryer interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -608,6 +1670,414 @@ func ensureWorkspaceMember(ctx context.Context, q queryer, workspaceID, userID s
 		return ErrNotFound
 	}
 	return err
+}
+
+func ensureWorkspaceRole(ctx context.Context, q queryer, workspaceID, userID string, allowed ...string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	if workspaceID == "" || userID == "" {
+		return ErrNotFound
+	}
+	var role string
+	err := q.QueryRow(ctx, `
+		SELECT role
+		FROM workspace_members
+		WHERE workspace_id = $1 AND user_id = $2
+	`, workspaceID, userID).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	for _, item := range allowed {
+		if role == item {
+			return nil
+		}
+	}
+	return ErrForbidden
+}
+
+type scanner interface {
+	Scan(...any) error
+}
+
+func scanWorkspaceMember(row scanner) (WorkspaceMember, error) {
+	var member WorkspaceMember
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&member.ID,
+		&member.WorkspaceID,
+		&member.UserID,
+		&member.Role,
+		&member.Name,
+		&member.Email,
+		&member.AvatarURL,
+		&member.IdentityLogin,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return WorkspaceMember{}, err
+	}
+	member.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	member.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return member, nil
+}
+
+func scanWorkspaceInvitation(row scanner) (WorkspaceInvitation, error) {
+	var invitation WorkspaceInvitation
+	var acceptedAt sql.NullTime
+	var expiresAt, createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&invitation.ID,
+		&invitation.WorkspaceID,
+		&invitation.WorkspaceName,
+		&invitation.Email,
+		&invitation.Role,
+		&invitation.TokenPrefix,
+		&invitation.InvitedByUserID,
+		&invitation.AcceptedByUserID,
+		&acceptedAt,
+		&expiresAt,
+		&invitation.Revoked,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return WorkspaceInvitation{}, err
+	}
+	if acceptedAt.Valid {
+		invitation.AcceptedAt = acceptedAt.Time.UTC().Format(time.RFC3339)
+	}
+	invitation.ExpiresAt = expiresAt.UTC().Format(time.RFC3339)
+	invitation.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	invitation.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return invitation, nil
+}
+
+func scanRuntimeRegistrationToken(row scanner) (RuntimeRegistrationToken, error) {
+	var record RuntimeRegistrationToken
+	var expiresAt, createdAt, updatedAt time.Time
+	var lastUsedAt sql.NullTime
+	if err := row.Scan(
+		&record.ID,
+		&record.WorkspaceID,
+		&record.Name,
+		&record.TokenPrefix,
+		&expiresAt,
+		&lastUsedAt,
+		&record.Revoked,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return RuntimeRegistrationToken{}, err
+	}
+	record.ExpiresAt = expiresAt.UTC().Format(time.RFC3339)
+	if lastUsedAt.Valid {
+		record.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
+	}
+	record.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	record.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return record, nil
+}
+
+func scanRuntimeWorker(row scanner) (RuntimeWorker, error) {
+	var worker RuntimeWorker
+	var capabilities, labels []byte
+	var lastSeenAt, createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&worker.ID,
+		&worker.WorkspaceID,
+		&worker.Name,
+		&worker.Mode,
+		&worker.Status,
+		&worker.Version,
+		&worker.CurrentLoad,
+		&capabilities,
+		&labels,
+		&lastSeenAt,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return RuntimeWorker{}, err
+	}
+	worker.Capabilities = copyRawMessage(json.RawMessage(capabilities))
+	worker.Labels = copyRawMessage(json.RawMessage(labels))
+	worker.LastSeenAt = lastSeenAt.UTC().Format(time.RFC3339)
+	worker.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	worker.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return worker, nil
+}
+
+func scanRuntimeTask(row scanner) (RuntimeTask, error) {
+	var task RuntimeTask
+	var requiredCapabilities, payload, result []byte
+	var claimedAt, startedAt, finishedAt sql.NullTime
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&task.ID,
+		&task.WorkspaceID,
+		&task.IssueID,
+		&task.SessionID,
+		&task.ProjectID,
+		&task.Kind,
+		&task.Status,
+		&task.Priority,
+		&task.RuntimeMode,
+		&requiredCapabilities,
+		&payload,
+		&result,
+		&task.ClaimedByWorkerID,
+		&claimedAt,
+		&startedAt,
+		&finishedAt,
+		&task.Error,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return RuntimeTask{}, err
+	}
+	task.RequiredCapabilities = copyRawMessage(json.RawMessage(requiredCapabilities))
+	task.Payload = copyRawMessage(json.RawMessage(payload))
+	task.Result = copyRawMessage(json.RawMessage(result))
+	if claimedAt.Valid {
+		task.ClaimedAt = claimedAt.Time.UTC().Format(time.RFC3339)
+	}
+	if startedAt.Valid {
+		task.StartedAt = startedAt.Time.UTC().Format(time.RFC3339)
+	}
+	if finishedAt.Valid {
+		task.FinishedAt = finishedAt.Time.UTC().Format(time.RFC3339)
+	}
+	task.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	task.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return task, nil
+}
+
+func scanRuntimeTaskEvent(row scanner) (RuntimeTaskEvent, error) {
+	var event RuntimeTaskEvent
+	var payload []byte
+	var createdAt time.Time
+	if err := row.Scan(
+		&event.ID,
+		&event.WorkspaceID,
+		&event.TaskID,
+		&event.WorkerID,
+		&event.ActorUserID,
+		&event.Kind,
+		&payload,
+		&createdAt,
+	); err != nil {
+		return RuntimeTaskEvent{}, err
+	}
+	event.Payload = copyRawMessage(json.RawMessage(payload))
+	event.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	return event, nil
+}
+
+func scanRuntimeTaskLog(row scanner) (RuntimeTaskLog, error) {
+	var log RuntimeTaskLog
+	var createdAt time.Time
+	if err := row.Scan(
+		&log.ID,
+		&log.WorkspaceID,
+		&log.TaskID,
+		&log.WorkerID,
+		&log.Stream,
+		&log.Message,
+		&createdAt,
+	); err != nil {
+		return RuntimeTaskLog{}, err
+	}
+	log.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	return log, nil
+}
+
+func insertRuntimeTaskEvent(ctx context.Context, q queryer, workspaceID, taskID, workerID, actorUserID, kind string, payload map[string]any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = q.Exec(ctx, `
+		INSERT INTO runtime_task_events (workspace_id, task_id, worker_id, actor_user_id, kind, payload)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, $5, $6)
+	`, workspaceID, taskID, workerID, actorUserID, kind, body)
+	return err
+}
+
+func normalizeRuntimeWorkerInput(input RuntimeWorkerInput) (RuntimeWorkerInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" {
+		return RuntimeWorkerInput{}, errors.New("worker name is required")
+	}
+	input.Mode = strings.ToLower(strings.TrimSpace(input.Mode))
+	if input.Mode == "" {
+		input.Mode = "team"
+	}
+	if input.Mode != "personal" && input.Mode != "team" {
+		return RuntimeWorkerInput{}, errors.New("worker mode must be personal or team")
+	}
+	input.Status = strings.ToLower(strings.TrimSpace(input.Status))
+	if input.Status == "" {
+		input.Status = "online"
+	}
+	switch input.Status {
+	case "online", "draining", "offline":
+	default:
+		return RuntimeWorkerInput{}, errors.New("worker status must be online, draining, or offline")
+	}
+	input.Version = strings.TrimSpace(input.Version)
+	if input.CurrentLoad < 0 {
+		return RuntimeWorkerInput{}, errors.New("currentLoad must be greater than or equal to zero")
+	}
+	capabilities, err := normalizeJSONPayload(input.Capabilities)
+	if err != nil {
+		return RuntimeWorkerInput{}, fmt.Errorf("capabilities %w", err)
+	}
+	labels, err := normalizeJSONPayload(input.Labels)
+	if err != nil {
+		return RuntimeWorkerInput{}, fmt.Errorf("labels %w", err)
+	}
+	input.Capabilities = capabilities
+	input.Labels = labels
+	return input, nil
+}
+
+func normalizeCreateRuntimeTaskInput(input CreateRuntimeTaskInput) (CreateRuntimeTaskInput, error) {
+	input.IssueID = strings.TrimSpace(input.IssueID)
+	input.SessionID = strings.TrimSpace(input.SessionID)
+	input.ProjectID = strings.TrimSpace(input.ProjectID)
+	input.Kind = strings.ToLower(strings.TrimSpace(input.Kind))
+	if input.Kind == "" {
+		return CreateRuntimeTaskInput{}, errors.New("task kind is required")
+	}
+	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
+	if input.RuntimeMode == "" {
+		input.RuntimeMode = "team"
+	}
+	if input.RuntimeMode != "personal" && input.RuntimeMode != "team" {
+		return CreateRuntimeTaskInput{}, errors.New("runtimeMode must be personal or team")
+	}
+	if input.Priority < 0 {
+		return CreateRuntimeTaskInput{}, errors.New("priority must be greater than or equal to zero")
+	}
+	requiredCapabilities, err := normalizeJSONObjectPayload(input.RequiredCapabilities)
+	if err != nil {
+		return CreateRuntimeTaskInput{}, fmt.Errorf("requiredCapabilities %w", err)
+	}
+	payload, err := normalizeJSONObjectPayload(input.Payload)
+	if err != nil {
+		return CreateRuntimeTaskInput{}, fmt.Errorf("payload %w", err)
+	}
+	input.RequiredCapabilities = requiredCapabilities
+	input.Payload = payload
+	return input, nil
+}
+
+func normalizeUpdateRuntimeTaskStatusInput(input UpdateRuntimeTaskStatusInput) (UpdateRuntimeTaskStatusInput, bool, error) {
+	input.Status = strings.ToLower(strings.TrimSpace(input.Status))
+	switch input.Status {
+	case "running", "completed", "failed", "cancelled":
+	default:
+		return UpdateRuntimeTaskStatusInput{}, false, errors.New("task status must be running, completed, failed, or cancelled")
+	}
+	resultProvided := len(strings.TrimSpace(string(input.Result))) > 0
+	if resultProvided {
+		result, err := normalizeJSONObjectPayload(input.Result)
+		if err != nil {
+			return UpdateRuntimeTaskStatusInput{}, false, fmt.Errorf("result %w", err)
+		}
+		input.Result = result
+	}
+	input.Error = strings.TrimSpace(input.Error)
+	return input, resultProvided, nil
+}
+
+func normalizeAppendRuntimeTaskLogInput(input AppendRuntimeTaskLogInput) (AppendRuntimeTaskLogInput, error) {
+	input.Stream = strings.ToLower(strings.TrimSpace(input.Stream))
+	if input.Stream == "" {
+		input.Stream = "system"
+	}
+	if len(input.Stream) > 64 {
+		return AppendRuntimeTaskLogInput{}, errors.New("log stream must be 64 characters or less")
+	}
+	for _, r := range input.Stream {
+		if !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9') && r != '-' && r != '_' {
+			return AppendRuntimeTaskLogInput{}, errors.New("log stream may only contain lowercase letters, numbers, dash, and underscore")
+		}
+	}
+	input.Message = strings.TrimSpace(input.Message)
+	if input.Message == "" {
+		return AppendRuntimeTaskLogInput{}, errors.New("log message is required")
+	}
+	const maxRuntimeTaskLogMessageBytes = 64 * 1024
+	if len(input.Message) > maxRuntimeTaskLogMessageBytes {
+		input.Message = input.Message[:maxRuntimeTaskLogMessageBytes]
+	}
+	return input, nil
+}
+
+func normalizeCreateWorkspaceInvitationInput(input CreateWorkspaceInvitationInput) (CreateWorkspaceInvitationInput, error) {
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+	if len(input.Email) > 320 {
+		return CreateWorkspaceInvitationInput{}, errors.New("email must be 320 characters or less")
+	}
+	input.Role = strings.ToLower(strings.TrimSpace(input.Role))
+	if input.Role == "" {
+		input.Role = "member"
+	}
+	if input.Role != "member" && input.Role != "admin" {
+		return CreateWorkspaceInvitationInput{}, errors.New("role must be member or admin")
+	}
+	if input.ExpiresInHours <= 0 {
+		input.ExpiresInHours = 168
+	}
+	if input.ExpiresInHours > 24*90 {
+		return CreateWorkspaceInvitationInput{}, errors.New("expiresInHours must be 2160 or less")
+	}
+	return input, nil
+}
+
+func normalizeRuntimeTaskCancelReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "Task cancellation requested by workspace member."
+	}
+	const maxRuntimeTaskCancelReasonBytes = 1024
+	if len(reason) > maxRuntimeTaskCancelReasonBytes {
+		reason = reason[:maxRuntimeTaskCancelReasonBytes]
+	}
+	return reason
+}
+
+func isFinalRuntimeTaskStatus(status string) bool {
+	return status == "completed" || status == "failed" || status == "cancelled"
+}
+
+func normalizeRuntimeHeartbeatInput(input RuntimeWorkerInput) (RuntimeWorkerInput, error) {
+	input.Status = strings.ToLower(strings.TrimSpace(input.Status))
+	if input.Status == "" {
+		input.Status = "online"
+	}
+	switch input.Status {
+	case "online", "draining", "offline":
+	default:
+		return RuntimeWorkerInput{}, errors.New("worker status must be online, draining, or offline")
+	}
+	input.Version = strings.TrimSpace(input.Version)
+	if input.CurrentLoad < 0 {
+		return RuntimeWorkerInput{}, errors.New("currentLoad must be greater than or equal to zero")
+	}
+	capabilities, err := normalizeJSONPayload(input.Capabilities)
+	if err != nil {
+		return RuntimeWorkerInput{}, fmt.Errorf("capabilities %w", err)
+	}
+	labels, err := normalizeJSONPayload(input.Labels)
+	if err != nil {
+		return RuntimeWorkerInput{}, fmt.Errorf("labels %w", err)
+	}
+	input.Capabilities = capabilities
+	input.Labels = labels
+	return input, nil
 }
 
 func resolveIssueEventRecipients(ctx context.Context, q queryer, input CreateIssueEventInput) (map[string]bool, error) {
