@@ -166,6 +166,7 @@ pnpm test:server
 - `docs/ia.md`: MVP navigation, screen map, page regions, state model, build sequence.
 - `docs/references.md`: notes from Multica and Optio references.
 - `docs/runbook.md`: local run, data paths, smoke checks, and troubleshooting.
+- `docs/release.md`: mspace project release versioning, manual tag gate, and GitHub Release workflow.
 - `apps/website/README.md`: website scope, local commands, Vercel deployment, visual guardrails, and asset sources.
 - `apps/website/TODO.md`: narrow website backlog; keep speculative website tasks here instead of `ROADMAP.md`.
 

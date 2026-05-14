@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate tagged release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck TypeScript packages
+        run: pnpm typecheck
+
+      - name: Build desktop app
+        run: pnpm --filter @mspace/desktop build
+
+      - name: Build website
+        run: pnpm --filter @mspace/website build
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.0"
+          cache-dependency-path: |
+            server/go.sum
+            runner/go.sum
+
+      - name: Test server
+        working-directory: server
+        run: go test ./...
+
+      - name: Build server
+        working-directory: server
+        run: go build ./cmd/server
+
+      - name: Test runner
+        working-directory: runner
+        run: go test ./...
+
+      - name: Build runner
+        working-directory: runner
+        run: go build ./...
+
+      - name: Test worker
+        working-directory: worker
+        run: go test ./...
+
+      - name: Build worker
+        working-directory: worker
+        run: go build ./...
+
+      - name: Write release verification summary
+        run: |
+          mkdir -p release-artifacts
+          {
+            echo "# mspace ${GITHUB_REF_NAME}"
+            echo
+            echo "- Tag: ${GITHUB_REF_NAME}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- TypeScript typecheck: passed"
+            echo "- Desktop build: passed"
+            echo "- Website build: passed"
+            echo "- Server tests/build: passed"
+            echo "- Runner tests/build: passed"
+            echo "- Worker tests/build: passed"
+            echo
+            echo "This workflow validates the tagged source. It does not publish installers, container images, npm packages, or production deployments."
+          } > release-artifacts/release-verification.md
+
+      - name: Upload release verification artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-verification-${{ github.ref_name }}
+          path: release-artifacts/release-verification.md
+          if-no-files-found: error
+
+      - name: Create or update draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease_flag=""
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            prerelease_flag="--prerelease"
+          fi
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release-artifacts/release-verification.md --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --draft \
+              ${prerelease_flag} \
+              --generate-notes \
+              --title "mspace ${GITHUB_REF_NAME}" \
+              release-artifacts/release-verification.md
+          fi
