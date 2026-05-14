@@ -11,7 +11,7 @@ import {
   Navigate,
   RouterProvider,
 } from "@tanstack/react-router";
-import { UsersRound, X } from "lucide-react";
+import { GitBranch, LoaderCircle, UsersRound, X } from "lucide-react";
 import {
   AgentsPage,
   ClustersPage,
@@ -28,7 +28,6 @@ import {
   WorkspaceInvitePage,
 } from "@mspace/views";
 import {
-  api,
   AUTH_TOKEN_STORAGE_KEY,
   controlPlaneApi,
   getControlPlaneBaseUrl,
@@ -62,24 +61,6 @@ function RootShell() {
   const [teamWorkspaceModalOpen, setTeamWorkspaceModalOpen] = useState(false);
   const [teamWorkspaceName, setTeamWorkspaceName] = useState("");
 
-  const activeWorkQuery = useQuery({
-    queryKey: queryKeys.activeWork,
-    queryFn: api.listActiveWork,
-    refetchInterval: 15_000,
-  });
-  const issuesQuery = useQuery({
-    queryKey: queryKeys.issues,
-    queryFn: api.listIssues,
-  });
-  const projectsQuery = useQuery({
-    queryKey: queryKeys.projects,
-    queryFn: api.listProjects,
-  });
-  const localInboxQuery = useQuery({
-    queryKey: queryKeys.inbox,
-    queryFn: api.listInbox,
-    refetchInterval: 5_000,
-  });
   const meQuery = useQuery({
     queryKey: queryKeys.authMe(authToken),
     queryFn: () => controlPlaneApi.me(authToken),
@@ -142,24 +123,30 @@ function RootShell() {
       setSelectedWorkspaceId(currentWorkspace.id);
     }
   }, [currentWorkspace?.id, selectedWorkspaceId, workspaces.length]);
-  const isTeamWorkspace = currentWorkspace?.kind === "team";
-  const teamInboxEnabled = authToken !== "" && Boolean(currentWorkspace?.id) && isTeamWorkspace;
-  const teamInboxQuery = useQuery({
-    queryKey: queryKeys.teamInbox(currentWorkspace?.id || "", authToken),
+  const serverWorkspaceReady = authToken !== "" && Boolean(currentWorkspace?.id);
+  const workspaceIssuesQueryKey = queryKeys.workspaceIssues(currentWorkspace?.id || "", authToken);
+  const workspaceProjectsQueryKey = queryKeys.workspaceProjects(currentWorkspace?.id || "", authToken);
+  const issuesQuery = useQuery({
+    queryKey: workspaceIssuesQueryKey,
+    queryFn: () => controlPlaneApi.listIssues(authToken, currentWorkspace?.id || ""),
+    enabled: serverWorkspaceReady,
+  });
+  const projectsQuery = useQuery({
+    queryKey: workspaceProjectsQueryKey,
+    queryFn: () => controlPlaneApi.listProjects(authToken, currentWorkspace?.id || ""),
+    enabled: serverWorkspaceReady,
+  });
+  const inboxQuery = useQuery({
+    queryKey: queryKeys.workspaceInbox(currentWorkspace?.id || "", authToken),
     queryFn: () => controlPlaneApi.listInbox(authToken, currentWorkspace?.id || ""),
-    enabled: teamInboxEnabled,
-    refetchInterval: teamInboxEnabled ? 5_000 : false,
+    enabled: serverWorkspaceReady,
+    refetchInterval: serverWorkspaceReady ? 5_000 : false,
   });
 
   useEffect(() => {
-    void api.configureControlPlaneSession({
-      serverBaseUrl: getControlPlaneBaseUrl(),
-      token: authToken,
-      workspaceId: currentWorkspace?.id || "",
-    }).catch(() => {
-      // The local runner may not be ready yet; Inbox still has server and local query fallbacks.
-    });
-  }, [authToken, currentWorkspace?.id]);
+    if (!serverWorkspaceReady) return;
+    void fetch(`${getControlPlaneBaseUrl()}/health`).catch(() => undefined);
+  }, [serverWorkspaceReady]);
 
   const handleSignOut = () => {
     window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
@@ -168,6 +155,7 @@ function RootShell() {
     setAuthToken("");
     setSelectedWorkspaceId("");
     setPendingAuthState("");
+    void queryClient.clear();
   };
 
   const handleSelectWorkspace = (workspaceId: string) => {
@@ -207,11 +195,8 @@ function RootShell() {
           ? "error"
           : "signed-out";
   const inboxUnreadCount = useMemo(() => {
-    const teamItems = teamInboxQuery.data || [];
-    const teamIssueIds = new Set(teamItems.map((item) => item.issueId));
-    const localOnlyItems = (localInboxQuery.data || []).filter((item) => !teamIssueIds.has(item.issueId));
-    return teamItems.length + localOnlyItems.length;
-  }, [localInboxQuery.data, teamInboxQuery.data]);
+    return (inboxQuery.data || []).length;
+  }, [inboxQuery.data]);
   const searchItems = useMemo<ShellSearchItem[]>(() => {
     const issueItems: ShellSearchItem[] = (issuesQuery.data || []).map((issue) => ({
       id: `issue:${issue.id}`,
@@ -254,7 +239,7 @@ function RootShell() {
     return [...issueItems, ...projectItems];
   }, [issuesQuery.data, projectsQuery.data]);
 
-  return (
+  const shell = (
     <MspaceAuthProvider
       value={{
         token: authToken,
@@ -268,7 +253,7 @@ function RootShell() {
     >
       <AppShell
         brandLogoSrc={mspaceLogoUrl}
-        activeWorkItems={activeWorkQuery.data || []}
+        activeWorkItems={[]}
         inboxUnreadCount={inboxUnreadCount}
         searchItems={searchItems}
         searchLoading={issuesQuery.isLoading || projectsQuery.isLoading}
@@ -293,6 +278,15 @@ function RootShell() {
           setTeamWorkspaceModalOpen(true);
         }}
       />
+      {accountStatus !== "signed-in" ? (
+        <AuthRequiredOverlay
+          status={accountStatus}
+          error={authError instanceof Error ? authError.message : undefined}
+          actionLabel={pendingAuthState ? "Waiting for GitHub" : undefined}
+          onSignIn={() => signInMutation.mutate()}
+          isBusy={pendingAuthState !== "" || signInMutation.isPending}
+        />
+      ) : null}
       {teamWorkspaceModalOpen ? (
         <Modal
           title="Create team workspace"
@@ -322,6 +316,39 @@ function RootShell() {
         </Modal>
       ) : null}
     </MspaceAuthProvider>
+  );
+  return shell;
+}
+
+function AuthRequiredOverlay(props: {
+  status: "signed-in" | "signed-out" | "loading" | "error";
+  error?: string;
+  actionLabel?: string;
+  isBusy?: boolean;
+  onSignIn: () => void;
+}) {
+  const busy = props.status === "loading" || props.isBusy;
+  return (
+    <div className="fixed inset-0 z-[90] grid place-items-center bg-[color:var(--canvas)] px-6">
+      <section className="w-full max-w-[420px] rounded-[12px] bg-[color:var(--paper)] px-6 py-6 shadow-[0_24px_80px_rgba(0,0,0,0.14),inset_0_0_0_1px_var(--line)]">
+        <div className="flex items-center gap-3">
+          <span className="grid size-10 place-items-center rounded-[10px] bg-[color:var(--block)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+            {busy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
+          </span>
+          <div className="min-w-0">
+            <h1 className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">Sign in to mspace</h1>
+            <p className="mt-1 text-[13px] leading-5 text-[color:var(--muted)]">
+              Workspace data is stored in the server control plane.
+            </p>
+          </div>
+        </div>
+        {props.error ? <div className="mt-4"><Notice tone="danger">{props.error}</Notice></div> : null}
+        <Button type="button" className="mt-5 w-full justify-center" disabled={busy} onClick={props.onSignIn}>
+          {busy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
+          {props.actionLabel || (busy ? "Waiting for GitHub" : "Sign in with GitHub")}
+        </Button>
+      </section>
+    </div>
   );
 }
 

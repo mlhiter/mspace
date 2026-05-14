@@ -7,10 +7,11 @@ const DEFAULT_SERVER_PORT = 8787;
 const DEFAULT_START_TIMEOUT_MS = 30_000;
 const EXPECTED_SERVER_PROTOCOL = 1;
 const EXPECTED_SERVER_CAPABILITIES = [
-  "teamInboxIssueGrouping",
+  "workspaceInboxIssueGrouping",
   "teamWorkspaceCreation",
   "workspaceInvitations",
   "workspaceKinds",
+  "workspaceCollaboration",
   "runtimeWorkerRegistration",
   "runtimeTaskQueue",
 ] as const;

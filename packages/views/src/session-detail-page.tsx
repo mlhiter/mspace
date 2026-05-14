@@ -161,23 +161,7 @@ export function SessionDetailPage() {
   const cleanupMutation = useMutation({
     mutationFn: () => api.cleanupSession(sessionId),
     onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) }),
-        sessionQuery.data?.issue.id
-          ? queryClient.invalidateQueries({ queryKey: queryKeys.issue(sessionQuery.data.issue.id) })
-          : Promise.resolve(),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
-      ]);
-    },
-  });
-
-  const postSummaryMutation = useMutation({
-    mutationFn: () => api.addComment(sessionId ? sessionQuery.data!.issue.id : "", { body: summaryDraft }),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(sessionQuery.data!.issue.id) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) }),
-      ]);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) });
     },
   });
 
@@ -274,7 +258,6 @@ export function SessionDetailPage() {
           <Panel title="Issue summary draft">
             {copyState === "copied" ? <Notice>Summary copied to clipboard.</Notice> : null}
             {copyState === "failed" ? <Notice tone="danger">Clipboard access failed. You can still copy from the draft below.</Notice> : null}
-            {postSummaryMutation.error ? <Notice tone="danger">{postSummaryMutation.error.message}</Notice> : null}
             <div className="mt-3 flex flex-col gap-3">
               <Textarea
                 value={summaryDraft}
@@ -289,11 +272,8 @@ export function SessionDetailPage() {
                   <Clipboard data-icon />
                   Copy summary
                 </Button>
-                <Button
-                  disabled={postSummaryMutation.isPending || !summaryDraft.trim()}
-                  onClick={() => postSummaryMutation.mutate()}
-                >
-                  {postSummaryMutation.isPending ? "Posting summary..." : "Post to issue"}
+                <Button disabled title="Issue comments now write through the server control plane.">
+                  Post to issue
                 </Button>
               </div>
             </div>

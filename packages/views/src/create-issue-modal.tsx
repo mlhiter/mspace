@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { MessageSquarePlus, X } from "lucide-react";
-import { api, queryKeys } from "@mspace/core";
+import { type CreateIssueInput } from "@mspace/core";
 import {
   Button,
   Notice,
@@ -12,22 +12,24 @@ import { IssueDocumentEditor } from "./issue-document-editor";
 
 export function CreateIssueModal(props: {
   onClose: () => void;
+  createIssue: (input: CreateIssueInput) => Promise<{ issueId: string }>;
+  issueQueryKey: readonly unknown[];
+  inboxQueryKey: readonly unknown[];
+  projectsQueryKey: readonly unknown[];
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [prompt, setPrompt] = useState("");
-  const [attachmentIds, setAttachmentIds] = useState<string[]>([]);
   const canCreate = prompt.trim().length > 0;
 
   const createIssue = useMutation({
-    mutationFn: api.createIssue,
+    mutationFn: props.createIssue,
     onSuccess: async ({ issueId }) => {
       setPrompt("");
-      setAttachmentIds([]);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: props.issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: props.inboxQueryKey }),
+        queryClient.invalidateQueries({ queryKey: props.projectsQueryKey }),
       ]);
       props.onClose();
       void navigate({ to: "/issues/$issueId", params: { issueId } });
@@ -49,18 +51,7 @@ export function CreateIssueModal(props: {
 
     createIssue.mutate({
       prompt,
-      attachmentIds: attachmentIdsReferencedBy(prompt, attachmentIds),
     });
-  }
-
-  async function uploadIssueImage(file: File) {
-    const attachment = await api.uploadAttachment(file);
-    setAttachmentIds((current) => current.includes(attachment.id) ? current : [...current, attachment.id]);
-    return {
-      id: attachment.id,
-      url: attachment.url,
-      filename: attachment.filename,
-    };
   }
 
   return (
@@ -107,7 +98,6 @@ export function CreateIssueModal(props: {
               autoFocus
               value={prompt}
               onChange={setPrompt}
-              onImageUpload={uploadIssueImage}
               placeholder={"Write the issue...\n\n- [ ] Add the first task\n- [ ] Add the next task"}
             />
           </section>
@@ -124,8 +114,4 @@ export function CreateIssueModal(props: {
       </section>
     </div>
   );
-}
-
-function attachmentIdsReferencedBy(markdown: string, attachmentIds: string[]) {
-  return attachmentIds.filter((id) => markdown.includes(`/api/attachments/${id}`));
 }

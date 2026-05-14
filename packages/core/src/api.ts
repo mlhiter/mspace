@@ -1,5 +1,4 @@
 import type {
-  ActiveWorkItem,
   AgentProfile,
   AgentProfileInput,
   AuthMeResult,
@@ -15,15 +14,12 @@ import type {
 	CreateProjectInput,
 	CreatePullRequestInput,
 	CreateRuntimeRegistrationTokenInput,
-	CreateRuntimeTaskInput,
-	CreateWorkspaceInput,
-	CreateWorkspaceInvitationInput,
-	CreateWorkspaceResult,
-	CreateSessionInput,
-	CreateTeamIssueEventInput,
-  InboxItem,
+  CreateRuntimeTaskInput,
+  CreateWorkspaceInput,
+  CreateWorkspaceInvitationInput,
+  CreateWorkspaceResult,
+	CreateWorkspaceIssueEventInput,
   Issue,
-  IssueAttachment,
   IssueDetail,
   IssueHandoff,
   IssueLabel,
@@ -44,7 +40,7 @@ import type {
 	RuntimeWorker,
 	SessionDetail,
   StartTestDeployInput,
-  TeamInboxItem,
+  WorkspaceInboxItem,
   UpdateCommentInput,
   UpdateIssueLabelsInput,
   UpdateIssueInput,
@@ -71,26 +67,27 @@ export interface StoredAuthIdentity {
 }
 
 export const queryKeys = {
-  activeWork: ["active-work"] as const,
   agents: ["agents"] as const,
   authMe: (token: string) => ["auth-me", token] as const,
   authPoll: (state: string) => ["auth-github-result", state] as const,
-	teamInbox: (workspaceId: string, token: string) => ["team-inbox", workspaceId, token] as const,
+	workspaceInbox: (workspaceId: string, token: string) => ["workspace-inbox", workspaceId, token] as const,
 	workspaceMembers: (workspaceId: string, token: string) => ["workspace-members", workspaceId, token] as const,
 	workspaceInvitations: (workspaceId: string, token: string) => ["workspace-invitations", workspaceId, token] as const,
 	runtimeRegistrationTokens: (workspaceId: string, token: string) => ["runtime-registration-tokens", workspaceId, token] as const,
 	runtimeWorkers: (workspaceId: string, token: string) => ["runtime-workers", workspaceId, token] as const,
 	runtimeTasks: (workspaceId: string, token: string) => ["runtime-tasks", workspaceId, token] as const,
-	runtimeTaskEvents: (workspaceId: string, taskId: string, token: string) => ["runtime-task-events", workspaceId, taskId, token] as const,
-	runtimeTaskLogs: (workspaceId: string, taskId: string, token: string) => ["runtime-task-logs", workspaceId, taskId, token] as const,
+  runtimeTaskEvents: (workspaceId: string, taskId: string, token: string) => ["runtime-task-events", workspaceId, taskId, token] as const,
+  runtimeTaskLogs: (workspaceId: string, taskId: string, token: string) => ["runtime-task-logs", workspaceId, taskId, token] as const,
+  workspaceIssueLabelDefinitions: (workspaceId: string, token: string) =>
+    ["workspace-issue-label-definitions", workspaceId, token] as const,
+  workspaceIssues: (workspaceId: string, token: string) => ["workspace-issues", workspaceId, token] as const,
+  workspaceIssue: (workspaceId: string, issueId: string, token: string) =>
+    ["workspace-issue", workspaceId, issueId, token] as const,
+  workspaceProjects: (workspaceId: string, token: string) => ["workspace-projects", workspaceId, token] as const,
+  workspaceProjectRunbook: (workspaceId: string, projectId: string, token: string) =>
+    ["workspace-project-runbook", workspaceId, projectId, token] as const,
 	workspaceSettings: ["workspace-settings"] as const,
   clusters: ["clusters"] as const,
-  inbox: ["inbox"] as const,
-  issueLabelDefinitions: ["issue-label-definitions"] as const,
-  issues: ["issues"] as const,
-  projects: ["projects"] as const,
-  projectRunbook: (projectId: string) => ["project-runbook", projectId] as const,
-  issue: (issueId: string) => ["issue", issueId] as const,
   issueResources: (issueId: string) => ["issue-resources", issueId] as const,
   session: (sessionId: string) => ["session", sessionId] as const,
 };
@@ -152,24 +149,6 @@ export function setStoredAuthIdentity(user: MspaceUser | null | undefined): void
   } catch {
     // localStorage is best-effort; API calls still fall back to the local actor.
   }
-}
-
-function withIssueCreator(input: CreateIssueInput): CreateIssueInput {
-  const actor = getStoredAuthIdentity();
-  return {
-    ...input,
-    creatorName: input.creatorName || actor.name,
-    creatorAvatarUrl: input.creatorAvatarUrl || actor.avatarUrl || "",
-  };
-}
-
-function withCommentAuthor(input: CreateCommentInput): CreateCommentInput {
-  const actor = getStoredAuthIdentity();
-  return {
-    ...input,
-    authorName: input.authorName || actor.name,
-    authorAvatarUrl: input.authorAvatarUrl || actor.avatarUrl || "",
-  };
 }
 
 export function buildApiUrl(path: string): string {
@@ -262,7 +241,6 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(input),
     }),
-  listActiveWork: () => request<ActiveWorkItem[]>("/api/active-work"),
   listAgents: () => request<AgentProfile[]>("/api/agents"),
   createAgent: (input: AgentProfileInput) =>
     request<AgentProfile>("/api/agents", {
@@ -299,98 +277,6 @@ export const api = {
     request<KubeconfigImportResult>("/api/clusters/import", {
       method: "POST",
       body: JSON.stringify({ paths }),
-    }),
-  listInbox: () => request<InboxItem[]>("/api/inbox"),
-  markInboxIssueRead: (issueId: string) =>
-    request<{ ok: boolean }>(`/api/inbox/issues/${issueId}/read`, {
-      method: "POST",
-    }),
-  listProjects: () => request<Project[]>("/api/projects"),
-  createProject: (input: CreateProjectInput) =>
-    request<Project>("/api/projects", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  updateProject: (input: UpdateProjectInput) =>
-    request<Project>(`/api/projects/${input.id}`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    }),
-  getProjectRunbook: (projectId: string) =>
-    request<ProjectRunbook>(`/api/projects/${projectId}/runbook`),
-  updateProjectRunbook: (projectId: string, input: UpdateProjectRunbookInput) =>
-    request<ProjectRunbook>(`/api/projects/${projectId}/runbook`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    }),
-  deleteProject: (projectId: string) =>
-    request<{ ok: boolean }>(`/api/projects/${projectId}`, {
-      method: "DELETE",
-    }),
-  listIssueLabelDefinitions: () =>
-    request<IssueLabelDefinition[]>("/api/issue-label-definitions"),
-  uploadAttachment: (file: File) => {
-    const body = new FormData();
-    body.append("file", file);
-    return request<IssueAttachment>("/api/attachments", {
-      method: "POST",
-      body,
-    });
-  },
-  listIssues: () => request<IssueListItem[]>("/api/issues"),
-  createIssue: (input: CreateIssueInput) =>
-    request<{ issueId: string }>("/api/issues", {
-      method: "POST",
-      body: JSON.stringify(withIssueCreator(input)),
-    }),
-  getIssue: (issueId: string) =>
-    request<IssueDetail>(`/api/issues/${issueId}`),
-  updateIssue: (issueId: string, input: UpdateIssueInput) =>
-    request<Issue>(`/api/issues/${issueId}`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    }),
-  createIssueTask: (issueId: string, input: CreateIssueTaskInput) =>
-    request<IssueListItem>(`/api/issues/${issueId}/tasks`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  deleteIssueTask: (issueId: string, taskId: string) =>
-    request<{ ok: boolean }>(`/api/issues/${issueId}/tasks/${taskId}`, {
-      method: "DELETE",
-    }),
-  updateIssueLabels: (issueId: string, input: UpdateIssueLabelsInput) =>
-    request<IssueLabel[]>(`/api/issues/${issueId}/labels`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    }),
-  addComment: (issueId: string, input: CreateCommentInput) =>
-    request<{ ok: boolean; commentId: string }>(`/api/issues/${issueId}/comments`, {
-      method: "POST",
-      body: JSON.stringify(withCommentAuthor(input)),
-    }),
-  updateComment: (issueId: string, commentId: string, input: UpdateCommentInput) =>
-    request<{ ok: boolean; comment: Comment }>(`/api/issues/${issueId}/comments/${commentId}`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    }),
-  setCommentReaction: (issueId: string, commentId: string, reaction: string) =>
-    request<{ ok: boolean }>(`/api/issues/${issueId}/comments/${commentId}/reactions/${encodeURIComponent(reaction)}`, {
-      method: "PUT",
-    }),
-  deleteCommentReaction: (issueId: string, commentId: string, reaction: string) =>
-    request<{ ok: boolean }>(`/api/issues/${issueId}/comments/${commentId}/reactions/${encodeURIComponent(reaction)}`, {
-      method: "DELETE",
-    }),
-  assignAgent: (issueId: string, input: CreateSessionInput) =>
-    request<{ sessionId: string }>(`/api/issues/${issueId}/assign-agent`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  createSession: (issueId: string, input: CreateSessionInput) =>
-    request<{ sessionId: string }>(`/api/issues/${issueId}/sessions`, {
-      method: "POST",
-      body: JSON.stringify(input),
     }),
   startTestDeploy: (issueId: string, input: StartTestDeployInput) =>
     request<{ sessionId: string; testEnvironment: IssueTestEnvironment }>(`/api/issues/${issueId}/test-deploy`, {
@@ -478,10 +364,10 @@ export const controlPlaneApi = {
       body: JSON.stringify({ token: inviteToken }),
     }),
   listInbox: (token: string, workspaceId: string) =>
-    requestControlPlane<TeamInboxItem[]>(`/api/workspaces/${workspaceId}/inbox`, {
+    requestControlPlane<WorkspaceInboxItem[]>(`/api/workspaces/${workspaceId}/inbox`, {
       headers: authHeaders(token),
     }),
-  createIssueEvent: (token: string, workspaceId: string, input: CreateTeamIssueEventInput) =>
+  createIssueEvent: (token: string, workspaceId: string, input: CreateWorkspaceIssueEventInput) =>
     requestControlPlane<{ id: string }>(`/api/workspaces/${workspaceId}/issue-events`, {
       method: "POST",
       headers: authHeaders(token),
@@ -540,5 +426,99 @@ export const controlPlaneApi = {
 			method: "POST",
 			headers: authHeaders(token),
 			body: JSON.stringify(input),
+		}),
+	listProjects: (token: string, workspaceId: string) =>
+		requestControlPlane<Project[]>(`/api/workspaces/${workspaceId}/projects`, {
+			headers: authHeaders(token),
+		}),
+	createProject: (token: string, workspaceId: string, input: CreateProjectInput) =>
+		requestControlPlane<Project>(`/api/workspaces/${workspaceId}/projects`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	updateProject: (token: string, workspaceId: string, input: UpdateProjectInput) =>
+		requestControlPlane<Project>(`/api/workspaces/${workspaceId}/projects/${input.id}`, {
+			method: "PUT",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	deleteProject: (token: string, workspaceId: string, projectId: string) =>
+		requestControlPlane<{ ok: boolean }>(`/api/workspaces/${workspaceId}/projects/${projectId}`, {
+			method: "DELETE",
+			headers: authHeaders(token),
+		}),
+	getProjectRunbook: (token: string, workspaceId: string, projectId: string) =>
+		requestControlPlane<ProjectRunbook>(`/api/workspaces/${workspaceId}/projects/${projectId}/runbook`, {
+			headers: authHeaders(token),
+		}),
+	updateProjectRunbook: (token: string, workspaceId: string, projectId: string, input: UpdateProjectRunbookInput) =>
+		requestControlPlane<ProjectRunbook>(`/api/workspaces/${workspaceId}/projects/${projectId}/runbook`, {
+			method: "PUT",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	listIssueLabelDefinitions: (token: string, workspaceId: string) =>
+		requestControlPlane<IssueLabelDefinition[]>(`/api/workspaces/${workspaceId}/issue-label-definitions`, {
+			headers: authHeaders(token),
+		}),
+	listIssues: (token: string, workspaceId: string) =>
+		requestControlPlane<IssueListItem[]>(`/api/workspaces/${workspaceId}/issues`, {
+			headers: authHeaders(token),
+		}),
+	createIssue: (token: string, workspaceId: string, input: CreateIssueInput) =>
+		requestControlPlane<{ issueId: string }>(`/api/workspaces/${workspaceId}/issues`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	getIssue: (token: string, workspaceId: string, issueId: string) =>
+		requestControlPlane<IssueDetail>(`/api/workspaces/${workspaceId}/issues/${issueId}`, {
+			headers: authHeaders(token),
+		}),
+	updateIssue: (token: string, workspaceId: string, issueId: string, input: UpdateIssueInput) =>
+		requestControlPlane<Issue>(`/api/workspaces/${workspaceId}/issues/${issueId}`, {
+			method: "PUT",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	createIssueTask: (token: string, workspaceId: string, issueId: string, input: CreateIssueTaskInput) =>
+		requestControlPlane<IssueListItem>(`/api/workspaces/${workspaceId}/issues/${issueId}/tasks`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	deleteIssueTask: (token: string, workspaceId: string, issueId: string, taskId: string) =>
+		requestControlPlane<{ ok: boolean }>(`/api/workspaces/${workspaceId}/issues/${issueId}/tasks/${taskId}`, {
+			method: "DELETE",
+			headers: authHeaders(token),
+		}),
+	updateIssueLabels: (token: string, workspaceId: string, issueId: string, input: UpdateIssueLabelsInput) =>
+		requestControlPlane<IssueLabel[]>(`/api/workspaces/${workspaceId}/issues/${issueId}/labels`, {
+			method: "PUT",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	addComment: (token: string, workspaceId: string, issueId: string, input: CreateCommentInput) =>
+		requestControlPlane<{ ok: boolean; commentId: string }>(`/api/workspaces/${workspaceId}/issues/${issueId}/comments`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	updateComment: (token: string, workspaceId: string, issueId: string, commentId: string, input: UpdateCommentInput) =>
+		requestControlPlane<{ ok: boolean; comment: Comment }>(`/api/workspaces/${workspaceId}/issues/${issueId}/comments/${commentId}`, {
+			method: "PUT",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	setCommentReaction: (token: string, workspaceId: string, issueId: string, commentId: string, reaction: string) =>
+		requestControlPlane<{ ok: boolean }>(`/api/workspaces/${workspaceId}/issues/${issueId}/comments/${commentId}/reactions/${encodeURIComponent(reaction)}`, {
+			method: "PUT",
+			headers: authHeaders(token),
+		}),
+	deleteCommentReaction: (token: string, workspaceId: string, issueId: string, commentId: string, reaction: string) =>
+		requestControlPlane<{ ok: boolean }>(`/api/workspaces/${workspaceId}/issues/${issueId}/comments/${commentId}/reactions/${encodeURIComponent(reaction)}`, {
+			method: "DELETE",
+			headers: authHeaders(token),
 		}),
 };

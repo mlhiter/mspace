@@ -94,8 +94,6 @@ export function ClustersPage() {
       setSettingsForm(emptyClusterForm);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
       ]);
     },
   });

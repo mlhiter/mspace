@@ -94,7 +94,7 @@ export interface InboxItem {
   updatedAt: string;
 }
 
-export interface TeamInboxItem {
+export interface WorkspaceInboxItem {
   eventId: string;
   workspaceId: string;
   issueId: string;
@@ -107,7 +107,7 @@ export interface TeamInboxItem {
   createdAt: string;
 }
 
-export interface CreateTeamIssueEventInput {
+export interface CreateWorkspaceIssueEventInput {
 	issueId: string;
 	actorUserId?: string;
 	kind: string;

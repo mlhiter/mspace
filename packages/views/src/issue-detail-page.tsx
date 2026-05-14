@@ -37,6 +37,7 @@ import {
 import {
   api,
   buildApiUrl,
+  controlPlaneApi,
   getStoredAuthIdentity,
   queryKeys,
   type AgentProfile,
@@ -50,6 +51,7 @@ import {
   type IssueLabel,
   type IssueLabelDefinition,
   type IssueListItem,
+  type IssueDetail,
   type IssueTestEnvironment,
   type IssueTestEnvironmentResources,
   type ProjectRunbook,
@@ -61,6 +63,7 @@ import {
   type SessionReviewEvidence,
   type SessionStreamEvent,
   type StartTestDeployInput,
+  type UpdateIssueLabelsInput,
   type WorkspaceChange,
 } from "@mspace/core";
 import {
@@ -309,7 +312,7 @@ function formatMentionPlaceholder(agents: AgentProfile[]) {
   return `Write a reply. Mention ${mentions}.`;
 }
 
-function testDeployDefaults(detail: NonNullable<Awaited<ReturnType<typeof api.getIssue>>>, clusters: Cluster[]): StartTestDeployInput {
+function testDeployDefaults(detail: IssueDetail, clusters: Cluster[]): StartTestDeployInput {
   const clusterId = detail.testEnvironment?.clusterId || detail.project.defaultClusterId || clusters[0]?.id || "";
   const selectedCluster = clusters.find((cluster) => cluster.id === clusterId);
   const changeNodes = listOrEmpty(detail.changeNodes);
@@ -642,10 +645,6 @@ function stringsOrEmpty(value: string) {
 function attachmentImageSrc(src: string) {
   if (src.startsWith("/api/attachments/")) return buildApiUrl(src);
   return src;
-}
-
-function attachmentIdsReferencedBy(markdown: string, attachmentIds: string[]) {
-  return attachmentIds.filter((id) => markdown.includes(`/api/attachments/${id}`));
 }
 
 function splitColumns(line: string) {
@@ -1405,6 +1404,7 @@ function HandoffMeta(props: { label: string; value: string; mono?: boolean; titl
 function IssueHandoffPanel(props: {
   changeNodes: IssueChangeNode[];
   handoffs: IssueHandoff[];
+  disabled?: boolean;
   isCreatingPr: boolean;
   refreshingHandoffId: string;
   createError: Error | null;
@@ -1426,7 +1426,7 @@ function IssueHandoffPanel(props: {
   const selectedNode = nodes.find((node) => node.commitSha === sourceCommit) || nodes[0];
   const syncedPR = issuePullRequestHandoff(props.handoffs);
   const primaryHandoff = syncedPR || props.handoffs[0];
-  const canCreate = Boolean(selectedNode?.branch) && !syncedPR?.prUrl && !props.isCreatingPr;
+  const canCreate = Boolean(selectedNode?.branch) && !syncedPR?.prUrl && !props.isCreatingPr && !props.disabled;
   const sourceBranch = primaryHandoff?.branch || selectedNode?.branch || "No branch captured";
   const sourceCommitValue =
     primaryHandoff?.headCommitSha ||
@@ -1446,7 +1446,7 @@ function IssueHandoffPanel(props: {
             <div>
               <div>Pull request</div>
               <div className="mt-0.5 text-[12px] font-normal leading-5 text-[color:var(--muted)]">
-                One issue-level PR, backed by the commits below.
+                {props.disabled ? "PR handoff is still runner-backed for this issue." : "One issue-level PR, backed by the commits below."}
               </div>
             </div>
           </div>
@@ -1457,13 +1457,20 @@ function IssueHandoffPanel(props: {
               <ExternalLink data-icon />
               Open PR
             </Button>
-            <Button type="button" variant="ghost" size="sm" disabled={props.refreshingHandoffId === syncedPR.id} onClick={() => props.onRefresh(syncedPR)}>
+            <Button type="button" variant="ghost" size="sm" disabled={props.disabled || props.refreshingHandoffId === syncedPR.id} onClick={() => props.onRefresh(syncedPR)}>
               <RefreshCw data-icon />
               {props.refreshingHandoffId === syncedPR.id ? "Refreshing" : "Refresh"}
             </Button>
           </div>
         ) : (
-          <Button type="button" variant="secondary" size="sm" disabled={!canCreate} title={!selectedNode?.branch ? "A captured branch is required before PR sync." : undefined} onClick={() => selectedNode && props.onCreatePr(selectedNode)}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={!canCreate}
+            title={props.disabled ? "PR handoff for server-owned issues still uses the local runner bridge." : !selectedNode?.branch ? "A captured branch is required before PR sync." : undefined}
+            onClick={() => selectedNode && props.onCreatePr(selectedNode)}
+          >
             <GitPullRequest data-icon />
             {props.isCreatingPr ? "Syncing" : "Create or sync PR"}
           </Button>
@@ -1537,6 +1544,7 @@ function IssueCommitsTab(props: {
   sessions: AgentSession[];
   agents: AgentProfile[];
   handoffs: IssueHandoff[];
+  runnerActionsDisabled?: boolean;
   isCreatingPr: boolean;
   refreshingHandoffId: string;
   createPrError: Error | null;
@@ -1562,6 +1570,7 @@ function IssueCommitsTab(props: {
         <IssueHandoffPanel
           changeNodes={nodes}
           handoffs={props.handoffs}
+          disabled={props.runnerActionsDisabled}
           isCreatingPr={props.isCreatingPr}
           refreshingHandoffId={props.refreshingHandoffId}
           createError={props.createPrError}
@@ -1590,6 +1599,7 @@ function IssueCommitsTab(props: {
       <IssueHandoffPanel
         changeNodes={nodes}
         handoffs={props.handoffs}
+        disabled={props.runnerActionsDisabled}
         isCreatingPr={props.isCreatingPr}
         refreshingHandoffId={props.refreshingHandoffId}
         createError={props.createPrError}
@@ -1706,10 +1716,13 @@ function CommitReviewFilesNav(props: { node: IssueChangeNode; workdir: string; f
 export function IssueCommitDetailPage() {
   const { issueId = "", commitSha = "" } = useParams({ strict: false }) as { issueId?: string; commitSha?: string };
   const commitRef = decodeURIComponent(commitSha);
+  const auth = useMspaceAuth();
+  const workspaceId = auth.workspace?.id || "";
+  const serverWorkspaceReady = Boolean(auth.token && workspaceId);
   const issueQuery = useQuery({
-    queryKey: queryKeys.issue(issueId),
-    queryFn: () => api.getIssue(issueId),
-    enabled: issueId.length > 0,
+    queryKey: queryKeys.workspaceIssue(workspaceId, issueId, auth.token),
+    queryFn: () => controlPlaneApi.getIssue(auth.token, workspaceId, issueId),
+    enabled: serverWorkspaceReady && issueId.length > 0,
     refetchInterval: 4_000,
   });
   const agentsQuery = useQuery({
@@ -3625,10 +3638,13 @@ function EvidenceTimelineItem(props: { evidence: DeploymentEvidence }) {
 
 export function IssueEvidenceSnapshotsPage() {
   const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
+  const auth = useMspaceAuth();
+  const workspaceId = auth.workspace?.id || "";
+  const serverWorkspaceReady = Boolean(auth.token && workspaceId);
   const issueQuery = useQuery({
-    queryKey: queryKeys.issue(issueId),
-    queryFn: () => api.getIssue(issueId),
-    enabled: issueId.length > 0,
+    queryKey: queryKeys.workspaceIssue(workspaceId, issueId, auth.token),
+    queryFn: () => controlPlaneApi.getIssue(auth.token, workspaceId, issueId),
+    enabled: serverWorkspaceReady && issueId.length > 0,
     refetchInterval: 4_000,
   });
 
@@ -3724,10 +3740,13 @@ function ReviewEvidenceTimelineItem(props: { review: SessionReviewEvidence }) {
 
 export function IssueEvidenceHistoryPage() {
   const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
+  const auth = useMspaceAuth();
+  const workspaceId = auth.workspace?.id || "";
+  const serverWorkspaceReady = Boolean(auth.token && workspaceId);
   const issueQuery = useQuery({
-    queryKey: queryKeys.issue(issueId),
-    queryFn: () => api.getIssue(issueId),
-    enabled: issueId.length > 0,
+    queryKey: queryKeys.workspaceIssue(workspaceId, issueId, auth.token),
+    queryFn: () => controlPlaneApi.getIssue(auth.token, workspaceId, issueId),
+    enabled: serverWorkspaceReady && issueId.length > 0,
     refetchInterval: 4_000,
   });
 
@@ -3966,6 +3985,7 @@ function IssueTestEnvironmentPanel(props: {
   cluster?: Cluster;
   sessions: AgentSession[];
   hasActiveSession: boolean;
+  disabled?: boolean;
   startError?: Error | null;
   cleanupError?: Error | null;
   retainError?: Error | null;
@@ -3986,12 +4006,14 @@ function IssueTestEnvironmentPanel(props: {
   const StatusIcon = failed || needsAttention ? CircleAlert : namespaceStatus === "active" ? CheckCircle2 : changing ? Clock3 : CircleDot;
   const canCleanup =
     Boolean(environment) &&
+    !props.disabled &&
     !props.hasActiveSession &&
     !props.isCleaning &&
     environment?.namespaceStatus !== "cleaned" &&
     environment?.cleanupStatus !== "cleaned";
   const canRetain =
     Boolean(environment) &&
+    !props.disabled &&
     !props.hasActiveSession &&
     !props.isRetaining &&
     environmentHasRetainableNamespace(environment);
@@ -4075,7 +4097,7 @@ function IssueTestEnvironmentPanel(props: {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="secondary" size="sm" disabled={props.hasActiveSession || props.isStarting} onClick={props.onStartDeploy}>
+        <Button type="button" variant="secondary" size="sm" disabled={props.disabled || props.hasActiveSession || props.isStarting} onClick={props.onStartDeploy}>
           <Rocket data-icon />
           {environment ? (props.isStarting ? "Queueing" : "Deploy again") : "Deploy test env"}
         </Button>
@@ -4092,6 +4114,11 @@ function IssueTestEnvironmentPanel(props: {
           </>
         ) : null}
       </div>
+      {props.disabled ? (
+        <div className="text-[12px] leading-5 text-[color:var(--muted)]">
+          Test environments for server-owned issues still run through the local runtime bridge.
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -4651,14 +4678,20 @@ export function IssueDetailPage() {
   const searchTab = isIssueTab(search.tab) ? search.tab : "overview";
   const queryClient = useQueryClient();
   const auth = useMspaceAuth();
+  const workspaceId = auth.workspace?.id || "";
+  const serverWorkspaceReady = Boolean(auth.token && workspaceId);
+  const issueQueryKey = queryKeys.workspaceIssue(workspaceId, issueId, auth.token);
+  const issuesQueryKey = queryKeys.workspaceIssues(workspaceId, auth.token);
+  const inboxQueryKey = queryKeys.workspaceInbox(workspaceId, auth.token);
+  const labelDefinitionsQueryKey = queryKeys.workspaceIssueLabelDefinitions(workspaceId, auth.token);
+  const projectRunbookKey = (projectId: string) =>
+    queryKeys.workspaceProjectRunbook(workspaceId, projectId, auth.token);
   const [composerEditor, setComposerEditor] = useState<Editor | null>(null);
   const [composerBody, setComposerBody] = useState("");
-  const [composerAttachmentIds, setComposerAttachmentIds] = useState<string[]>([]);
   const [composerRuntimeMode, setComposerRuntimeMode] = useState<"local" | "team">("local");
   const [composerFocused, setComposerFocused] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentBody, setEditingCommentBody] = useState("");
-  const [editingCommentAttachmentIds, setEditingCommentAttachmentIds] = useState<string[]>([]);
   const [editingCommentEditor, setEditingCommentEditor] = useState<Editor | null>(null);
   const [editingCommentFocused, setEditingCommentFocused] = useState(false);
   const [composerMentionMatch, setComposerMentionMatch] = useState<EditorMentionMatch | null>(null);
@@ -4686,9 +4719,9 @@ export function IssueDetailPage() {
   });
 
   const issueQuery = useQuery({
-    queryKey: queryKeys.issue(issueId),
-    queryFn: () => api.getIssue(issueId),
-    enabled: issueId.length > 0,
+    queryKey: issueQueryKey,
+    queryFn: () => controlPlaneApi.getIssue(auth.token, workspaceId, issueId),
+    enabled: serverWorkspaceReady && issueId.length > 0,
     refetchInterval: 4_000,
   });
   const agentsQuery = useQuery({
@@ -4700,8 +4733,9 @@ export function IssueDetailPage() {
     queryFn: api.listClusters,
   });
   const labelDefinitionsQuery = useQuery({
-    queryKey: queryKeys.issueLabelDefinitions,
-    queryFn: api.listIssueLabelDefinitions,
+    queryKey: labelDefinitionsQueryKey,
+    queryFn: () => controlPlaneApi.listIssueLabelDefinitions(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
     retry: false,
   });
 
@@ -4717,9 +4751,12 @@ export function IssueDetailPage() {
     retry: false,
   });
   const projectRunbookQuery = useQuery({
-    queryKey: detail?.project.id ? queryKeys.projectRunbook(detail.project.id) : queryKeys.projectRunbook("__none"),
-    queryFn: ({ queryKey }) => api.getProjectRunbook(queryKey[1]),
-    enabled: runbookOpen && Boolean(detail?.project.id),
+    queryKey: detail?.project.id ? projectRunbookKey(detail.project.id) : projectRunbookKey("__none"),
+    queryFn: () => {
+      if (!detail?.project.id) throw new Error("Project is not loaded.");
+      return controlPlaneApi.getProjectRunbook(auth.token, workspaceId, detail.project.id);
+    },
+    enabled: serverWorkspaceReady && runbookOpen && Boolean(detail?.project.id),
   });
   const agents = listOrEmpty(agentsQuery.data);
   const clusters = listOrEmpty(clustersQuery.data);
@@ -4759,26 +4796,27 @@ export function IssueDetailPage() {
     Boolean(editingCommentId) &&
     Boolean(editingCommentBody.trim()) &&
     !isUnsupportedEditingAgentMention &&
+    !isSupportedEditingAgentMention &&
     !(isSupportedEditingAgentMention && hasActiveSession);
   const editHelperText = isSupportedEditingAgentMention
     ? hasActiveSession
       ? `${editingMentionedAgentConfig?.name} is already working.`
-      : `This edit will be saved and sent to ${editingMentionedAgentConfig?.name}.`
+      : "Agent sessions for server-owned issues are not connected yet."
     : isUnsupportedEditingAgentMention
       ? `@${editingMentionedAgent} is not available yet.`
       : "Edit the latest comment before it starts work.";
   const editSaveLabel = isSupportedEditingAgentMention
     ? hasActiveSession
       ? "Agent is working"
-      : `Save & send to ${editingMentionedAgentConfig?.name}`
+      : "Runtime bridge pending"
     : "Save edit";
-  const canUseTeamRuntime = auth.status === "signed-in" && Boolean(auth.token && auth.workspace?.id) && auth.workspace?.kind === "team";
+  const canUseTeamRuntime = false;
   const composerRuntimeModeEffective = canUseTeamRuntime ? composerRuntimeMode : "local";
   const composerAgentTargetLabel = composerRuntimeModeEffective === "team" ? "team worker" : "local runner";
   const composerHelperText = isSupportedAgentMention
     ? hasActiveSession
       ? `${mentionedAgentConfig?.name} is already working.`
-      : `This comment will be saved and sent to ${mentionedAgentConfig?.name} on the ${composerAgentTargetLabel}.`
+      : "Agent sessions for server-owned issues are not connected yet."
     : isUnsupportedAgentMention
       ? `@${mentionedAgent} is not available yet.`
       : "Comments stay on the issue. Mention an agent when you want a turn.";
@@ -4851,13 +4889,13 @@ export function IssueDetailPage() {
         }));
         return;
       }
-      void queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.inbox });
+      void queryClient.invalidateQueries({ queryKey: issueQueryKey });
+      void queryClient.invalidateQueries({ queryKey: inboxQueryKey });
       if (latestSession?.id) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.session(latestSession.id) });
       }
     },
-    [issueId, latestSession?.id, queryClient],
+    [inboxQueryKey, issueQueryKey, latestSession?.id, queryClient],
   );
 
   useSessionStream(latestSession?.id, handleSessionEvent);
@@ -4869,11 +4907,11 @@ export function IssueDetailPage() {
 
   const invalidateIssueHandoffSurfaces = useCallback(async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+      queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+      queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
+      queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
     ]);
-  }, [issueId, queryClient]);
+  }, [inboxQueryKey, issueQueryKey, issuesQueryKey, queryClient]);
 
   useEffect(() => {
     setActiveMentionIndex(0);
@@ -4894,30 +4932,22 @@ export function IssueDetailPage() {
       if (agent && !agentConfig) {
         throw new Error(`@${agent} is not available.`);
       }
-      const comment = await api.addComment(issueId, {
-        body: trimmedBody,
-        attachmentIds: attachmentIdsReferencedBy(trimmedBody, composerAttachmentIds),
-      });
       if (agentConfig) {
-        const command = stripAgentMention(trimmedBody, mentionKey(agentConfig.mention));
-        await api.assignAgent(issueId, {
-          provider: agentConfig.provider,
-          agentProfile: agentConfig.id,
-          runtimeMode: composerRuntimeModeEffective,
-          command: command || trimmedBody,
-          triggerCommentId: comment.commentId,
-        });
+        throw new Error("Agent sessions for server-owned issues are still routed through the local runtime bridge. Add a plain comment for now.");
       }
+      const commentInput = {
+        body: trimmedBody,
+      };
+      await controlPlaneApi.addComment(auth.token, workspaceId, issueId, commentInput);
     },
     onSuccess: async () => {
       setComposerBody("");
-      setComposerAttachmentIds([]);
       setComposerRuntimeMode("local");
       composerEditor?.commands.clearContent(false);
       setComposerMentionMatch(null);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
@@ -4925,32 +4955,25 @@ export function IssueDetailPage() {
     Boolean(composerBody.trim()) &&
     !sendComposer.isPending &&
     !isUnsupportedAgentMention &&
+    !isSupportedAgentMention &&
     !(isSupportedAgentMention && hasActiveSession);
 
   const updateComment = useMutation({
-    mutationFn: async (input: { commentId: string; body: string; attachmentIds: string[]; agentConfig?: AgentProfile }) => {
+    mutationFn: async (input: { commentId: string; body: string; agentConfig?: AgentProfile }) => {
       const trimmedBody = input.body.trim();
-      const result = await api.updateComment(issueId, input.commentId, {
-        body: trimmedBody,
-        attachmentIds: input.attachmentIds,
-      });
       if (input.agentConfig) {
-        const command = stripAgentMention(trimmedBody, mentionKey(input.agentConfig.mention));
-        await api.assignAgent(issueId, {
-          provider: input.agentConfig.provider,
-          agentProfile: input.agentConfig.id,
-          runtimeMode: "local",
-          command: command || trimmedBody,
-          triggerCommentId: input.commentId,
-        });
+        throw new Error("Agent sessions for server-owned issues are still routed through the local runtime bridge. Save a plain edit for now.");
       }
-      return result;
+      const commentInput = {
+        body: trimmedBody,
+      };
+      return controlPlaneApi.updateComment(auth.token, workspaceId, issueId, input.commentId, commentInput);
     },
     onSuccess: async () => {
       resetEditingCommentState();
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
@@ -4958,39 +4981,18 @@ export function IssueDetailPage() {
   const toggleCommentReaction = useMutation({
     mutationFn: async (input: { commentId: string; reaction: string; reactedByMe: boolean }) => {
       if (input.reactedByMe) {
-        return api.deleteCommentReaction(issueId, input.commentId, input.reaction);
+        return controlPlaneApi.deleteCommentReaction(auth.token, workspaceId, issueId, input.commentId, input.reaction);
       }
-      return api.setCommentReaction(issueId, input.commentId, input.reaction);
+      return controlPlaneApi.setCommentReaction(auth.token, workspaceId, issueId, input.commentId, input.reaction);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) });
+      await queryClient.invalidateQueries({ queryKey: issueQueryKey });
     },
   });
-
-  async function uploadComposerImage(file: File) {
-    const attachment = await api.uploadAttachment(file);
-    setComposerAttachmentIds((current) => current.includes(attachment.id) ? current : [...current, attachment.id]);
-    return {
-      id: attachment.id,
-      url: attachment.url,
-      filename: attachment.filename,
-    };
-  }
-
-  async function uploadEditedCommentImage(file: File) {
-    const attachment = await api.uploadAttachment(file);
-    setEditingCommentAttachmentIds((current) => current.includes(attachment.id) ? current : [...current, attachment.id]);
-    return {
-      id: attachment.id,
-      url: attachment.url,
-      filename: attachment.filename,
-    };
-  }
 
   function resetEditingCommentState() {
     setEditingCommentId(null);
     setEditingCommentBody("");
-    setEditingCommentAttachmentIds([]);
     setEditingCommentEditor(null);
     setEditingCommentFocused(false);
     setEditingCommentMentionMatch(null);
@@ -5118,64 +5120,67 @@ export function IssueDetailPage() {
     updateComment.mutate({
       commentId: editingCommentId,
       body: editingCommentBody,
-      attachmentIds: attachmentIdsReferencedBy(editingCommentBody, editingCommentAttachmentIds),
       agentConfig: editingMentionedAgentConfig,
     });
   }
 
   const updateLabels = useMutation({
-    mutationFn: api.updateIssueLabels.bind(null, issueId),
+    mutationFn: (input: UpdateIssueLabelsInput) =>
+      controlPlaneApi.updateIssueLabels(auth.token, workspaceId, issueId, input),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
 
   const createTask = useMutation({
-    mutationFn: (title: string) => api.createIssueTask(issueId, { title }),
+    mutationFn: (title: string) =>
+      controlPlaneApi.createIssueTask(auth.token, workspaceId, issueId, { title }),
     onSuccess: async () => {
       setNewTaskTitle("");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
 
   const updateTaskStatus = useMutation({
-    mutationFn: (input: { taskId: string; status: string }) => api.updateIssue(input.taskId, { status: input.status }),
+    mutationFn: (input: { taskId: string; status: string }) =>
+      controlPlaneApi.updateIssue(auth.token, workspaceId, input.taskId, { status: input.status }),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
 
   const deleteTask = useMutation({
-    mutationFn: (taskId: string) => api.deleteIssueTask(issueId, taskId),
+    mutationFn: (taskId: string) =>
+      controlPlaneApi.deleteIssueTask(auth.token, workspaceId, issueId, taskId),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
 
   const updateIssueStatus = useMutation({
-    mutationFn: (status: string) => api.updateIssue(issueId, { status }),
+    mutationFn: (status: string) =>
+      controlPlaneApi.updateIssue(auth.token, workspaceId, issueId, { status }),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.issues }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
@@ -5184,9 +5189,9 @@ export function IssueDetailPage() {
     mutationFn: (sessionId: string) => api.cancelSession(sessionId),
     onSuccess: async (_data, sessionId) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
@@ -5196,11 +5201,10 @@ export function IssueDetailPage() {
     onSuccess: async (data) => {
       setTestDeployOpen(false);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.issueResources(issueId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.session(data.sessionId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
@@ -5209,11 +5213,10 @@ export function IssueDetailPage() {
     mutationFn: () => api.requestTestEnvironmentCleanup(issueId, { agentProfile: "codex" }),
     onSuccess: async (data) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.issueResources(issueId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.session(data.sessionId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
@@ -5222,10 +5225,9 @@ export function IssueDetailPage() {
     mutationFn: () => api.retainTestEnvironment(issueId),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.issueResources(issueId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
@@ -5233,10 +5235,9 @@ export function IssueDetailPage() {
     mutationFn: () => api.probeTestEnvironment(issueId),
     onSuccess: async () => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.issue(issueId) }),
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.issueResources(issueId) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.inbox }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.activeWork }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
@@ -5490,7 +5491,6 @@ export function IssueDetailPage() {
                             updateComment.reset();
                             setEditingCommentId(item.comment.id);
                             setEditingCommentBody(item.comment.body);
-                            setEditingCommentAttachmentIds([]);
                             setEditingCommentEditor(null);
                             setEditingCommentFocused(false);
                             setEditingCommentMentionMatch(null);
@@ -5511,13 +5511,12 @@ export function IssueDetailPage() {
                           onEditFocus={handleEditingCommentFocus}
                           onEditBlur={handleEditingCommentBlur}
                           onEditKeyDown={handleEditingCommentKeyDown}
-                          onEditImageUpload={uploadEditedCommentImage}
+                          onEditImageUpload={undefined}
                           onSaveEdit={() => {
                             if (!canSaveEditingComment) return;
                             updateComment.mutate({
                               commentId: item.comment.id,
                               body: editingCommentBody,
-                              attachmentIds: attachmentIdsReferencedBy(editingCommentBody, editingCommentAttachmentIds),
                               agentConfig: editingMentionedAgentConfig,
                             });
                           }}
@@ -5614,7 +5613,7 @@ export function IssueDetailPage() {
                         setComposerBody(value);
                         setMentionMenuDismissed(false);
                       }}
-                      onImageUpload={uploadComposerImage}
+                      onImageUpload={undefined}
                       onReady={setComposerEditor}
                       onEditorStateChange={syncComposerEditorState}
                       onFocus={(editor) => {
@@ -5692,6 +5691,7 @@ export function IssueDetailPage() {
               sessions={listOrEmpty(detail.sessions)}
               agents={agents}
               handoffs={handoffs}
+              runnerActionsDisabled={serverWorkspaceReady}
               isCreatingPr={createPullRequest.isPending}
               refreshingHandoffId={refreshIssueHandoff.isPending ? refreshIssueHandoff.variables?.id || "" : ""}
               createPrError={createPullRequest.error}
@@ -5770,6 +5770,7 @@ export function IssueDetailPage() {
                 cluster={testCluster}
                 sessions={listOrEmpty(detail.sessions)}
                 hasActiveSession={hasActiveSession}
+                disabled={serverWorkspaceReady}
                 startError={startTestDeploy.error}
                 cleanupError={cleanupTestEnvironment.error}
                 retainError={retainTestEnvironment.error}

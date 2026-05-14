@@ -15,7 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api, queryKeys, type Cluster, type CreateProjectInput, type Project } from "@mspace/core";
+import { api, controlPlaneApi, queryKeys, type Cluster, type CreateProjectInput, type Project } from "@mspace/core";
 import {
   Button,
   CollectionEmptyState,
@@ -33,6 +33,7 @@ import {
   cn,
 } from "@mspace/ui";
 import { IssueDocumentEditor } from "./issue-document-editor";
+import { useMspaceAuth } from "./auth-context";
 import { RelativeTime } from "./time";
 
 const emptyProjectForm: CreateProjectInput = {
@@ -75,9 +76,16 @@ function projectToForm(project: Project): CreateProjectInput {
 
 export function ProjectsPage() {
   const queryClient = useQueryClient();
+  const auth = useMspaceAuth();
+  const workspaceId = auth.workspace?.id || "";
+  const serverWorkspaceReady = Boolean(auth.token && workspaceId);
+  const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
+  const projectRunbookKey = (projectId: string) =>
+    queryKeys.workspaceProjectRunbook(workspaceId, projectId, auth.token);
   const projectsQuery = useQuery({
-    queryKey: queryKeys.projects,
-    queryFn: api.listProjects,
+    queryKey: projectsQueryKey,
+    queryFn: () => controlPlaneApi.listProjects(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
   });
   const clustersQuery = useQuery({
     queryKey: queryKeys.clusters,
@@ -91,32 +99,37 @@ export function ProjectsPage() {
   const [folderPickerError, setFolderPickerError] = useState("");
 
   const createProject = useMutation({
-    mutationFn: api.createProject,
+    mutationFn: (input: CreateProjectInput) => controlPlaneApi.createProject(auth.token, workspaceId, input),
     onSuccess: async () => {
       setCreateForm(emptyProjectForm);
       setCreateOpen(false);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
       ]);
     },
   });
   const settingsRunbookQuery = useQuery({
-    queryKey: settingsProject ? queryKeys.projectRunbook(settingsProject.id) : queryKeys.projectRunbook("__none"),
-    queryFn: ({ queryKey }) => api.getProjectRunbook(queryKey[1]),
-    enabled: Boolean(settingsProject),
+    queryKey: settingsProject ? projectRunbookKey(settingsProject.id) : projectRunbookKey("__none"),
+    queryFn: () => {
+      if (!settingsProject) throw new Error("Project settings are not open.");
+      return controlPlaneApi.getProjectRunbook(auth.token, workspaceId, settingsProject.id);
+    },
+    enabled: Boolean(settingsProject && serverWorkspaceReady),
   });
   const saveProjectSettings = useMutation({
     mutationFn: async () => {
       if (!settingsProject) throw new Error("Project settings are not open.");
-      const updatedProject = await api.updateProject({
+      const input = {
         id: settingsProject.id,
         ...settingsForm,
-      });
-      await api.updateProjectRunbook(settingsProject.id, {
+      };
+      const updatedProject = await controlPlaneApi.updateProject(auth.token, workspaceId, input);
+      const runbookInput = {
         content: runbookDraft,
         status: runbookDraft.trim() ? "learned" : "empty",
-      });
+      };
+      await controlPlaneApi.updateProjectRunbook(auth.token, workspaceId, settingsProject.id, runbookInput);
       return updatedProject;
     },
     onSuccess: async (updatedProject) => {
@@ -124,19 +137,19 @@ export function ProjectsPage() {
       setSettingsProject(updatedProject);
       setSettingsForm(projectToForm(updatedProject));
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
-        projectID ? queryClient.invalidateQueries({ queryKey: queryKeys.projectRunbook(projectID) }) : Promise.resolve(),
+        projectID ? queryClient.invalidateQueries({ queryKey: projectRunbookKey(projectID) }) : Promise.resolve(),
       ]);
     },
   });
   const deleteProject = useMutation({
-    mutationFn: api.deleteProject,
+    mutationFn: (projectId: string) => controlPlaneApi.deleteProject(auth.token, workspaceId, projectId),
     onSuccess: async () => {
       setSettingsProject(null);
       setSettingsForm(emptyProjectForm);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
       ]);
     },

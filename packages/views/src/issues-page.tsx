@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowRight, CheckCircle2, Clock3, Inbox, Layers3, MessageSquarePlus, Plus, Search } from "lucide-react";
-import { api, getStoredAuthIdentity, queryKeys, type IssueListItem } from "@mspace/core";
+import { controlPlaneApi, getStoredAuthIdentity, queryKeys, type IssueListItem } from "@mspace/core";
 import {
   Button,
   CollectionEmptyState,
@@ -18,6 +18,7 @@ import {
 } from "@mspace/ui";
 import { CreateIssueModal } from "./create-issue-modal";
 import { codexAvatarDataUrl } from "./agent-avatar";
+import { useMspaceAuth } from "./auth-context";
 import {
   issueLabelMatchesDimension,
   issueLabelOptionsByDimension,
@@ -79,6 +80,13 @@ function IssueAssigneeMeta(props: { issue: IssueListItem }) {
 export function IssuesPage() {
   const search = useSearch({ strict: false }) as { new?: string };
   const navigate = useNavigate();
+  const auth = useMspaceAuth();
+  const workspaceId = auth.workspace?.id || "";
+  const serverWorkspaceReady = Boolean(auth.token && workspaceId);
+  const issuesQueryKey = queryKeys.workspaceIssues(workspaceId, auth.token);
+  const issueLabelDefinitionsQueryKey = queryKeys.workspaceIssueLabelDefinitions(workspaceId, auth.token);
+  const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
+  const inboxQueryKey = queryKeys.workspaceInbox(workspaceId, auth.token);
   const [createOpen, setCreateOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -86,12 +94,14 @@ export function IssuesPage() {
   const [priorityFilter, setPriorityFilter] = useState("all");
   const [sortBy, setSortBy] = useState<(typeof sortOptions)[number]["value"]>("updated");
   const issuesQuery = useQuery({
-    queryKey: queryKeys.issues,
-    queryFn: api.listIssues,
+    queryKey: issuesQueryKey,
+    queryFn: () => controlPlaneApi.listIssues(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
   });
   const labelDefinitionsQuery = useQuery({
-    queryKey: queryKeys.issueLabelDefinitions,
-    queryFn: api.listIssueLabelDefinitions,
+    queryKey: issueLabelDefinitionsQueryKey,
+    queryFn: () => controlPlaneApi.listIssueLabelDefinitions(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
     retry: false,
   });
 
@@ -247,7 +257,15 @@ export function IssuesPage() {
         </div>
       )}
 
-      {createOpen ? <CreateIssueModal onClose={closeCreateModal} /> : null}
+      {createOpen ? (
+        <CreateIssueModal
+          onClose={closeCreateModal}
+          createIssue={(input) => controlPlaneApi.createIssue(auth.token, workspaceId, input)}
+          issueQueryKey={issuesQueryKey}
+          inboxQueryKey={inboxQueryKey}
+          projectsQueryKey={projectsQueryKey}
+        />
+      ) : null}
     </PageFrame>
   );
 }

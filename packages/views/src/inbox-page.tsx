@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Bot, Clock3, Inbox, Layers3, MessageSquareText } from "lucide-react";
-import { api, buildApiUrl, controlPlaneApi, queryKeys, type InboxItem, type TeamInboxItem } from "@mspace/core";
+import { controlPlaneApi, queryKeys, type WorkspaceInboxItem } from "@mspace/core";
 import {
   CollectionEmptyState,
   InlineMeta,
@@ -16,7 +16,6 @@ import { RelativeTime } from "./time";
 
 type ReviewItem = {
   key: string;
-  source: "team" | "local";
   issueId: string;
   eventId?: string;
   title: string;
@@ -33,63 +32,39 @@ export function InboxPage() {
   const auth = useMspaceAuth();
   const queryClient = useQueryClient();
   const workspaceId = auth.workspace?.id || "";
-  const teamInboxEnabled = auth.token !== "" && workspaceId !== "";
+  const inboxEnabled = auth.token !== "" && workspaceId !== "";
 
-  const localInboxQuery = useQuery({
-    queryKey: queryKeys.inbox,
-    queryFn: api.listInbox,
-  });
-  const teamInboxQuery = useQuery({
-    queryKey: queryKeys.teamInbox(workspaceId, auth.token),
+  const inboxQuery = useQuery({
+    queryKey: queryKeys.workspaceInbox(workspaceId, auth.token),
     queryFn: () => controlPlaneApi.listInbox(auth.token, workspaceId),
-    enabled: teamInboxEnabled,
-    refetchInterval: teamInboxEnabled ? 5_000 : false,
+    enabled: inboxEnabled,
+    refetchInterval: inboxEnabled ? 5_000 : false,
   });
 
   const markReviewed = useMutation({
     mutationFn: async (item: ReviewItem) => {
-      if (item.source === "team" && auth.token && workspaceId) {
+      if (auth.token && workspaceId) {
         await controlPlaneApi.markIssueReadThrough(auth.token, workspaceId, item.issueId, item.eventId);
-        await api.markInboxIssueRead(item.issueId).catch(() => undefined);
-        return;
-      }
-      if (item.source === "local") {
-        await api.markInboxIssueRead(item.issueId);
       }
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.inbox });
-      if (teamInboxEnabled) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.teamInbox(workspaceId, auth.token) });
+      if (inboxEnabled) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.workspaceInbox(workspaceId, auth.token) });
       }
-      void queryClient.invalidateQueries({ queryKey: queryKeys.issues });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.projects });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workspaceIssues(workspaceId, auth.token) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workspaceProjects(workspaceId, auth.token) });
     },
   });
 
-  const teamItems = (teamInboxQuery.data || []).map(teamInboxItemToReviewItem);
-  const teamIssueIds = new Set(teamItems.map((item) => item.issueId));
-  const localItems = (localInboxQuery.data || [])
-    .filter((item) => !teamIssueIds.has(item.issueId))
-    .map(localInboxItemToReviewItem);
-  const items = [...teamItems, ...localItems];
+  const items = (inboxQuery.data || []).map(workspaceInboxItemToReviewItem);
 
   useEffect(() => {
-    const eventSource = new EventSource(buildApiUrl("/api/inbox/stream"));
-    const refreshInbox = () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.inbox });
-      if (teamInboxEnabled) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.teamInbox(workspaceId, auth.token) });
-      }
-      void queryClient.invalidateQueries({ queryKey: queryKeys.issues });
-      void queryClient.invalidateQueries({ queryKey: queryKeys.projects });
-    };
-    eventSource.addEventListener("message", refreshInbox);
-    return () => {
-      eventSource.removeEventListener("message", refreshInbox);
-      eventSource.close();
-    };
-  }, [auth.token, queryClient, teamInboxEnabled, workspaceId]);
+    if (!inboxEnabled) return;
+    const timer = window.setInterval(() => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.workspaceInbox(workspaceId, auth.token) });
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [auth.token, inboxEnabled, queryClient, workspaceId]);
 
   return (
     <PageFrame
@@ -123,7 +98,7 @@ export function InboxPage() {
                   ) : null}
                   <div className="mt-1 flex flex-wrap items-center gap-3">
                     <InlineMeta icon={MessageSquareText}>
-                      {item.source === "team" ? "Team event" : "Local update"}
+                      Workspace event
                       {item.unreadCount > 1 ? ` · ${item.unreadCount} unread` : ""}
                     </InlineMeta>
                     <InlineMeta icon={Clock3}><RelativeTime value={item.updatedAt} /></InlineMeta>
@@ -149,36 +124,19 @@ export function InboxPage() {
   );
 }
 
-function teamInboxItemToReviewItem(item: TeamInboxItem): ReviewItem {
+function workspaceInboxItemToReviewItem(item: WorkspaceInboxItem): ReviewItem {
   return {
-    key: `team:${item.eventId}`,
-    source: "team",
+    key: `workspace:${item.eventId}`,
     issueId: item.issueId,
     eventId: item.eventId,
     title: payloadText(item.payload, ["issueTitle", "title"]) || item.summary || `Issue ${item.issueId.slice(0, 8)}`,
     summary: item.summary || eventKindLabel(item.kind),
     status: payloadText(item.payload, ["issueStatus", "status"]) || eventKindLabel(item.kind),
-    projectName: payloadText(item.payload, ["projectName", "projectId"]) || "Team workspace",
+    projectName: payloadText(item.payload, ["projectName", "projectId"]) || "Workspace",
     assignee: payloadText(item.payload, ["assignee"]) || "",
     assigneeType: payloadText(item.payload, ["assigneeType"]) || "human",
     updatedAt: item.createdAt,
     unreadCount: item.unreadCount,
-  };
-}
-
-function localInboxItemToReviewItem(item: InboxItem): ReviewItem {
-  return {
-    key: `local:${item.id}`,
-    source: "local",
-    issueId: item.issueId,
-    title: item.title,
-    summary: "Local runner update",
-    status: item.status,
-    projectName: item.projectName || item.projectId.slice(0, 8),
-    assignee: item.assignee,
-    assigneeType: item.assigneeType,
-    updatedAt: item.updatedAt,
-    unreadCount: 1,
   };
 }
 
