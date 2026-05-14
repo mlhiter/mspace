@@ -29,6 +29,7 @@ import {
 } from "@mspace/views";
 import {
   AUTH_TOKEN_STORAGE_KEY,
+  api,
   controlPlaneApi,
   getControlPlaneBaseUrl,
   queryKeys,
@@ -147,6 +148,14 @@ function RootShell() {
     if (!serverWorkspaceReady) return;
     void fetch(`${getControlPlaneBaseUrl()}/health`).catch(() => undefined);
   }, [serverWorkspaceReady]);
+
+  useEffect(() => {
+    void api.configureControlPlaneSession({
+      serverBaseUrl: getControlPlaneBaseUrl(),
+      token: serverWorkspaceReady ? authToken : "",
+      workspaceId: serverWorkspaceReady ? currentWorkspace?.id || "" : "",
+    }).catch(() => undefined);
+  }, [authToken, currentWorkspace?.id, serverWorkspaceReady]);
 
   const handleSignOut = () => {
     window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);

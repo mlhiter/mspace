@@ -738,6 +738,24 @@ export interface CreateSessionInput {
   triggerCommentId?: string;
 }
 
+export interface CreateServerIssueTeamSessionInput {
+  workspaceId: string;
+  issueId: string;
+  commentId?: string;
+  provider: string;
+  agentProfile?: string;
+  runtimeMode?: "team" | string;
+  command: string;
+  branch?: string;
+  sourceSessionId?: string;
+  sourceCommitSha?: string;
+  issue: Issue;
+  project: Project;
+  comments?: Comment[];
+  childIssues?: IssueListItem[];
+  labels?: IssueLabel[];
+}
+
 export interface UpdateIssueLabelsInput {
   labels?: string[];
   labelKeys?: string[];

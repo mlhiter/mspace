@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -440,7 +441,7 @@ func (s *PostgresStore) GetIssue(ctx Context, userID, workspaceID, issueID strin
 	}
 	detail := IssueDetail{
 		TestEnvironment: nil,
-		Sessions:        []RuntimeTask{},
+		Sessions:        []AgentSession{},
 		Evidence:        []any{},
 		Failures:        []any{},
 		ChangeNodes:     []any{},
@@ -475,6 +476,10 @@ func (s *PostgresStore) GetIssue(ctx Context, userID, workspaceID, issueID strin
 		return IssueDetail{}, err
 	}
 	detail.Comments, err = s.listIssueComments(dbctx, workspaceID, issueID, userID)
+	if err != nil {
+		return IssueDetail{}, err
+	}
+	detail.Sessions, err = s.listIssueAgentSessions(dbctx, workspaceID, issueID)
 	if err != nil {
 		return IssueDetail{}, err
 	}
@@ -860,6 +865,126 @@ func scanComment(row scanner) (Comment, error) {
 	}
 	comment.Reactions = []CommentReactionSummary{}
 	return comment, nil
+}
+
+func (s *PostgresStore) listIssueAgentSessions(ctx context.Context, workspaceID, issueID string) ([]AgentSession, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			id::text,
+			issue_id,
+			session_id,
+			project_id,
+			status,
+			runtime_mode,
+			payload,
+			result,
+			error,
+			created_at,
+			updated_at
+		FROM runtime_tasks
+		WHERE workspace_id = $1 AND issue_id = $2 AND kind = 'agent_session'
+		ORDER BY created_at DESC, id DESC
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(issueID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	sessions := []AgentSession{}
+	for rows.Next() {
+		session, err := scanRuntimeTaskAgentSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
+}
+
+func scanRuntimeTaskAgentSession(row scanner) (AgentSession, error) {
+	var runtimeTaskID, issueID, sessionID, projectID, status, runtimeMode, errorText string
+	var payloadBytes, resultBytes []byte
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&runtimeTaskID,
+		&issueID,
+		&sessionID,
+		&projectID,
+		&status,
+		&runtimeMode,
+		&payloadBytes,
+		&resultBytes,
+		&errorText,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return AgentSession{}, err
+	}
+
+	var payload struct {
+		Prompt          string `json:"prompt"`
+		AgentProfile    string `json:"agentProfile"`
+		Branch          string `json:"branch"`
+		SourceCommitSHA string `json:"sourceCommitSha"`
+		ArtifactDir     string `json:"artifactDir"`
+	}
+	_ = json.Unmarshal(payloadBytes, &payload)
+
+	var result struct {
+		ThreadID    string `json:"threadId"`
+		TurnID      string `json:"turnId"`
+		Workdir     string `json:"workdir"`
+		ArtifactDir string `json:"artifactDir"`
+		Source      struct {
+			CommitSHA string `json:"commitSha"`
+			Branch    string `json:"branch"`
+		} `json:"source"`
+	}
+	_ = json.Unmarshal(resultBytes, &result)
+
+	sessionStatus, agentStatus := runtimeTaskSessionStatus(status, errorText)
+	return AgentSession{
+		ID:              firstNonEmpty(sessionID, runtimeTaskID),
+		IssueID:         issueID,
+		Provider:        "codex",
+		AgentProfile:    firstNonEmpty(payload.AgentProfile, "codex"),
+		RuntimeMode:     firstNonEmpty(runtimeMode, "team"),
+		RuntimeTaskID:   runtimeTaskID,
+		Command:         strings.TrimSpace(payload.Prompt),
+		Status:          sessionStatus,
+		Branch:          firstNonEmpty(result.Source.Branch, payload.Branch),
+		Workdir:         result.Workdir,
+		CodexThreadID:   result.ThreadID,
+		CodexTurnID:     result.TurnID,
+		AgentStatus:     agentStatus,
+		ArtifactDir:     firstNonEmpty(result.ArtifactDir, payload.ArtifactDir),
+		SourceCommitSHA: firstNonEmpty(result.Source.CommitSHA, payload.SourceCommitSHA),
+		CleanupStatus:   "retained",
+		CreatedAt:       createdAt.UTC().Format(time.RFC3339),
+		UpdatedAt:       updatedAt.UTC().Format(time.RFC3339),
+	}, nil
+}
+
+func runtimeTaskSessionStatus(status, errorText string) (string, string) {
+	switch strings.TrimSpace(status) {
+	case "queued":
+		return "queued", "team-runtime-queued"
+	case "claimed":
+		return "running", "team-runtime-claimed"
+	case "running":
+		return "running", "team-runtime-running"
+	case "completed":
+		return "completed", "completed"
+	case "failed":
+		return "failed", "failed"
+	case "cancelled":
+		return "cancelled", "cancelled"
+	default:
+		if strings.TrimSpace(errorText) != "" {
+			return "failed", "failed"
+		}
+		return "queued", "team-runtime"
+	}
 }
 
 func scanIssueAndProject(row scanner) (Issue, Project, error) {

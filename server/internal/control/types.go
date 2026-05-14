@@ -317,12 +317,36 @@ type IssueDetail struct {
 	ChildIssues     []IssueListItem `json:"childIssues"`
 	Labels          []IssueLabel    `json:"labels"`
 	Comments        []Comment       `json:"comments"`
-	Sessions        []RuntimeTask   `json:"sessions"`
+	Sessions        []AgentSession  `json:"sessions"`
 	Evidence        []any           `json:"evidence"`
 	Failures        []any           `json:"failures"`
 	ChangeNodes     []any           `json:"changeNodes"`
 	ReviewEvidence  []any           `json:"reviewEvidence"`
 	Handoffs        []any           `json:"handoffs"`
+}
+
+type AgentSession struct {
+	ID               string `json:"id"`
+	IssueID          string `json:"issueId"`
+	Provider         string `json:"provider"`
+	AgentProfile     string `json:"agentProfile"`
+	RuntimeMode      string `json:"runtimeMode"`
+	RuntimeTaskID    string `json:"runtimeTaskId"`
+	Command          string `json:"command"`
+	Status           string `json:"status"`
+	Branch           string `json:"branch"`
+	Workdir          string `json:"workdir"`
+	CodexThreadID    string `json:"codexThreadId"`
+	CodexTurnID      string `json:"codexTurnId"`
+	AgentStatus      string `json:"agentStatus"`
+	ArtifactDir      string `json:"artifactDir"`
+	SourceSessionID  string `json:"sourceSessionId"`
+	SourceCommitSHA  string `json:"sourceCommitSha"`
+	TriggerCommentID string `json:"triggerCommentId"`
+	CleanupStatus    string `json:"cleanupStatus"`
+	CleanedAt        string `json:"cleanedAt"`
+	CreatedAt        string `json:"createdAt"`
+	UpdatedAt        string `json:"updatedAt"`
 }
 
 type CreateIssueInput struct {

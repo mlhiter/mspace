@@ -4792,6 +4792,7 @@ export function IssueDetailPage() {
       : enabledAgents.filter((agent) => mentionKey(agent.mention).startsWith(editingMentionQuery) || agent.name.toLowerCase().startsWith(editingMentionQuery));
   const selectedEditingMentionIndex = editingAgentSuggestions.length === 0 ? 0 : Math.min(activeEditingMentionIndex, editingAgentSuggestions.length - 1);
   const editingMentionMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingMentionMenuDismissed && editingAgentSuggestions.length > 0;
+  const canUseTeamRuntime = auth.workspace?.kind === "team";
   const canSaveEditingComment =
     Boolean(editingCommentId) &&
     Boolean(editingCommentBody.trim()) &&
@@ -4801,22 +4802,22 @@ export function IssueDetailPage() {
   const editHelperText = isSupportedEditingAgentMention
     ? hasActiveSession
       ? `${editingMentionedAgentConfig?.name} is already working.`
-      : "Agent sessions for server-owned issues are not connected yet."
+      : "Edits that mention an agent can start a new Team worker turn only after saving as a plain comment."
     : isUnsupportedEditingAgentMention
       ? `@${editingMentionedAgent} is not available yet.`
       : "Edit the latest comment before it starts work.";
   const editSaveLabel = isSupportedEditingAgentMention
     ? hasActiveSession
       ? "Agent is working"
-      : "Runtime bridge pending"
+      : "Save plain edit"
     : "Save edit";
-  const canUseTeamRuntime = false;
-  const composerRuntimeModeEffective = canUseTeamRuntime ? composerRuntimeMode : "local";
-  const composerAgentTargetLabel = composerRuntimeModeEffective === "team" ? "team worker" : "local runner";
+  const composerRuntimeModeEffective = canUseTeamRuntime ? composerRuntimeMode : "team";
   const composerHelperText = isSupportedAgentMention
     ? hasActiveSession
       ? `${mentionedAgentConfig?.name} is already working.`
-      : "Agent sessions for server-owned issues are not connected yet."
+      : canUseTeamRuntime
+        ? `${mentionedAgentConfig?.name} will run on the selected Team worker.`
+        : "Team worker sessions require a team workspace."
     : isUnsupportedAgentMention
       ? `@${mentionedAgent} is not available yet.`
       : "Comments stay on the issue. Mention an agent when you want a turn.";
@@ -4932,12 +4933,33 @@ export function IssueDetailPage() {
       if (agent && !agentConfig) {
         throw new Error(`@${agent} is not available.`);
       }
-      if (agentConfig) {
-        throw new Error("Agent sessions for server-owned issues are still routed through the local runtime bridge. Add a plain comment for now.");
-      }
       const commentInput = {
         body: trimmedBody,
       };
+      if (agentConfig) {
+        if (!detail) {
+          throw new Error("Issue is not loaded yet.");
+        }
+        if (!canUseTeamRuntime) {
+          throw new Error("Team worker sessions require a team workspace.");
+        }
+        const comment = await controlPlaneApi.addComment(auth.token, workspaceId, issueId, commentInput);
+        await api.createServerIssueTeamSession(issueId, {
+          workspaceId,
+          issueId,
+          commentId: comment.commentId,
+          provider: agentConfig.provider,
+          agentProfile: agentConfig.id,
+          runtimeMode: composerRuntimeModeEffective,
+          command: trimmedBody,
+          issue: detail.issue,
+          project: detail.project,
+          comments: listOrEmpty(detail.comments),
+          childIssues,
+          labels: issueLabels,
+        });
+        return;
+      }
       await controlPlaneApi.addComment(auth.token, workspaceId, issueId, commentInput);
     },
     onSuccess: async () => {
@@ -4955,7 +4977,7 @@ export function IssueDetailPage() {
     Boolean(composerBody.trim()) &&
     !sendComposer.isPending &&
     !isUnsupportedAgentMention &&
-    !isSupportedAgentMention &&
+    (!isSupportedAgentMention || canUseTeamRuntime) &&
     !(isSupportedAgentMention && hasActiveSession);
 
   const updateComment = useMutation({

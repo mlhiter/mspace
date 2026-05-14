@@ -2918,6 +2918,143 @@ func TestQueueAgentSessionRoutesTeamRuntimeThroughControlPlane(t *testing.T) {
 	}
 }
 
+func TestCreateServerIssueTeamSessionQueuesRuntimeTask(t *testing.T) {
+	application, db := newAuthTestApp(t)
+	controlPlaneToken := configureTestHumanAuth(t, application)
+	workspaceID := "workspace-1"
+	repoURL := "https://github.com/mlhiter/mspace.git"
+	taskCreated := false
+	var taskPayload struct {
+		IssueID              string          `json:"issueId"`
+		SessionID            string          `json:"sessionId"`
+		ProjectID            string          `json:"projectId"`
+		Kind                 string          `json:"kind"`
+		RuntimeMode          string          `json:"runtimeMode"`
+		RequiredCapabilities map[string]bool `json:"requiredCapabilities"`
+		Payload              struct {
+			Prompt          string `json:"prompt"`
+			AgentProfile    string `json:"agentProfile"`
+			Branch          string `json:"branch"`
+			ContextMarkdown string `json:"contextMarkdown"`
+			Repository      struct {
+				URL           string `json:"url"`
+				DefaultBranch string `json:"defaultBranch"`
+			} `json:"repository"`
+		} `json:"payload"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+controlPlaneToken {
+			writeError(w, http.StatusUnauthorized, errUnauthorized)
+			return
+		}
+		switch {
+		case r.URL.Path == "/api/auth/me":
+			writeJSON(w, map[string]any{
+				"user":       map[string]string{"id": "user-1", "name": "Test Human"},
+				"workspaces": []map[string]string{{"id": workspaceID, "kind": "team"}},
+			})
+		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks" && r.Method == http.MethodPost:
+			if err := json.NewDecoder(r.Body).Decode(&taskPayload); err != nil {
+				t.Fatalf("decode runtime task: %v", err)
+			}
+			taskCreated = true
+			writeJSONStatus(t, w, http.StatusCreated, runtimeTask{ID: "runtime-task-server-issue", Status: "queued"})
+		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks" && r.Method == http.MethodGet:
+			writeJSON(w, []runtimeTask{{ID: "runtime-task-server-issue", Status: "running"}})
+		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks/runtime-task-server-issue/logs":
+			writeJSON(w, []runtimeTaskLog{{ID: "log-1", Stream: "agent", Message: "Server issue task started.", CreatedAt: nowString()}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	application.controlPlaneBaseURL = server.URL
+	application.controlPlaneToken = controlPlaneToken
+	application.controlPlaneWorkspaceID = workspaceID
+
+	router := chi.NewRouter()
+	router.Post("/api/server-issues/{issueID}/team-session", application.handleCreateServerIssueTeamSession)
+	body := `{
+		"workspaceId":"workspace-1",
+		"issueId":"server-issue-1",
+		"commentId":"server-comment-1",
+		"provider":"codex",
+		"agentProfile":"codex",
+		"runtimeMode":"team",
+		"command":"@codex wire the bridge",
+		"issue":{
+			"id":"server-issue-1",
+			"projectId":"server-project-1",
+			"title":"PG issue bridge",
+			"body":"Connect the shared workspace issue to Team worker.",
+			"status":"open",
+			"triageStatus":"pending",
+			"creatorName":"Test Human",
+			"creatorAvatarUrl":"https://example.com/avatar.png"
+		},
+		"project":{
+			"id":"server-project-1",
+			"name":"mspace",
+			"repoPath":"",
+			"sourceType":"github",
+			"remoteUrl":"https://github.com/mlhiter/mspace.git",
+			"gitProvider":"github",
+			"gitOwner":"mlhiter",
+			"gitRepo":"mspace",
+			"defaultBranch":"main"
+		},
+		"comments":[{"id":"server-comment-1","issueId":"server-issue-1","authorType":"human","authorUserId":"user-1","authorName":"Test Human","body":"@codex wire the bridge","createdAt":"2026-05-14T00:00:00Z","updatedAt":"2026-05-14T00:00:00Z"}]
+	}`
+	create := httptest.NewRecorder()
+	router.ServeHTTP(create, authRequest(http.MethodPost, "/api/server-issues/server-issue-1/team-session", body, controlPlaneToken))
+	if create.Code != http.StatusOK {
+		t.Fatalf("expected server issue team session create to return 200, got %d body=%s", create.Code, create.Body.String())
+	}
+	var response struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		var runtimeTaskID string
+		_ = db.QueryRow(`SELECT runtime_task_id FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&runtimeTaskID)
+		return runtimeTaskID == "runtime-task-server-issue"
+	}, func() string {
+		var status, agentStatus, runtimeTaskID string
+		_ = db.QueryRow(`SELECT status, agent_status, runtime_task_id FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus, &runtimeTaskID)
+		return "status=" + status + " agentStatus=" + agentStatus + " runtimeTaskID=" + runtimeTaskID + " logs=" + strings.Join(sessionLogMessages(db, response.SessionID), " | ")
+	})
+	if !taskCreated {
+		t.Fatalf("expected runtime task to be created")
+	}
+	if taskPayload.IssueID != "server-issue-1" || taskPayload.SessionID != response.SessionID || taskPayload.ProjectID != "server-project-1" {
+		t.Fatalf("runtime task lost server issue identity: %+v", taskPayload)
+	}
+	if taskPayload.Kind != "agent_session" || taskPayload.RuntimeMode != "team" || !taskPayload.RequiredCapabilities["codex"] {
+		t.Fatalf("unexpected runtime task routing payload: %+v", taskPayload)
+	}
+	if taskPayload.Payload.Repository.URL != repoURL || taskPayload.Payload.Repository.DefaultBranch != "main" || taskPayload.Payload.AgentProfile != "codex" {
+		t.Fatalf("unexpected team runtime payload: %+v", taskPayload.Payload)
+	}
+	if !strings.Contains(taskPayload.Payload.ContextMarkdown, "PG issue bridge") || !strings.Contains(taskPayload.Payload.ContextMarkdown, "@codex wire the bridge") {
+		t.Fatalf("context did not include server issue snapshot: %s", taskPayload.Payload.ContextMarkdown)
+	}
+	var issueTitle, commentBody, triggerCommentID string
+	if err := db.QueryRow(`SELECT title FROM issues WHERE id = 'server-issue-1'`).Scan(&issueTitle); err != nil {
+		t.Fatalf("query bridged issue: %v", err)
+	}
+	if err := db.QueryRow(`SELECT body FROM comments WHERE id = 'server-comment-1'`).Scan(&commentBody); err != nil {
+		t.Fatalf("query bridged comment: %v", err)
+	}
+	if err := db.QueryRow(`SELECT trigger_comment_id FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&triggerCommentID); err != nil {
+		t.Fatalf("query trigger comment: %v", err)
+	}
+	if issueTitle != "PG issue bridge" || commentBody != "@codex wire the bridge" || triggerCommentID != "server-comment-1" {
+		t.Fatalf("unexpected bridged snapshot issue=%q comment=%q trigger=%q", issueTitle, commentBody, triggerCommentID)
+	}
+}
+
 func TestQueueAgentSessionRejectsTeamRuntimeFromPersonalWorkspace(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is required for team runtime session test")

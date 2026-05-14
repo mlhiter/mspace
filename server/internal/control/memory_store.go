@@ -1242,13 +1242,77 @@ func (s *MemoryStore) GetIssue(_ Context, userID, workspaceID, issueID string) (
 		ChildIssues:     children,
 		Labels:          s.issueLabels[issueID],
 		Comments:        comments,
-		Sessions:        []RuntimeTask{},
+		Sessions:        s.issueAgentSessionsLocked(workspaceID, issueID),
 		Evidence:        []any{},
 		Failures:        []any{},
 		ChangeNodes:     []any{},
 		ReviewEvidence:  []any{},
 		Handoffs:        []any{},
 	}, nil
+}
+
+func (s *MemoryStore) issueAgentSessionsLocked(workspaceID, issueID string) []AgentSession {
+	sessions := []AgentSession{}
+	for _, task := range s.runtimeTasks {
+		if task.WorkspaceID != workspaceID || task.IssueID != issueID || task.Kind != "agent_session" {
+			continue
+		}
+		sessionStatus, agentStatus := runtimeTaskSessionStatus(task.Status, task.Error)
+		session := AgentSession{
+			ID:              firstNonEmpty(task.SessionID, task.ID),
+			IssueID:         task.IssueID,
+			Provider:        "codex",
+			AgentProfile:    "codex",
+			RuntimeMode:     firstNonEmpty(task.RuntimeMode, "team"),
+			RuntimeTaskID:   task.ID,
+			Status:          sessionStatus,
+			AgentStatus:     agentStatus,
+			CleanupStatus:   "retained",
+			CreatedAt:       task.CreatedAt,
+			UpdatedAt:       task.UpdatedAt,
+			SourceCommitSHA: "",
+		}
+		var payload struct {
+			Prompt          string `json:"prompt"`
+			AgentProfile    string `json:"agentProfile"`
+			Branch          string `json:"branch"`
+			SourceCommitSHA string `json:"sourceCommitSha"`
+			ArtifactDir     string `json:"artifactDir"`
+		}
+		if len(task.Payload) > 0 && json.Unmarshal(task.Payload, &payload) == nil {
+			session.Command = strings.TrimSpace(payload.Prompt)
+			session.AgentProfile = firstNonEmpty(payload.AgentProfile, session.AgentProfile)
+			session.Branch = strings.TrimSpace(payload.Branch)
+			session.SourceCommitSHA = strings.TrimSpace(payload.SourceCommitSHA)
+			session.ArtifactDir = strings.TrimSpace(payload.ArtifactDir)
+		}
+		var result struct {
+			ThreadID    string `json:"threadId"`
+			TurnID      string `json:"turnId"`
+			Workdir     string `json:"workdir"`
+			ArtifactDir string `json:"artifactDir"`
+			Source      struct {
+				CommitSHA string `json:"commitSha"`
+				Branch    string `json:"branch"`
+			} `json:"source"`
+		}
+		if len(task.Result) > 0 && json.Unmarshal(task.Result, &result) == nil {
+			session.CodexThreadID = result.ThreadID
+			session.CodexTurnID = result.TurnID
+			session.Workdir = result.Workdir
+			session.ArtifactDir = firstNonEmpty(result.ArtifactDir, session.ArtifactDir)
+			session.SourceCommitSHA = firstNonEmpty(result.Source.CommitSHA, session.SourceCommitSHA)
+			session.Branch = firstNonEmpty(result.Source.Branch, session.Branch)
+		}
+		sessions = append(sessions, session)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].CreatedAt == sessions[j].CreatedAt {
+			return sessions[i].ID > sessions[j].ID
+		}
+		return sessions[i].CreatedAt > sessions[j].CreatedAt
+	})
+	return sessions
 }
 
 func (s *MemoryStore) UpdateIssue(_ Context, userID, workspaceID, issueID string, input UpdateIssueInput) (Issue, error) {

@@ -825,6 +825,24 @@ type sessionRequest struct {
 	TriggerCommentID string `json:"triggerCommentId"`
 }
 
+type serverIssueSessionRequest struct {
+	WorkspaceID     string          `json:"workspaceId"`
+	IssueID         string          `json:"issueId"`
+	CommentID       string          `json:"commentId"`
+	Provider        string          `json:"provider"`
+	AgentProfile    string          `json:"agentProfile"`
+	RuntimeMode     string          `json:"runtimeMode"`
+	Command         string          `json:"command"`
+	Branch          string          `json:"branch"`
+	SourceSessionID string          `json:"sourceSessionId"`
+	SourceCommitSHA string          `json:"sourceCommitSha"`
+	Issue           issue           `json:"issue"`
+	Project         project         `json:"project"`
+	Comments        []comment       `json:"comments"`
+	ChildIssues     []issueListItem `json:"childIssues"`
+	Labels          []issueLabel    `json:"labels"`
+}
+
 type issueTaskInput struct {
 	Title     string `json:"title"`
 	Body      string `json:"body"`
@@ -976,6 +994,7 @@ func main() {
 	router.Delete("/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}", application.handleDeleteCommentReaction)
 	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
 	router.Post("/api/issues/{issueID}/sessions", application.handleCreateSession)
+	router.Post("/api/server-issues/{issueID}/team-session", application.handleCreateServerIssueTeamSession)
 	router.Post("/api/issues/{issueID}/test-deploy", application.handleStartIssueTestDeploy)
 	router.Post("/api/issues/{issueID}/test-environment/cleanup", application.handleRequestIssueTestEnvironmentCleanup)
 	router.Post("/api/issues/{issueID}/test-environment/retain", application.handleRetainIssueTestEnvironment)
@@ -3883,6 +3902,72 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"sessionId": session.ID})
 }
 
+func (a *app) handleCreateServerIssueTeamSession(w http.ResponseWriter, r *http.Request) {
+	issueID := strings.TrimSpace(chi.URLParam(r, "issueID"))
+	actor, ok := a.requireHumanActor(w, r)
+	if !ok {
+		return
+	}
+	var input serverIssueSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if input.IssueID == "" {
+		input.IssueID = issueID
+	}
+	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
+	if input.WorkspaceID == "" {
+		_, _, configuredWorkspaceID := a.controlPlaneSession()
+		input.WorkspaceID = configuredWorkspaceID
+	}
+	input.IssueID = strings.TrimSpace(input.IssueID)
+	input.CommentID = strings.TrimSpace(input.CommentID)
+	input.Provider = strings.TrimSpace(input.Provider)
+	input.AgentProfile = strings.TrimSpace(input.AgentProfile)
+	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
+	input.Command = strings.TrimSpace(input.Command)
+	input.Branch = strings.TrimSpace(input.Branch)
+	input.SourceSessionID = strings.TrimSpace(input.SourceSessionID)
+	input.SourceCommitSHA = strings.TrimSpace(input.SourceCommitSHA)
+	if input.IssueID == "" || input.IssueID != issueID {
+		writeError(w, http.StatusBadRequest, errors.New("issue id mismatch"))
+		return
+	}
+	if input.WorkspaceID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("workspace id is required"))
+		return
+	}
+	_, _, configuredWorkspaceID := a.controlPlaneSession()
+	if configuredWorkspaceID != "" && input.WorkspaceID != configuredWorkspaceID {
+		writeError(w, http.StatusForbidden, errors.New("selected workspace does not match runner control-plane session"))
+		return
+	}
+	if input.Command == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session command is required"))
+		return
+	}
+	if input.RuntimeMode == "" {
+		input.RuntimeMode = "team"
+	}
+	if input.RuntimeMode != "team" {
+		writeError(w, http.StatusBadRequest, errors.New("server issue bridge only supports team runtime"))
+		return
+	}
+
+	session, err := a.queueServerIssueTeamSession(input, actor)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errUnknownAgentProfile) || errors.Is(err, errInvalidRuntimeMode) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err)
+		return
+	}
+
+	writeJSON(w, map[string]string{"sessionId": session.ID})
+}
+
 func (a *app) handleStartIssueTestDeploy(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "issueID")
 	actor, ok := a.requireHumanActor(w, r)
@@ -5352,6 +5437,244 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 	return session, nil
 }
 
+func (a *app) queueServerIssueTeamSession(input serverIssueSessionRequest, actor issueActor) (agentSession, error) {
+	if err := a.requireTeamControlPlaneWorkspace(context.Background()); err != nil {
+		return agentSession{}, err
+	}
+	if input.Provider == "" {
+		input.Provider = "codex"
+	}
+	profile := agentProfile{}
+	if isCodexProvider(input.Provider) {
+		var err error
+		profile, err = a.resolveEnabledAgentProfile(input.AgentProfile)
+		if err != nil {
+			return agentSession{}, err
+		}
+		input.Provider = "codex"
+		input.AgentProfile = profile.ID
+	}
+	if input.RuntimeMode != "team" {
+		return agentSession{}, errInvalidRuntimeMode
+	}
+	input.Issue.ID = strings.TrimSpace(firstNonEmpty(input.Issue.ID, input.IssueID))
+	input.Issue.ProjectID = strings.TrimSpace(firstNonEmpty(input.Issue.ProjectID, input.Project.ID))
+	input.Issue.Title = strings.TrimSpace(input.Issue.Title)
+	input.Issue.Body = strings.TrimSpace(input.Issue.Body)
+	input.Issue.Status = normalizeIssueStatus(input.Issue.Status)
+	if input.Issue.Status == "" {
+		input.Issue.Status = "open"
+	}
+	if input.Issue.Assignee == "" {
+		input.Issue.Assignee = input.AgentProfile
+		input.Issue.AssigneeType = "agent"
+	}
+	if input.Issue.AssigneeType == "" {
+		input.Issue.AssigneeType = "agent"
+	}
+	if input.Project.ID == "" || input.Project.ID != input.Issue.ProjectID {
+		input.Project.ID = input.Issue.ProjectID
+	}
+	input.Project.Name = strings.TrimSpace(input.Project.Name)
+	if input.Project.Name == "" {
+		input.Project.Name = "Server project"
+	}
+	input.Project.RepoPath = strings.TrimSpace(input.Project.RepoPath)
+	input.Project.RemoteURL = strings.TrimSpace(input.Project.RemoteURL)
+	if input.Project.RepoPath == "" {
+		input.Project.RepoPath = input.Project.RemoteURL
+	}
+	if input.Project.DefaultBranch == "" {
+		input.Project.DefaultBranch = "main"
+	}
+	if input.Project.SourceType == "" {
+		if input.Project.RemoteURL != "" {
+			input.Project.SourceType = "github"
+		} else {
+			input.Project.SourceType = "local"
+		}
+	}
+	if input.Project.ID == "" || input.Issue.ID == "" || input.Issue.ProjectID == "" {
+		return agentSession{}, errors.New("server issue bridge requires issue and project ids")
+	}
+	if remoteURLForTeamRuntime(input.Project) == "" {
+		return agentSession{}, errors.New("team runtime requires a project remote URL or repository path")
+	}
+	if input.Issue.Title == "" {
+		input.Issue.Title = "Server issue " + shortID(input.Issue.ID)
+	}
+
+	if err := a.upsertServerIssueSnapshot(input, actor); err != nil {
+		return agentSession{}, err
+	}
+
+	sessionID := uuid.NewString()
+	agentToken := agentTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
+	branch := input.Branch
+	if branch == "" {
+		branch = fmt.Sprintf("mspace/%s/%s", shortID(input.Issue.ID), shortID(sessionID))
+	}
+	session := agentSession{
+		ID:               sessionID,
+		IssueID:          input.Issue.ID,
+		Provider:         input.Provider,
+		AgentProfile:     input.AgentProfile,
+		RuntimeMode:      "team",
+		Command:          input.Command,
+		Status:           "queued",
+		Branch:           branch,
+		Workdir:          plannedSessionWorkdir(a.workdir, input.Project.ID, sessionID),
+		AgentStatus:      "queued",
+		SourceSessionID:  input.SourceSessionID,
+		SourceCommitSHA:  input.SourceCommitSHA,
+		TriggerCommentID: input.CommentID,
+		AgentToken:       agentToken,
+		CleanupStatus:    "retained",
+		CreatedAt:        nowString(),
+		UpdatedAt:        nowString(),
+	}
+	if _, err := a.db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, runtime_task_id, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, session.ID, session.IssueID, session.Provider, session.AgentProfile, session.RuntimeMode, session.RuntimeTaskID, session.Command, session.Status, session.Branch, session.Workdir, session.CodexThreadID, session.CodexTurnID, session.AgentStatus, session.ArtifactDir, session.SourceSessionID, session.SourceCommitSHA, session.TriggerCommentID, session.AgentToken, session.CleanupStatus, session.CleanedAt, session.CreatedAt, session.UpdatedAt); err != nil {
+		return agentSession{}, err
+	}
+
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Bridge accepted server-owned issue %s from workspace %s.", shortID(input.Issue.ID), input.WorkspaceID))
+	go a.runSession(session, input.Project)
+	return session, nil
+}
+
+func (a *app) upsertServerIssueSnapshot(input serverIssueSessionRequest, actor issueActor) error {
+	now := nowString()
+	if input.Project.CreatedAt == "" {
+		input.Project.CreatedAt = now
+	}
+	input.Project.UpdatedAt = now
+	if input.Issue.CreatedAt == "" {
+		input.Issue.CreatedAt = now
+	}
+	input.Issue.UpdatedAt = now
+	tx, err := a.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, kubeconfig_path, namespace, image_registry_prefix, preview_domain, ingress_class, node_host, default_cluster_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name = excluded.name,
+			repo_path = excluded.repo_path,
+			source_type = excluded.source_type,
+			remote_url = excluded.remote_url,
+			git_provider = excluded.git_provider,
+			git_owner = excluded.git_owner,
+			git_repo = excluded.git_repo,
+			default_branch = excluded.default_branch,
+			deploy_command = excluded.deploy_command,
+			validation_command = excluded.validation_command,
+			kube_context = excluded.kube_context,
+			kubeconfig_path = excluded.kubeconfig_path,
+			namespace = excluded.namespace,
+			image_registry_prefix = excluded.image_registry_prefix,
+			preview_domain = excluded.preview_domain,
+			ingress_class = excluded.ingress_class,
+			node_host = excluded.node_host,
+			default_cluster_id = excluded.default_cluster_id,
+			updated_at = excluded.updated_at
+	`, input.Project.ID, input.Project.Name, input.Project.RepoPath, input.Project.SourceType, input.Project.RemoteURL, input.Project.GitProvider, input.Project.GitOwner, input.Project.GitRepo, input.Project.DefaultBranch, input.Project.DeployCommand, input.Project.ValidationCommand, input.Project.KubeContext, input.Project.KubeconfigPath, input.Project.Namespace, input.Project.ImageRegistryPrefix, input.Project.PreviewDomain, input.Project.IngressClass, input.Project.NodeHost, input.Project.DefaultClusterID, input.Project.CreatedAt, input.Project.UpdatedAt); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO project_runbooks (project_id, content, status, source, source_session_id, content_hash, created_at, updated_at)
+		VALUES (?, '', 'empty', '', '', '', ?, ?)
+		ON CONFLICT(project_id) DO NOTHING
+	`, input.Project.ID, now, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			project_id = excluded.project_id,
+			parent_issue_id = excluded.parent_issue_id,
+			sort_order = excluded.sort_order,
+			title = excluded.title,
+			body = excluded.body,
+			status = excluded.status,
+			close_reason = excluded.close_reason,
+			triage_status = excluded.triage_status,
+			assignee = excluded.assignee,
+			assignee_type = excluded.assignee_type,
+			creator_name = excluded.creator_name,
+			creator_avatar_url = excluded.creator_avatar_url,
+			environment_url = excluded.environment_url,
+			updated_at = excluded.updated_at
+	`, input.Issue.ID, input.Issue.ProjectID, nullableString(input.Issue.ParentIssueID), input.Issue.SortOrder, input.Issue.Title, input.Issue.Body, input.Issue.Status, input.Issue.CloseReason, input.Issue.TriageStatus, input.Issue.Assignee, input.Issue.AssigneeType, input.Issue.CreatorName, input.Issue.CreatorAvatar, input.Issue.EnvironmentURL, input.Issue.CreatedAt, input.Issue.UpdatedAt); err != nil {
+		return err
+	}
+	for _, child := range input.ChildIssues {
+		child.ID = strings.TrimSpace(child.ID)
+		if child.ID == "" {
+			continue
+		}
+		child.ProjectID = firstNonEmpty(child.ProjectID, input.Project.ID)
+		child.ParentIssueID = firstNonEmpty(child.ParentIssueID, input.Issue.ID)
+		child.Status = normalizeIssueStatus(child.Status)
+		if child.Status == "" {
+			child.Status = "open"
+		}
+		if child.CreatedAt == "" {
+			child.CreatedAt = now
+		}
+		child.UpdatedAt = now
+		if _, err := tx.Exec(`
+			INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				project_id = excluded.project_id,
+				parent_issue_id = excluded.parent_issue_id,
+				sort_order = excluded.sort_order,
+				title = excluded.title,
+				body = excluded.body,
+				status = excluded.status,
+				triage_status = excluded.triage_status,
+				assignee = excluded.assignee,
+				assignee_type = excluded.assignee_type,
+				updated_at = excluded.updated_at
+		`, child.ID, child.ProjectID, nullableString(child.ParentIssueID), child.SortOrder, child.Title, child.Body, child.Status, child.CloseReason, child.TriageStatus, child.Assignee, child.AssigneeType, input.Issue.CreatorName, input.Issue.CreatorAvatar, child.CreatedAt, child.UpdatedAt); err != nil {
+			return err
+		}
+	}
+	if input.CommentID != "" {
+		commentBody := input.Command
+		for _, c := range input.Comments {
+			if c.ID == input.CommentID {
+				commentBody = c.Body
+				break
+			}
+		}
+		if _, err := tx.Exec(`
+			INSERT INTO comments (id, issue_id, author_type, author_user_id, author_name, author_avatar_url, body, created_at, updated_at)
+			VALUES (?, ?, 'human', ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET
+				body = excluded.body,
+				updated_at = excluded.updated_at
+		`, input.CommentID, input.Issue.ID, actor.UserID, commentActorName(actor), actor.AvatarURL, commentBody, now, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func nullableString(value string) any {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return strings.TrimSpace(value)
+}
+
 func (a *app) issueHasActiveSession(issueID string) bool {
 	var count int
 	if err := a.db.QueryRow(`
@@ -6022,6 +6345,7 @@ func (a *app) createTeamRuntimeAgentTask(ctx context.Context, session agentSessi
 		"sourceCommitSha":       session.SourceCommitSHA,
 		"contextMarkdown":       contextMarkdown,
 		"artifactDir":           session.ArtifactDir,
+		"agentProfile":          session.AgentProfile,
 		"repository": map[string]any{
 			"url":           repoURL,
 			"defaultBranch": project.DefaultBranch,
@@ -6152,11 +6476,15 @@ func (a *app) loadTeamRuntimeTaskResult(ctx context.Context, taskID string) (run
 	if err != nil {
 		return runtimeTaskResult{}, err
 	}
-	if len(task.Result) == 0 {
+	return parseRuntimeTaskResult(task.Result)
+}
+
+func parseRuntimeTaskResult(raw json.RawMessage) (runtimeTaskResult, error) {
+	if len(raw) == 0 {
 		return runtimeTaskResult{}, nil
 	}
 	var result runtimeTaskResult
-	if err := json.Unmarshal(task.Result, &result); err != nil {
+	if err := json.Unmarshal(raw, &result); err != nil {
 		return runtimeTaskResult{}, err
 	}
 	return result, nil
@@ -8957,6 +9285,16 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 	detail.Failures = failures
 
 	detail.Workspace = inspectWorkspace(detail.Session.Workdir, detail.Project.DefaultBranch)
+	if detail.Session.RuntimeMode == "team" && strings.TrimSpace(detail.Session.Workdir) == "" && strings.TrimSpace(detail.Session.RuntimeTaskID) != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		task, err := a.loadTeamRuntimeTask(ctx, detail.Session.RuntimeTaskID)
+		cancel()
+		if err == nil {
+			result, _ := parseRuntimeTaskResult(task.Result)
+			detail.Session = a.sessionWithTeamRuntimeResult(detail.Session, result)
+			detail.Workspace = inspectWorkspace(detail.Session.Workdir, detail.Project.DefaultBranch)
+		}
+	}
 	if detail.Session.CleanupStatus == "cleaned" && !detail.Workspace.Exists {
 		detail.Workspace.Error = "Session worktree has been cleaned up."
 	}
