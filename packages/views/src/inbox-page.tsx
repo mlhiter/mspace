@@ -102,7 +102,7 @@ export function InboxPage() {
                       {item.unreadCount > 1 ? ` · ${item.unreadCount} unread` : ""}
                     </InlineMeta>
                     <InlineMeta icon={Clock3}><RelativeTime value={item.updatedAt} /></InlineMeta>
-                    <InlineMeta icon={Layers3}>{item.projectName}</InlineMeta>
+	                    <InlineMeta icon={Layers3}>{item.projectName || "No project"}</InlineMeta>
                     <InlineMeta icon={item.assigneeType === "agent" ? Bot : Layers3}>
                       {item.assigneeType === "agent" ? "agent" : "human"} · {item.assignee || "unassigned"}
                     </InlineMeta>
@@ -132,7 +132,7 @@ function workspaceInboxItemToReviewItem(item: WorkspaceInboxItem): ReviewItem {
     title: payloadText(item.payload, ["issueTitle", "title"]) || item.summary || `Issue ${item.issueId.slice(0, 8)}`,
     summary: item.summary || eventKindLabel(item.kind),
     status: payloadText(item.payload, ["issueStatus", "status"]) || eventKindLabel(item.kind),
-    projectName: payloadText(item.payload, ["projectName", "projectId"]) || "Workspace",
+    projectName: payloadText(item.payload, ["projectName", "projectId"]) || "No project",
     assignee: payloadText(item.payload, ["assignee"]) || "",
     assigneeType: payloadText(item.payload, ["assigneeType"]) || "human",
     updatedAt: item.createdAt,

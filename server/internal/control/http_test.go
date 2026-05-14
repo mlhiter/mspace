@@ -564,6 +564,112 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 	}
 }
 
+func TestCreateWorkspaceIssueWithoutProject(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "issue-user-2",
+		Login:          "issue-user-2",
+		Name:           "Issue User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createRecorder := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues", strings.NewReader(`{"body":"Capture a workspace-level issue before the repo is known"}`))
+	createReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createRecorder, createReq)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create issue without project status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var createResult struct {
+		IssueID string `json:"issueId"`
+	}
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &createResult); err != nil {
+		t.Fatalf("parse create result: %v", err)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/issues", nil)
+	listReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(listRecorder, listReq)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list issues status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var issues []IssueListItem
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &issues); err != nil {
+		t.Fatalf("parse issues: %v", err)
+	}
+	if len(issues) != 1 || issues[0].ProjectID != "" || issues[0].ProjectName != "" {
+		t.Fatalf("expected workspace-level issue without project, got %+v", issues)
+	}
+
+	detailRecorder := httptest.NewRecorder()
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/issues/"+createResult.IssueID, nil)
+	detailReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(detailRecorder, detailReq)
+	if detailRecorder.Code != http.StatusOK {
+		t.Fatalf("get issue status=%d body=%s", detailRecorder.Code, detailRecorder.Body.String())
+	}
+	var detail IssueDetail
+	if err := json.Unmarshal(detailRecorder.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("parse issue detail: %v", err)
+	}
+	if detail.Issue.ProjectID != "" || detail.Project.ID != "" {
+		t.Fatalf("expected detail without project, got issue=%+v project=%+v", detail.Issue, detail.Project)
+	}
+
+	createProjectRecorder := httptest.NewRecorder()
+	createProjectReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects", strings.NewReader(`{"name":"mspace","sourceType":"local","repoPath":"/Users/mlhiter/personal-projects/mspace","defaultBranch":"main"}`))
+	createProjectReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createProjectRecorder, createProjectReq)
+	if createProjectRecorder.Code != http.StatusCreated {
+		t.Fatalf("create project status=%d body=%s", createProjectRecorder.Code, createProjectRecorder.Body.String())
+	}
+	var project Project
+	if err := json.Unmarshal(createProjectRecorder.Body.Bytes(), &project); err != nil {
+		t.Fatalf("parse project: %v", err)
+	}
+
+	updateRecorder := httptest.NewRecorder()
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/issues/"+createResult.IssueID, strings.NewReader(`{"projectId":"`+project.ID+`"}`))
+	updateReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(updateRecorder, updateReq)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("attach project status=%d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	var updated Issue
+	if err := json.Unmarshal(updateRecorder.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("parse updated issue: %v", err)
+	}
+	if updated.ProjectID != project.ID {
+		t.Fatalf("expected issue attached to project %q, got %+v", project.ID, updated)
+	}
+
+	attachedDetailRecorder := httptest.NewRecorder()
+	attachedDetailReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/issues/"+createResult.IssueID, nil)
+	attachedDetailReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(attachedDetailRecorder, attachedDetailReq)
+	if attachedDetailRecorder.Code != http.StatusOK {
+		t.Fatalf("get attached issue status=%d body=%s", attachedDetailRecorder.Code, attachedDetailRecorder.Body.String())
+	}
+	var attachedDetail IssueDetail
+	if err := json.Unmarshal(attachedDetailRecorder.Body.Bytes(), &attachedDetail); err != nil {
+		t.Fatalf("parse attached detail: %v", err)
+	}
+	if attachedDetail.Issue.ProjectID != project.ID || attachedDetail.Project.ID != project.ID || attachedDetail.Project.Name != "mspace" {
+		t.Fatalf("expected attached project detail, got issue=%+v project=%+v", attachedDetail.Issue, attachedDetail.Project)
+	}
+}
+
 func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{

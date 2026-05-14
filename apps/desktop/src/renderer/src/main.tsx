@@ -211,10 +211,10 @@ function RootShell() {
       id: `issue:${issue.id}`,
       kind: "Issue",
       title: issue.title,
-      subtitle: joinSearchSubtitle([issue.projectName, issue.status, issue.labels.map((label) => label.name).join(", ")]),
+      subtitle: joinSearchSubtitle([issue.projectName || "No project", issue.status, issue.labels.map((label) => label.name).join(", ")]),
       keywords: [
         issue.body,
-        issue.projectName,
+        issue.projectName || "No project",
         issue.status,
         issue.triageStatus,
         issue.assignee,

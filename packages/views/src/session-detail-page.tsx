@@ -174,6 +174,7 @@ export function SessionDetailPage() {
   }
 
   const { session, issue, project } = sessionQuery.data;
+  const projectName = project?.name || "No project";
   const workspace = normalizeWorkspace(sessionQuery.data.workspace);
   const sessionActive = ["queued", "running"].includes(session.status);
   const cleanupStatus = session.cleanupStatus || "retained";
@@ -201,7 +202,7 @@ export function SessionDetailPage() {
   return (
     <PageFrame
       title={`Session ${session.id.slice(0, 8)}`}
-      subtitle={`${project.name} · issue ${issue.title}`}
+      subtitle={`${projectName} · issue ${issue.title}`}
       breadcrumbs={[
         { label: "mspace", to: "/inbox" },
         { label: "Issues", to: "/issues" },
@@ -251,7 +252,7 @@ export function SessionDetailPage() {
               <DataBlock label="Codex turn" icon={SquareTerminal}>{session.codexTurnId || "not started yet"}</DataBlock>
               <DataBlock label="Session workspace" icon={Files}>{session.workdir || "not reported yet"}</DataBlock>
               <DataBlock label="Artifact directory" icon={Files}>{session.artifactDir || "not reported yet"}</DataBlock>
-              <DataBlock label="Source repository" icon={Files}>{project.repoPath}</DataBlock>
+              <DataBlock label="Source repository" icon={Files}>{project?.repoPath || "not configured"}</DataBlock>
             </div>
           </Panel>
 

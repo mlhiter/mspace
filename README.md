@@ -144,10 +144,10 @@ The server automatically loads `.env.local` from the project root. Keep `MSPACE_
 
 ### First workflow
 
-1. Add a project from a local folder or GitHub repository URL.
-2. Add a reusable test cluster in the Clusters tab, or use the first-run prompt to choose which discovered `~/.kube` kubeconfig files to import.
-3. Select that cluster as the project default when needed.
-4. Create an issue in the Issues tab with a document-style note; include the project or repository name when multiple projects exist.
+1. Create an issue in the Issues tab with a document-style note; it can start without a project when the repository is not known yet.
+2. Add a project from a local folder or GitHub repository URL when the issue needs agent execution, PR handoff, or a test environment.
+3. Add a reusable test cluster in the Clusters tab, or use the first-run prompt to choose which discovered `~/.kube` kubeconfig files to import.
+4. Select that cluster as the project default when needed.
 5. Use checklist rows such as `- [ ] Add tests` when the issue needs child tasks, or paste/drop screenshots when the issue needs visual context.
 6. Mention an enabled agent profile, such as `@codex`, in a rich issue comment.
 7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.

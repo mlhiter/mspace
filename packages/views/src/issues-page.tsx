@@ -129,7 +129,7 @@ export function IssuesPage() {
         const haystack = [
           issue.title,
           issue.body,
-          issue.projectName,
+	          issue.projectName || "No project",
           issueStatusLabel(issue.status),
           issue.labels.map((label) => label.name).join(" "),
         ].join(" ").toLowerCase();
@@ -306,7 +306,7 @@ function IssueRow(props: { issue: IssueListItem }) {
       </div>
 
       <div className="min-w-0">
-        <InlineMeta icon={Layers3}>{issue.projectName}</InlineMeta>
+        <InlineMeta icon={Layers3}>{issue.projectName || "No project"}</InlineMeta>
       </div>
 
       <div className="min-w-0">

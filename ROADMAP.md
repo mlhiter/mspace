@@ -13,8 +13,8 @@ Product truth lives in `docs/product.md`, product value thesis lives in `docs/pr
 Build the first usable product loop:
 
 ```text
-Project
-  -> Issue
+Issue intake
+  -> Optional Project attachment
   -> Local Agent Session
   -> Inbox review updates
   -> Worktree and evidence review
@@ -39,12 +39,12 @@ Target: 5-8 focused development days.
 
 Goal:
 
-- Create or import a project, create an issue, assign it to an agent, watch status updates, then manually trigger PR output, opt into automatic draft PR output, or manually run an issue-scoped Kubernetes test deployment.
+- Create an issue, attach or import a project when execution is needed, assign it to an agent, watch status updates, then manually trigger PR output, opt into automatic draft PR output, or manually run an issue-scoped Kubernetes test deployment.
 
 Build in order:
 
 - Project import: support existing local folders, auto-detect GitHub remote metadata, and support direct GitHub repository URLs cloned into the mspace data directory.
-- Issue creation: keep creation in the Issues surface, use a document-style note without a project selector, and infer the target project from the issue text.
+- Issue creation: keep creation in the Issues surface, use a document-style note without a project selector, allow workspace-level issues before the repository is known, and attach a project later when agent execution, PR handoff, or test deployment is needed.
 - Issue task lists: treat task rows as child issues, convert creation-time Markdown checklist lines into child rows, and let humans or agents update task status from the parent issue.
 - Agent mention flow: let a user manage agent profiles, write an issue comment with an enabled agent mention, save that comment, and create the local session from the current turn request and selected profile.
 - Inbox realtime updates: move issue/session status changes into the Inbox review feed without relying on slow manual refreshes.
@@ -106,7 +106,7 @@ Goal:
 Build:
 
 - Keep Inbox focused on review updates and unread agent activity.
-- Polish Issue creation, project inference, and list flow.
+- Polish Issue creation, project attachment/inference, and list flow.
 - Polish Project creation and settings flow.
 - Polish Issue Detail as the durable working document.
 - Make starting a local agent session through an agent mention in the issue composer feel obvious.
@@ -117,8 +117,8 @@ Build:
 
 Acceptance:
 
-- A user can create a project from a local folder or GitHub repository URL and adjust runtime settings later.
-- A user can create an issue from the Issues surface or sidebar quick action and return to it later.
+- A user can create an issue from the Issues surface or sidebar quick action and return to it later, even before the repository is known.
+- A user can create a project from a local folder or GitHub repository URL, attach it to the issue when execution is needed, and adjust runtime settings later.
 - A user can create and check off issue tasks without duplicating state between Markdown checkboxes and child issue rows.
 - A user can manage agent profiles, mention an enabled agent in an issue comment, and start a local session from that current turn request.
 - A user can label an issue and stop an active session from Issue Detail.

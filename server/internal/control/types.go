@@ -373,9 +373,10 @@ type IssueTaskInput struct {
 }
 
 type UpdateIssueInput struct {
-	Title  *string `json:"title"`
-	Body   *string `json:"body"`
-	Status *string `json:"status"`
+	ProjectID *string `json:"projectId"`
+	Title     *string `json:"title"`
+	Body      *string `json:"body"`
+	Status    *string `json:"status"`
 }
 
 type UpdateIssueLabelsInput struct {

@@ -54,6 +54,7 @@ import {
   type IssueDetail,
   type IssueTestEnvironment,
   type IssueTestEnvironmentResources,
+  type Project,
   type ProjectRunbook,
   type ReviewEvidenceCheck,
   type ReviewEvidenceCommand,
@@ -313,7 +314,7 @@ function formatMentionPlaceholder(agents: AgentProfile[]) {
 }
 
 function testDeployDefaults(detail: IssueDetail, clusters: Cluster[]): StartTestDeployInput {
-  const clusterId = detail.testEnvironment?.clusterId || detail.project.defaultClusterId || clusters[0]?.id || "";
+  const clusterId = detail.testEnvironment?.clusterId || detail.project?.defaultClusterId || clusters[0]?.id || "";
   const selectedCluster = clusters.find((cluster) => cluster.id === clusterId);
   const changeNodes = listOrEmpty(detail.changeNodes);
   const selectedSource =
@@ -1405,6 +1406,7 @@ function IssueHandoffPanel(props: {
   changeNodes: IssueChangeNode[];
   handoffs: IssueHandoff[];
   disabled?: boolean;
+  disabledReason?: string;
   isCreatingPr: boolean;
   refreshingHandoffId: string;
   createError: Error | null;
@@ -1446,7 +1448,7 @@ function IssueHandoffPanel(props: {
             <div>
               <div>Pull request</div>
               <div className="mt-0.5 text-[12px] font-normal leading-5 text-[color:var(--muted)]">
-                {props.disabled ? "PR handoff is still runner-backed for this issue." : "One issue-level PR, backed by the commits below."}
+                {props.disabledReason || (props.disabled ? "PR handoff is still runner-backed for this issue." : "One issue-level PR, backed by the commits below.")}
               </div>
             </div>
           </div>
@@ -1468,7 +1470,7 @@ function IssueHandoffPanel(props: {
             variant="secondary"
             size="sm"
             disabled={!canCreate}
-            title={props.disabled ? "PR handoff for server-owned issues still uses the local runner bridge." : !selectedNode?.branch ? "A captured branch is required before PR sync." : undefined}
+            title={props.disabledReason || (props.disabled ? "PR handoff for server-owned issues still uses the local runner bridge." : !selectedNode?.branch ? "A captured branch is required before PR sync." : undefined)}
             onClick={() => selectedNode && props.onCreatePr(selectedNode)}
           >
             <GitPullRequest data-icon />
@@ -1545,6 +1547,7 @@ function IssueCommitsTab(props: {
   agents: AgentProfile[];
   handoffs: IssueHandoff[];
   runnerActionsDisabled?: boolean;
+  runnerActionsDisabledReason?: string;
   isCreatingPr: boolean;
   refreshingHandoffId: string;
   createPrError: Error | null;
@@ -1571,6 +1574,7 @@ function IssueCommitsTab(props: {
           changeNodes={nodes}
           handoffs={props.handoffs}
           disabled={props.runnerActionsDisabled}
+          disabledReason={props.runnerActionsDisabledReason}
           isCreatingPr={props.isCreatingPr}
           refreshingHandoffId={props.refreshingHandoffId}
           createError={props.createPrError}
@@ -1600,6 +1604,7 @@ function IssueCommitsTab(props: {
         changeNodes={nodes}
         handoffs={props.handoffs}
         disabled={props.runnerActionsDisabled}
+        disabledReason={props.runnerActionsDisabledReason}
         isCreatingPr={props.isCreatingPr}
         refreshingHandoffId={props.refreshingHandoffId}
         createError={props.createPrError}
@@ -3986,6 +3991,7 @@ function IssueTestEnvironmentPanel(props: {
   sessions: AgentSession[];
   hasActiveSession: boolean;
   disabled?: boolean;
+  disabledReason?: string;
   startError?: Error | null;
   cleanupError?: Error | null;
   retainError?: Error | null;
@@ -4116,7 +4122,7 @@ function IssueTestEnvironmentPanel(props: {
       </div>
       {props.disabled ? (
         <div className="text-[12px] leading-5 text-[color:var(--muted)]">
-          Test environments for server-owned issues still run through the local runtime bridge.
+          {props.disabledReason || "Test environments for server-owned issues still run through the local runtime bridge."}
         </div>
       ) : null}
     </div>
@@ -4384,6 +4390,10 @@ function runbookStatusLabel(status: string) {
 
 function runbookUpdatedLabel(value: string) {
   return value ? formatRelativeTime(value) : "not available";
+}
+
+function projectDisplayName(project: Project | null | undefined) {
+  return project?.name || "No project";
 }
 
 function ProjectRunbookModal(props: {
@@ -4684,6 +4694,7 @@ export function IssueDetailPage() {
   const issuesQueryKey = queryKeys.workspaceIssues(workspaceId, auth.token);
   const inboxQueryKey = queryKeys.workspaceInbox(workspaceId, auth.token);
   const labelDefinitionsQueryKey = queryKeys.workspaceIssueLabelDefinitions(workspaceId, auth.token);
+  const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
   const projectRunbookKey = (projectId: string) =>
     queryKeys.workspaceProjectRunbook(workspaceId, projectId, auth.token);
   const [composerEditor, setComposerEditor] = useState<Editor | null>(null);
@@ -4732,6 +4743,11 @@ export function IssueDetailPage() {
     queryKey: queryKeys.clusters,
     queryFn: api.listClusters,
   });
+  const projectsQuery = useQuery({
+    queryKey: projectsQueryKey,
+    queryFn: () => controlPlaneApi.listProjects(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
+  });
   const labelDefinitionsQuery = useQuery({
     queryKey: labelDefinitionsQueryKey,
     queryFn: () => controlPlaneApi.listIssueLabelDefinitions(auth.token, workspaceId),
@@ -4751,18 +4767,21 @@ export function IssueDetailPage() {
     retry: false,
   });
   const projectRunbookQuery = useQuery({
-    queryKey: detail?.project.id ? projectRunbookKey(detail.project.id) : projectRunbookKey("__none"),
+    queryKey: detail?.project?.id ? projectRunbookKey(detail.project.id) : projectRunbookKey("__none"),
     queryFn: () => {
-      if (!detail?.project.id) throw new Error("Project is not loaded.");
+      if (!detail?.project?.id) throw new Error("Project is not loaded.");
       return controlPlaneApi.getProjectRunbook(auth.token, workspaceId, detail.project.id);
     },
-    enabled: serverWorkspaceReady && runbookOpen && Boolean(detail?.project.id),
+    enabled: serverWorkspaceReady && runbookOpen && Boolean(detail?.project?.id),
   });
   const agents = listOrEmpty(agentsQuery.data);
   const clusters = listOrEmpty(clustersQuery.data);
+  const projects = listOrEmpty(projectsQuery.data);
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
   const enabledAgents = agents.filter((agent) => agent.enabled);
   const continueAgent = enabledAgents.find((agent) => mentionKey(agent.mention) === "codex") || enabledAgents[0];
+  const hasProject = Boolean(detail?.project?.id);
+  const projectName = projectDisplayName(detail?.project);
   const childIssues = listOrEmpty(detail?.childIssues);
   const changeNodes = listOrEmpty(detail?.changeNodes);
   const handoffs = listOrEmpty(detail?.handoffs);
@@ -4815,9 +4834,11 @@ export function IssueDetailPage() {
   const composerHelperText = isSupportedAgentMention
     ? hasActiveSession
       ? `${mentionedAgentConfig?.name} is already working.`
-      : canUseTeamRuntime
-        ? `${mentionedAgentConfig?.name} will run on the selected Team worker.`
-        : "Team worker sessions require a team workspace."
+      : !hasProject
+        ? "Attach a project before sending this issue to an agent."
+        : canUseTeamRuntime
+          ? `${mentionedAgentConfig?.name} will run on the selected Team worker.`
+          : "Team worker sessions require a team workspace."
     : isUnsupportedAgentMention
       ? `@${mentionedAgent} is not available yet.`
       : "Comments stay on the issue. Mention an agent when you want a turn.";
@@ -4940,6 +4961,10 @@ export function IssueDetailPage() {
         if (!detail) {
           throw new Error("Issue is not loaded yet.");
         }
+        const project = detail.project;
+        if (!project?.id) {
+          throw new Error("Attach a project before sending this issue to an agent.");
+        }
         if (!canUseTeamRuntime) {
           throw new Error("Team worker sessions require a team workspace.");
         }
@@ -4953,7 +4978,7 @@ export function IssueDetailPage() {
           runtimeMode: composerRuntimeModeEffective,
           command: trimmedBody,
           issue: detail.issue,
-          project: detail.project,
+          project,
           comments: listOrEmpty(detail.comments),
           childIssues,
           labels: issueLabels,
@@ -4977,7 +5002,7 @@ export function IssueDetailPage() {
     Boolean(composerBody.trim()) &&
     !sendComposer.isPending &&
     !isUnsupportedAgentMention &&
-    (!isSupportedAgentMention || canUseTeamRuntime) &&
+    (!isSupportedAgentMention || (canUseTeamRuntime && hasProject)) &&
     !(isSupportedAgentMention && hasActiveSession);
 
   const updateComment = useMutation({
@@ -5207,6 +5232,19 @@ export function IssueDetailPage() {
     },
   });
 
+  const attachProject = useMutation({
+    mutationFn: (projectId: string) =>
+      controlPlaneApi.updateIssue(auth.token, workspaceId, issueId, { projectId }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
+        queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
+      ]);
+    },
+  });
+
   const stopSession = useMutation({
     mutationFn: (sessionId: string) => api.cancelSession(sessionId),
     onSuccess: async (_data, sessionId) => {
@@ -5264,17 +5302,26 @@ export function IssueDetailPage() {
     },
   });
   const createPullRequest = useMutation({
-    mutationFn: (node: IssueChangeNode) =>
-      api.createPullRequest(issueId, {
+    mutationFn: (node: IssueChangeNode) => {
+      if (!hasProject) {
+        throw new Error("Attach a project before creating a PR.");
+      }
+      return api.createPullRequest(issueId, {
         sourceSessionId: node.sessionId,
         sourceCommitSha: node.commitSha,
-      }),
+      });
+    },
     onSettled: async () => {
       await invalidateIssueHandoffSurfaces();
     },
   });
   const refreshIssueHandoff = useMutation({
-    mutationFn: (handoff: IssueHandoff) => api.refreshIssueHandoff(issueId, handoff.id),
+    mutationFn: (handoff: IssueHandoff) => {
+      if (!hasProject) {
+        throw new Error("Attach a project before refreshing PR state.");
+      }
+      return api.refreshIssueHandoff(issueId, handoff.id);
+    },
     onSettled: async () => {
       await invalidateIssueHandoffSurfaces();
     },
@@ -5310,6 +5357,7 @@ export function IssueDetailPage() {
     previewStatusCheckPending,
   ]);
   const canStartTestDeploy =
+    hasProject &&
     Boolean(testDeployForm.clusterId.trim()) &&
     Boolean(testDeployForm.sourceCommitSha?.trim()) &&
     changeNodes.length > 0 &&
@@ -5374,7 +5422,7 @@ export function IssueDetailPage() {
   const creatorActor = humanActor(detail.issue.creatorName, detail.issue.creatorAvatarUrl);
   const composerActor = storedHumanActor();
   const assigneeActor = actorForAssignee(detail.issue.assigneeType, detail.issue.assignee);
-  const projectCluster = clusters.find((cluster) => cluster.id === detail.project.defaultClusterId);
+  const projectCluster = clusters.find((cluster) => cluster.id === detail.project?.defaultClusterId);
   const testCluster = clusters.find((cluster) => cluster.id === detail.testEnvironment?.clusterId);
   const issueLabels = listOrEmpty(detail.labels);
   const rawComments = listOrEmpty(detail.comments);
@@ -5398,7 +5446,7 @@ export function IssueDetailPage() {
       title={detail.issue.title}
       subtitle={
         <IssueHeaderMeta
-          projectName={detail.project.name}
+          projectName={projectName}
           status={detail.issue.status}
           typeLabel={selectedTypeLabel}
           priorityLabel={selectedPriorityLabel}
@@ -5469,7 +5517,7 @@ export function IssueDetailPage() {
                       return (
                         <TimelineShell key="opened" actor={creatorActor} title={`${creatorActor.name || "mlhiter"} opened this issue`} time={item.createdAt}>
                           <div className="text-[13px] leading-6 text-[color:var(--muted)]">
-                            {`Created in ${detail.project.name}.`}
+                            {detail.project?.id ? `Created in ${projectName}.` : "Created without a project."}
                           </div>
                         </TimelineShell>
                       );
@@ -5713,7 +5761,8 @@ export function IssueDetailPage() {
               sessions={listOrEmpty(detail.sessions)}
               agents={agents}
               handoffs={handoffs}
-              runnerActionsDisabled={serverWorkspaceReady}
+              runnerActionsDisabled={serverWorkspaceReady || !hasProject}
+              runnerActionsDisabledReason={!hasProject ? "Attach a project before creating or refreshing a PR." : undefined}
               isCreatingPr={createPullRequest.isPending}
               refreshingHandoffId={refreshIssueHandoff.isPending ? refreshIssueHandoff.variables?.id || "" : ""}
               createPrError={createPullRequest.error}
@@ -5779,11 +5828,40 @@ export function IssueDetailPage() {
             </SidebarSection>
 
             <SidebarSection title="Project">
-              <div className="grid gap-2">
-                <MetaLine label="Name" value={detail.project.name} />
-                <MetaLine label="Repo" value={detail.project.repoPath || "not configured"} />
-                <MetaLine label="Default cluster" value={projectCluster?.name || "not configured"} />
-              </div>
+              {detail.project?.id ? (
+                <div className="grid gap-2">
+                  <MetaLine label="Name" value={detail.project.name} />
+                  <MetaLine label="Repo" value={detail.project.repoPath || "not configured"} />
+                  <MetaLine label="Default cluster" value={projectCluster?.name || "not configured"} />
+                </div>
+              ) : (
+                <div className="grid gap-2 rounded-[8px] bg-[color:var(--block-subtle)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                  <span className="font-medium text-[color:var(--muted-strong)]">No project attached</span>
+                  <span>Attach a project before running agents, PR handoff, or test environments.</span>
+                  {projects.length > 0 ? (
+                    <Select
+                      value="__none"
+                      onValueChange={(projectId) => {
+                        if (projectId !== "__none") attachProject.mutate(projectId);
+                      }}
+                      disabled={attachProject.isPending}
+                    >
+                      <SelectTrigger className="h-8 min-h-8 bg-[color:var(--paper)] text-[12px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none">Attach project</SelectItem>
+                        {projects.map((project) => (
+                          <SelectItem key={project.id} value={project.id}>
+                            {project.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : null}
+                  {attachProject.error ? <Notice tone="danger">{attachProject.error.message}</Notice> : null}
+                </div>
+              )}
             </SidebarSection>
 
             <SidebarSection title="Test environment">
@@ -5792,7 +5870,8 @@ export function IssueDetailPage() {
                 cluster={testCluster}
                 sessions={listOrEmpty(detail.sessions)}
                 hasActiveSession={hasActiveSession}
-                disabled={serverWorkspaceReady}
+                disabled={serverWorkspaceReady || !hasProject}
+                disabledReason={!hasProject ? "Attach a project before deploying a test environment." : undefined}
                 startError={startTestDeploy.error}
                 cleanupError={cleanupTestEnvironment.error}
                 retainError={retainTestEnvironment.error}
@@ -5852,31 +5931,33 @@ export function IssueDetailPage() {
               )}
             </SidebarSection>
 
-            <SidebarSection title="Workflow">
-              <button
-                type="button"
-                className="grid w-full gap-2 rounded-[8px] px-2 py-2 text-left transition-[background-color,box-shadow,transform] duration-150 ease-out hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99]"
-                onClick={() => setRunbookOpen(true)}
-              >
-                <span className="flex items-center justify-between gap-2">
-                  <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium leading-5 text-[color:var(--muted-strong)]">
-                    <BookOpenText data-icon className="shrink-0" />
-                    <span className="truncate">Project runbook</span>
+            {detail.project?.id ? (
+              <SidebarSection title="Workflow">
+                <button
+                  type="button"
+                  className="grid w-full gap-2 rounded-[8px] px-2 py-2 text-left transition-[background-color,box-shadow,transform] duration-150 ease-out hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99]"
+                  onClick={() => setRunbookOpen(true)}
+                >
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium leading-5 text-[color:var(--muted-strong)]">
+                      <BookOpenText data-icon className="shrink-0" />
+                      <span className="truncate">Project runbook</span>
+                    </span>
+                    <span className="shrink-0 text-[12px] font-medium leading-5 text-[color:var(--muted)]">View</span>
                   </span>
-                  <span className="shrink-0 text-[12px] font-medium leading-5 text-[color:var(--muted)]">View</span>
-                </span>
-                <div className="grid gap-1.5">
-                  <MetaLine label="Status" value={runbookStatusLabel(detail.project.runbookStatus)} />
-                  <MetaLine label="Updated" value={runbookUpdatedLabel(detail.project.runbookUpdatedAt)} />
-                </div>
-              </button>
-            </SidebarSection>
+                  <div className="grid gap-1.5">
+                    <MetaLine label="Status" value={runbookStatusLabel(detail.project.runbookStatus)} />
+                    <MetaLine label="Updated" value={runbookUpdatedLabel(detail.project.runbookUpdatedAt)} />
+                  </div>
+                </button>
+              </SidebarSection>
+            ) : null}
           </div>
         </aside>
         ) : null}
       </div>
 
-      {runbookOpen ? (
+      {runbookOpen && detail.project?.id ? (
         <ProjectRunbookModal
           projectName={detail.project.name}
           projectStatus={detail.project.runbookStatus}

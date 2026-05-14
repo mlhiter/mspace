@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-13
+> Status: local MVP implementation snapshot, updated 2026-05-14
 
 ## One-Line Definition
 
@@ -140,14 +140,15 @@ For the team-ready model, unread is not an issue property. Reviewable changes ar
 The Issues surface should support:
 
 - human-created issues;
-- automatic project inference from the issue text, without a project selector in the creation flow;
+- workspace-level issue creation before a project is known;
+- automatic project inference from the issue text when a single clear project exists, without a project selector in the creation flow;
 - assignments to people or agents;
 - durable list browsing and reopening later.
 
 An Issue should hold:
 
 - title and durable problem statement;
-- project link;
+- optional project link, required before agent execution, PR handoff, or test environments;
 - comments, lightweight reactions, and progress updates;
 - assignee and subscriber list;
 - linked branch, PR, and environment evidence;

@@ -62,7 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_project_runbook_revisions_project_created
 CREATE TABLE IF NOT EXISTS issues (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
   parent_issue_id UUID REFERENCES issues(id) ON DELETE CASCADE,
   sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
   title TEXT NOT NULL CHECK (title <> ''),

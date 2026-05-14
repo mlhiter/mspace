@@ -1128,7 +1128,7 @@ func (s *MemoryStore) CreateIssue(_ Context, user User, workspaceID string, inpu
 	if err != nil {
 		return "", err
 	}
-	project, err := s.resolveIssueProjectLocked(workspaceID, normalized.ProjectID, normalized.Title+"\n"+normalized.Body)
+	projectID, err := s.resolveOptionalIssueProjectIDLocked(workspaceID, normalized.ProjectID, normalized.Title+"\n"+normalized.Body)
 	if err != nil {
 		return "", err
 	}
@@ -1138,7 +1138,7 @@ func (s *MemoryStore) CreateIssue(_ Context, user User, workspaceID string, inpu
 	issue := Issue{
 		ID:             issueID,
 		WorkspaceID:    workspaceID,
-		ProjectID:      project.ID,
+		ProjectID:      projectID,
 		Title:          normalized.Title,
 		Body:           normalized.Body,
 		Status:         "open",
@@ -1164,7 +1164,7 @@ func (s *MemoryStore) CreateIssue(_ Context, user User, workspaceID string, inpu
 		s.issues[taskID] = Issue{
 			ID:             taskID,
 			WorkspaceID:    workspaceID,
-			ProjectID:      project.ID,
+			ProjectID:      projectID,
 			ParentIssueID:  issue.ID,
 			SortOrder:      index + 1,
 			Title:          task.Title,
@@ -1326,6 +1326,18 @@ func (s *MemoryStore) UpdateIssue(_ Context, userID, workspaceID, issueID string
 	if !ok || issue.WorkspaceID != strings.TrimSpace(workspaceID) {
 		return Issue{}, ErrNotFound
 	}
+	if input.ProjectID != nil {
+		projectID := strings.TrimSpace(*input.ProjectID)
+		if projectID != "" {
+			project, err := s.resolveIssueProjectLocked(issue.WorkspaceID, projectID, "")
+			if err != nil {
+				return Issue{}, err
+			}
+			issue.ProjectID = project.ID
+		} else {
+			issue.ProjectID = ""
+		}
+	}
 	if input.Title != nil {
 		title := strings.TrimSpace(*input.Title)
 		if title == "" {
@@ -1345,6 +1357,15 @@ func (s *MemoryStore) UpdateIssue(_ Context, userID, workspaceID, issueID string
 	}
 	issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.issues[issue.ID] = issue
+	if input.ProjectID != nil && issue.ParentIssueID == "" {
+		for id, child := range s.issues {
+			if child.WorkspaceID == issue.WorkspaceID && child.ParentIssueID == issue.ID {
+				child.ProjectID = issue.ProjectID
+				child.UpdatedAt = issue.UpdatedAt
+				s.issues[id] = child
+			}
+		}
+	}
 	return issue, nil
 }
 
@@ -1841,13 +1862,42 @@ func (s *MemoryStore) resolveIssueProjectLocked(workspaceID, projectID, text str
 	return best, nil
 }
 
+func (s *MemoryStore) resolveOptionalIssueProjectIDLocked(workspaceID, projectID, text string) (string, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID != "" {
+		project, err := s.resolveIssueProjectLocked(workspaceID, projectID, text)
+		if err != nil {
+			return "", err
+		}
+		return project.ID, nil
+	}
+	projectCount := 0
+	for _, project := range s.projects {
+		if project.WorkspaceID == workspaceID {
+			projectCount++
+		}
+	}
+	if projectCount == 0 || projectCount > 1 {
+		return "", nil
+	}
+	project, err := s.resolveIssueProjectLocked(workspaceID, "", text)
+	if err != nil {
+		if strings.Contains(err.Error(), "create a project before creating issues") {
+			return "", nil
+		}
+		return "", err
+	}
+	return project.ID, nil
+}
+
 func (s *MemoryStore) issueListItemLocked(issue Issue) IssueListItem {
 	project := s.projects[issue.ProjectID]
+	projectName := project.Name
 	item := IssueListItem{
 		ID:            issue.ID,
 		WorkspaceID:   issue.WorkspaceID,
 		ProjectID:     issue.ProjectID,
-		ProjectName:   project.Name,
+		ProjectName:   projectName,
 		ParentIssueID: issue.ParentIssueID,
 		SortOrder:     issue.SortOrder,
 		Title:         issue.Title,

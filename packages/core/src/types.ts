@@ -60,8 +60,8 @@ export interface Cluster {
 
 export interface ActiveWorkItem {
   issueId: string;
-  projectId: string;
-  projectName: string;
+  projectId?: string;
+  projectName?: string;
   title: string;
   status: string;
   namespace: string;
@@ -84,8 +84,8 @@ export interface UpdateWorkspaceSettingsInput {
 export interface InboxItem {
   id: string;
   issueId: string;
-  projectId: string;
-  projectName: string;
+  projectId?: string;
+  projectName?: string;
   title: string;
   status: string;
   assignee: string;
@@ -158,7 +158,7 @@ export interface RuntimeTask {
 	workspaceId: string;
 	issueId: string;
 	sessionId: string;
-	projectId: string;
+	projectId?: string;
 	kind: string;
 	status: string;
 	priority: number;
@@ -213,8 +213,8 @@ export interface CreateRuntimeTaskInput {
 
 export interface IssueListItem {
 	id: string;
-	projectId: string;
-  projectName: string;
+	projectId?: string;
+  projectName?: string;
   parentIssueId: string;
   sortOrder: number;
   title: string;
@@ -235,7 +235,7 @@ export interface IssueListItem {
 
 export interface Issue {
   id: string;
-  projectId: string;
+  projectId?: string;
   parentIssueId: string;
   sortOrder: number;
   title: string;
@@ -638,7 +638,7 @@ export interface KubernetesEventResource {
 
 export interface IssueDetail {
   issue: Issue;
-  project: Project;
+  project?: Project | null;
   testEnvironment: IssueTestEnvironment | null;
   childIssues: IssueListItem[];
   labels: IssueLabel[];
@@ -654,7 +654,7 @@ export interface IssueDetail {
 export interface SessionDetail {
   session: AgentSession;
   issue: Issue;
-  project: Project;
+  project?: Project | null;
   logs: SessionLog[];
   evidence: DeploymentEvidence[];
   failures: SessionFailure[];
@@ -703,6 +703,7 @@ export interface CreateIssueInput {
 }
 
 export interface UpdateIssueInput {
+  projectId?: string;
   title?: string;
   body?: string;
   status?: string;

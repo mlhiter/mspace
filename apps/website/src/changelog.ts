@@ -15,6 +15,7 @@ export const changelog: ChangelogEntry[] = [
       "Added a one-time local SQLite import path so existing personal test issues, comments, labels, reactions, Inbox rows, and project runbooks can be carried into server Postgres.",
       "Documented the import path for development workspaces that still have legacy runner product rows in `~/.mspace/mspace.db`.",
       "Connected PG-backed team workspace issues to Team worker sessions through the runner bridge, so a shared issue comment can now queue an `agent_session` runtime task instead of stopping at collaboration state.",
+      "Let users create workspace-level issues before choosing a project, while keeping project attachment required for agent runs, PR handoff, and test environments.",
       "Refreshed the README and public website with a curated set of current running screenshots instead of publishing every Issue Detail tab.",
     ],
   },

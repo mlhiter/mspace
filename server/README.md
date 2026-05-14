@@ -64,6 +64,24 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 | `POST` | `/api/workspaces/{workspaceID}/issue-events` | Append a reviewable issue event and create per-user receipts. |
 | `POST` | `/api/workspaces/{workspaceID}/issue-events/{eventID}/read` | Mark one event receipt read for the authenticated user. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/read-through` | Mark unread receipts for one issue read through an optional event boundary. |
+| `GET` | `/api/workspaces/{workspaceID}/projects` | List workspace projects. |
+| `POST` | `/api/workspaces/{workspaceID}/projects` | Create a workspace project. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Update a workspace project. |
+| `DELETE` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Delete a project when no issues reference it. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Read the workspace project runbook. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the workspace project runbook and record a revision. |
+| `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List issue type and priority label definitions. |
+| `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level workspace issues. |
+| `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. `projectId` is optional; issues can remain projectless until execution is needed. |
+| `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Load issue detail with optional project, child tasks, labels, comments, and sessions. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update issue project attachment, title, body, or workflow status. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks` | Create a child issue task. |
+| `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks/{taskID}` | Delete a child issue task under the parent. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/labels` | Replace selected issue label keys. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments` | Add a Markdown human comment. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}` | Edit the current user's eligible human comment. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current user's reaction to a comment. |
+| `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current user's reaction from a comment. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived worker registration token. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration token metadata without raw token values. Owner/admin only. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. Owner/admin only. |
@@ -85,6 +103,8 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 The workspace Inbox is event-based. `issue_events` stores the append-only review fact, `issue_event_receipts` stores each recipient user's unread/read/archive state, and `issue_watchers` stores the issue-level recipient set. Opening or polling an issue must not clear unread state; clients should call the read-through endpoint after the user intentionally reviews an Inbox row.
 
 Personal workspaces are the default result of GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, and Inbox receipts in Postgres. Invitations, worker registration tokens, registered workers, and runtime task APIs require a workspace with `kind="team"`; those endpoints return `403 Forbidden` for personal workspaces.
+
+Issue `project_id` is optional in the control plane. A user can capture a workspace-level issue before the repository is known, comment on it, and attach a project later through `PUT /api/workspaces/{workspaceID}/issues/{issueID}` with `projectId`. If a create request omits `projectId` and the workspace has exactly one project, the server auto-attaches it; zero or multiple projects leave the issue unassigned. Agent execution, PR handoff, and issue test environments require an attached project.
 
 ## Workspace Invitations
 

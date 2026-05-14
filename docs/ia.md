@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-05-12
+> Status: local MVP implementation snapshot, updated 2026-05-14
 
 ## IA Goal
 
@@ -112,7 +112,7 @@ Inbox is where unread issue updates appear for review.
 Each row should show:
 
 - title;
-- project;
+- project, or `No project` for workspace-level issues that have not been attached yet;
 - latest activity time;
 - assignee;
 - unread state;
@@ -154,7 +154,7 @@ Each row should show:
 
 - title;
 - body preview;
-- project;
+- project, or `No project` for workspace-level issues that have not been attached yet;
 - owner avatar and display name;
 - current status;
 - unread marker;
@@ -185,8 +185,8 @@ Current implementation:
 - lists issues across the workspace;
 - opens create issue in a modal from the page header or the sidebar quick action;
 - uses a TipTap-backed Markdown document editor for the issue note, including task-list input and pasted or dropped image attachments rendered as thumbnails;
-- does not show a project selector during issue creation; the runner infers the best matching existing project from the issue text;
-- keeps the creation modal minimal: issue note only, with project routing inferred from the text;
+- does not show a project selector during issue creation; the issue may start as a workspace-level document without a project, and a single existing project can be auto-attached when unambiguous;
+- keeps the creation modal minimal: issue note only, with project attachment handled from Issue Detail when the repository becomes necessary;
 - supports search, status/type/priority filters, and sorting by updated time, created time, priority, or type;
 - shows unread state, stored owner avatar/name, owner type, linked session count, child task count, and labels inline.
 
@@ -210,12 +210,14 @@ Issue Detail is the main working screen. It should read like a live document wit
 The header should show:
 
 - title;
-- project;
+- project, or `No project` when the issue is still workspace-level;
 - status;
 - assignee;
 - latest activity summary.
 
 Primary action should stay in the reply composer, not in a large runner control panel. To ask an agent, the user writes a normal issue comment and mentions an enabled agent from the Agents module.
+
+When an issue has no attached project, Issue Detail should stay readable and commentable but block agent execution, PR handoff, test environments, and project runbook access until a project is attached from the Project sidebar section.
 
 ### Document body
 

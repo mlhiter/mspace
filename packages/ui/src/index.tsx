@@ -150,7 +150,7 @@ export type BreadcrumbItem = {
 
 export type ShellActiveWorkItem = {
   issueId: string;
-  projectName: string;
+  projectName?: string;
   title: string;
   status: string;
   namespace?: string;
@@ -809,7 +809,8 @@ export function SidebarActionLink(props: PropsWithChildren<{ to: string; search?
 
 function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
   const status = normalizeStatusValue(props.item.sessionStatus || props.item.namespaceStatus || props.item.status);
-  const secondary = props.item.namespace || props.item.projectName;
+  const projectName = props.item.projectName || "No project";
+  const secondary = props.item.namespace || projectName;
   return (
     <Link
       to="/issues/$issueId"
@@ -832,7 +833,7 @@ function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium">{props.item.title}</span>
         <span className="block truncate text-[11px] text-[color:var(--muted)]">
-          {props.item.projectName}{secondary && secondary !== props.item.projectName ? ` · ${secondary}` : ""}
+          {projectName}{secondary && secondary !== projectName ? ` · ${secondary}` : ""}
         </span>
       </span>
       <ChevronRight

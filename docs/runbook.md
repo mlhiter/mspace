@@ -659,7 +659,9 @@ GitHub imports must use a GitHub repository URL. The runner clones them into `~/
 test -d ~/.mspace/repos/<owner>/<repo>/.git && git -C ~/.mspace/repos/<owner>/<repo> remote -v
 ```
 
-If issue creation fails immediately after project setup, the usual cause is that no project exists yet. The issue modal no longer exposes a project selector; when more than one project exists, include the intended project or repository name in the issue note so the runner can infer the best matching existing project.
+Signed-in workspace issue creation no longer requires a project. A new issue can stay workspace-level until the repository is known; Issue Detail shows `No project` and lets the user attach an existing project from the Project sidebar section. Agent execution, PR handoff, and test environments stay disabled until a project is attached.
+
+If issue creation still fails with a project-related error, check whether the request is using the legacy runner API instead of the server workspace API. The legacy runner path still requires an existing inferred project. The signed-in desktop product should create issues through `POST /api/workspaces/{workspaceID}/issues`.
 
 ### Project Delete Fails
 

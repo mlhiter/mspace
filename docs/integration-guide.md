@@ -76,9 +76,9 @@ Server workspace endpoints require `Authorization: Bearer <msp-token>`:
 | `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the workspace project runbook and record a revision. |
 | `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List Type and Priority label options. |
 | `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level issues in the selected workspace. |
-| `POST` | `/api/workspaces/{workspaceID}/issues` | Create an issue from `title`, `body` or `prompt`, optional `projectId`, optional labels, and optional child task drafts. |
+| `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue from `title`, `body` or `prompt`, optional `projectId`, optional labels, and optional child task drafts. |
 | `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Load issue detail with project, child issues, labels, comments, and reaction summaries. |
-| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update issue title, body, or workflow status. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update issue project attachment, title, body, or workflow status. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks` | Create a child issue task. |
 | `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks/{taskID}` | Delete a child issue task under the parent. |
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/labels` | Replace an issue's selected label keys. |
@@ -87,7 +87,29 @@ Server workspace endpoints require `Authorization: Bearer <msp-token>`:
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current user's reaction to a comment. |
 | `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current user's reaction from a comment. |
 
-Create a server-backed project and issue:
+Create a workspace issue before the repository is known:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"body":"Capture a workspace-level issue before the repo is known\n\n- [ ] Clarify the target repository"}'
+```
+
+When `projectId` is omitted, the server leaves the issue unassigned if the workspace has zero projects or more than one possible project. If the workspace has exactly one project, the server auto-attaches that project. The issue can be reviewed and commented on without a project, but agent execution, PR handoff, and issue test environments require attaching a project first.
+
+Attach an existing project later:
+
+```bash
+curl -X PUT "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues/<issue-id>" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"projectId":"<project-id>"}'
+```
+
+For top-level issues, changing `projectId` also updates existing child issue tasks so the task list stays under the same repository/runtime boundary as the parent issue. Sending an empty `projectId` detaches the issue from its project.
+
+Create a server-backed project and issue together when the repository is known:
 
 ```bash
 project_json="$(curl -sS -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects" \
@@ -101,8 +123,6 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues" \
   -H 'Content-Type: application/json' \
   -d "{\"projectId\":\"$project_id\",\"body\":\"Move workspace issue data to server PG\\n\\n- [ ] Keep runner workdirs local\",\"labelKeys\":[\"type:feat\",\"priority:p1\"]}"
 ```
-
-When `projectId` is omitted, the server infers the best matching existing project from the title, body, and task text. If no project exists, issue creation returns `400 Bad Request`.
 
 ### PG-backed Team Worker Session Bridge
 
@@ -156,7 +176,7 @@ The desktop uses a rich TipTap editor for issue creation, human comments, projec
 | `DELETE` | `/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current human user's reaction from a comment. |
 | `POST` | `/api/server-issues/{issueID}/team-session` | Bridge a server-owned team workspace issue comment into a Team worker runtime task. |
 
-When `projectId` is omitted, the runner infers the best matching existing project from the title, body, and task text. If no project exists, issue creation returns `400 Bad Request`.
+When `projectId` is omitted, the legacy runner API still infers the best matching existing project from the title, body, and task text and returns `400 Bad Request` if no project exists. The signed-in desktop product should use the server workspace API above, where workspace-level issues can exist without a project until execution is needed.
 
 Comment reactions are stored separately from comment Markdown so they do not change agent prompt history or comment edit eligibility. Supported reaction keys are `thumbs_up`, `thumbs_down`, `laugh`, `hooray`, `confused`, `heart`, `rocket`, and `eyes`; `GET /api/issues/{issueID}` returns per-comment reaction counts plus `reactedByMe` for the authenticated viewer.
 

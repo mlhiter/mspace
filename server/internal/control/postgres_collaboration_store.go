@@ -392,7 +392,7 @@ func (s *PostgresStore) CreateIssue(ctx Context, user User, workspaceID string, 
 	if err := ensureWorkspaceMember(dbctx, tx, workspaceID, user.ID); err != nil {
 		return "", err
 	}
-	project, err := resolveIssueProject(dbctx, tx, workspaceID, normalized.ProjectID, normalized.Title+"\n"+normalized.Body)
+	projectID, err := resolveOptionalIssueProjectID(dbctx, tx, workspaceID, normalized.ProjectID, normalized.Title+"\n"+normalized.Body)
 	if err != nil {
 		return "", err
 	}
@@ -405,7 +405,7 @@ func (s *PostgresStore) CreateIssue(ctx Context, user User, workspaceID string, 
 		INSERT INTO issues (workspace_id, project_id, title, body, status, triage_status, assignee, assignee_type, creator_user_id, creator_name, creator_avatar_url)
 		VALUES ($1, $2, $3, $4, 'open', $5, $6, $7, $8, $9, $10)
 		RETURNING id::text
-	`, workspaceID, project.ID, normalized.Title, normalized.Body, triageStatus, normalized.Assignee, normalized.AssigneeType, user.ID, normalized.CreatorName, normalized.CreatorAvatar).Scan(&issueID)
+	`, workspaceID, nullableText(projectID), normalized.Title, normalized.Body, triageStatus, normalized.Assignee, normalized.AssigneeType, user.ID, normalized.CreatorName, normalized.CreatorAvatar).Scan(&issueID)
 	if err != nil {
 		return "", err
 	}
@@ -413,7 +413,7 @@ func (s *PostgresStore) CreateIssue(ctx Context, user User, workspaceID string, 
 		if _, err := tx.Exec(dbctx, `
 			INSERT INTO issues (workspace_id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, creator_user_id, creator_name, creator_avatar_url)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, 'none', $8, 'human', $9, $10, $11)
-		`, workspaceID, project.ID, issueID, index+1, task.Title, task.Body, normalizeIssueStatus(task.Status), normalized.CreatorName, user.ID, normalized.CreatorName, normalized.CreatorAvatar); err != nil {
+			`, workspaceID, nullableText(projectID), issueID, index+1, task.Title, task.Body, normalizeIssueStatus(task.Status), normalized.CreatorName, user.ID, normalized.CreatorName, normalized.CreatorAvatar); err != nil {
 			return "", err
 		}
 	}
@@ -449,13 +449,13 @@ func (s *PostgresStore) GetIssue(ctx Context, userID, workspaceID, issueID strin
 		Handoffs:        []any{},
 	}
 	row := s.pool.QueryRow(dbctx, `
-		SELECT
-			i.id::text, i.workspace_id::text, i.project_id::text, COALESCE(i.parent_issue_id::text, ''), i.sort_order, i.title, i.body, i.status, i.close_reason, i.triage_status, i.assignee, i.assignee_type, COALESCE(i.creator_name, ''), COALESCE(i.creator_avatar_url, ''), i.environment_url, i.created_at, i.updated_at,
-			p.id::text, p.workspace_id::text, p.name, p.repo_path, p.source_type, p.remote_url, p.git_provider, p.git_owner, p.git_repo, p.default_branch, p.deploy_command, p.validation_command, p.kube_context, p.kubeconfig_path, p.namespace, p.image_registry_prefix, p.preview_domain, p.ingress_class, p.node_host, p.default_cluster_id, COALESCE(r.status, 'empty'), r.updated_at, COALESCE(r.source, ''), COALESCE(r.source_session_id, ''), 0, 0, NULL::timestamptz, p.created_at, p.updated_at
-		FROM issues i
-		JOIN projects p ON p.id = i.project_id
-		LEFT JOIN project_runbooks r ON r.project_id = p.id
-		WHERE i.workspace_id = $1 AND i.id = $2
+			SELECT
+				i.id::text, i.workspace_id::text, COALESCE(i.project_id::text, ''), COALESCE(i.parent_issue_id::text, ''), i.sort_order, i.title, i.body, i.status, i.close_reason, i.triage_status, i.assignee, i.assignee_type, COALESCE(i.creator_name, ''), COALESCE(i.creator_avatar_url, ''), i.environment_url, i.created_at, i.updated_at,
+				COALESCE(p.id::text, ''), COALESCE(p.workspace_id::text, ''), COALESCE(p.name, ''), COALESCE(p.repo_path, ''), COALESCE(p.source_type, ''), COALESCE(p.remote_url, ''), COALESCE(p.git_provider, ''), COALESCE(p.git_owner, ''), COALESCE(p.git_repo, ''), COALESCE(p.default_branch, ''), COALESCE(p.deploy_command, ''), COALESCE(p.validation_command, ''), COALESCE(p.kube_context, ''), COALESCE(p.kubeconfig_path, ''), COALESCE(p.namespace, ''), COALESCE(p.image_registry_prefix, ''), COALESCE(p.preview_domain, ''), COALESCE(p.ingress_class, ''), COALESCE(p.node_host, ''), COALESCE(p.default_cluster_id, ''), COALESCE(r.status, 'empty'), r.updated_at, COALESCE(r.source, ''), COALESCE(r.source_session_id, ''), 0, 0, NULL::timestamptz, p.created_at, p.updated_at
+			FROM issues i
+			LEFT JOIN projects p ON p.id = i.project_id
+			LEFT JOIN project_runbooks r ON r.project_id = p.id
+			WHERE i.workspace_id = $1 AND i.id = $2
 	`, workspaceID, issueID)
 	var err error
 	detail.Issue, detail.Project, err = scanIssueAndProject(row)
@@ -498,6 +498,18 @@ func (s *PostgresStore) UpdateIssue(ctx Context, userID, workspaceID, issueID st
 		return Issue{}, err
 	}
 	next := existing
+	if input.ProjectID != nil {
+		projectID := strings.TrimSpace(*input.ProjectID)
+		if projectID != "" {
+			project, err := resolveIssueProject(dbctx, s.pool, workspaceID, projectID, "")
+			if err != nil {
+				return Issue{}, err
+			}
+			next.ProjectID = project.ID
+		} else {
+			next.ProjectID = ""
+		}
+	}
 	if input.Title != nil {
 		next.Title = strings.TrimSpace(*input.Title)
 		if next.Title == "" {
@@ -514,13 +526,35 @@ func (s *PostgresStore) UpdateIssue(ctx Context, userID, workspaceID, issueID st
 		}
 		next.Status = status
 	}
-	row := s.pool.QueryRow(dbctx, `
+
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return Issue{}, err
+	}
+	defer tx.Rollback(dbctx)
+	row := tx.QueryRow(dbctx, `
 		UPDATE issues
-		SET title = $3, body = $4, status = $5, updated_at = now()
+		SET project_id = $3, title = $4, body = $5, status = $6, updated_at = now()
 		WHERE workspace_id = $1 AND id = $2
-		RETURNING id::text, workspace_id::text, project_id::text, COALESCE(parent_issue_id::text, ''), sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at
-	`, workspaceID, issueID, next.Title, next.Body, next.Status)
-	return scanIssue(row)
+		RETURNING id::text, workspace_id::text, COALESCE(project_id::text, ''), COALESCE(parent_issue_id::text, ''), sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at
+	`, workspaceID, issueID, nullableText(next.ProjectID), next.Title, next.Body, next.Status)
+	updated, err := scanIssue(row)
+	if err != nil {
+		return Issue{}, err
+	}
+	if input.ProjectID != nil && updated.ParentIssueID == "" {
+		if _, err := tx.Exec(dbctx, `
+			UPDATE issues
+			SET project_id = $3, updated_at = now()
+			WHERE workspace_id = $1 AND parent_issue_id = $2
+		`, workspaceID, issueID, nullableText(updated.ProjectID)); err != nil {
+			return Issue{}, err
+		}
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return Issue{}, err
+	}
+	return updated, nil
 }
 
 func (s *PostgresStore) CreateIssueTask(ctx Context, userID, workspaceID, issueID string, input IssueTaskInput) (IssueListItem, error) {
@@ -552,7 +586,7 @@ func (s *PostgresStore) CreateIssueTask(ctx Context, userID, workspaceID, issueI
 			RETURNING id
 		)
 		SELECT id::text FROM inserted
-	`, workspaceID, issueID, parent.ProjectID, task[0].Title, task[0].Body, normalizeIssueStatus(task[0].Status), parent.CreatorName, userID, parent.CreatorAvatar).Scan(&taskID)
+	`, workspaceID, issueID, nullableText(parent.ProjectID), task[0].Title, task[0].Body, normalizeIssueStatus(task[0].Status), parent.CreatorName, userID, parent.CreatorAvatar).Scan(&taskID)
 	if err != nil {
 		return IssueListItem{}, err
 	}
@@ -992,7 +1026,7 @@ func scanIssueAndProject(row scanner) (Issue, Project, error) {
 	var project Project
 	var issueCreatedAt, issueUpdatedAt time.Time
 	var runbookUpdatedAt, latestIssueUpdatedAt sql.NullTime
-	var projectCreatedAt, projectUpdatedAt time.Time
+	var projectCreatedAt, projectUpdatedAt sql.NullTime
 	if err := row.Scan(
 		&issue.ID, &issue.WorkspaceID, &issue.ProjectID, &issue.ParentIssueID, &issue.SortOrder, &issue.Title, &issue.Body, &issue.Status, &issue.CloseReason, &issue.TriageStatus, &issue.Assignee, &issue.AssigneeType, &issue.CreatorName, &issue.CreatorAvatar, &issue.EnvironmentURL, &issueCreatedAt, &issueUpdatedAt,
 		&project.ID, &project.WorkspaceID, &project.Name, &project.RepoPath, &project.SourceType, &project.RemoteURL, &project.GitProvider, &project.GitOwner, &project.GitRepo, &project.DefaultBranch, &project.DeployCommand, &project.ValidationCommand, &project.KubeContext, &project.KubeconfigPath, &project.Namespace, &project.ImageRegistryPrefix, &project.PreviewDomain, &project.IngressClass, &project.NodeHost, &project.DefaultClusterID, &project.RunbookStatus, &runbookUpdatedAt, &project.RunbookSource, &project.RunbookSourceSessionID, &project.IssueCount, &project.SessionCount, &latestIssueUpdatedAt, &projectCreatedAt, &projectUpdatedAt,
@@ -1007,8 +1041,12 @@ func scanIssueAndProject(row scanner) (Issue, Project, error) {
 	if latestIssueUpdatedAt.Valid {
 		project.LatestIssueUpdatedAt = latestIssueUpdatedAt.Time.UTC().Format(time.RFC3339)
 	}
-	project.CreatedAt = projectCreatedAt.UTC().Format(time.RFC3339)
-	project.UpdatedAt = projectUpdatedAt.UTC().Format(time.RFC3339)
+	if projectCreatedAt.Valid {
+		project.CreatedAt = projectCreatedAt.Time.UTC().Format(time.RFC3339)
+	}
+	if projectUpdatedAt.Valid {
+		project.UpdatedAt = projectUpdatedAt.Time.UTC().Format(time.RFC3339)
+	}
 	return issue, project, nil
 }
 
@@ -1017,8 +1055,8 @@ func issueListQuery(whereClause, orderClause string) string {
 		SELECT
 			i.id::text,
 			i.workspace_id::text,
-			i.project_id::text,
-			p.name,
+				COALESCE(i.project_id::text, ''),
+				COALESCE(p.name, ''),
 			COALESCE(i.parent_issue_id::text, ''),
 			i.sort_order,
 			i.title,
@@ -1033,20 +1071,20 @@ func issueListQuery(whereClause, orderClause string) string {
 			COUNT(DISTINCT child.id) FILTER (WHERE child.status = 'closed'),
 			i.updated_at,
 			i.created_at
-		FROM issues i
-		JOIN projects p ON p.id = i.project_id
-		LEFT JOIN runtime_tasks t ON t.issue_id = i.id::text
-		LEFT JOIN issues child ON child.parent_issue_id = i.id
-	` + whereClause + `
-		GROUP BY i.id, p.name
+			FROM issues i
+			LEFT JOIN projects p ON p.id = i.project_id
+			LEFT JOIN runtime_tasks t ON t.issue_id = i.id::text
+			LEFT JOIN issues child ON child.parent_issue_id = i.id
+		` + whereClause + `
+			GROUP BY i.id, p.name
 	` + orderClause
 }
 
 func loadIssue(ctx context.Context, q queryer, workspaceID, issueID string) (Issue, error) {
 	row := q.QueryRow(ctx, `
-		SELECT id::text, workspace_id::text, project_id::text, COALESCE(parent_issue_id::text, ''), sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at
-		FROM issues
-		WHERE workspace_id = $1 AND id = $2
+			SELECT id::text, workspace_id::text, COALESCE(project_id::text, ''), COALESCE(parent_issue_id::text, ''), sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at
+			FROM issues
+			WHERE workspace_id = $1 AND id = $2
 	`, workspaceID, issueID)
 	issue, err := scanIssue(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1099,6 +1137,43 @@ func resolveIssueProject(ctx context.Context, q queryer, workspaceID, projectID,
 		return Project{}, errors.New("create a project before creating issues")
 	}
 	return best, nil
+}
+
+func resolveOptionalIssueProjectID(ctx context.Context, q queryer, workspaceID, projectID, text string) (string, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID != "" {
+		project, err := resolveIssueProject(ctx, q, workspaceID, projectID, text)
+		if err != nil {
+			return "", err
+		}
+		return project.ID, nil
+	}
+	var count int
+	if err := q.QueryRow(ctx, `SELECT COUNT(*) FROM projects WHERE workspace_id = $1`, workspaceID).Scan(&count); err != nil {
+		return "", err
+	}
+	if count == 0 {
+		return "", nil
+	}
+	if count > 1 {
+		return "", nil
+	}
+	project, err := resolveIssueProject(ctx, q, workspaceID, "", text)
+	if err != nil {
+		if strings.Contains(err.Error(), "create a project before creating issues") {
+			return "", nil
+		}
+		return "", err
+	}
+	return project.ID, nil
+}
+
+func nullableText(value string) any {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func replaceIssueLabels(ctx context.Context, q queryer, workspaceID, issueID string, labels []IssueLabel) error {
