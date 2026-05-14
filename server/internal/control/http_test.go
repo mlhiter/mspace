@@ -56,8 +56,8 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	if !payload.OK || payload.Service != "mspace-server" || payload.ServerProtocol != serverProtocolVersion {
 		t.Fatalf("unexpected health payload: %+v", payload)
 	}
-	if payload.Capabilities["teamInboxIssueGrouping"] != true {
-		t.Fatalf("expected team inbox grouping capability, got %+v", payload.Capabilities)
+	if payload.Capabilities["workspaceInboxIssueGrouping"] != true {
+		t.Fatalf("expected workspace inbox grouping capability, got %+v", payload.Capabilities)
 	}
 	if payload.Capabilities["teamWorkspaceCreation"] != true {
 		t.Fatalf("expected team workspace creation capability, got %+v", payload.Capabilities)
@@ -163,15 +163,6 @@ func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 	router.ServeHTTP(meRecorder, meReq)
 	if meRecorder.Code != http.StatusOK {
 		t.Fatalf("me status=%d body=%s", meRecorder.Code, meRecorder.Body.String())
-	}
-
-	personalWorkspaceID := auth.Workspaces[0].ID
-	personalEventReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issue-events", strings.NewReader(`{"issueId":"issue-1","kind":"agent_completed"}`))
-	personalEventReq.Header.Set("Authorization", "Bearer "+auth.Token)
-	personalEventRecorder := httptest.NewRecorder()
-	router.ServeHTTP(personalEventRecorder, personalEventReq)
-	if personalEventRecorder.Code != http.StatusForbidden {
-		t.Fatalf("personal workspace event status=%d body=%s", personalEventRecorder.Code, personalEventRecorder.Body.String())
 	}
 
 	workspaceID := workspaceResult.Workspace.ID
@@ -433,6 +424,143 @@ func TestWorkspaceInvitationFlow(t *testing.T) {
 	router.ServeHTTP(reuseRecorder, reuseReq)
 	if reuseRecorder.Code != http.StatusNotFound {
 		t.Fatalf("accepted invitation should not be reusable, status=%d body=%s", reuseRecorder.Code, reuseRecorder.Body.String())
+	}
+}
+
+func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "collab-owner",
+		Login:          "collab-owner",
+		Name:           "Collab Owner",
+		Email:          "collab-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	personalWorkspaceID := workspaces[0].ID
+	teamWorkspace, _, err := store.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Collab Team", Kind: "team"})
+	if err != nil {
+		t.Fatalf("create team workspace: %v", err)
+	}
+
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createPersonalProjectRecorder := httptest.NewRecorder()
+	createPersonalProjectReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/projects", strings.NewReader(`{"name":"mspace","sourceType":"local","repoPath":"/Users/mlhiter/personal-projects/mspace","defaultBranch":"main"}`))
+	createPersonalProjectReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createPersonalProjectRecorder, createPersonalProjectReq)
+	if createPersonalProjectRecorder.Code != http.StatusCreated {
+		t.Fatalf("create personal project status=%d body=%s", createPersonalProjectRecorder.Code, createPersonalProjectRecorder.Body.String())
+	}
+	var personalProject Project
+	if err := json.Unmarshal(createPersonalProjectRecorder.Body.Bytes(), &personalProject); err != nil {
+		t.Fatalf("parse personal project: %v", err)
+	}
+	if personalProject.WorkspaceID != personalWorkspaceID || personalProject.Name != "mspace" {
+		t.Fatalf("unexpected personal project: %+v", personalProject)
+	}
+
+	createIssueRecorder := httptest.NewRecorder()
+	createIssueReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues", strings.NewReader(`{"projectId":"`+personalProject.ID+`","body":"Move issues to server PG\n\n- [ ] Keep runner workdirs local","labelKeys":["type:feat","priority:p1"]}`))
+	createIssueReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createIssueRecorder, createIssueReq)
+	if createIssueRecorder.Code != http.StatusCreated {
+		t.Fatalf("create issue status=%d body=%s", createIssueRecorder.Code, createIssueRecorder.Body.String())
+	}
+	var createIssueResult struct {
+		IssueID string `json:"issueId"`
+	}
+	if err := json.Unmarshal(createIssueRecorder.Body.Bytes(), &createIssueResult); err != nil {
+		t.Fatalf("parse create issue: %v", err)
+	}
+	if createIssueResult.IssueID == "" {
+		t.Fatalf("expected issue id, got %+v", createIssueResult)
+	}
+
+	listPersonalRecorder := httptest.NewRecorder()
+	listPersonalReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+personalWorkspaceID+"/issues", nil)
+	listPersonalReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(listPersonalRecorder, listPersonalReq)
+	if listPersonalRecorder.Code != http.StatusOK {
+		t.Fatalf("list personal issues status=%d body=%s", listPersonalRecorder.Code, listPersonalRecorder.Body.String())
+	}
+	var personalIssues []IssueListItem
+	if err := json.Unmarshal(listPersonalRecorder.Body.Bytes(), &personalIssues); err != nil {
+		t.Fatalf("parse personal issues: %v", err)
+	}
+	if len(personalIssues) != 1 || personalIssues[0].ID != createIssueResult.IssueID || personalIssues[0].ChildIssueCount != 1 {
+		t.Fatalf("unexpected personal issues: %+v", personalIssues)
+	}
+
+	listTeamRecorder := httptest.NewRecorder()
+	listTeamReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+teamWorkspace.ID+"/issues", nil)
+	listTeamReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(listTeamRecorder, listTeamReq)
+	if listTeamRecorder.Code != http.StatusOK {
+		t.Fatalf("list team issues status=%d body=%s", listTeamRecorder.Code, listTeamRecorder.Body.String())
+	}
+	var teamIssues []IssueListItem
+	if err := json.Unmarshal(listTeamRecorder.Body.Bytes(), &teamIssues); err != nil {
+		t.Fatalf("parse team issues: %v", err)
+	}
+	if len(teamIssues) != 0 {
+		t.Fatalf("expected team workspace isolation, got %+v", teamIssues)
+	}
+
+	addCommentRecorder := httptest.NewRecorder()
+	addCommentReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/comments", strings.NewReader(`{"body":"Server comment"}`))
+	addCommentReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(addCommentRecorder, addCommentReq)
+	if addCommentRecorder.Code != http.StatusCreated {
+		t.Fatalf("add comment status=%d body=%s", addCommentRecorder.Code, addCommentRecorder.Body.String())
+	}
+	var commentResult struct {
+		CommentID string `json:"commentId"`
+	}
+	if err := json.Unmarshal(addCommentRecorder.Body.Bytes(), &commentResult); err != nil {
+		t.Fatalf("parse comment result: %v", err)
+	}
+	if commentResult.CommentID == "" {
+		t.Fatalf("expected comment id, got %+v", commentResult)
+	}
+
+	reactionRecorder := httptest.NewRecorder()
+	reactionReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/comments/"+commentResult.CommentID+"/reactions/rocket", nil)
+	reactionReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(reactionRecorder, reactionReq)
+	if reactionRecorder.Code != http.StatusOK {
+		t.Fatalf("set reaction status=%d body=%s", reactionRecorder.Code, reactionRecorder.Body.String())
+	}
+
+	detailRecorder := httptest.NewRecorder()
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID, nil)
+	detailReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(detailRecorder, detailReq)
+	if detailRecorder.Code != http.StatusOK {
+		t.Fatalf("get issue status=%d body=%s", detailRecorder.Code, detailRecorder.Body.String())
+	}
+	var detail IssueDetail
+	if err := json.Unmarshal(detailRecorder.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("parse issue detail: %v", err)
+	}
+	if detail.Issue.WorkspaceID != personalWorkspaceID || detail.Issue.Body != "Move issues to server PG" {
+		t.Fatalf("unexpected issue detail: %+v", detail.Issue)
+	}
+	if len(detail.ChildIssues) != 1 || detail.ChildIssues[0].Title != "Keep runner workdirs local" {
+		t.Fatalf("unexpected child issues: %+v", detail.ChildIssues)
+	}
+	if len(detail.Labels) != 2 {
+		t.Fatalf("expected type and priority labels, got %+v", detail.Labels)
+	}
+	if len(detail.Comments) != 2 || detail.Comments[0].Body != "Server comment" || len(detail.Comments[0].Reactions) != 1 || detail.Comments[0].Reactions[0].Reaction != "rocket" {
+		t.Fatalf("unexpected comments: %+v", detail.Comments)
 	}
 }
 

@@ -549,9 +549,6 @@ func (s *PostgresStore) ListInbox(ctx Context, userID, workspaceID string) ([]In
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return nil, err
 	}
-	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
-		return nil, err
-	}
 	rows, err := s.pool.Query(dbctx, `
 			WITH unread AS (
 				SELECT
@@ -635,9 +632,6 @@ func (s *PostgresStore) CreateIssueEvent(ctx Context, requesterUserID string, in
 	if err := ensureWorkspaceMember(dbctx, tx, input.WorkspaceID, requesterUserID); err != nil {
 		return IssueEvent{}, err
 	}
-	if err := ensureTeamWorkspace(dbctx, tx, input.WorkspaceID); err != nil {
-		return IssueEvent{}, err
-	}
 	if input.ActorUserID != "" {
 		if err := ensureWorkspaceMember(dbctx, tx, input.WorkspaceID, input.ActorUserID); err != nil {
 			return IssueEvent{}, err
@@ -700,9 +694,6 @@ func (s *PostgresStore) MarkIssueEventRead(ctx Context, userID, workspaceID, eve
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return err
 	}
-	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
-		return err
-	}
 	_, err := s.pool.Exec(dbctx, `
 		UPDATE issue_event_receipts
 		SET state = 'read', read_at = COALESCE(read_at, now()), updated_at = now()
@@ -714,9 +705,6 @@ func (s *PostgresStore) MarkIssueEventRead(ctx Context, userID, workspaceID, eve
 func (s *PostgresStore) MarkIssueReadThrough(ctx Context, userID, workspaceID, issueID, throughEventID string) (int, error) {
 	dbctx := asContext(ctx)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
-		return 0, err
-	}
-	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
 		return 0, err
 	}
 	issueID = strings.TrimSpace(issueID)

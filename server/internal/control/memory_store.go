@@ -2,6 +2,7 @@ package control
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -22,6 +23,12 @@ type MemoryStore struct {
 	events               map[string]IssueEvent
 	receipts             map[string]memoryReceipt
 	watchers             map[string]map[string]bool
+	projects             map[string]Project
+	projectRunbooks      map[string]ProjectRunbook
+	issues               map[string]Issue
+	comments             map[string]Comment
+	commentReactions     map[string]map[string]CommentReactionSummary
+	issueLabels          map[string][]IssueLabel
 	sessionHash          map[string]memorySession
 	runtimeTokens        map[string]memoryRuntimeRegistrationToken
 	runtimeWorkers       map[string]RuntimeWorker
@@ -76,6 +83,12 @@ func NewMemoryStore() *MemoryStore {
 		events:               map[string]IssueEvent{},
 		receipts:             map[string]memoryReceipt{},
 		watchers:             map[string]map[string]bool{},
+		projects:             map[string]Project{},
+		projectRunbooks:      map[string]ProjectRunbook{},
+		issues:               map[string]Issue{},
+		comments:             map[string]Comment{},
+		commentReactions:     map[string]map[string]CommentReactionSummary{},
+		issueLabels:          map[string][]IssueLabel{},
 		sessionHash:          map[string]memorySession{},
 		runtimeTokens:        map[string]memoryRuntimeRegistrationToken{},
 		runtimeWorkers:       map[string]RuntimeWorker{},
@@ -513,9 +526,6 @@ func (s *MemoryStore) CreateIssueEvent(_ Context, requesterUserID string, input 
 	if !s.isWorkspaceMember(input.WorkspaceID, requesterUserID) {
 		return IssueEvent{}, ErrNotFound
 	}
-	if !s.isTeamWorkspace(input.WorkspaceID) {
-		return IssueEvent{}, ErrForbidden
-	}
 	if input.ActorUserID != "" && !s.isWorkspaceMember(input.WorkspaceID, input.ActorUserID) {
 		return IssueEvent{}, ErrNotFound
 	}
@@ -570,9 +580,6 @@ func (s *MemoryStore) MarkIssueEventRead(_ Context, userID, workspaceID, eventID
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return ErrNotFound
 	}
-	if !s.isTeamWorkspace(workspaceID) {
-		return ErrForbidden
-	}
 	key := receiptKey(eventID, userID)
 	receipt, ok := s.receipts[key]
 	if !ok || receipt.WorkspaceID != workspaceID {
@@ -594,9 +601,6 @@ func (s *MemoryStore) MarkIssueReadThrough(_ Context, userID, workspaceID, issue
 
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return 0, ErrNotFound
-	}
-	if !s.isTeamWorkspace(workspaceID) {
-		return 0, ErrForbidden
 	}
 	issueID = strings.TrimSpace(issueID)
 	if issueID == "" {
@@ -900,6 +904,562 @@ func (s *MemoryStore) CreateRuntimeTask(_ Context, userID, workspaceID string, i
 	return task, nil
 }
 
+func (s *MemoryStore) ListProjects(_ Context, userID, workspaceID string) ([]Project, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	projects := []Project{}
+	for _, project := range s.projects {
+		if project.WorkspaceID != workspaceID {
+			continue
+		}
+		item := project
+		for _, issue := range s.issues {
+			if issue.WorkspaceID != workspaceID || issue.ProjectID != item.ID || issue.ParentIssueID != "" {
+				continue
+			}
+			item.IssueCount++
+			if issue.UpdatedAt > item.LatestIssueUpdatedAt {
+				item.LatestIssueUpdatedAt = issue.UpdatedAt
+			}
+		}
+		projects = append(projects, item)
+	}
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].UpdatedAt > projects[j].UpdatedAt
+	})
+	return projects, nil
+}
+
+func (s *MemoryStore) CreateProject(_ Context, userID, workspaceID string, input ProjectInput) (Project, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return Project{}, ErrNotFound
+	}
+	normalized, err := normalizeProjectInput(input)
+	if err != nil {
+		return Project{}, err
+	}
+	s.nextID++
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	project := Project{
+		ID:                  fmt.Sprintf("project-%04d", s.nextID),
+		WorkspaceID:         workspaceID,
+		Name:                normalized.Name,
+		RepoPath:            normalized.RepoPath,
+		SourceType:          normalized.SourceType,
+		RemoteURL:           normalized.RepoURL,
+		GitProvider:         gitProviderFromURL(normalized.RepoURL),
+		GitOwner:            gitOwnerRepoFromURL(normalized.RepoURL).owner,
+		GitRepo:             gitOwnerRepoFromURL(normalized.RepoURL).repo,
+		DefaultBranch:       normalized.DefaultBranch,
+		KubeContext:         normalized.KubeContext,
+		KubeconfigPath:      normalized.KubeconfigPath,
+		Namespace:           normalized.Namespace,
+		ImageRegistryPrefix: normalized.ImageRegistryPrefix,
+		PreviewDomain:       normalized.PreviewDomain,
+		IngressClass:        normalized.IngressClass,
+		NodeHost:            normalized.NodeHost,
+		DefaultClusterID:    normalized.DefaultClusterID,
+		RunbookStatus:       "empty",
+		CreatedAt:           now,
+		UpdatedAt:           now,
+	}
+	if project.DefaultBranch == "" {
+		project.DefaultBranch = "main"
+	}
+	s.projects[project.ID] = project
+	s.projectRunbooks[project.ID] = ProjectRunbook{ProjectID: project.ID, Status: "empty", CreatedAt: now, UpdatedAt: now}
+	return project, nil
+}
+
+func (s *MemoryStore) UpdateProject(_ Context, userID, workspaceID, projectID string, input ProjectInput) (Project, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return Project{}, ErrNotFound
+	}
+	project, ok := s.projects[projectID]
+	if !ok || project.WorkspaceID != workspaceID {
+		return Project{}, ErrNotFound
+	}
+	normalized, err := normalizeProjectInput(input)
+	if err != nil {
+		return Project{}, err
+	}
+	project.Name = normalized.Name
+	project.DefaultBranch = normalized.DefaultBranch
+	project.KubeContext = normalized.KubeContext
+	project.KubeconfigPath = normalized.KubeconfigPath
+	project.Namespace = normalized.Namespace
+	project.ImageRegistryPrefix = normalized.ImageRegistryPrefix
+	project.PreviewDomain = normalized.PreviewDomain
+	project.IngressClass = normalized.IngressClass
+	project.NodeHost = normalized.NodeHost
+	project.DefaultClusterID = normalized.DefaultClusterID
+	project.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.projects[project.ID] = project
+	return project, nil
+}
+
+func (s *MemoryStore) DeleteProject(_ Context, userID, workspaceID, projectID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return ErrNotFound
+	}
+	project, ok := s.projects[projectID]
+	if !ok || project.WorkspaceID != workspaceID {
+		return ErrNotFound
+	}
+	for _, issue := range s.issues {
+		if issue.ProjectID == projectID {
+			return ErrForbidden
+		}
+	}
+	delete(s.projects, projectID)
+	delete(s.projectRunbooks, projectID)
+	return nil
+}
+
+func (s *MemoryStore) GetProjectRunbook(_ Context, userID, workspaceID, projectID string) (ProjectRunbook, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return ProjectRunbook{}, ErrNotFound
+	}
+	project, ok := s.projects[strings.TrimSpace(projectID)]
+	if !ok || project.WorkspaceID != strings.TrimSpace(workspaceID) {
+		return ProjectRunbook{}, ErrNotFound
+	}
+	runbook := s.projectRunbooks[project.ID]
+	if runbook.ProjectID == "" {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		runbook = ProjectRunbook{ProjectID: project.ID, Status: "empty", CreatedAt: now, UpdatedAt: now}
+	}
+	return runbook, nil
+}
+
+func (s *MemoryStore) UpdateProjectRunbook(_ Context, userID, workspaceID, projectID string, input ProjectRunbookInput) (ProjectRunbook, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return ProjectRunbook{}, ErrNotFound
+	}
+	project, ok := s.projects[strings.TrimSpace(projectID)]
+	if !ok || project.WorkspaceID != strings.TrimSpace(workspaceID) {
+		return ProjectRunbook{}, ErrNotFound
+	}
+	status := normalizeRunbookStatus(input.Status, input.Content)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	runbook := s.projectRunbooks[project.ID]
+	if runbook.CreatedAt == "" {
+		runbook.CreatedAt = now
+	}
+	runbook.ProjectID = project.ID
+	runbook.Content = input.Content
+	runbook.Status = status
+	runbook.Source = "human"
+	runbook.UpdatedAt = now
+	s.projectRunbooks[project.ID] = runbook
+	project.RunbookStatus = status
+	project.RunbookUpdatedAt = now
+	project.RunbookSource = "human"
+	project.UpdatedAt = now
+	s.projects[project.ID] = project
+	return runbook, nil
+}
+
+func (s *MemoryStore) ListIssueLabelDefinitions(_ Context, userID, workspaceID string) ([]IssueLabelDefinition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	return builtInIssueLabelDefinitions(), nil
+}
+
+func (s *MemoryStore) ListIssues(_ Context, userID, workspaceID string) ([]IssueListItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	items := []IssueListItem{}
+	for _, issue := range s.issues {
+		if issue.WorkspaceID != workspaceID || issue.ParentIssueID != "" {
+			continue
+		}
+		items = append(items, s.issueListItemLocked(issue))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].UpdatedAt > items[j].UpdatedAt
+	})
+	return items, nil
+}
+
+func (s *MemoryStore) CreateIssue(_ Context, user User, workspaceID string, input CreateIssueInput) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, user.ID) {
+		return "", ErrNotFound
+	}
+	normalized, tasks, labels, err := normalizeCreateIssueInput(input, user)
+	if err != nil {
+		return "", err
+	}
+	project, err := s.resolveIssueProjectLocked(workspaceID, normalized.ProjectID, normalized.Title+"\n"+normalized.Body)
+	if err != nil {
+		return "", err
+	}
+	s.nextID++
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	issueID := fmt.Sprintf("issue-%04d", s.nextID)
+	issue := Issue{
+		ID:             issueID,
+		WorkspaceID:    workspaceID,
+		ProjectID:      project.ID,
+		Title:          normalized.Title,
+		Body:           normalized.Body,
+		Status:         "open",
+		TriageStatus:   "pending",
+		Assignee:       normalized.Assignee,
+		AssigneeType:   normalized.AssigneeType,
+		CreatorName:    normalized.CreatorName,
+		CreatorAvatar:  normalized.CreatorAvatar,
+		EnvironmentURL: "",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if issue.AssigneeType == "human" && issue.Assignee == "" {
+		issue.Assignee = issue.CreatorName
+	}
+	if hasIssueLabelDimension(labels, "type") {
+		issue.TriageStatus = "classified"
+	}
+	s.issues[issue.ID] = issue
+	for index, task := range tasks {
+		s.nextID++
+		taskID := fmt.Sprintf("issue-%04d", s.nextID)
+		s.issues[taskID] = Issue{
+			ID:             taskID,
+			WorkspaceID:    workspaceID,
+			ProjectID:      project.ID,
+			ParentIssueID:  issue.ID,
+			SortOrder:      index + 1,
+			Title:          task.Title,
+			Body:           task.Body,
+			Status:         normalizeIssueStatus(task.Status),
+			TriageStatus:   "none",
+			Assignee:       issue.CreatorName,
+			AssigneeType:   "human",
+			CreatorName:    issue.CreatorName,
+			CreatorAvatar:  issue.CreatorAvatar,
+			EnvironmentURL: "",
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+	}
+	s.issueLabels[issue.ID] = labels
+	s.nextID++
+	s.comments[fmt.Sprintf("comment-%04d", s.nextID)] = Comment{
+		ID:         fmt.Sprintf("comment-%04d", s.nextID),
+		IssueID:    issue.ID,
+		AuthorType: "system",
+		AuthorName: "mspace",
+		Body:       "Issue created and ready for review.",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Reactions:  []CommentReactionSummary{},
+	}
+	return issue.ID, nil
+}
+
+func (s *MemoryStore) GetIssue(_ Context, userID, workspaceID, issueID string) (IssueDetail, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return IssueDetail{}, ErrNotFound
+	}
+	issue, ok := s.issues[issueID]
+	if !ok || issue.WorkspaceID != workspaceID {
+		return IssueDetail{}, ErrNotFound
+	}
+	project := s.projects[issue.ProjectID]
+	comments := []Comment{}
+	for _, comment := range s.comments {
+		if comment.IssueID != issueID {
+			continue
+		}
+		comment.Reactions = s.commentReactionSummariesLocked(comment.ID, userID)
+		comments = append(comments, comment)
+	}
+	sort.Slice(comments, func(i, j int) bool {
+		if comments[i].CreatedAt == comments[j].CreatedAt {
+			return comments[i].ID > comments[j].ID
+		}
+		return comments[i].CreatedAt > comments[j].CreatedAt
+	})
+	children := []IssueListItem{}
+	for _, child := range s.issues {
+		if child.ParentIssueID == issueID {
+			children = append(children, s.issueListItemLocked(child))
+		}
+	}
+	sort.Slice(children, func(i, j int) bool {
+		if children[i].SortOrder == children[j].SortOrder {
+			return children[i].CreatedAt < children[j].CreatedAt
+		}
+		return children[i].SortOrder < children[j].SortOrder
+	})
+	return IssueDetail{
+		Issue:           issue,
+		Project:         project,
+		TestEnvironment: nil,
+		ChildIssues:     children,
+		Labels:          s.issueLabels[issueID],
+		Comments:        comments,
+		Sessions:        []RuntimeTask{},
+		Evidence:        []any{},
+		Failures:        []any{},
+		ChangeNodes:     []any{},
+		ReviewEvidence:  []any{},
+		Handoffs:        []any{},
+	}, nil
+}
+
+func (s *MemoryStore) UpdateIssue(_ Context, userID, workspaceID, issueID string, input UpdateIssueInput) (Issue, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return Issue{}, ErrNotFound
+	}
+	issue, ok := s.issues[strings.TrimSpace(issueID)]
+	if !ok || issue.WorkspaceID != strings.TrimSpace(workspaceID) {
+		return Issue{}, ErrNotFound
+	}
+	if input.Title != nil {
+		title := strings.TrimSpace(*input.Title)
+		if title == "" {
+			return Issue{}, errors.New("issue title is required")
+		}
+		issue.Title = title
+	}
+	if input.Body != nil {
+		issue.Body = strings.TrimSpace(*input.Body)
+	}
+	if input.Status != nil {
+		status := normalizeIssueStatus(*input.Status)
+		if err := validateIssueStatus(status); err != nil {
+			return Issue{}, err
+		}
+		issue.Status = status
+	}
+	issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.issues[issue.ID] = issue
+	return issue, nil
+}
+
+func (s *MemoryStore) CreateIssueTask(_ Context, userID, workspaceID, issueID string, input IssueTaskInput) (IssueListItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return IssueListItem{}, ErrNotFound
+	}
+	parent, ok := s.issues[strings.TrimSpace(issueID)]
+	if !ok || parent.WorkspaceID != strings.TrimSpace(workspaceID) {
+		return IssueListItem{}, ErrNotFound
+	}
+	task := normalizeIssueTaskInputs([]IssueTaskInput{input})
+	if len(task) == 0 {
+		return IssueListItem{}, errors.New("task title is required")
+	}
+	sortOrder := 1
+	for _, issue := range s.issues {
+		if issue.ParentIssueID == parent.ID && issue.SortOrder >= sortOrder {
+			sortOrder = issue.SortOrder + 1
+		}
+	}
+	s.nextID++
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	child := Issue{
+		ID:             fmt.Sprintf("issue-%04d", s.nextID),
+		WorkspaceID:    parent.WorkspaceID,
+		ProjectID:      parent.ProjectID,
+		ParentIssueID:  parent.ID,
+		SortOrder:      sortOrder,
+		Title:          task[0].Title,
+		Body:           task[0].Body,
+		Status:         normalizeIssueStatus(task[0].Status),
+		TriageStatus:   "none",
+		Assignee:       parent.CreatorName,
+		AssigneeType:   "human",
+		CreatorName:    parent.CreatorName,
+		CreatorAvatar:  parent.CreatorAvatar,
+		EnvironmentURL: "",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	s.issues[child.ID] = child
+	return s.issueListItemLocked(child), nil
+}
+
+func (s *MemoryStore) DeleteIssueTask(_ Context, userID, workspaceID, issueID, taskID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return ErrNotFound
+	}
+	task, ok := s.issues[strings.TrimSpace(taskID)]
+	if !ok || task.WorkspaceID != strings.TrimSpace(workspaceID) || task.ParentIssueID != strings.TrimSpace(issueID) {
+		return ErrNotFound
+	}
+	delete(s.issues, task.ID)
+	return nil
+}
+
+func (s *MemoryStore) UpdateIssueLabels(_ Context, userID, workspaceID, issueID string, input UpdateIssueLabelsInput) ([]IssueLabel, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	issue, ok := s.issues[strings.TrimSpace(issueID)]
+	if !ok || issue.WorkspaceID != strings.TrimSpace(workspaceID) {
+		return nil, ErrNotFound
+	}
+	labels, err := normalizeIssueLabelKeys(append(input.LabelKeys, input.Labels...))
+	if err != nil {
+		return nil, err
+	}
+	s.issueLabels[issue.ID] = labels
+	return labels, nil
+}
+
+func (s *MemoryStore) AddComment(_ Context, user User, workspaceID, issueID string, input CreateCommentInput) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, user.ID) {
+		return "", ErrNotFound
+	}
+	issue, ok := s.issues[strings.TrimSpace(issueID)]
+	if !ok || issue.WorkspaceID != strings.TrimSpace(workspaceID) {
+		return "", ErrNotFound
+	}
+	body := strings.TrimSpace(input.Body)
+	if body == "" {
+		return "", errors.New("comment body is required")
+	}
+	s.nextID++
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	commentID := fmt.Sprintf("comment-%04d", s.nextID)
+	s.comments[commentID] = Comment{
+		ID:           commentID,
+		IssueID:      issue.ID,
+		AuthorType:   "human",
+		AuthorUserID: user.ID,
+		AuthorName:   firstNonEmpty(strings.TrimSpace(input.AuthorName), user.Name),
+		AuthorAvatar: firstNonEmpty(strings.TrimSpace(input.AuthorAvatar), user.AvatarURL),
+		Body:         body,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		Reactions:    []CommentReactionSummary{},
+	}
+	return commentID, nil
+}
+
+func (s *MemoryStore) UpdateComment(_ Context, user User, workspaceID, issueID, commentID string, input UpdateCommentInput) (Comment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, user.ID) {
+		return Comment{}, ErrNotFound
+	}
+	comment, ok := s.comments[strings.TrimSpace(commentID)]
+	if !ok || comment.IssueID != strings.TrimSpace(issueID) || s.issues[comment.IssueID].WorkspaceID != strings.TrimSpace(workspaceID) {
+		return Comment{}, ErrNotFound
+	}
+	if comment.AuthorUserID != user.ID || comment.AuthorType != "human" {
+		return Comment{}, ErrForbidden
+	}
+	body := strings.TrimSpace(input.Body)
+	if body == "" {
+		return Comment{}, errors.New("comment body is required")
+	}
+	comment.Body = body
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	comment.UpdatedAt = now
+	comment.EditedAt = now
+	comment.Reactions = s.commentReactionSummariesLocked(comment.ID, user.ID)
+	s.comments[comment.ID] = comment
+	return comment, nil
+}
+
+func (s *MemoryStore) SetCommentReaction(_ Context, user User, workspaceID, issueID, commentID, reaction string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, user.ID) {
+		return ErrNotFound
+	}
+	if err := validateCommentReaction(reaction); err != nil {
+		return err
+	}
+	comment, ok := s.comments[strings.TrimSpace(commentID)]
+	if !ok || comment.IssueID != strings.TrimSpace(issueID) || s.issues[comment.IssueID].WorkspaceID != strings.TrimSpace(workspaceID) {
+		return ErrNotFound
+	}
+	key := comment.ID + ":" + strings.TrimSpace(reaction)
+	if s.commentReactions[key] == nil {
+		s.commentReactions[key] = map[string]CommentReactionSummary{}
+	}
+	s.commentReactions[key][user.ID] = CommentReactionSummary{Reaction: strings.TrimSpace(reaction), Count: 1, ReactedByMe: true}
+	return nil
+}
+
+func (s *MemoryStore) DeleteCommentReaction(_ Context, userID, workspaceID, issueID, commentID, reaction string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return ErrNotFound
+	}
+	comment, ok := s.comments[strings.TrimSpace(commentID)]
+	if !ok || comment.IssueID != strings.TrimSpace(issueID) || s.issues[comment.IssueID].WorkspaceID != strings.TrimSpace(workspaceID) {
+		return ErrNotFound
+	}
+	delete(s.commentReactions[comment.ID+":"+strings.TrimSpace(reaction)], strings.TrimSpace(userID))
+	return nil
+}
+
 func (s *MemoryStore) ListRuntimeTasks(_ Context, userID, workspaceID string) ([]RuntimeTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1188,6 +1748,89 @@ func (s *MemoryStore) appendRuntimeTaskEventLocked(workspaceID, taskID, workerID
 
 func (s *MemoryStore) isWorkspaceMember(workspaceID, userID string) bool {
 	return s.workspaceMembers[strings.TrimSpace(workspaceID)][strings.TrimSpace(userID)] != ""
+}
+
+func (s *MemoryStore) resolveIssueProjectLocked(workspaceID, projectID, text string) (Project, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID != "" {
+		project, ok := s.projects[projectID]
+		if !ok || project.WorkspaceID != workspaceID {
+			return Project{}, ErrNotFound
+		}
+		return project, nil
+	}
+	var best Project
+	bestScore := -1
+	for _, project := range s.projects {
+		if project.WorkspaceID != workspaceID {
+			continue
+		}
+		score := issueProjectScore(project, text)
+		if best.ID == "" || score > bestScore {
+			best = project
+			bestScore = score
+		}
+	}
+	if best.ID == "" {
+		return Project{}, errors.New("create a project before creating issues")
+	}
+	return best, nil
+}
+
+func (s *MemoryStore) issueListItemLocked(issue Issue) IssueListItem {
+	project := s.projects[issue.ProjectID]
+	item := IssueListItem{
+		ID:            issue.ID,
+		WorkspaceID:   issue.WorkspaceID,
+		ProjectID:     issue.ProjectID,
+		ProjectName:   project.Name,
+		ParentIssueID: issue.ParentIssueID,
+		SortOrder:     issue.SortOrder,
+		Title:         issue.Title,
+		Body:          issue.Body,
+		Status:        issue.Status,
+		CloseReason:   issue.CloseReason,
+		TriageStatus:  issue.TriageStatus,
+		Assignee:      issue.Assignee,
+		AssigneeType:  issue.AssigneeType,
+		Labels:        s.issueLabels[issue.ID],
+		UpdatedAt:     issue.UpdatedAt,
+		CreatedAt:     issue.CreatedAt,
+	}
+	for _, child := range s.issues {
+		if child.ParentIssueID != issue.ID {
+			continue
+		}
+		item.ChildIssueCount++
+		if child.Status == "closed" {
+			item.CompletedChildIssueCount++
+		}
+	}
+	for _, task := range s.runtimeTasks {
+		if task.IssueID == issue.ID {
+			item.SessionCount++
+		}
+	}
+	return item
+}
+
+func (s *MemoryStore) commentReactionSummariesLocked(commentID, viewerUserID string) []CommentReactionSummary {
+	summaries := []CommentReactionSummary{}
+	for key, users := range s.commentReactions {
+		if !strings.HasPrefix(key, commentID+":") {
+			continue
+		}
+		reaction := strings.TrimPrefix(key, commentID+":")
+		summaries = append(summaries, CommentReactionSummary{
+			Reaction:    reaction,
+			Count:       len(users),
+			ReactedByMe: users[strings.TrimSpace(viewerUserID)].Reaction != "",
+		})
+	}
+	sort.Slice(summaries, func(i, j int) bool {
+		return summaries[i].Reaction < summaries[j].Reaction
+	})
+	return summaries
 }
 
 func (s *MemoryStore) runtimeWorkerByID(workspaceID, workerID string) (RuntimeWorker, bool) {

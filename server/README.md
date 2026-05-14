@@ -60,7 +60,7 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 | `GET` | `/api/workspaces/{workspaceID}/invitations` | List recent workspace invitations without raw tokens. Owner/admin only. |
 | `DELETE` | `/api/workspaces/{workspaceID}/invitations/{invitationID}` | Revoke a workspace invitation. Owner/admin only. |
 | `POST` | `/api/workspace-invitations/accept` | Accept a workspace invitation as the current authenticated user. |
-| `GET` | `/api/workspaces/{workspaceID}/inbox` | List unread issue-event receipts for the authenticated user. |
+| `GET` | `/api/workspaces/{workspaceID}/inbox` | List unread workspace issue-event receipts for the authenticated user. |
 | `POST` | `/api/workspaces/{workspaceID}/issue-events` | Append a reviewable issue event and create per-user receipts. |
 | `POST` | `/api/workspaces/{workspaceID}/issue-events/{eventID}/read` | Mark one event receipt read for the authenticated user. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/read-through` | Mark unread receipts for one issue read through an optional event boundary. |
@@ -80,11 +80,11 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/logs` | Append a log line to a claimed/running worker-owned task. |
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/status` | Move a claimed task to `running`, `completed`, `failed`, or `cancelled`. |
 
-## Team Inbox Model
+## Workspace Inbox Model
 
-The team Inbox is event-based. `issue_events` stores the append-only review fact, `issue_event_receipts` stores each recipient user's unread/read/archive state, and `issue_watchers` stores the issue-level recipient set. Opening or polling an issue must not clear unread state; clients should call the read-through endpoint after the user intentionally reviews an Inbox row.
+The workspace Inbox is event-based. `issue_events` stores the append-only review fact, `issue_event_receipts` stores each recipient user's unread/read/archive state, and `issue_watchers` stores the issue-level recipient set. Opening or polling an issue must not clear unread state; clients should call the read-through endpoint after the user intentionally reviews an Inbox row.
 
-Personal workspaces are the default result of GitHub sign-in and are local-first. Team Inbox, invitations, worker registration tokens, registered workers, and runtime task APIs require a workspace with `kind="team"`; those endpoints return `403 Forbidden` for personal workspaces.
+Personal workspaces are the default result of GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, and Inbox receipts in Postgres. Invitations, worker registration tokens, registered workers, and runtime task APIs require a workspace with `kind="team"`; those endpoints return `403 Forbidden` for personal workspaces.
 
 ## Workspace Invitations
 

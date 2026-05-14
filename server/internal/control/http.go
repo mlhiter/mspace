@@ -44,6 +44,24 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/workspaces/{workspaceID}/issue-events", s.handleCreateIssueEvent)
 	r.Post("/api/workspaces/{workspaceID}/issue-events/{eventID}/read", s.handleMarkIssueEventRead)
 	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/read-through", s.handleMarkIssueReadThrough)
+	r.Get("/api/workspaces/{workspaceID}/projects", s.handleListProjects)
+	r.Post("/api/workspaces/{workspaceID}/projects", s.handleCreateProject)
+	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}", s.handleUpdateProject)
+	r.Delete("/api/workspaces/{workspaceID}/projects/{projectID}", s.handleDeleteProject)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleGetProjectRunbook)
+	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleUpdateProjectRunbook)
+	r.Get("/api/workspaces/{workspaceID}/issue-label-definitions", s.handleListIssueLabelDefinitions)
+	r.Get("/api/workspaces/{workspaceID}/issues", s.handleListIssues)
+	r.Post("/api/workspaces/{workspaceID}/issues", s.handleCreateIssue)
+	r.Get("/api/workspaces/{workspaceID}/issues/{issueID}", s.handleGetIssue)
+	r.Put("/api/workspaces/{workspaceID}/issues/{issueID}", s.handleUpdateIssue)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/tasks", s.handleCreateIssueTask)
+	r.Delete("/api/workspaces/{workspaceID}/issues/{issueID}/tasks/{taskID}", s.handleDeleteIssueTask)
+	r.Put("/api/workspaces/{workspaceID}/issues/{issueID}/labels", s.handleUpdateIssueLabels)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/comments", s.handleAddComment)
+	r.Put("/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}", s.handleUpdateComment)
+	r.Put("/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}", s.handleSetCommentReaction)
+	r.Delete("/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}", s.handleDeleteCommentReaction)
 	r.Post("/api/workspaces/{workspaceID}/runtime-registration-tokens", s.handleCreateRuntimeRegistrationToken)
 	r.Get("/api/workspaces/{workspaceID}/runtime-registration-tokens", s.handleListRuntimeRegistrationTokens)
 	r.Delete("/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}", s.handleRevokeRuntimeRegistrationToken)
@@ -69,12 +87,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"version":        "0.1.0",
 		"serverProtocol": serverProtocolVersion,
 		"capabilities": map[string]bool{
-			"teamInboxIssueGrouping":    true,
-			"teamWorkspaceCreation":     true,
-			"workspaceInvitations":      true,
-			"workspaceKinds":            true,
-			"runtimeWorkerRegistration": true,
-			"runtimeTaskQueue":          true,
+			"workspaceInboxIssueGrouping": true,
+			"teamWorkspaceCreation":       true,
+			"workspaceInvitations":        true,
+			"workspaceKinds":              true,
+			"runtimeWorkerRegistration":   true,
+			"runtimeTaskQueue":            true,
+			"workspaceCollaboration":      true,
 		},
 	})
 }
@@ -391,6 +410,284 @@ func (s *Server) handleMarkIssueReadThrough(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "readCount": count})
 }
 
+func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	projects, err := s.store.ListProjects(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, projects)
+}
+
+func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ProjectInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	project, err := s.store.CreateProject(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, project)
+}
+
+func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ProjectInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	project, err := s.store.UpdateProject(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, project)
+}
+
+func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if err := s.store.DeleteProject(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID"))); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleGetProjectRunbook(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	runbook, err := s.store.GetProjectRunbook(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, runbook)
+}
+
+func (s *Server) handleUpdateProjectRunbook(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ProjectRunbookInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	runbook, err := s.store.UpdateProjectRunbook(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, runbook)
+}
+
+func (s *Server) handleListIssueLabelDefinitions(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	definitions, err := s.store.ListIssueLabelDefinitions(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, definitions)
+}
+
+func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	issues, err := s.store.ListIssues(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, issues)
+}
+
+func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateIssueInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	issueID, err := s.store.CreateIssue(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"issueId": issueID})
+}
+
+func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	detail, err := s.store.GetIssue(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := UpdateIssueInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	issue, err := s.store.UpdateIssue(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, issue)
+}
+
+func (s *Server) handleCreateIssueTask(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := IssueTaskInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	task, err := s.store.CreateIssueTask(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, task)
+}
+
+func (s *Server) handleDeleteIssueTask(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	err := s.store.DeleteIssueTask(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), strings.TrimSpace(chi.URLParam(r, "taskID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleUpdateIssueLabels(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := UpdateIssueLabelsInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	labels, err := s.store.UpdateIssueLabels(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, labels)
+}
+
+func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateCommentInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	commentID, err := s.store.AddComment(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "commentId": commentID})
+}
+
+func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := UpdateCommentInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	comment, err := s.store.UpdateComment(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), strings.TrimSpace(chi.URLParam(r, "commentID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "comment": comment})
+}
+
+func (s *Server) handleSetCommentReaction(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	err := s.store.SetCommentReaction(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), strings.TrimSpace(chi.URLParam(r, "commentID")), strings.TrimSpace(chi.URLParam(r, "reaction")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleDeleteCommentReaction(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	err := s.store.DeleteCommentReaction(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), strings.TrimSpace(chi.URLParam(r, "commentID")), strings.TrimSpace(chi.URLParam(r, "reaction")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleCreateRuntimeRegistrationToken(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.authenticate(w, r)
 	if !ok {
@@ -690,7 +987,7 @@ func jsonMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -717,7 +1014,7 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		status = http.StatusUnauthorized
 	} else if errors.Is(err, ErrForbidden) {
 		status = http.StatusForbidden
-	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") {
+	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") {
 		status = http.StatusBadRequest
 	}
 	writeError(w, status, err)

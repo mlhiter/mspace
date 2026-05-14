@@ -154,6 +154,223 @@ type ReadThroughInput struct {
 	ThroughEventID string `json:"throughEventId"`
 }
 
+type Project struct {
+	ID                     string `json:"id"`
+	WorkspaceID            string `json:"workspaceId"`
+	Name                   string `json:"name"`
+	RepoPath               string `json:"repoPath"`
+	SourceType             string `json:"sourceType"`
+	RemoteURL              string `json:"remoteUrl"`
+	GitProvider            string `json:"gitProvider"`
+	GitOwner               string `json:"gitOwner"`
+	GitRepo                string `json:"gitRepo"`
+	DefaultBranch          string `json:"defaultBranch"`
+	DeployCommand          string `json:"deployCommand"`
+	ValidationCommand      string `json:"validationCommand"`
+	KubeContext            string `json:"kubeContext"`
+	KubeconfigPath         string `json:"kubeconfigPath"`
+	Namespace              string `json:"namespace"`
+	ImageRegistryPrefix    string `json:"imageRegistryPrefix"`
+	PreviewDomain          string `json:"previewDomain"`
+	IngressClass           string `json:"ingressClass"`
+	NodeHost               string `json:"nodeHost"`
+	DefaultClusterID       string `json:"defaultClusterId"`
+	RunbookStatus          string `json:"runbookStatus"`
+	RunbookUpdatedAt       string `json:"runbookUpdatedAt"`
+	RunbookSource          string `json:"runbookSource"`
+	RunbookSourceSessionID string `json:"runbookSourceSessionId"`
+	IssueCount             int    `json:"issueCount"`
+	SessionCount           int    `json:"sessionCount"`
+	LatestIssueUpdatedAt   string `json:"latestIssueUpdatedAt"`
+	CreatedAt              string `json:"createdAt"`
+	UpdatedAt              string `json:"updatedAt"`
+}
+
+type ProjectRunbook struct {
+	ProjectID       string `json:"projectId"`
+	Content         string `json:"content"`
+	Status          string `json:"status"`
+	Source          string `json:"source"`
+	SourceSessionID string `json:"sourceSessionId"`
+	ContentHash     string `json:"contentHash"`
+	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt"`
+}
+
+type ProjectInput struct {
+	Name                string `json:"name"`
+	SourceType          string `json:"sourceType"`
+	RepoPath            string `json:"repoPath"`
+	RepoURL             string `json:"repoUrl"`
+	DefaultBranch       string `json:"defaultBranch"`
+	KubeContext         string `json:"kubeContext"`
+	KubeconfigPath      string `json:"kubeconfigPath"`
+	Namespace           string `json:"namespace"`
+	ImageRegistryPrefix string `json:"imageRegistryPrefix"`
+	PreviewDomain       string `json:"previewDomain"`
+	IngressClass        string `json:"ingressClass"`
+	NodeHost            string `json:"nodeHost"`
+	DefaultClusterID    string `json:"defaultClusterId"`
+}
+
+type UpdateProjectInput struct {
+	ID string `json:"id"`
+	ProjectInput
+}
+
+type ProjectRunbookInput struct {
+	Content string `json:"content"`
+	Status  string `json:"status"`
+}
+
+type Issue struct {
+	ID             string `json:"id"`
+	WorkspaceID    string `json:"workspaceId"`
+	ProjectID      string `json:"projectId"`
+	ParentIssueID  string `json:"parentIssueId"`
+	SortOrder      int    `json:"sortOrder"`
+	Title          string `json:"title"`
+	Body           string `json:"body"`
+	Status         string `json:"status"`
+	CloseReason    string `json:"closeReason"`
+	TriageStatus   string `json:"triageStatus"`
+	Assignee       string `json:"assignee"`
+	AssigneeType   string `json:"assigneeType"`
+	CreatorName    string `json:"creatorName"`
+	CreatorAvatar  string `json:"creatorAvatarUrl"`
+	EnvironmentURL string `json:"environmentUrl"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
+type IssueListItem struct {
+	ID                       string       `json:"id"`
+	WorkspaceID              string       `json:"workspaceId"`
+	ProjectID                string       `json:"projectId"`
+	ProjectName              string       `json:"projectName"`
+	ParentIssueID            string       `json:"parentIssueId"`
+	SortOrder                int          `json:"sortOrder"`
+	Title                    string       `json:"title"`
+	Body                     string       `json:"body"`
+	Status                   string       `json:"status"`
+	CloseReason              string       `json:"closeReason"`
+	TriageStatus             string       `json:"triageStatus"`
+	Assignee                 string       `json:"assignee"`
+	AssigneeType             string       `json:"assigneeType"`
+	Labels                   []IssueLabel `json:"labels"`
+	Unread                   bool         `json:"unread"`
+	SessionCount             int          `json:"sessionCount"`
+	ChildIssueCount          int          `json:"childIssueCount"`
+	CompletedChildIssueCount int          `json:"completedChildIssueCount"`
+	UpdatedAt                string       `json:"updatedAt"`
+	CreatedAt                string       `json:"createdAt"`
+}
+
+type Comment struct {
+	ID           string                   `json:"id"`
+	IssueID      string                   `json:"issueId"`
+	AuthorType   string                   `json:"authorType"`
+	AuthorUserID string                   `json:"authorUserId"`
+	AuthorName   string                   `json:"authorName"`
+	AuthorAvatar string                   `json:"authorAvatarUrl"`
+	Body         string                   `json:"body"`
+	CreatedAt    string                   `json:"createdAt"`
+	UpdatedAt    string                   `json:"updatedAt"`
+	EditedAt     string                   `json:"editedAt"`
+	Reactions    []CommentReactionSummary `json:"reactions"`
+}
+
+type CommentReactionSummary struct {
+	Reaction    string `json:"reaction"`
+	Count       int    `json:"count"`
+	ReactedByMe bool   `json:"reactedByMe"`
+}
+
+type IssueLabel struct {
+	ID        string `json:"id"`
+	IssueID   string `json:"issueId"`
+	LabelID   string `json:"labelId"`
+	Key       string `json:"key"`
+	Name      string `json:"name"`
+	Dimension string `json:"dimension"`
+	Color     string `json:"color"`
+	SortOrder int    `json:"sortOrder"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type IssueLabelDefinition struct {
+	ID        string `json:"id"`
+	Key       string `json:"key"`
+	Name      string `json:"name"`
+	Dimension string `json:"dimension"`
+	Color     string `json:"color"`
+	SortOrder int    `json:"sortOrder"`
+	BuiltIn   bool   `json:"builtIn"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+type IssueDetail struct {
+	Issue           Issue           `json:"issue"`
+	Project         Project         `json:"project"`
+	TestEnvironment any             `json:"testEnvironment"`
+	ChildIssues     []IssueListItem `json:"childIssues"`
+	Labels          []IssueLabel    `json:"labels"`
+	Comments        []Comment       `json:"comments"`
+	Sessions        []RuntimeTask   `json:"sessions"`
+	Evidence        []any           `json:"evidence"`
+	Failures        []any           `json:"failures"`
+	ChangeNodes     []any           `json:"changeNodes"`
+	ReviewEvidence  []any           `json:"reviewEvidence"`
+	Handoffs        []any           `json:"handoffs"`
+}
+
+type CreateIssueInput struct {
+	ProjectID     string           `json:"projectId"`
+	Title         string           `json:"title"`
+	Body          string           `json:"body"`
+	Prompt        string           `json:"prompt"`
+	Tasks         []string         `json:"tasks"`
+	ChildIssues   []IssueTaskInput `json:"childIssues"`
+	Labels        []string         `json:"labels"`
+	LabelKeys     []string         `json:"labelKeys"`
+	Assignee      string           `json:"assignee"`
+	AssigneeType  string           `json:"assigneeType"`
+	CreatorName   string           `json:"creatorName"`
+	CreatorAvatar string           `json:"creatorAvatarUrl"`
+	AttachmentIDs []string         `json:"attachmentIds"`
+}
+
+type IssueTaskInput struct {
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	Status    string `json:"status"`
+	Completed bool   `json:"completed"`
+}
+
+type UpdateIssueInput struct {
+	Title  *string `json:"title"`
+	Body   *string `json:"body"`
+	Status *string `json:"status"`
+}
+
+type UpdateIssueLabelsInput struct {
+	Labels    []string `json:"labels"`
+	LabelKeys []string `json:"labelKeys"`
+}
+
+type CreateCommentInput struct {
+	Body          string   `json:"body"`
+	AuthorName    string   `json:"authorName"`
+	AuthorAvatar  string   `json:"authorAvatarUrl"`
+	AttachmentIDs []string `json:"attachmentIds"`
+}
+
+type UpdateCommentInput struct {
+	Body          string   `json:"body"`
+	AttachmentIDs []string `json:"attachmentIds"`
+}
+
 type RuntimeRegistrationToken struct {
 	ID          string `json:"id"`
 	WorkspaceID string `json:"workspaceId"`
@@ -328,6 +545,24 @@ type Store interface {
 	CreateIssueEvent(ctx Context, requesterUserID string, input CreateIssueEventInput) (IssueEvent, error)
 	MarkIssueEventRead(ctx Context, userID, workspaceID, eventID string) error
 	MarkIssueReadThrough(ctx Context, userID, workspaceID, issueID, throughEventID string) (int, error)
+	ListProjects(ctx Context, userID, workspaceID string) ([]Project, error)
+	CreateProject(ctx Context, userID, workspaceID string, input ProjectInput) (Project, error)
+	UpdateProject(ctx Context, userID, workspaceID, projectID string, input ProjectInput) (Project, error)
+	DeleteProject(ctx Context, userID, workspaceID, projectID string) error
+	GetProjectRunbook(ctx Context, userID, workspaceID, projectID string) (ProjectRunbook, error)
+	UpdateProjectRunbook(ctx Context, userID, workspaceID, projectID string, input ProjectRunbookInput) (ProjectRunbook, error)
+	ListIssueLabelDefinitions(ctx Context, userID, workspaceID string) ([]IssueLabelDefinition, error)
+	ListIssues(ctx Context, userID, workspaceID string) ([]IssueListItem, error)
+	CreateIssue(ctx Context, user User, workspaceID string, input CreateIssueInput) (string, error)
+	GetIssue(ctx Context, userID, workspaceID, issueID string) (IssueDetail, error)
+	UpdateIssue(ctx Context, userID, workspaceID, issueID string, input UpdateIssueInput) (Issue, error)
+	CreateIssueTask(ctx Context, userID, workspaceID, issueID string, input IssueTaskInput) (IssueListItem, error)
+	DeleteIssueTask(ctx Context, userID, workspaceID, issueID, taskID string) error
+	UpdateIssueLabels(ctx Context, userID, workspaceID, issueID string, input UpdateIssueLabelsInput) ([]IssueLabel, error)
+	AddComment(ctx Context, user User, workspaceID, issueID string, input CreateCommentInput) (string, error)
+	UpdateComment(ctx Context, user User, workspaceID, issueID, commentID string, input UpdateCommentInput) (Comment, error)
+	SetCommentReaction(ctx Context, user User, workspaceID, issueID, commentID, reaction string) error
+	DeleteCommentReaction(ctx Context, userID, workspaceID, issueID, commentID, reaction string) error
 	CreateRuntimeRegistrationToken(ctx Context, userID, workspaceID string, input CreateRuntimeRegistrationTokenInput) (RuntimeRegistrationTokenResult, error)
 	ListRuntimeRegistrationTokens(ctx Context, userID, workspaceID string) ([]RuntimeRegistrationToken, error)
 	RevokeRuntimeRegistrationToken(ctx Context, userID, workspaceID, tokenID string) (RuntimeRegistrationToken, error)
