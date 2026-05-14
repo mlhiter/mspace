@@ -29,9 +29,11 @@ The interaction model is closer to a shared engineering document than a terminal
 
 ## Screenshots
 
-![mspace issues list](./docs/images/mspace-issues-list.png)
+The README intentionally shows only a representative pair. Current and task-specific captures live in `docs/images/`; article embeds should use uploaded cloud image URLs instead of local repository paths.
 
-![mspace issue detail](./docs/images/mspace-issue-detail.png)
+![mspace issues list](./docs/images/mspace-issues-list-current.png)
+
+![mspace issue detail](./docs/images/mspace-issue-detail-overview-current.png)
 
 ## Website
 

@@ -40,9 +40,11 @@ Do not commit `.vercel/`; it is a local project link and is ignored by git.
 ## Content Sources
 
 - Brand mark: `apps/desktop/assets/brand/mspace-icon.png`; transparent website mark: `apps/website/src/assets/mspace-mark-transparent.png`
-- Product screenshots: `docs/images/mspace-issues-list.png` and `docs/images/mspace-issue-detail.png`
+- Product screenshots: current Issues, Issue Detail, Evidence, and Team Runtime captures in `docs/images`
 - Changelog data: `apps/website/src/changelog.ts`
 - Website backlog: `apps/website/TODO.md`
+
+Keep screenshot usage curated. The homepage should show a small set of representative running surfaces, not every Issue Detail tab. Full tab coverage can stay in `docs/images` or external article assets, while the README should keep only one or two screenshots.
 
 ## Visual Guardrails
 

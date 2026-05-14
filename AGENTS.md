@@ -109,6 +109,7 @@ The product should stay narrow:
 - Do not fork Multica; use it as a structural reference only.
 - Keep docs current when product decisions change.
 - Keep `apps/website/src/changelog.ts` current when a task ships meaningful product, engineering, documentation, or website progress. Group entries by calendar day and write public-facing bullets that explain what changed without exposing private environment details.
+- Keep screenshots curated on public surfaces. The root README should show only one or two representative current screenshots, and the public website should highlight a compact selected set rather than every Issue Detail tab. Keep full screenshot sets in `docs/images/` or in uploaded article assets; article pages should embed cloud image URLs rather than local repository paths.
 - Keep the desktop product shell quiet and document-first. The public website may use a bolder forensic brand direction, but it must still avoid generic AI-platform claims and stay grounded in issues, sessions, diffs, Kubernetes preview namespaces, evidence, and cleanup.
 - Use the shadcn CLI for new shared UI primitives when an equivalent shadcn component exists, then wrap or re-export from `@mspace/ui` as needed.
 - Preserve the quiet Notion-like workspace style: document-first, low-contrast paper surfaces, compact rows, restrained icon buttons, and no decorative dashboard or marketing layout.

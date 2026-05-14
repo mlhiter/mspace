@@ -10,8 +10,10 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useState, type CSSProperties } from "react";
-import issueDetailImage from "../../../docs/images/mspace-issue-detail.png";
-import issuesListImage from "../../../docs/images/mspace-issues-list.png";
+import evidenceImage from "../../../docs/images/mspace-issue-evidence.png";
+import issueDetailImage from "../../../docs/images/mspace-issue-detail-overview-current.png";
+import issuesListImage from "../../../docs/images/mspace-issues-list-current.png";
+import teamRuntimeImage from "../../../docs/images/mspace-team-runtime.png";
 import brandMark from "./assets/mspace-mark-transparent.png";
 import { changelog } from "./changelog";
 
@@ -72,6 +74,27 @@ const controlPoints = [
 
 const quickStart = ["pnpm install", "pnpm dev:desktop", "pnpm dev:website"];
 const changelogItemCount = changelog.reduce((total, entry) => total + entry.items.length, 0);
+
+const selectedSurfaces = [
+  {
+    label: "Evidence",
+    title: "Review packet",
+    detail: "Command evidence, source facts, risks, and follow-ups stay readable after the session.",
+    image: evidenceImage,
+    alt: "mspace Evidence tab with review packet and command evidence",
+    width: 1269,
+    height: 1012,
+  },
+  {
+    label: "Runtime",
+    title: "Team worker queue",
+    detail: "Registered workers, queued runtime tasks, events, and logs stay inside Workspace Settings.",
+    image: teamRuntimeImage,
+    alt: "mspace Team Runtime settings with workers, tasks, events, and logs",
+    width: 1269,
+    height: 720,
+  },
+];
 
 function getCurrentView(): SiteView {
   if (typeof window === "undefined") {
@@ -196,8 +219,8 @@ export function App() {
           <img
             src={issueDetailImage}
             alt="mspace issue detail page with activity, sessions, and evidence"
-            width="1440"
-            height="1100"
+            width="1269"
+            height="2480"
           />
           <button className="annotation annotation-branch" type="button" aria-label="Branch evidence">
             <GitBranch aria-hidden="true" size={16} />
@@ -215,8 +238,8 @@ export function App() {
           <img
             src={issuesListImage}
             alt="mspace issues list with status, owner, and session metadata"
-            width="1440"
-            height="900"
+            width="1280"
+            height="720"
             loading="lazy"
           />
         </figure>
@@ -227,6 +250,40 @@ export function App() {
             mspace keeps the everyday surface quiet, but the language stays concrete: issues,
             sessions, worktrees, branches, clusters, namespaces, preview URLs, and cleanup.
           </p>
+        </div>
+      </section>
+
+      <section className="surface-section" aria-label="Selected mspace running surfaces">
+        <div className="surface-copy">
+          <div className="section-kicker">Selected running surfaces</div>
+          <h2>Enough screenshots to show the loop, not every tab.</h2>
+          <p>
+            The website now highlights only the screens that prove the current product shape:
+            issue review, evidence, and team runtime. The deeper tab set stays in docs and article
+            assets where it belongs.
+          </p>
+        </div>
+
+        <div className="surface-gallery">
+          {selectedSurfaces.map((surface, index) => (
+            <figure
+              className={index === 0 ? "surface-shot surface-shot-wide" : "surface-shot"}
+              key={surface.title}
+            >
+              <img
+                src={surface.image}
+                alt={surface.alt}
+                width={surface.width}
+                height={surface.height}
+                loading="lazy"
+              />
+              <figcaption>
+                <span>{surface.label}</span>
+                <strong>{surface.title}</strong>
+                <p>{surface.detail}</p>
+              </figcaption>
+            </figure>
+          ))}
         </div>
       </section>
 

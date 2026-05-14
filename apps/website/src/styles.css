@@ -334,6 +334,7 @@ a {
 .workflow-section,
 .proof-section,
 .split-proof,
+.surface-section,
 .control-section,
 .changelog-section,
 .quick-start {
@@ -351,6 +352,7 @@ a {
 .workflow-head h2,
 .proof-copy h2,
 .split-proof h2,
+.surface-copy h2,
 .control-lead h2,
 .changelog-head h1,
 .quick-copy h2 {
@@ -368,6 +370,7 @@ a {
 .workflow-head p,
 .proof-copy > p,
 .split-proof p,
+.surface-copy p,
 .control-lead p,
 .changelog-head > p,
 .quick-copy p {
@@ -520,7 +523,8 @@ a {
 }
 
 .screenshot-stage img,
-.split-proof figure img {
+.split-proof figure img,
+.surface-shot img {
   outline: 1px solid oklch(8% 0.01 62 / 0.18);
   outline-offset: -1px;
   box-shadow: 0 24px 72px oklch(8% 0.01 62 / 0.28);
@@ -589,6 +593,80 @@ a {
 
 .split-proof p {
   margin-top: 24px;
+}
+
+.surface-section {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.55fr) minmax(520px, 1fr);
+  gap: 54px;
+  align-items: center;
+  background:
+    linear-gradient(0deg, oklch(12% 0.012 62 / 0.035) 1px, transparent 1px),
+    var(--paper);
+  background-size: 100% 36px;
+}
+
+.surface-copy h2 {
+  margin-top: 18px;
+}
+
+.surface-copy p {
+  margin-top: 24px;
+}
+
+.surface-gallery {
+  display: grid;
+  gap: 18px;
+}
+
+.surface-shot {
+  margin: 0;
+  border: 1px solid var(--line-strong);
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 12px 12px 0 oklch(28% 0.02 62 / 0.14);
+}
+
+.surface-shot-wide {
+  margin-right: 9%;
+}
+
+.surface-shot:not(.surface-shot-wide) {
+  margin-left: 16%;
+}
+
+.surface-shot figcaption {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 14px;
+  padding: 14px 16px 16px;
+  border-top: 1px solid oklch(96% 0.01 72 / 0.14);
+}
+
+.surface-shot figcaption span {
+  color: var(--oxide);
+  font-family: var(--mono-font);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.surface-shot figcaption strong {
+  min-width: 0;
+  color: var(--paper);
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.surface-shot figcaption p {
+  grid-column: 2;
+  max-width: 62ch;
+  margin: 0;
+  color: oklch(90% 0.012 72 / 0.72);
+  font-size: 0.88rem;
+  font-weight: 620;
+  line-height: 1.45;
 }
 
 .control-section {
@@ -928,6 +1006,8 @@ a {
   .workflow-step,
   .proof-copy,
   .changelog-entry,
+  .surface-copy,
+  .surface-shot,
   .screenshot-stage {
     animation: reveal 720ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
@@ -984,6 +1064,7 @@ a {
   .control-grid,
   .changelog-head,
   .changelog-entry,
+  .surface-section,
   .quick-start {
     grid-template-columns: 1fr;
   }
@@ -1011,6 +1092,11 @@ a {
 
   .screenshot-stage {
     --stage-rotate: 0deg;
+  }
+
+  .surface-shot-wide,
+  .surface-shot:not(.surface-shot-wide) {
+    margin-inline: 0;
   }
 }
 
@@ -1072,6 +1158,7 @@ a {
   .workflow-section,
   .proof-section,
   .split-proof,
+  .surface-section,
   .control-section,
   .changelog-section,
   .quick-start {
@@ -1081,6 +1168,7 @@ a {
   .workflow-head h2,
   .proof-copy h2,
   .split-proof h2,
+  .surface-copy h2,
   .control-lead h2,
   .changelog-head h1,
   .quick-copy h2 {
@@ -1103,6 +1191,14 @@ a {
 
   .annotation {
     display: none;
+  }
+
+  .surface-shot figcaption {
+    grid-template-columns: 1fr;
+  }
+
+  .surface-shot figcaption p {
+    grid-column: auto;
   }
 
   .changelog-date {
@@ -1148,6 +1244,7 @@ a {
   .workflow-head h2,
   .proof-copy h2,
   .split-proof h2,
+  .surface-copy h2,
   .control-lead h2,
   .changelog-head h1,
   .quick-copy h2 {

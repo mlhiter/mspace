@@ -14,6 +14,7 @@ export const changelog: ChangelogEntry[] = [
     items: [
       "Added a one-time local SQLite import path so existing personal test issues, comments, labels, reactions, Inbox rows, and project runbooks can be carried into server Postgres.",
       "Documented the import path for development workspaces that still have legacy runner product rows in `~/.mspace/mspace.db`.",
+      "Refreshed the README and public website with a curated set of current running screenshots instead of publishing every Issue Detail tab.",
     ],
   },
   {
