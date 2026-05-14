@@ -1,6 +1,6 @@
 # mspace Local API Integration Guide
 
-> Status: local MVP API guide, updated 2026-05-13
+> Status: local MVP API guide, updated 2026-05-14
 
 This guide covers the local runner API and the current server collaboration API used by the desktop. The server API is the product-data path and is served by the control plane, normally on `http://127.0.0.1:8787`; the runner API is the local runtime path and is served by the Go runner, normally on `http://127.0.0.1:7788`.
 
@@ -62,7 +62,7 @@ The current transition boundary is explicit:
 
 - server Postgres is truth for signed-in workspace projects, runbooks, issues, child tasks, comments, reactions, labels, and Inbox receipts;
 - local runner SQLite is still truth for local execution state, worktrees, sessions, logs, evidence, handoffs, clusters, issue test environments, image attachments, and runtime metadata;
-- server-owned issues currently guard agent-session starts and attachment uploads until the runtime bridge can operate directly on PG-backed issue ids.
+- PG-backed team workspace issues can start Team worker agent sessions through the runner bridge; personal workspaces keep Team worker routing disabled, and server-owned attachment uploads are still pending.
 
 Server workspace endpoints require `Authorization: Bearer <msp-token>`:
 
@@ -104,6 +104,36 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues" \
 
 When `projectId` is omitted, the server infers the best matching existing project from the title, body, and task text. If no project exists, issue creation returns `400 Bad Request`.
 
+### PG-backed Team Worker Session Bridge
+
+Issue Detail starts a Team worker turn for a server-owned issue in two steps:
+
+1. Write the human comment through `POST /api/workspaces/{workspaceID}/issues/{issueID}/comments`.
+2. Call the local runner bridge `POST /api/server-issues/{issueID}/team-session`.
+
+The runner must first be configured through `POST /api/control-plane/session` with the selected server base URL, `msp_...` token, and workspace id. The bridge requires a team workspace, rejects personal workspaces, rejects workspace mismatches between the payload and the configured runner session, and only accepts `runtimeMode: "team"`.
+
+Bridge payload:
+
+```json
+{
+  "workspaceId": "<team-workspace-id>",
+  "issueId": "<server-issue-id>",
+  "commentId": "<server-comment-id>",
+  "provider": "codex",
+  "agentProfile": "codex",
+  "runtimeMode": "team",
+  "command": "@codex implement the fix",
+  "issue": { "id": "<server-issue-id>", "projectId": "<project-id>", "title": "Issue title", "body": "Issue body" },
+  "project": { "id": "<project-id>", "name": "mspace", "remoteUrl": "https://github.com/org/repo.git", "defaultBranch": "main" },
+  "comments": [],
+  "childIssues": [],
+  "labels": []
+}
+```
+
+The runner snapshots the server issue, project, comment, child issue, and label state into local SQLite, creates an `agent_sessions` row with the server `commentId` as `trigger_comment_id`, queues a control-plane `runtime_tasks` row with kind `agent_session`, imports worker logs/results back into local session state, and returns `{ "sessionId": "<local-session-id>" }`. Server Issue Detail includes matching Team worker sessions by mapping `runtime_tasks` with `kind="agent_session"` back into its `sessions` field.
+
 ## Legacy Runner Issue Writing APIs
 
 These endpoints remain for the current runtime bridge, local attachments, and older test data. The desktop product surfaces should use the server workspace endpoints above for both personal and team workspaces.
@@ -124,6 +154,7 @@ The desktop uses a rich TipTap editor for issue creation, human comments, projec
 | `PUT` | `/api/issues/{issueID}/comments/{commentID}` | Edit the latest human comment before it has triggered an agent session. |
 | `PUT` | `/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current human user's reaction to a comment. |
 | `DELETE` | `/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current human user's reaction from a comment. |
+| `POST` | `/api/server-issues/{issueID}/team-session` | Bridge a server-owned team workspace issue comment into a Team worker runtime task. |
 
 When `projectId` is omitted, the runner infers the best matching existing project from the title, body, and task text. If no project exists, issue creation returns `400 Bad Request`.
 

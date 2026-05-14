@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-05-13
+> Status: milestone roadmap, updated 2026-05-14
 
 ## Purpose
 
@@ -25,7 +25,7 @@ Project
 
 The roadmap intentionally keeps local workflow first. Kubernetes is the manually triggered test target for the MVP, not the first development runtime.
 
-The first server control-plane slice now exists for GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, runtime registration, and runtime tasks. Signed-in personal and team workspace product data now uses server Postgres. Runtime execution, attachments, PR handoff, evidence, clusters, and issue test environments still use the local runner path until the runtime bridge is connected to PG-backed issue ids; do not treat the runner's display identity snapshots or SQLite runtime rows as the collaboration architecture.
+The first server control-plane slice now exists for GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, runtime registration, and runtime tasks. Signed-in personal and team workspace product data now uses server Postgres. Team worker agent-session routing is connected for PG-backed team issues through the runner bridge, while runtime execution state, attachments, PR handoff, evidence, clusters, and issue test environments still use local runner storage and APIs. Do not treat the runner's display identity snapshots or SQLite runtime rows as the collaboration architecture.
 
 The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, and continueable failure evidence. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 
@@ -66,8 +66,8 @@ Goal:
 
 Build in order:
 
-- Server Worker repo/workspace provisioning so the worker can clone or reuse a repository, prepare its own workdir, run Codex, and return artifacts without relying on the desktop runner's filesystem.
-- Durable source-change and artifact adoption from remote workers back into the issue/session model.
+- Harden Server Worker repo/workspace provisioning so the worker can clone or reuse a repository, prepare its own workdir, run Codex, and return artifacts without relying on the desktop runner's filesystem.
+- Harden source-change and artifact adoption from remote workers back into the issue/session model.
 - Runtime provider labels and capabilities for routing tasks to fixed Server Workers or future Kubernetes providers.
 - Kubernetes namespace allocator with labels, TTL, ResourceQuota, LimitRange, and project/session ownership metadata.
 - Scoped ServiceAccount, Role, RoleBinding, and kubeconfig generation for each Kubernetes runtime session.
