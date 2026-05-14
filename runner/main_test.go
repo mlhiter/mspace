@@ -2979,11 +2979,11 @@ func TestQueueAgentSessionRejectsTeamRuntimeFromPersonalWorkspace(t *testing.T) 
 	waitForCondition(t, 5*time.Second, func() bool {
 		var status, agentStatus string
 		_ = db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus)
-		return status == "failed" && agentStatus == "failed"
+		return status == "failed" && agentStatus == "failed" && sessionLogContains(db, response.SessionID, "team runtime requires a team workspace")
 	}, func() string {
 		var status, agentStatus string
 		_ = db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus)
-		return "status=" + status + " agentStatus=" + agentStatus
+		return "status=" + status + " agentStatus=" + agentStatus + " logs=" + strings.Join(sessionLogMessages(db, response.SessionID), " | ")
 	})
 	if taskCreated {
 		t.Fatalf("personal workspace should not create a team runtime task")
@@ -3484,17 +3484,45 @@ func assertCommentAuthorContains(t *testing.T, db *sql.DB, issueID, expectedBody
 
 func assertSessionLogContains(t *testing.T, db *sql.DB, sessionID, expected string) {
 	t.Helper()
+	if sessionLogContains(db, sessionID, expected) {
+		return
+	}
+	t.Fatalf("expected session log on %s containing %q", sessionID, expected)
+}
+
+func sessionLogContains(db *sql.DB, sessionID, expected string) bool {
 	var count int
 	if err := db.QueryRow(`
 		SELECT COUNT(*)
 		FROM session_logs
 		WHERE session_id = ? AND message LIKE ?
 	`, sessionID, "%"+expected+"%").Scan(&count); err != nil {
-		t.Fatalf("query session logs: %v", err)
+		return false
 	}
-	if count == 0 {
-		t.Fatalf("expected session log on %s containing %q", sessionID, expected)
+	return count > 0
+}
+
+func sessionLogMessages(db *sql.DB, sessionID string) []string {
+	rows, err := db.Query(`
+		SELECT stream, message
+		FROM session_logs
+		WHERE session_id = ?
+		ORDER BY id
+	`, sessionID)
+	if err != nil {
+		return []string{"query session logs: " + err.Error()}
 	}
+	defer rows.Close()
+
+	var logs []string
+	for rows.Next() {
+		var stream, message string
+		if err := rows.Scan(&stream, &message); err != nil {
+			return append(logs, "scan session log: "+err.Error())
+		}
+		logs = append(logs, stream+": "+message)
+	}
+	return logs
 }
 
 func writeJSONStatus(t *testing.T, w http.ResponseWriter, status int, payload any) {

@@ -2953,7 +2953,7 @@ func (a *app) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 	if _, err := tx.Exec(`
 		INSERT INTO comments (id, issue_id, author_type, author_name, author_avatar_url, body, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, uuid.NewString(), issueID, "system", systemActorName, "", "Issue created and ready for a local-first agent session.", now, now); err != nil {
+	`, uuid.NewString(), issueID, "system", systemActorName, "", "Issue created and ready for review.", now, now); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -6599,12 +6599,12 @@ func (a *app) captureStream(wg *sync.WaitGroup, sessionID, stream string, reader
 }
 
 func (a *app) failSession(session agentSession, project *project, err error) {
+	a.appendSessionLog(session.ID, "system", err.Error())
 	a.updateSessionStatus(session.ID, "failed")
 	a.updateSessionAgentStatus(session.ID, "failed")
 	session.Status = "failed"
 	session.AgentStatus = "failed"
 	a.updateIssueStatus(session.IssueID, "blocked")
-	a.appendSessionLog(session.ID, "system", err.Error())
 	a.addSystemComment(session.IssueID, fmt.Sprintf("Session `%s` failed.\n\n%s", shortID(session.ID), err.Error()))
 	var evidence *deploymentEvidence
 	if project != nil && a.isIssueTestDeploySession(session) {
