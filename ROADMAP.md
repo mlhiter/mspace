@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-05-12
+> Status: milestone roadmap, updated 2026-05-13
 
 ## Purpose
 
@@ -25,7 +25,7 @@ Project
 
 The roadmap intentionally keeps local workflow first. Kubernetes is the manually triggered test target for the MVP, not the first development runtime.
 
-The first server control-plane slice now exists for GitHub sign-in, mspace auth sessions, users, workspaces, and membership. Full multiplayer collaboration is still later work; do not treat the local runner's display identity snapshots as that architecture.
+The first server control-plane slice now exists for GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, runtime registration, and runtime tasks. Signed-in personal and team workspace product data now uses server Postgres. Runtime execution, attachments, PR handoff, evidence, clusters, and issue test environments still use the local runner path until the runtime bridge is connected to PG-backed issue ids; do not treat the runner's display identity snapshots or SQLite runtime rows as the collaboration architecture.
 
 The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, and continueable failure evidence. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 

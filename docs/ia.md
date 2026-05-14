@@ -136,9 +136,8 @@ Each row should show:
 
 Current implementation:
 
-- lists signed-in team Inbox items from server issue-event receipts;
-- falls back to local runner inbox items when there is no signed-in workspace item for the same issue;
-- refreshes local fallback data through `/api/inbox/stream` and polls server receipts for team state;
+- lists signed-in workspace Inbox items from server issue-event receipts;
+- polls server receipts for the current workspace;
 - shows a sidebar count badge when unread Inbox items exist;
 - navigates to issue detail for review and action;
 - keeps assignee state visible so agent and human ownership changes are obvious.

@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-13
+> Status: local MVP operations guide, updated 2026-05-14
 
 ## Local Data
 
@@ -15,9 +15,17 @@
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional session review artifact. The runner imports compact commands, tests, build/deploy results, agent summary, risks, and follow-ups into `session_review_evidence`. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-learned project runbook artifact. When present after a successful session, the runner stores it as the current project runbook. |
 
-Reusable cluster configs are stored in `clusters`. Workspace automation policy is stored in `workspace_settings`. Project runbooks are stored in `project_runbooks`, with edit and agent-learning history in `project_runbook_revisions`. Issue test namespace records are stored in `issue_test_environments`. Review snapshots are stored in `session_review_evidence`; continueable failed-session and failed-environment records are stored in `session_failures`; branch and PR delivery records are stored in `issue_handoffs`; raw execution trails stay in `session_logs`. Local fallback unread rows are stored in `inbox_items`. Issue label options are stored in `issue_label_definitions`, issue label selections are stored in `issue_labels`, and type triage state is stored on `issues.triage_status`. Comment reactions are stored in `comment_reactions` so reaction counts do not mutate comment Markdown. Agent definitions are stored in `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `trigger_comment_id`, `agent_token`, `cleanup_status`, and `cleaned_at`.
+Reusable cluster configs are stored in runner `clusters`. Workspace automation policy is stored in runner `workspace_settings`. Issue test namespace records are stored in runner `issue_test_environments`. Review snapshots are stored in runner `session_review_evidence`; continueable failed-session and failed-environment records are stored in runner `session_failures`; branch and PR delivery records are stored in runner `issue_handoffs`; raw execution trails stay in runner `session_logs`. Legacy local unread rows may still exist in runner `inbox_items`, but the product Inbox uses server receipts. Agent definitions are stored in runner `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `trigger_comment_id`, `agent_token`, `cleanup_status`, and `cleaned_at`.
 
-The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. GitHub sign-in creates a personal workspace by default; team Inbox receipts, invitations, worker tokens, registered workers, and runtime tasks require an explicit team workspace. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
+The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, project runbook revisions, issues, comments, comment reactions, issue label definitions, issue labels, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. GitHub sign-in creates a personal workspace by default; invitations, worker tokens, registered workers, and runtime tasks require an explicit team workspace. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
+
+If a signed-in personal workspace is empty after moving product data to Postgres, import the legacy runner product rows once:
+
+```bash
+node scripts/import-local-sqlite-product-data.mjs
+```
+
+The script reads `~/.mspace/mspace.db`, auto-selects the single personal workspace when possible, preserves legacy project, issue, comment, label, reaction, runbook, and Inbox event UUIDs, and writes them into the server control plane. Pass `--workspace-id <id>` when multiple personal workspaces exist. The script is idempotent and can be re-run without duplicating rows.
 
 ## Start The App
 
@@ -193,7 +201,7 @@ Server health:
 curl http://127.0.0.1:8787/health
 ```
 
-The health response should include `serverProtocol: 1` and these capabilities: `teamInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceKinds`, `runtimeWorkerRegistration`, and `runtimeTaskQueue`. Electron treats a local server that lacks those capabilities as stale and replaces it during desktop development.
+The health response should include `serverProtocol: 1` and these capabilities: `workspaceInboxIssueGrouping`, `workspaceCollaboration`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceKinds`, `runtimeWorkerRegistration`, and `runtimeTaskQueue`. Electron treats a local server that lacks those capabilities as stale and replaces it during desktop development.
 
 GitHub auth start endpoint:
 
@@ -203,7 +211,7 @@ curl -i http://127.0.0.1:8787/api/auth/github/start
 
 This endpoint requires `DATABASE_URL`, `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` to be configured in the server environment.
 
-Team Inbox receipt checks:
+Workspace Inbox receipt checks:
 
 ```bash
 curl -H "Authorization: Bearer <msp-token>" \
@@ -222,7 +230,7 @@ export MSPACE_RUNTIME_TOKEN="msw_..."
 pnpm worker -- -once
 ```
 
-Use a team workspace id for the smoke checks above. Personal workspaces intentionally reject team Inbox, invitations, worker tokens, worker lists, and runtime task APIs with `403 Forbidden`.
+Use any signed-in workspace id for Inbox checks. Use a team workspace id for invitations, worker tokens, worker lists, and runtime task APIs; personal workspaces intentionally reject those team-only runtime/collaboration-management APIs with `403 Forbidden`.
 
 Queue a protocol task for that worker:
 
@@ -283,7 +291,7 @@ Runner health:
 curl http://127.0.0.1:7788/health
 ```
 
-Local fallback Inbox checks:
+Legacy local Inbox checks:
 
 ```bash
 curl http://127.0.0.1:7788/api/inbox

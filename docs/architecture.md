@@ -9,13 +9,13 @@ The repository currently contains a runnable local-first desktop MVP:
 - Electron desktop shell built with electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
 - Public website in `apps/website`, built with Vite, React 19, Tailwind CSS 4, and lucide-react, deployed as a static Vercel site from the root `vercel.json`. It has a homepage plus a static `Changelog` navigation view backed by `apps/website/src/changelog.ts`.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
-- Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`. It owns users, workspaces, membership, GitHub identity, mspace auth sessions, runtime worker registration, and future GitHub App installation state.
-- Desktop GitHub sign-in uses the server OAuth flow, stores an `msp_...` session token, and caches a lightweight display identity for local runner writes while collaboration data still lives in SQLite.
-- GitHub sign-in creates a personal workspace by default. Team collaboration features require an explicit team workspace created from Workspace Settings; personal workspaces keep team Inbox, invitations, worker tokens, worker registry, and runtime tasks disabled.
+- Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`. It owns users, workspaces, membership, GitHub identity, mspace auth sessions, projects, project runbooks, issues, child issue tasks, comments, reactions, labels, Inbox receipts, runtime worker registration, and future GitHub App installation state.
+- Desktop GitHub sign-in uses the server OAuth flow, stores an `msp_...` session token, and caches a lightweight display identity for local runner runtime writes.
+- GitHub sign-in creates a personal workspace by default. Personal and team workspaces both store product data in server Postgres. Team collaboration features require an explicit team workspace created from Workspace Settings; personal workspaces keep invitations, worker tokens, worker registry, and runtime tasks disabled.
 - Issue creation, the Issue Detail reply composer, the Project runbook editor, and the Issue Detail runbook modal use a local TipTap-backed `IssueDocumentEditor` that emits or renders Markdown. This preserves document-like writing surfaces while keeping runner-side checklist extraction, runbook storage, and comment storage text-based. The Issue Detail runbook modal uses the read-only `runbook-viewer` variant rather than ReactMarkdown or the editable runbook shell. Images can be uploaded, pasted, or dropped into the editor; Markdown stores stable `/api/attachments/<id>` image URLs backed by runner attachment records rather than loose local files, and the renderer shows them as thumbnail node views.
 - Go local runner built with chi and SQLite. The Electron main process starts the runner automatically with `go run .` unless `/health` is healthy and advertises the expected runner protocol capabilities; in desktop development, stale local runners on `127.0.0.1:7788` are replaced before startup continues.
 - Go team runtime worker in `worker/`. It is a standalone daemon that registers with an `msw_...` token, sends heartbeat/load/capability updates, claims matching tasks, completes protocol smoke/noop tasks, and can execute `agent_session` tasks by starting `codex app-server --listen stdio://` in a payload-specified workdir.
-- SQLite state lives at `~/.mspace/mspace.db`, including local MVP issue image attachment blobs in `issue_attachments`.
+- SQLite state lives at `~/.mspace/mspace.db` as the local runner runtime store: issue image attachment blobs, sessions, logs, evidence, handoffs, clusters, issue test environments, and execution metadata. Signed-in workspace projects, runbooks, issues, comments, reactions, labels, and Inbox receipts live in server Postgres.
 - Imported GitHub repositories are cached under `~/.mspace/repos/<owner>/<repo>`.
 - Session worktrees live under `~/.mspace/workdirs/<project-id>/<session-id>`.
 - Session context markdown lives under `~/.mspace/workdirs/_contexts/<session-id>.md`.
@@ -29,10 +29,10 @@ The repository currently contains a runnable local-first desktop MVP:
 - Source changes, delivery handoff, live namespace resources, review evidence, and failure evidence are split deliberately. `issue_change_nodes` backs the Commits tab for commit metadata and diffs; source capture records an existing ahead-of-base session HEAD commit when the agent has already committed, or stages the worktree, excludes `.mspace`, retries transient `.git/index.lock` conflicts, and creates a captured source commit when the worktree still has uncommitted changes. `issue_handoffs` stores the current branch or PR delivery artifact for an issue. `GET /api/issues/{issueID}/test-environment/resources` powers the Resources tab with a live namespace-scoped read of Pods, Services, Deployments, Ingresses, and Events. `session_review_evidence` backs the Evidence tab's current review packet, including compact command evidence, tests, build/deploy results, preview URL, agent summary, risks/follow-ups, source facts, and cleanup/retain state. Kubernetes snapshot history and older attempts are full-width Evidence subpages, not expanded right-rail content. `session_failures` stores continueable failed-session and failed-environment evidence. The runner stores only evidence-worthy commands in `commands_json`; raw command trails and exploratory output remain in `session_logs`. Changed-file UI uses Material Icon Theme file icons and filters directory-only placeholder paths while preserving concrete file paths under those directories.
 - Workspace Settings is exposed at `/settings` from the workspace identity menu. It stores local automation policy in `workspace_settings`: source commit capture remains always on, while `auto_create_draft_pr` controls whether the runner automatically creates or refreshes the issue's current draft PR after source capture.
 - Session branch defaults to `mspace/<issue-short-id>/<session-short-id>` when the user does not provide one.
-- Project import supports existing local folders and GitHub repository URLs. Local repositories auto-detect git remote metadata when available.
-- Inbox is an unread review feed. Signed-in team state is built from server `issue_events` and per-user `issue_event_receipts`; the local runner `inbox_items.unread` plus `/api/inbox/stream` remains a fallback and invalidation path.
-- Issue comments that mention an enabled agent are saved first, then the desktop calls `POST /api/issues/{issueID}/assign-agent` with the mention-stripped comment as the current turn request and the selected Codex profile.
-- Local runner issues and comments keep denormalized display identity snapshots: issue creator name/avatar and comment author name/avatar. Comment reactions are stored separately in `comment_reactions` and returned as per-comment summaries from issue detail so they do not rewrite Markdown bodies or agent prompt history. Existing anonymous local human rows are backfilled to `mlhiter`; ordinary system comments display as `mspace`. Status-transition comments are authored by the actor that performed the change, so human changes render as that signed-in user and scoped agent changes render as the agent.
+- Project import supports existing local folders and GitHub repository URLs. Signed-in workspaces persist project records in server Postgres. Local repositories auto-detect git remote metadata when available.
+- Inbox is an unread review feed. Signed-in workspace state is built from server `issue_events` and per-user `issue_event_receipts`; local runner inbox rows are legacy/runtime state rather than the product source.
+- Workspace issue comments are stored through the server collaboration APIs. Server-owned issues currently guard agent-session starts until the runtime bridge can operate on PG-backed issue ids.
+- Server-owned and runner-fallback issues/comments keep denormalized display identity snapshots: issue creator name/avatar and comment author name/avatar. Comment reactions are stored separately in `comment_reactions` and returned as per-comment summaries from issue detail so they do not rewrite Markdown bodies or agent prompt history. Existing anonymous local human rows are backfilled to `mlhiter`; ordinary system comments display as `mspace`. Status-transition comments are authored by the actor that performed the change, so human changes render as that signed-in user and scoped agent changes render as the agent.
 - Local runner issue writes are authenticated. Human write requests carry a mspace session token and are verified against control-plane `GET /api/auth/me`; agent write requests carry the session-scoped `MSPACE_AGENT_TOKEN`.
 - Issue workflow status values are `open`, `needs_review`, `changes_requested`, `ready_for_test`, `blocked`, `cancelled`, and `closed`. `cancelled` is the issue-level "closed as not planned" outcome, not a stopped-session state. Humans do not choose general top-level workflow states from the sidebar: the sidebar status is read-only, while lifecycle actions live inside the Issue Detail comment composer footer. Humans can close a top-level issue as `closed` or `cancelled`, and can reopen a closed/cancelled issue to `changes_requested`; they cannot move a post-open issue back to `open`. The desktop keeps the primary close/reopen action visible and hides less common close reasons such as `Close as not planned` behind a compact dropdown. Agent sessions may move their scoped top-level issue to `needs_review`, `ready_for_test`, or `blocked`, and may close child tasks under their assigned issue. Transient progress such as queued/running agent work or test deployment is derived from sessions and issue test environments, not issue status. Every transition is mirrored to the issue timeline and rendered as a compact actor-authored status event with readable badges.
 - The desktop shell exposes a global search / Command+K palette backed by the existing issues and projects queries. Active work remains a separate sidebar block because it is an issue subset, not an additional global search source.
@@ -85,10 +85,28 @@ Implemented server control-plane API:
 | `GET` | `/api/auth/me` | Load the authenticated user and workspaces from `Authorization: Bearer msp_...`. |
 | `GET` | `/api/workspaces` | List workspaces for the authenticated user. |
 | `POST` | `/api/workspaces` | Create a team workspace for the authenticated user. |
-| `GET` | `/api/workspaces/{workspaceID}/inbox` | List unread issue-event receipts for the authenticated user in a team workspace. |
-| `POST` | `/api/workspaces/{workspaceID}/issue-events` | Append a reviewable issue event and create per-user receipts in a team workspace. |
-| `POST` | `/api/workspaces/{workspaceID}/issue-events/{eventID}/read` | Mark one team workspace event receipt read for the authenticated user. |
-| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/read-through` | Mark unread team workspace receipts for one issue read through an optional event boundary. |
+| `GET` | `/api/workspaces/{workspaceID}/inbox` | List unread issue-event receipts for the authenticated user in a workspace. |
+| `POST` | `/api/workspaces/{workspaceID}/issue-events` | Append a reviewable issue event and create per-user receipts in a workspace. |
+| `POST` | `/api/workspaces/{workspaceID}/issue-events/{eventID}/read` | Mark one workspace event receipt read for the authenticated user. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/read-through` | Mark unread workspace receipts for one issue read through an optional event boundary. |
+| `GET` | `/api/workspaces/{workspaceID}/projects` | List server-backed projects for a workspace. |
+| `POST` | `/api/workspaces/{workspaceID}/projects` | Create a server-backed project in a workspace. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Update server-backed project settings. |
+| `DELETE` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Delete a server-backed project when no issues reference it. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Read the server-backed project runbook. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the server-backed project runbook and record a revision. |
+| `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List built-in Type and Priority label definitions. |
+| `GET` | `/api/workspaces/{workspaceID}/issues` | List server-backed top-level issues for a workspace. |
+| `POST` | `/api/workspaces/{workspaceID}/issues` | Create a server-backed issue, extract checklist tasks as child issues, and apply labels. |
+| `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Load server-backed issue detail with project, child tasks, labels, comments, and reaction summaries. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update server-backed issue title, body, or workflow status. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks` | Create a child issue task. |
+| `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks/{taskID}` | Delete a child issue task under its parent. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/labels` | Replace a server-backed issue's label keys. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments` | Add a human comment to a server-backed issue. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}` | Edit the current user's human comment. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current user's reaction to a comment. |
+| `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current user's reaction from a comment. |
 | `GET` | `/api/workspaces/{workspaceID}/members` | List workspace members with role and display identity. |
 | `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time team workspace invitation link. |
 | `GET` | `/api/workspaces/{workspaceID}/invitations` | List recent team workspace invitations without raw token values. |
@@ -117,7 +135,7 @@ Implemented runner API:
 | `GET` | `/health` | Runner health, version, protocol, and feature capabilities. |
 | `POST` | `/api/control-plane/session` | Cache the current server base URL, bearer token, and workspace id so the runner can report reviewable issue events to the control plane. |
 | `GET` | `/api/inbox` | List inbox items. |
-| `POST` | `/api/inbox/issues/{issueID}/read` | Mark the local fallback inbox item for one issue read. Does not mutate server receipts. |
+| `POST` | `/api/inbox/issues/{issueID}/read` | Mark the legacy local inbox item for one issue read. Does not mutate server receipts. |
 | `GET` | `/api/inbox/stream` | Stream inbox update events over server-sent events. |
 | `GET` | `/api/active-work` | List recent issue work for the shell sidebar. |
 | `GET` | `/api/agents` | List managed agent profiles. |
@@ -167,7 +185,7 @@ Implemented runner API:
 
 mspace should separate the control plane, collaboration layer, runtime layer, and validation layer.
 
-The control plane is the durable multiplayer authority: users, workspaces, members, auth sessions, GitHub identity, future GitHub App installations, and runtime worker registration. The collaboration layer is the product entry point: Inbox, Issue, comments, subscribers, agent sessions, and evidence. The runtime layer is where the agent edits and runs code. The validation environment layer is where the changed project gets deployed and inspected. In the MVP, the runtime should be local-first and the validation environment should be namespace-scoped Kubernetes.
+The control plane is the durable collaboration authority: users, workspaces, members, auth sessions, GitHub identity, workspace projects/issues/comments/runbooks/labels, Inbox receipts, future GitHub App installations, and runtime worker registration. The collaboration layer is the product entry point: Inbox, Issue, comments, subscribers, agent sessions, and evidence. The runtime layer is where the agent edits and runs code. The validation environment layer is where the changed project gets deployed and inspected. In the MVP, the runtime should be local-first and the validation environment should be namespace-scoped Kubernetes.
 
 The public website is not part of the runtime path. It is a static brand surface for the issue-to-evidence story and should not own product state, auth, runner calls, or Kubernetes actions. Its changelog is repository-authored static content, not a live audit log from the runner or control plane.
 
@@ -176,7 +194,7 @@ Identity boundary:
 - server-side users, workspaces, memberships, GitHub identities, and auth sessions are authoritative;
 - desktop stores only the current bearer token and a lightweight display identity cache;
 - runner `creator_name`, `creator_avatar_url`, `author_name`, and `author_avatar_url` are local MVP display snapshots, not a parallel account system;
-- future shared issue ownership, comments, audit, and collaboration permissions should move behind the control plane.
+- workspace issue ownership, comments, reactions, labels, project runbooks, and collaboration permissions live behind the control plane.
 
 ```text
 Desktop / Web UI
@@ -213,7 +231,7 @@ Required fields:
 - runtime policy;
 - project list.
 
-The control plane implements `workspaces` and `workspace_members`. A GitHub user gets a personal workspace by default; explicit team workspaces unlock shared members, server Inbox receipts, invitations, runtime worker registration, and runtime tasks. The local runner still behaves as a single local workspace for issue/session data until those collaboration APIs move behind the server.
+The control plane implements `workspaces` and `workspace_members`. A GitHub user gets a personal workspace by default. Personal and team workspaces use the server for projects, runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts. Team workspaces additionally unlock shared members, invitations, runtime worker registration, and runtime tasks. The local runner still behaves as the personal runtime executor and local store for session/test-environment/evidence data until the runtime bridge is fully PG-backed.
 
 ### Inbox Event
 
@@ -480,7 +498,7 @@ User creates an issue in /issues or opens an existing one
   -> runner maps app-server notifications into session_logs and agent_status
   -> desktop watches GET /api/sessions/{sessionID}/stream
   -> desktop refreshes Issues and Issue Detail from runner state
-  -> Inbox refreshes server receipts when signed in, with GET /api/inbox/stream as local fallback invalidation
+  -> Inbox refreshes server receipts when signed in
   -> session detail reads git status, commits, diff, and base comparison from workdir
 ```
 
@@ -511,9 +529,9 @@ User creates issue
 
 ## Data Model Sketch
 
-### Current SQLite Schema
+### Current Local Runtime SQLite Schema
 
-The local MVP uses these SQLite tables from `runner/migrations/001_init.sql`:
+The local runner uses these SQLite tables from `runner/migrations/001_init.sql` for runtime state, attachments, evidence, and Kubernetes validation. These tables are no longer the product truth for signed-in workspace projects, runbooks, issues, comments, reactions, labels, or Inbox receipts:
 
 ```text
 clusters
@@ -1014,7 +1032,7 @@ session_events
 
 ### Inbox
 
-Shows unread review events for the current user. When signed in, the list comes from control-plane issue-event receipts and is marked read through the server read-through endpoint. Local runner inbox rows remain as a fallback for unsigned-in or not-yet-reported issue updates.
+Shows unread review events for the current user. The list comes from control-plane issue-event receipts and is marked read through the server read-through endpoint.
 
 ### Issues
 

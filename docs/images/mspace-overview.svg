@@ -32,7 +32,7 @@
     <rect x="474" y="158" width="252" height="126" rx="18" fill="#ffffff" stroke="#d8d1c7"/>
     <text x="504" y="199" fill="#171512" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700">Go runner</text>
     <text x="504" y="232" fill="#756a5f" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14">HTTP API, SSE streams, sessions</text>
-    <text x="504" y="257" fill="#756a5f" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14">SQLite at ~/.mspace/mspace.db</text>
+    <text x="504" y="257" fill="#756a5f" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14">SQLite runtime metadata</text>
   </g>
 
   <g filter="url(#softShadow)">

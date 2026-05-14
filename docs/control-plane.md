@@ -18,6 +18,7 @@ The control plane owns:
 - mspace auth sessions;
 - GitHub identity links;
 - future GitHub App installation state;
+- workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts;
 - audit and collaboration sync;
 - runtime registration tokens;
 - runtime worker identity, liveness, and capability snapshots;
@@ -36,6 +37,7 @@ The runner owns:
 - local repo checkout and worktree execution;
 - Codex app-server process lifecycle;
 - local logs and artifacts while running;
+- legacy/local attachment blobs and runner-owned runtime rows during the transition;
 - Kubernetes deploy/test execution until this moves into runtime workers.
 
 ## Auth Shape
@@ -81,6 +83,24 @@ The initial `server/` module provides:
 - `POST /api/workspaces/{workspaceID}/issue-events`;
 - `POST /api/workspaces/{workspaceID}/issue-events/{eventID}/read`;
 - `POST /api/workspaces/{workspaceID}/issues/{issueID}/read-through`;
+- `GET /api/workspaces/{workspaceID}/projects`;
+- `POST /api/workspaces/{workspaceID}/projects`;
+- `PUT /api/workspaces/{workspaceID}/projects/{projectID}`;
+- `DELETE /api/workspaces/{workspaceID}/projects/{projectID}`;
+- `GET /api/workspaces/{workspaceID}/projects/{projectID}/runbook`;
+- `PUT /api/workspaces/{workspaceID}/projects/{projectID}/runbook`;
+- `GET /api/workspaces/{workspaceID}/issue-label-definitions`;
+- `GET /api/workspaces/{workspaceID}/issues`;
+- `POST /api/workspaces/{workspaceID}/issues`;
+- `GET /api/workspaces/{workspaceID}/issues/{issueID}`;
+- `PUT /api/workspaces/{workspaceID}/issues/{issueID}`;
+- `POST /api/workspaces/{workspaceID}/issues/{issueID}/tasks`;
+- `DELETE /api/workspaces/{workspaceID}/issues/{issueID}/tasks/{taskID}`;
+- `PUT /api/workspaces/{workspaceID}/issues/{issueID}/labels`;
+- `POST /api/workspaces/{workspaceID}/issues/{issueID}/comments`;
+- `PUT /api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}`;
+- `PUT /api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}`;
+- `DELETE /api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}`;
 - `GET /api/workspaces/{workspaceID}/members`;
 - `POST /api/workspaces/{workspaceID}/invitations`;
 - `GET /api/workspaces/{workspaceID}/invitations`;
@@ -101,19 +121,19 @@ The initial `server/` module provides:
 - `GET /api/runtime/workers/{workerID}/tasks/{taskID}`;
 - `POST /api/runtime/workers/{workerID}/tasks/{taskID}/status`;
 - `POST /api/runtime/workers/{workerID}/tasks/{taskID}/logs`;
-- Postgres migrations for `users`, `user_identities`, `workspaces`, `workspace_members`, `workspace_invitations`, `oauth_states`, `oauth_results`, `auth_sessions`, `issue_events`, `issue_event_receipts`, `issue_watchers`, `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, and `runtime_task_logs`;
+- Postgres migrations for `users`, `user_identities`, `workspaces`, `workspace_members`, `workspace_invitations`, `oauth_states`, `oauth_results`, `auth_sessions`, `issue_events`, `issue_event_receipts`, `issue_watchers`, `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`, `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, and `runtime_task_logs`;
 - mspace session tokens with `msp_` prefix;
 - workspace invitation tokens with `msi_` prefix, returned only at creation time;
 - runtime registration tokens with `msw_` prefix, returned only at creation time;
 - a memory-backed store used only by tests.
 
-Workspaces have an explicit `kind`: `personal` or `team`. The first GitHub sign-in creates a default personal workspace for local-first use. Team collaboration is opt-in: `POST /api/workspaces` currently creates team workspaces, and team-only collaboration/runtime APIs reject personal workspaces. This keeps the default single-user path from accidentally exposing invite, team Inbox receipt, worker registration, or runtime task behavior.
+Workspaces have an explicit `kind`: `personal` or `team`. The first GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, issues, child tasks, comments, reactions, labels, and Inbox receipts in server Postgres so workspace switching has one durable product-data boundary. Personal workspaces bind that data to the user's local runner and machine environment. Team collaboration is opt-in: `POST /api/workspaces` creates team workspaces, and invitation, worker registration, registered worker, and runtime task APIs reject personal workspaces.
 
-The desktop now has a lightweight GitHub sign-in entrypoint in the sidebar. Product issue/session data still talks to the local runner for the local MVP, but Inbox read state now has a server-backed team model for team workspaces. After sign-in, the renderer sends the current token and workspace id to the local runner so reviewable issue events can be reported to the control plane when the selected workspace supports team collaboration.
+The desktop now requires GitHub sign-in before product data is available. Projects, Issues, Issue Detail comments/tasks/labels, Inbox, and Project runbooks use the server collaboration APIs for the selected signed-in workspace. Agent sessions, attachment upload/storage, PR handoff, review evidence, clusters, and issue test environments still use the runner path until the runtime bridge can operate directly on PG-backed issue ids. After sign-in, the renderer sends the current token and workspace id to the local runner so reviewable issue events can be reported to the control plane.
 
 The left workspace menu is the primary UI surface for switching workspaces and creating an explicit team workspace. Workspace Settings stays scoped to the selected workspace: in team workspaces it lets an owner/admin invite teammates, inspect workspace members, create and revoke worker registration tokens, inspect registered worker heartbeat/capability state, and inspect or queue protocol-level runtime tasks. The Agents route remains focused on Codex-backed profile behavior, not worker infrastructure.
 
-Workspace invitations are deliberately narrow. They are one-time `msi_...` links scoped to one team workspace and one role (`member` or `admin`). The raw token is shown once; the server stores a hash and prefix. Accepting an invite requires an authenticated mspace user and adds that user to `workspace_members`, then the desktop workspace switcher can select the shared workspace for UI-only testing.
+Workspace invitations are deliberately narrow. They are one-time `msi_...` links scoped to one team workspace and one role (`member` or `admin`). The raw token is shown once; the server stores a hash and prefix. Accepting an invite requires an authenticated mspace user and adds that user to `workspace_members`, then the desktop workspace switcher can select the shared workspace and see only that workspace's server-backed projects and issues.
 
 ## Runtime Registry
 

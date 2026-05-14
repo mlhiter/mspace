@@ -2,7 +2,7 @@
 
 > Status: local MVP API guide, updated 2026-05-13
 
-This guide is for local tools or future desktop integrations that need to call the mspace runner directly. The API is local-first and currently served by the Go runner, normally on `http://127.0.0.1:7788`.
+This guide covers the local runner API and the current server collaboration API used by the desktop. The server API is the product-data path and is served by the control plane, normally on `http://127.0.0.1:8787`; the runner API is the local runtime path and is served by the Go runner, normally on `http://127.0.0.1:7788`.
 
 The API is not a public cloud contract yet. It is a stable enough local MVP contract for the desktop renderer, smoke checks, and small integration scripts.
 
@@ -15,7 +15,7 @@ curl "$MSPACE_API_BASE/health"
 
 The Electron preload exposes the same base URL to the renderer through `window.mspaceDesktop.apiBaseUrl`.
 
-The server control plane normally runs on `http://127.0.0.1:8787` and owns GitHub auth, personal/team workspaces, membership, invitations, team Inbox receipts, worker registration, and runtime task queues:
+The server control plane normally runs on `http://127.0.0.1:8787` and owns GitHub auth, personal/team workspaces, membership, workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, Inbox receipts, invitations, worker registration, and runtime task queues:
 
 ```bash
 export MSPACE_SERVER_BASE="http://127.0.0.1:8787"
@@ -54,7 +54,59 @@ Minimal review evidence artifact:
 }
 ```
 
-## Issue Writing APIs
+## Server Workspace Collaboration APIs
+
+When a user is signed into a selected workspace, the desktop reads and writes Projects, Issues, Issue Detail comments/tasks/labels, Inbox receipts, and Project runbooks through the server base URL. Personal workspaces still bind to the user's local runner and machine environment for execution, but their product data lives in server Postgres.
+
+The current transition boundary is explicit:
+
+- server Postgres is truth for signed-in workspace projects, runbooks, issues, child tasks, comments, reactions, labels, and Inbox receipts;
+- local runner SQLite is still truth for local execution state, worktrees, sessions, logs, evidence, handoffs, clusters, issue test environments, image attachments, and runtime metadata;
+- server-owned issues currently guard agent-session starts and attachment uploads until the runtime bridge can operate directly on PG-backed issue ids.
+
+Server workspace endpoints require `Authorization: Bearer <msp-token>`:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/workspaces/{workspaceID}/projects` | List projects in the selected workspace. |
+| `POST` | `/api/workspaces/{workspaceID}/projects` | Create a project in the selected workspace. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Update project settings. |
+| `DELETE` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Delete a project when no issues reference it. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Read the workspace project runbook. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the workspace project runbook and record a revision. |
+| `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List Type and Priority label options. |
+| `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level issues in the selected workspace. |
+| `POST` | `/api/workspaces/{workspaceID}/issues` | Create an issue from `title`, `body` or `prompt`, optional `projectId`, optional labels, and optional child task drafts. |
+| `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Load issue detail with project, child issues, labels, comments, and reaction summaries. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update issue title, body, or workflow status. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks` | Create a child issue task. |
+| `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks/{taskID}` | Delete a child issue task under the parent. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/labels` | Replace an issue's selected label keys. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments` | Add a Markdown human comment. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}` | Edit the current user's human comment. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current user's reaction to a comment. |
+| `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current user's reaction from a comment. |
+
+Create a server-backed project and issue:
+
+```bash
+project_json="$(curl -sS -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"mspace","sourceType":"local","repoPath":"/Users/mlhiter/personal-projects/mspace","defaultBranch":"main"}')"
+project_id="$(printf '%s' "$project_json" | jq -r '.id')"
+
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d "{\"projectId\":\"$project_id\",\"body\":\"Move workspace issue data to server PG\\n\\n- [ ] Keep runner workdirs local\",\"labelKeys\":[\"type:feat\",\"priority:p1\"]}"
+```
+
+When `projectId` is omitted, the server infers the best matching existing project from the title, body, and task text. If no project exists, issue creation returns `400 Bad Request`.
+
+## Legacy Runner Issue Writing APIs
+
+These endpoints remain for the current runtime bridge, local attachments, and older test data. The desktop product surfaces should use the server workspace endpoints above for both personal and team workspaces.
 
 The desktop uses a rich TipTap editor for issue creation, human comments, project runbook editing, and read-only Issue Detail runbook viewing, but the runner API stores Markdown text. Image uploads are stored as attachment records and inserted into Markdown as stable `/api/attachments/<id>` image URLs, so future storage backends can change without rewriting issue bodies. Issue write APIs require a bearer token:
 
@@ -112,14 +164,14 @@ curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/comments" \
 
 ## Inbox APIs
 
-The local runner still exposes a fallback unread Inbox, while signed-in team Inbox state belongs to the server control plane. External local tools should treat runner unread as local-only and use the control-plane APIs for team read state.
+The local runner still exposes legacy unread Inbox endpoints, while signed-in workspace Inbox state belongs to the server control plane. External local tools should treat runner unread as local-only and use the control-plane APIs for product read state.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/control-plane/session` | Give the runner the current server base URL, token, and workspace id so it can report reviewable issue events. |
-| `GET` | `/api/inbox` | List local fallback unread inbox items. |
-| `POST` | `/api/inbox/issues/{issueID}/read` | Mark one local fallback inbox item read. |
-| `GET` | `/api/inbox/stream` | Stream local fallback inbox invalidation events. |
+| `GET` | `/api/inbox` | List legacy local unread inbox items. |
+| `POST` | `/api/inbox/issues/{issueID}/read` | Mark one legacy local inbox item read. |
+| `GET` | `/api/inbox/stream` | Stream legacy local inbox invalidation events. |
 
 Configure the runner to report reviewable events to the control plane:
 
@@ -129,7 +181,7 @@ curl -X POST "$MSPACE_API_BASE/api/control-plane/session" \
   -d '{"serverBaseUrl":"http://127.0.0.1:8787","token":"<msp-token>","workspaceId":"<workspace-id>"}'
 ```
 
-Personal workspaces are the default after GitHub sign-in. Team Inbox, invitations, worker registration tokens, registered workers, and runtime tasks require an explicit team workspace:
+Personal workspaces are the default after GitHub sign-in. Invitations, worker registration tokens, registered workers, and runtime tasks require an explicit team workspace:
 
 ```bash
 curl -X POST "$MSPACE_SERVER_BASE/api/workspaces" \
@@ -138,7 +190,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces" \
   -d '{"name":"Engineering team","kind":"team"}'
 ```
 
-The team Inbox endpoints live on the server base URL and require `Authorization: Bearer <msp-token>`:
+The workspace Inbox endpoints live on the server base URL and require `Authorization: Bearer <msp-token>`:
 
 ```bash
 curl -H "Authorization: Bearer <msp-token>" \
@@ -168,7 +220,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspace-invitations/accept" \
 
 The raw `msi_...` invite token is returned only when the invitation is created. Listing invitations returns metadata and a token prefix only.
 
-Create an issue with a creator display snapshot:
+Legacy runner issue creation with a display snapshot:
 
 ```bash
 curl -X POST "$MSPACE_API_BASE/api/issues" \
@@ -177,7 +229,7 @@ curl -X POST "$MSPACE_API_BASE/api/issues" \
   -d '{"body":"Investigate login avatar rendering","creatorName":"mlhiter","creatorAvatarUrl":"https://avatars.githubusercontent.com/u/<github-id>?v=4"}'
 ```
 
-Add a comment with an author display snapshot:
+Legacy runner comment creation with a display snapshot:
 
 ```bash
 curl -X POST "$MSPACE_API_BASE/api/issues/<issue-id>/comments" \

@@ -25,7 +25,7 @@ mspace is a review Inbox and Issue workspace for software teams that want coding
 The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, inline child-issue tasks, comments, agent session, branch state, logs, deployment evidence, preview URL, and cleanup decision in one place.
 
 > [!NOTE]
-> mspace is currently a runnable local desktop MVP with a server/control-plane slice. GitHub sign-in creates a personal workspace by default; team collaboration is enabled by creating an explicit team workspace from Workspace Settings. Agent execution stays local-first by default, while team workspaces can route work through registered Server Workers.
+> mspace is currently a runnable local desktop MVP with a server/control-plane slice. GitHub sign-in creates a personal workspace by default, and signed-in workspace product data lives in server Postgres. Agent execution stays local-first by default, while team workspaces can route work through registered Server Workers.
 
 ## Screenshots
 
@@ -63,7 +63,7 @@ Production deployment uses the root `vercel.json`:
 ## Features
 
 - Electron desktop app with Inbox, Issues, Agents, Clusters, Projects, Issue Detail, and Session Detail screens.
-- Go server control plane with GitHub OAuth entrypoints, state-bound desktop login polling, Postgres migrations, mspace session tokens, personal/team workspaces, workspace membership, invitations, team Inbox receipts, runtime worker registration, and runtime task queues.
+- Go server control plane with GitHub OAuth entrypoints, state-bound desktop login polling, Postgres migrations, mspace session tokens, personal/team workspaces, workspace product data, workspace membership, invitations, Inbox receipts, runtime worker registration, and runtime task queues.
 - GitHub-authenticated sidebar account/workspace state, plus local issue creator and comment actor display snapshots with human and Codex avatars.
 - Workspace Settings creates team workspaces from the personal default, then exposes Team access and Team Runtime panels for members, one-time invites, worker tokens, workers, task events, and worker logs.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, Material Icon Theme file icons, and real shadcn/ui source components in `@mspace/ui`.
@@ -97,7 +97,7 @@ mspace separates collaboration, execution, and validation:
 
 | Layer | What it owns | Current implementation |
 | --- | --- | --- |
-| Control plane | Users, workspaces, membership, GitHub identity, mspace auth sessions, future GitHub App installations | Go server in `server/`, chi, PostgreSQL through `pgx` |
+| Control plane | Users, workspaces, product data, membership, GitHub identity, mspace auth sessions, future GitHub App installations | Go server in `server/`, chi, PostgreSQL through `pgx` |
 | Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review | Electron, React, TanStack Router, React Query, shared `@mspace/ui` |
 | Local runner | API, SQLite state, SSE streams, worktree preparation, Codex session lifecycle | Go, chi, SQLite, `codex app-server --listen stdio://` |
 | Server Worker runtime | Team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
@@ -179,7 +179,7 @@ Local data paths:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.mspace/mspace.db` | SQLite database for issues, comments, reactions, sessions, evidence, failure records, handoffs, and local issue image attachment blobs. |
+| `~/.mspace/mspace.db` | SQLite database for runner runtime state such as sessions, evidence, failure records, handoffs, cluster/test-environment records, and local attachment blobs. |
 | `~/.mspace/repos/<owner>/<repo>` | Cached clone path for GitHub-imported projects. |
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree for one agent session. |
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Session context markdown included in Codex prompts. |
@@ -187,6 +187,14 @@ Local data paths:
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional agent-written deployment result; `previewUrl` is copied back to the issue test environment, including from continuation sessions that need to refresh the current preview. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional agent-written review snapshot for commands, tests, build/deploy result, summary, risks, and follow-ups. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-written project runbook update imported after a successful session. |
+
+Legacy local product rows from earlier development snapshots can be copied into the current personal workspace with:
+
+```bash
+node scripts/import-local-sqlite-product-data.mjs
+```
+
+The script reads `~/.mspace/mspace.db`, preserves legacy project, issue, comment, label, reaction, runbook, and Inbox event UUIDs, and writes them into the server control plane. Use it only for development/test data migration when a signed-in personal workspace is empty after the Postgres move.
 
 ## Verification
 

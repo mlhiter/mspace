@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-12
+> Status: local MVP implementation snapshot, updated 2026-05-13
 
 ## One-Line Definition
 
@@ -14,6 +14,7 @@ The repository now has a runnable local desktop MVP:
 - create and manage issues in the Issues tab;
 - jump to issues and projects from the sidebar global search or `Command+K` palette;
 - sign in with GitHub through the local server control plane and show the current user/workspace state in the sidebar;
+- store signed-in workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts in server Postgres for both personal and team workspaces;
 - write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page, where they can be toggled or deleted;
 - classify new issues asynchronously with a background triage agent that assigns one Conventional Commit type label;
 - label priority manually from Issue Detail, and scan/filter labels from the Issues list;
@@ -27,7 +28,7 @@ The repository now has a runnable local desktop MVP:
 - clean a completed or cancelled session worktree from Session Detail while preserving the issue timeline, logs, evidence, and session metadata;
 - cache imported GitHub repositories under `~/.mspace/repos/<owner>/<repo>`;
 - show a project runbook in Projects, open it from the Issue Detail sidebar as a read-only TipTap modal, and update it either from direct Markdown edits or from successful agent session artifacts;
-- store session metadata, logs, comments, comment reactions, issues, projects, evidence, local creator/author display snapshots, and issue image attachment blobs in SQLite under `~/.mspace/mspace.db`;
+- keep SQLite under `~/.mspace/mspace.db` as the local runner runtime store for sessions, logs, evidence, issue image attachment blobs, clusters, issue test environments, handoffs, and execution metadata;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage workspace automation policy, keeping source commit capture always on while optionally creating draft PRs after captured source commits;
 - manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
@@ -228,7 +229,7 @@ Still outside the current implemented MVP:
 - server-owned GitHub App PR automation;
 - automated namespace cleanup policy beyond the current manual cleanup/retain decision.
 
-The product architecture is now explicitly moving toward a server control plane for multiplayer collaboration. The local desktop runner remains the execution path, but users, workspaces, membership, GitHub identity, auth sessions, audit, and future GitHub App installation state should live in the server rather than in local-only SQLite.
+The product architecture now uses the server control plane as the product truth for every signed-in workspace. The local desktop runner remains the personal runtime path, while users, workspaces, membership, GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, audit, and future GitHub App installation state live in the server rather than in local SQLite.
 
 The current runner `creatorName`/`creatorAvatarUrl` and `authorName`/`authorAvatarUrl` fields are local display snapshots for the MVP. They should not become a second account system; shared issue ownership, comments, and permissions belong behind the control plane.
 

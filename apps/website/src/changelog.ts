@@ -7,14 +7,27 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-05-14",
+    title: "Legacy personal data import",
+    summary:
+      "mspace added a recovery path for existing local test data after personal workspace product state moved to the server control plane.",
+    items: [
+      "Added a one-time local SQLite import path so existing personal test issues, comments, labels, reactions, Inbox rows, and project runbooks can be carried into server Postgres.",
+      "Documented the import path for development workspaces that still have legacy runner product rows in `~/.mspace/mspace.db`.",
+    ],
+  },
+  {
     date: "2026-05-13",
     title: "Personal and team workspace split",
     summary:
       "mspace made team collaboration explicit so local single-user work and shared team execution no longer blur together.",
     items: [
       "Made GitHub sign-in land in a personal workspace by default.",
+      "Moved workspace projects, runbooks, issues, child tasks, comments, reactions, labels, and Inbox receipts into the server control plane for both personal and team workspaces.",
+      "Kept runner SQLite focused on local runtime state, attachments, evidence, test environments, PR handoff, and execution metadata.",
+      "Made Issues, Projects, Project runbooks, global search, and Issue Detail use server workspace APIs for signed-in workspaces.",
       "Moved team workspace creation into the left workspace menu beside workspace switching.",
-      "Limited Team worker routing, server Inbox receipts, invitations, runtime registration, workers, and task queues to team workspaces.",
+      "Limited Team worker routing, invitations, runtime registration, workers, and task queues to team workspaces.",
       "Updated the workspace menu so users can see whether they are operating in a Personal or Team workspace.",
     ],
   },
