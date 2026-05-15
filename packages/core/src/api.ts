@@ -41,6 +41,8 @@ import type {
   RuntimeWorker,
   SessionDetail,
   StartTestDeployInput,
+  SuggestIssueTitleInput,
+  SuggestIssueTitleResult,
   WorkspaceInboxItem,
   UpdateCommentInput,
   UpdateIssueLabelsInput,
@@ -474,6 +476,12 @@ export const controlPlaneApi = {
 		}),
 	createIssue: (token: string, workspaceId: string, input: CreateIssueInput) =>
 		requestControlPlane<{ issueId: string }>(`/api/workspaces/${workspaceId}/issues`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	suggestIssueTitle: (token: string, workspaceId: string, input: SuggestIssueTitleInput) =>
+		requestControlPlane<SuggestIssueTitleResult>(`/api/workspaces/${workspaceId}/issues/suggest-title`, {
 			method: "POST",
 			headers: authHeaders(token),
 			body: JSON.stringify(input),

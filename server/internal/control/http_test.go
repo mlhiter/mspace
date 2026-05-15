@@ -76,6 +76,19 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	}
 }
 
+func TestFallbackIssueTitleSkipsGitHubURLLine(t *testing.T) {
+	title := fallbackIssueTitle("https://github.com/mlhiter/orcai.git\n这个项目，我想优化一下他的页面")
+	if title == "" {
+		t.Fatal("expected fallback title")
+	}
+	if strings.Contains(title, "github.com") || strings.Contains(title, "[") || strings.Contains(title, "]") {
+		t.Fatalf("expected readable title, got %q", title)
+	}
+	if !strings.Contains(strings.ToLower(title), "orcai") {
+		t.Fatalf("expected repository name in title, got %q", title)
+	}
+}
+
 func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 	store := NewMemoryStore()
 	server := NewServer(Config{

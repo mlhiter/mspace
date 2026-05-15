@@ -32,6 +32,7 @@ import {
   Send,
   SmilePlus,
   Trash2,
+  WandSparkles,
   X,
 } from "lucide-react";
 import {
@@ -4340,10 +4341,11 @@ function IssueHeaderMeta(props: {
   priorityLabel?: IssueLabel;
   triageStatus: string;
   assignee: ActorIdentity;
+  onProjectClick?: () => void;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <HeaderMetaBadge label="Project" value={props.projectName} />
+      <HeaderMetaBadge label="Project" value={props.projectName} onClick={props.onProjectClick} />
       <StatusBadge
         value={displayIssueStatus(props.status)}
         valueLabel={issueStatusLabel(props.status)}
@@ -4365,19 +4367,30 @@ function IssueHeaderMeta(props: {
   );
 }
 
-function HeaderMetaBadge(props: { label?: string; value: string; muted?: boolean }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex h-6 max-w-full items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium leading-4 shadow-[inset_0_0_0_1px_var(--line)]",
-        props.muted
-          ? "bg-[color:var(--block)] text-[color:var(--muted)]"
-          : "bg-[color:var(--surface)] text-[color:var(--muted-strong)]",
-      )}
-      title={props.label ? `${props.label}: ${props.value}` : props.value}
-    >
+function HeaderMetaBadge(props: { label?: string; value: string; muted?: boolean; onClick?: () => void }) {
+  const className = cn(
+    "inline-flex h-6 max-w-full items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium leading-4 shadow-[inset_0_0_0_1px_var(--line)]",
+    props.muted
+      ? "bg-[color:var(--block)] text-[color:var(--muted)]"
+      : "bg-[color:var(--surface)] text-[color:var(--muted-strong)]",
+    props.onClick && "transition-colors hover:bg-[color:var(--hover)]",
+  );
+  const content = (
+    <>
       {props.label ? <span className="shrink-0 text-[color:var(--faint)]">{props.label}</span> : null}
       <span className="truncate">{props.value}</span>
+    </>
+  );
+  if (props.onClick) {
+    return (
+      <button type="button" className={className} title={props.label ? `${props.label}: ${props.value}` : props.value} onClick={props.onClick}>
+        {content}
+      </button>
+    );
+  }
+  return (
+    <span className={className} title={props.label ? `${props.label}: ${props.value}` : props.value}>
+      {content}
     </span>
   );
 }
@@ -4394,6 +4407,25 @@ function runbookUpdatedLabel(value: string) {
 
 function projectDisplayName(project: Project | null | undefined) {
   return project?.name || "No project";
+}
+
+function detectGitHubRepoUrl(text: string): string {
+  const normalized = text.replace(/[()[\]<>`"']/g, " ");
+  const candidates = normalized.split(/\s+/);
+  for (const candidate of candidates) {
+    const trimmed = candidate.replace(/[.,;:!?]+$/g, "");
+    if (!trimmed.includes("github.com/")) continue;
+    try {
+      const parsed = new URL(trimmed.startsWith("http") ? trimmed : `https://${trimmed}`);
+      if (parsed.hostname.toLowerCase() !== "github.com") continue;
+      const parts = parsed.pathname.replace(/^\/+|\/+$/g, "").split("/");
+      if (parts.length < 2) continue;
+      return `https://github.com/${parts[0]}/${parts[1].replace(/\.git$/, "")}.git`;
+    } catch {
+      continue;
+    }
+  }
+  return "";
 }
 
 function ProjectRunbookModal(props: {
@@ -4681,6 +4713,133 @@ function TestDeployModal(props: {
   );
 }
 
+function ProjectAttachModal(props: {
+  projects: Project[];
+  currentProjectId: string;
+  suggestedRepoUrl: string;
+  repoUrl: string;
+  projectName: string;
+  attachError?: Error | null;
+  createError?: Error | null;
+  isAttaching: boolean;
+  onRepoUrlChange: (value: string) => void;
+  onProjectNameChange: (value: string) => void;
+  onAttachProject: (projectId: string) => void;
+  onCreateAndAttach: () => void;
+  onClose: () => void;
+}) {
+  const canCreate = props.repoUrl.trim().length > 0 && !props.isAttaching;
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") props.onClose();
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [props]);
+
+  return (
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
+      <button type="button" aria-label="Close project attachment dialog backdrop" className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="project-attach-title"
+        className="relative max-h-[calc(100vh-40px)] w-full max-w-[620px] overflow-auto rounded-[12px] bg-[color:var(--paper)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.18),0_0_0_1px_var(--line)]"
+      >
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="mb-2 flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
+              <Boxes data-icon />
+              Project
+            </div>
+            <h2 id="project-attach-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">Attach project</h2>
+            <p className="mt-1 max-w-[58ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
+              Choose the repository boundary before running agents, PR handoff, or a test environment.
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close modal"
+            className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
+            onClick={props.onClose}
+          >
+            <X data-icon />
+          </button>
+        </div>
+
+        <div className="grid gap-4">
+          {(props.attachError || props.createError) ? (
+            <Notice tone="danger">{props.attachError?.message || props.createError?.message}</Notice>
+          ) : null}
+
+          <Field label="Existing project" hint={props.projects.length > 0 ? "Switching project also updates existing child tasks." : "No existing projects in this workspace."}>
+            <Select
+              value={props.currentProjectId || "__none"}
+              onValueChange={(projectId) => {
+                if (projectId !== "__none") props.onAttachProject(projectId);
+              }}
+              disabled={props.projects.length === 0 || props.isAttaching}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">Select project</SelectItem>
+                {props.projects.map((project) => (
+                  <SelectItem key={project.id} value={project.id}>
+                    {project.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+
+          <div className="flex items-center gap-3 text-[12px] text-[color:var(--faint)]">
+            <span className="h-px flex-1 bg-[color:var(--line)]" />
+            or create from GitHub
+            <span className="h-px flex-1 bg-[color:var(--line)]" />
+          </div>
+
+          {props.suggestedRepoUrl ? (
+            <div className="flex min-w-0 items-center gap-2 rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+              <WandSparkles data-icon className="shrink-0" />
+              <span className="min-w-0 truncate">Detected {props.suggestedRepoUrl}</span>
+            </div>
+          ) : null}
+
+          <div className="grid gap-3">
+            <Field label="GitHub repository URL">
+              <Input
+                value={props.repoUrl}
+                onChange={(event) => props.onRepoUrlChange(event.target.value)}
+                placeholder="https://github.com/org/repo"
+              />
+            </Field>
+            <Field label="Project name" hint="Optional. Leave empty to use the repository name.">
+              <Input
+                value={props.projectName}
+                onChange={(event) => props.onProjectNameChange(event.target.value)}
+                placeholder="optional"
+              />
+            </Field>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isAttaching}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={props.onCreateAndAttach} disabled={!canCreate}>
+              <Plus data-icon />
+              {props.isAttaching ? "Attaching..." : "Create and attach"}
+            </Button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export function IssueDetailPage() {
   const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
   const search = useSearch({ strict: false }) as { tab?: string };
@@ -4718,6 +4877,12 @@ export function IssueDetailPage() {
   const [issueTab, setIssueTab] = useState<IssueTab>(searchTab);
   const [testDeployOpen, setTestDeployOpen] = useState(false);
   const [runbookOpen, setRunbookOpen] = useState(false);
+  const [editingIssue, setEditingIssue] = useState(false);
+  const [issueTitleDraft, setIssueTitleDraft] = useState("");
+  const [issueBodyDraft, setIssueBodyDraft] = useState("");
+  const [projectAttachOpen, setProjectAttachOpen] = useState(false);
+  const [newProjectRepoUrl, setNewProjectRepoUrl] = useState("");
+  const [newProjectName, setNewProjectName] = useState("");
   const [testDeployForm, setTestDeployForm] = useState<StartTestDeployInput>({
     agentProfile: "codex",
     clusterId: "",
@@ -5232,10 +5397,57 @@ export function IssueDetailPage() {
     },
   });
 
+  const updateIssueContent = useMutation({
+    mutationFn: (input: { title: string; body: string }) =>
+      controlPlaneApi.updateIssue(auth.token, workspaceId, issueId, input),
+    onSuccess: async () => {
+      setEditingIssue(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
+      ]);
+    },
+  });
+
   const attachProject = useMutation({
     mutationFn: (projectId: string) =>
       controlPlaneApi.updateIssue(auth.token, workspaceId, issueId, { projectId }),
     onSuccess: async () => {
+      setProjectAttachOpen(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
+        queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
+        queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
+      ]);
+    },
+  });
+
+  const createAndAttachProject = useMutation({
+    mutationFn: async (input: { name: string; repoUrl: string }) => {
+      const project = await controlPlaneApi.createProject(auth.token, workspaceId, {
+        name: input.name,
+        sourceType: "github",
+        repoPath: "",
+        repoUrl: input.repoUrl,
+        defaultBranch: "",
+        kubeContext: "",
+        kubeconfigPath: "",
+        namespace: "",
+        imageRegistryPrefix: "",
+        previewDomain: "",
+        ingressClass: "",
+        nodeHost: "",
+        defaultClusterId: "",
+      });
+      await controlPlaneApi.updateIssue(auth.token, workspaceId, issueId, { projectId: project.id });
+      return project;
+    },
+    onSuccess: async () => {
+      setProjectAttachOpen(false);
+      setNewProjectRepoUrl("");
+      setNewProjectName("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
@@ -5419,13 +5631,14 @@ export function IssueDetailPage() {
       </PageFrame>
     );
   }
-  const creatorActor = humanActor(detail.issue.creatorName, detail.issue.creatorAvatarUrl);
+  const loadedDetail = detail;
+  const creatorActor = humanActor(loadedDetail.issue.creatorName, loadedDetail.issue.creatorAvatarUrl);
   const composerActor = storedHumanActor();
-  const assigneeActor = actorForAssignee(detail.issue.assigneeType, detail.issue.assignee);
-  const projectCluster = clusters.find((cluster) => cluster.id === detail.project?.defaultClusterId);
-  const testCluster = clusters.find((cluster) => cluster.id === detail.testEnvironment?.clusterId);
-  const issueLabels = listOrEmpty(detail.labels);
-  const rawComments = listOrEmpty(detail.comments);
+  const assigneeActor = actorForAssignee(loadedDetail.issue.assigneeType, loadedDetail.issue.assignee);
+  const projectCluster = clusters.find((cluster) => cluster.id === loadedDetail.project?.defaultClusterId);
+  const testCluster = clusters.find((cluster) => cluster.id === loadedDetail.testEnvironment?.clusterId);
+  const issueLabels = listOrEmpty(loadedDetail.labels);
+  const rawComments = listOrEmpty(loadedDetail.comments);
   const latestRawComment = rawComments[0];
   const editableCommentId =
     latestRawComment &&
@@ -5434,16 +5647,49 @@ export function IssueDetailPage() {
     !parseSessionActionComment(latestRawComment.body) &&
     !parseStatusTransitionComment(latestRawComment.body) &&
     !hasActiveSession &&
-    !listOrEmpty(detail.sessions).some((session) => session.triggerCommentId === latestRawComment.id)
+    !listOrEmpty(loadedDetail.sessions).some((session) => session.triggerCommentId === latestRawComment.id)
       ? latestRawComment.id
       : "";
   const selectedTypeLabel = issueLabels.find((label) => issueLabelMatchesDimension(label, "type"));
   const selectedPriorityLabel = issueLabels.find((label) => issueLabelMatchesDimension(label, "priority"));
   const showIssueSidebar = issueTab === "overview";
+  const suggestedRepoUrl = detectGitHubRepoUrl(`${loadedDetail.issue.title}\n${loadedDetail.issue.body}`);
+  const projectAttachRepoUrl = newProjectRepoUrl;
+  const canSaveIssueContent = issueTitleDraft.trim().length > 0 && !updateIssueContent.isPending;
+
+  function startIssueEditing() {
+    setIssueTitleDraft(loadedDetail.issue.title);
+    setIssueBodyDraft(loadedDetail.issue.body);
+    updateIssueContent.reset();
+    setEditingIssue(true);
+  }
+
+  function cancelIssueEditing() {
+    setEditingIssue(false);
+    setIssueTitleDraft("");
+    setIssueBodyDraft("");
+    updateIssueContent.reset();
+  }
+
+  function saveIssueContent() {
+    if (!canSaveIssueContent) return;
+    updateIssueContent.mutate({
+      title: issueTitleDraft,
+      body: issueBodyDraft,
+    });
+  }
+
+  function openProjectAttach() {
+    setNewProjectRepoUrl(suggestedRepoUrl);
+    setNewProjectName("");
+    attachProject.reset();
+    createAndAttachProject.reset();
+    setProjectAttachOpen(true);
+  }
 
   return (
     <PageFrame
-      title={detail.issue.title}
+      title={editingIssue ? issueTitleDraft || detail.issue.title : detail.issue.title}
       subtitle={
         <IssueHeaderMeta
           projectName={projectName}
@@ -5452,7 +5698,29 @@ export function IssueDetailPage() {
           priorityLabel={selectedPriorityLabel}
           triageStatus={detail.issue.triageStatus}
           assignee={assigneeActor}
+          onProjectClick={openProjectAttach}
         />
+      }
+      actions={
+        issueTab === "overview" ? (
+          editingIssue ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Button type="button" variant="secondary" onClick={cancelIssueEditing} disabled={updateIssueContent.isPending}>
+                <X data-icon />
+                Cancel
+              </Button>
+              <Button type="button" onClick={saveIssueContent} disabled={!canSaveIssueContent}>
+                <Save data-icon />
+                {updateIssueContent.isPending ? "Saving..." : "Save issue"}
+              </Button>
+            </div>
+          ) : (
+            <Button type="button" variant="secondary" onClick={startIssueEditing}>
+              <Pencil data-icon />
+              Edit issue
+            </Button>
+          )
+        ) : undefined
       }
       breadcrumbs={[
         { label: "mspace", to: "/inbox" },
@@ -5474,7 +5742,25 @@ export function IssueDetailPage() {
           {issueTab === "overview" ? (
             <>
               <section className="border-b border-[color:var(--line)] pb-8">
-                {detail.issue.body ? (
+                {editingIssue ? (
+                  <div className="grid gap-4">
+                    {updateIssueContent.error ? <Notice tone="danger">{updateIssueContent.error.message}</Notice> : null}
+                    <Field label="Title">
+                      <Input
+                        value={issueTitleDraft}
+                        onChange={(event) => setIssueTitleDraft(event.target.value)}
+                        className="text-[16px] font-medium"
+                      />
+                    </Field>
+                    <Field label="Body">
+                      <IssueDocumentEditor
+                        value={issueBodyDraft}
+                        onChange={setIssueBodyDraft}
+                        placeholder="Write the issue..."
+                      />
+                    </Field>
+                  </div>
+                ) : detail.issue.body ? (
                   <RichText agents={agents} className="text-[15px] leading-8">{detail.issue.body}</RichText>
                 ) : (
                   <div className="text-[15px] leading-8 text-[color:var(--muted)]">No issue body yet.</div>
@@ -5830,35 +6116,27 @@ export function IssueDetailPage() {
             <SidebarSection title="Project">
               {detail.project?.id ? (
                 <div className="grid gap-2">
-                  <MetaLine label="Name" value={detail.project.name} />
+                  <div className="grid min-w-0 grid-cols-[86px_minmax(0,1fr)] items-center gap-2">
+                    <span className="text-[12px] leading-5 text-[color:var(--muted)]">Name</span>
+                    <button
+                      type="button"
+                      className="min-w-0 rounded-[6px] px-1 py-1 text-left text-[12px] font-medium leading-5 text-[color:var(--muted-strong)] transition-colors hover:bg-[color:var(--hover)]"
+                      onClick={openProjectAttach}
+                    >
+                      <span className="block truncate">{detail.project.name}</span>
+                    </button>
+                  </div>
                   <MetaLine label="Repo" value={detail.project.repoPath || "not configured"} />
                   <MetaLine label="Default cluster" value={projectCluster?.name || "not configured"} />
                 </div>
               ) : (
-                <div className="grid gap-2 rounded-[8px] bg-[color:var(--block-subtle)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                <div className="grid gap-3 rounded-[8px] bg-[color:var(--block-subtle)] px-3 py-2.5 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
                   <span className="font-medium text-[color:var(--muted-strong)]">No project attached</span>
                   <span>Attach a project before running agents, PR handoff, or test environments.</span>
-                  {projects.length > 0 ? (
-                    <Select
-                      value="__none"
-                      onValueChange={(projectId) => {
-                        if (projectId !== "__none") attachProject.mutate(projectId);
-                      }}
-                      disabled={attachProject.isPending}
-                    >
-                      <SelectTrigger className="h-8 min-h-8 bg-[color:var(--paper)] text-[12px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none">Attach project</SelectItem>
-                        {projects.map((project) => (
-                          <SelectItem key={project.id} value={project.id}>
-                            {project.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : null}
+                  <Button type="button" variant="secondary" size="sm" onClick={openProjectAttach}>
+                    <Plus data-icon />
+                    Attach project
+                  </Button>
                   {attachProject.error ? <Notice tone="danger">{attachProject.error.message}</Notice> : null}
                 </div>
               )}
@@ -5982,6 +6260,23 @@ export function IssueDetailPage() {
           onChange={setTestDeployForm}
           onClose={() => setTestDeployOpen(false)}
           onSubmit={() => startTestDeploy.mutate(testDeployForm)}
+        />
+      ) : null}
+      {projectAttachOpen ? (
+        <ProjectAttachModal
+          projects={projects}
+          currentProjectId={detail.project?.id || ""}
+          suggestedRepoUrl={suggestedRepoUrl}
+          repoUrl={projectAttachRepoUrl}
+          projectName={newProjectName}
+          attachError={attachProject.error}
+          createError={createAndAttachProject.error}
+          isAttaching={attachProject.isPending || createAndAttachProject.isPending}
+          onRepoUrlChange={setNewProjectRepoUrl}
+          onProjectNameChange={setNewProjectName}
+          onAttachProject={(projectId) => attachProject.mutate(projectId)}
+          onCreateAndAttach={() => createAndAttachProject.mutate({ name: newProjectName, repoUrl: projectAttachRepoUrl })}
+          onClose={() => setProjectAttachOpen(false)}
         />
       ) : null}
     </PageFrame>

@@ -702,6 +702,17 @@ export interface CreateIssueInput {
   attachmentIds?: string[];
 }
 
+export interface SuggestIssueTitleInput {
+  title?: string;
+  body?: string;
+  prompt?: string;
+}
+
+export interface SuggestIssueTitleResult {
+  title: string;
+  source: "user" | "ai" | "fallback" | string;
+}
+
 export interface UpdateIssueInput {
   projectId?: string;
   title?: string;

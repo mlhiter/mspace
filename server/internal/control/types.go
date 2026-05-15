@@ -150,6 +150,17 @@ type CreateIssueEventInput struct {
 	RecipientUserIDs []string        `json:"recipientUserIds"`
 }
 
+type SuggestIssueTitleInput struct {
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	Prompt string `json:"prompt"`
+}
+
+type SuggestIssueTitleResult struct {
+	Title  string `json:"title"`
+	Source string `json:"source"`
+}
+
 type ReadThroughInput struct {
 	ThroughEventID string `json:"throughEventId"`
 }

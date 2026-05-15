@@ -261,6 +261,7 @@ export function IssuesPage() {
         <CreateIssueModal
           onClose={closeCreateModal}
           createIssue={(input) => controlPlaneApi.createIssue(auth.token, workspaceId, input)}
+          suggestTitle={(input) => controlPlaneApi.suggestIssueTitle(auth.token, workspaceId, input)}
           issueQueryKey={issuesQueryKey}
           inboxQueryKey={inboxQueryKey}
           projectsQueryKey={projectsQueryKey}

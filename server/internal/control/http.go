@@ -52,6 +52,7 @@ func (s *Server) Routes() http.Handler {
 	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleUpdateProjectRunbook)
 	r.Get("/api/workspaces/{workspaceID}/issue-label-definitions", s.handleListIssueLabelDefinitions)
 	r.Get("/api/workspaces/{workspaceID}/issues", s.handleListIssues)
+	r.Post("/api/workspaces/{workspaceID}/issues/suggest-title", s.handleSuggestIssueTitle)
 	r.Post("/api/workspaces/{workspaceID}/issues", s.handleCreateIssue)
 	r.Get("/api/workspaces/{workspaceID}/issues/{issueID}", s.handleGetIssue)
 	r.Put("/api/workspaces/{workspaceID}/issues/{issueID}", s.handleUpdateIssue)
@@ -544,6 +545,33 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"issueId": issueID})
+}
+
+func (s *Server) handleSuggestIssueTitle(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("workspaceID is required"))
+		return
+	}
+	if _, err := s.store.ListProjects(r.Context(), user.ID, workspaceID); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	input := SuggestIssueTitleInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result := suggestIssueTitle(r.Context(), input)
+	if strings.TrimSpace(result.Title) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("issue cannot be empty"))
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {

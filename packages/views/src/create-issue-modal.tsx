@@ -13,6 +13,7 @@ import { IssueDocumentEditor } from "./issue-document-editor";
 export function CreateIssueModal(props: {
   onClose: () => void;
   createIssue: (input: CreateIssueInput) => Promise<{ issueId: string }>;
+  suggestTitle: (input: Pick<CreateIssueInput, "title" | "body" | "prompt">) => Promise<{ title: string; source: string }>;
   issueQueryKey: readonly unknown[];
   inboxQueryKey: readonly unknown[];
   projectsQueryKey: readonly unknown[];
@@ -22,8 +23,15 @@ export function CreateIssueModal(props: {
   const [prompt, setPrompt] = useState("");
   const canCreate = prompt.trim().length > 0;
 
-  const createIssue = useMutation({
-    mutationFn: props.createIssue,
+  const submitIssue = useMutation({
+    mutationFn: async (body: string) => {
+      const suggestion = await props.suggestTitle({ prompt: body });
+      const title = suggestion.title.trim();
+      if (title === "") {
+        throw new Error("Could not generate an issue title. Try rewriting the issue note.");
+      }
+      return props.createIssue({ title, body });
+    },
     onSuccess: async ({ issueId }) => {
       setPrompt("");
       await Promise.all([
@@ -47,11 +55,9 @@ export function CreateIssueModal(props: {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!canCreate) return;
-
-    createIssue.mutate({
-      prompt,
-    });
+    const body = prompt.trim();
+    if (body === "" || submitIssue.isPending) return;
+    submitIssue.mutate(body);
   }
 
   return (
@@ -87,9 +93,9 @@ export function CreateIssueModal(props: {
         </div>
 
         <form className="flex flex-col" onSubmit={handleSubmit}>
-          {createIssue.error ? (
+          {submitIssue.error ? (
             <div className="grid gap-3 px-8 pb-4">
-              <Notice tone="danger">{createIssue.error.message}</Notice>
+              <Notice tone="danger">{submitIssue.error.message}</Notice>
             </div>
           ) : null}
 
@@ -103,11 +109,11 @@ export function CreateIssueModal(props: {
           </section>
 
           <div className="flex justify-end gap-2 border-t border-[color:var(--line)] bg-[color:var(--surface)] px-8 py-4">
-            <Button type="button" variant="secondary" onClick={props.onClose} disabled={createIssue.isPending}>
+            <Button type="button" variant="secondary" onClick={props.onClose} disabled={submitIssue.isPending}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!canCreate || createIssue.isPending} className={cn(!canCreate && "opacity-60")}>
-              {createIssue.isPending ? "Creating..." : "Create issue"}
+            <Button type="submit" disabled={!canCreate || submitIssue.isPending} className={cn(!canCreate && "opacity-60")}>
+              {submitIssue.isPending ? "Creating..." : "Create issue"}
             </Button>
           </div>
         </form>
