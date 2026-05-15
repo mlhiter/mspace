@@ -30,6 +30,14 @@ GitHub Release notes should describe the release from a user and operator point 
 - known limitations;
 - the exact tag and commit.
 
+Release titles should start with the tag and should not repeat the repository name. Use titles like:
+
+```text
+v0.1.0: Personal Workspace MVP
+v0.2.0: Team Workspace MVP
+v0.2.1: Team Runtime fixes
+```
+
 The public website changelog in `apps/website/src/changelog.ts` is a progress log, not the source of truth for release notes. Keep both current when a release ships meaningful product, engineering, documentation, or website progress.
 
 ## Manual Tag Gate

@@ -76,7 +76,7 @@ jobs:
         run: |
           mkdir -p release-artifacts
           {
-            echo "# mspace ${GITHUB_REF_NAME}"
+            echo "# ${GITHUB_REF_NAME}"
             echo
             echo "- Tag: ${GITHUB_REF_NAME}"
             echo "- Commit: ${GITHUB_SHA}"
@@ -113,6 +113,6 @@ jobs:
               --draft \
               ${prerelease_flag} \
               --generate-notes \
-              --title "mspace ${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
               release-artifacts/release-verification.md
           fi
