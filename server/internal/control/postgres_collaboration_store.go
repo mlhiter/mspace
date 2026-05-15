@@ -643,10 +643,82 @@ func (s *PostgresStore) UpdateIssueLabels(ctx Context, userID, workspaceID, issu
 	if err := replaceIssueLabels(dbctx, tx, workspaceID, issueID, labels); err != nil {
 		return nil, err
 	}
+	nextTriageStatus := "none"
+	if hasIssueLabelDimension(labels, issueLabelDimensionType) {
+		nextTriageStatus = "classified"
+	}
+	if _, err := tx.Exec(dbctx, `
+		UPDATE issues
+		SET triage_status = $3, updated_at = now()
+		WHERE workspace_id = $1 AND id = $2
+	`, workspaceID, issueID, nextTriageStatus); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(dbctx); err != nil {
 		return nil, err
 	}
 	return s.listIssueLabels(dbctx, workspaceID, issueID)
+}
+
+func (s *PostgresStore) ApplyIssueTypeClassification(ctx Context, workspaceID, issueID string, labelKey string) error {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	labels, err := normalizeIssueLabelKeys([]string{labelKey})
+	if err != nil {
+		return err
+	}
+	if !hasIssueLabelDimension(labels, issueLabelDimensionType) {
+		return errors.New("issue type label is required")
+	}
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(dbctx)
+	issue, err := loadIssue(dbctx, tx, workspaceID, issueID)
+	if err != nil {
+		return err
+	}
+	if issue.TriageStatus != "pending" {
+		return nil
+	}
+	existingLabels, err := listIssueLabels(dbctx, tx, workspaceID, issueID)
+	if err != nil {
+		return err
+	}
+	nextLabels := replaceIssueLabelDimension(existingLabels, issueLabelDimensionType, labels[0])
+	if err := replaceIssueLabels(dbctx, tx, workspaceID, issueID, nextLabels); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(dbctx, `
+		UPDATE issues
+		SET triage_status = 'classified', updated_at = now()
+		WHERE workspace_id = $1 AND id = $2 AND triage_status = 'pending'
+	`, workspaceID, issueID); err != nil {
+		return err
+	}
+	return tx.Commit(dbctx)
+}
+
+func (s *PostgresStore) MarkIssueTriageFailed(ctx Context, workspaceID, issueID string) error {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	tag, err := s.pool.Exec(dbctx, `
+		UPDATE issues
+		SET triage_status = 'failed', updated_at = now()
+		WHERE workspace_id = $1 AND id = $2 AND triage_status = 'pending'
+	`, workspaceID, issueID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		if _, err := loadIssue(dbctx, s.pool, workspaceID, issueID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *PostgresStore) AddComment(ctx Context, user User, workspaceID, issueID string, input CreateCommentInput) (string, error) {
@@ -1194,7 +1266,11 @@ func replaceIssueLabels(ctx context.Context, q queryer, workspaceID, issueID str
 }
 
 func (s *PostgresStore) listIssueLabels(ctx context.Context, workspaceID, issueID string) ([]IssueLabel, error) {
-	rows, err := s.pool.Query(ctx, `
+	return listIssueLabels(ctx, s.pool, workspaceID, issueID)
+}
+
+func listIssueLabels(ctx context.Context, q queryer, workspaceID, issueID string) ([]IssueLabel, error) {
+	rows, err := q.Query(ctx, `
 		SELECT il.id::text, il.issue_id::text, COALESCE(il.label_id::text, ''), COALESCE(ld.key, ''), il.name, COALESCE(ld.dimension, ''), il.color, COALESCE(ld.sort_order, 0), il.created_at
 		FROM issue_labels il
 		LEFT JOIN issue_label_definitions ld ON ld.id = il.label_id

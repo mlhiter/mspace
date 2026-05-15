@@ -118,6 +118,50 @@ type codexErrorNotification struct {
 	TurnID    string         `json:"turnId"`
 }
 
+func startCodexAppServer(codexPath, cwd string) (*codexAppServerClient, error) {
+	cmd := exec.Command(codexPath, "app-server", "--listen", "stdio://")
+	cmd.Dir = cwd
+	cmd.Env = os.Environ()
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("codex stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("codex stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("codex stderr pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start codex app-server: %w", err)
+	}
+
+	client := &codexAppServerClient{
+		cmd:           cmd,
+		stdin:         stdin,
+		encoder:       json.NewEncoder(stdin),
+		pending:       map[int64]chan codexRPCResponse{},
+		notifications: make(chan codexRPCNotification, 128),
+		waitDone:      make(chan error, 1),
+	}
+	go client.readLoop(stdout)
+	go discardCodexDiagnostics(stderr)
+	go func() {
+		client.waitDone <- cmd.Wait()
+	}()
+	return client, nil
+}
+
+func discardCodexDiagnostics(reader io.Reader) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 16*1024), 1024*1024)
+	for scanner.Scan() {
+	}
+}
+
 func (c *codexAppServerClient) request(ctx context.Context, method string, params any, result any) error {
 	c.mu.Lock()
 	c.nextID++

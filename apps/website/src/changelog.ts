@@ -17,6 +17,7 @@ export const changelog: ChangelogEntry[] = [
       "Connected PG-backed team workspace issues to Team worker sessions through the runner bridge, so a shared issue comment can now queue an `agent_session` runtime task instead of stopping at collaboration state.",
       "Let users create workspace-level issues before choosing a project, while keeping project attachment required for agent runs, PR handoff, and test environments.",
       "Made issue creation note-first: mspace creates the issue immediately with a draft title, then refreshes the title in the background while keeping manual edits in Issue Detail.",
+      "Fixed server-backed issue type triage so new issues move out of the `Classifying` state once the classifier applies or fails.",
       "Made project attachment explicit from Issue Detail, including creating and attaching a GitHub-backed project from a repository URL found in the issue note.",
       "Refreshed the README and public website with a curated set of current running screenshots instead of publishing every Issue Detail tab.",
     ],

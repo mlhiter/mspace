@@ -595,6 +595,8 @@ type Store interface {
 	CreateIssueTask(ctx Context, userID, workspaceID, issueID string, input IssueTaskInput) (IssueListItem, error)
 	DeleteIssueTask(ctx Context, userID, workspaceID, issueID, taskID string) error
 	UpdateIssueLabels(ctx Context, userID, workspaceID, issueID string, input UpdateIssueLabelsInput) ([]IssueLabel, error)
+	ApplyIssueTypeClassification(ctx Context, workspaceID, issueID string, labelKey string) error
+	MarkIssueTriageFailed(ctx Context, workspaceID, issueID string) error
 	AddComment(ctx Context, user User, workspaceID, issueID string, input CreateCommentInput) (string, error)
 	UpdateComment(ctx Context, user User, workspaceID, issueID, commentID string, input UpdateCommentInput) (Comment, error)
 	SetCommentReaction(ctx Context, user User, workspaceID, issueID, commentID, reaction string) error

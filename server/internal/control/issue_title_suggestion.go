@@ -1,12 +1,10 @@
 package control
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -126,47 +124,7 @@ func suggestIssueTitleWithCodex(parent context.Context, text string) (string, er
 }
 
 func startIssueTitleCodexAppServer(codexPath string) (*codexAppServerClient, error) {
-	cmd := exec.Command(codexPath, "app-server", "--listen", "stdio://")
-	cmd.Dir = os.TempDir()
-	cmd.Env = os.Environ()
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("codex stdin pipe: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("codex stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("codex stderr pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start codex app-server: %w", err)
-	}
-
-	client := &codexAppServerClient{
-		cmd:           cmd,
-		stdin:         stdin,
-		encoder:       json.NewEncoder(stdin),
-		pending:       map[int64]chan codexRPCResponse{},
-		notifications: make(chan codexRPCNotification, 128),
-		waitDone:      make(chan error, 1),
-	}
-	go client.readLoop(stdout)
-	go discardIssueTitleDiagnostics(stderr)
-	go func() {
-		client.waitDone <- cmd.Wait()
-	}()
-	return client, nil
-}
-
-func discardIssueTitleDiagnostics(reader io.Reader) {
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 16*1024), 1024*1024)
-	for scanner.Scan() {
-	}
+	return startCodexAppServer(codexPath, os.TempDir())
 }
 
 func waitCodexTitleTurn(ctx context.Context, client *codexAppServerClient, threadID, turnID string) (string, error) {

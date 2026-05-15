@@ -423,6 +423,20 @@ func hasIssueLabelDimension(labels []IssueLabel, dimension string) bool {
 	return false
 }
 
+func replaceIssueLabelDimension(labels []IssueLabel, dimension string, replacement IssueLabel) []IssueLabel {
+	next := make([]IssueLabel, 0, len(labels)+1)
+	for _, label := range labels {
+		if label.Dimension == dimension {
+			continue
+		}
+		next = append(next, label)
+	}
+	if replacement.Key != "" {
+		next = append(next, replacement)
+	}
+	return next
+}
+
 func validateCommentReaction(reaction string) error {
 	switch strings.TrimSpace(reaction) {
 	case "thumbs_up", "thumbs_down", "laugh", "hooray", "confused", "heart", "rocket", "eyes":

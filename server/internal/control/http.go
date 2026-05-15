@@ -544,6 +544,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	s.startIssueTypeTriage(strings.TrimSpace(chi.URLParam(r, "workspaceID")), issueID)
 	writeJSON(w, http.StatusCreated, map[string]string{"issueId": issueID})
 }
 

@@ -1445,7 +1445,55 @@ func (s *MemoryStore) UpdateIssueLabels(_ Context, userID, workspaceID, issueID 
 		return nil, err
 	}
 	s.issueLabels[issue.ID] = labels
+	if hasIssueLabelDimension(labels, issueLabelDimensionType) {
+		issue.TriageStatus = "classified"
+	} else {
+		issue.TriageStatus = "none"
+	}
+	issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.issues[issue.ID] = issue
 	return labels, nil
+}
+
+func (s *MemoryStore) ApplyIssueTypeClassification(_ Context, workspaceID, issueID string, labelKey string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	issue, ok := s.issues[strings.TrimSpace(issueID)]
+	if !ok || issue.WorkspaceID != strings.TrimSpace(workspaceID) {
+		return ErrNotFound
+	}
+	if issue.TriageStatus != "pending" {
+		return nil
+	}
+	labels, err := normalizeIssueLabelKeys([]string{labelKey})
+	if err != nil {
+		return err
+	}
+	if !hasIssueLabelDimension(labels, issueLabelDimensionType) {
+		return errors.New("issue type label is required")
+	}
+	s.issueLabels[issue.ID] = replaceIssueLabelDimension(s.issueLabels[issue.ID], issueLabelDimensionType, labels[0])
+	issue.TriageStatus = "classified"
+	issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.issues[issue.ID] = issue
+	return nil
+}
+
+func (s *MemoryStore) MarkIssueTriageFailed(_ Context, workspaceID, issueID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	issue, ok := s.issues[strings.TrimSpace(issueID)]
+	if !ok || issue.WorkspaceID != strings.TrimSpace(workspaceID) {
+		return ErrNotFound
+	}
+	if issue.TriageStatus == "pending" {
+		issue.TriageStatus = "failed"
+		issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		s.issues[issue.ID] = issue
+	}
+	return nil
 }
 
 func (s *MemoryStore) AddComment(_ Context, user User, workspaceID, issueID string, input CreateCommentInput) (string, error) {

@@ -683,6 +683,60 @@ func TestCreateWorkspaceIssueWithoutProject(t *testing.T) {
 	}
 }
 
+func TestIssueTypeTriageStoreTransitions(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "triage-user",
+		Login:          "triage-user",
+		Name:           "Triage User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{Body: "Fix the broken issue type classifier"})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	detail, err := store.GetIssue(context.Background(), user.ID, workspaceID, issueID)
+	if err != nil {
+		t.Fatalf("get issue: %v", err)
+	}
+	if detail.Issue.TriageStatus != "pending" {
+		t.Fatalf("expected pending triage, got %q", detail.Issue.TriageStatus)
+	}
+
+	if err := store.ApplyIssueTypeClassification(context.Background(), workspaceID, issueID, "type:fix"); err != nil {
+		t.Fatalf("apply issue type classification: %v", err)
+	}
+	detail, err = store.GetIssue(context.Background(), user.ID, workspaceID, issueID)
+	if err != nil {
+		t.Fatalf("get classified issue: %v", err)
+	}
+	if detail.Issue.TriageStatus != "classified" {
+		t.Fatalf("expected classified triage, got %q", detail.Issue.TriageStatus)
+	}
+	if len(detail.Labels) != 1 || detail.Labels[0].Key != "type:fix" {
+		t.Fatalf("expected type:fix label, got %+v", detail.Labels)
+	}
+
+	failedIssueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{Body: "Ambiguous issue"})
+	if err != nil {
+		t.Fatalf("create issue for failed triage: %v", err)
+	}
+	if err := store.MarkIssueTriageFailed(context.Background(), workspaceID, failedIssueID); err != nil {
+		t.Fatalf("mark triage failed: %v", err)
+	}
+	failedDetail, err := store.GetIssue(context.Background(), user.ID, workspaceID, failedIssueID)
+	if err != nil {
+		t.Fatalf("get failed issue: %v", err)
+	}
+	if failedDetail.Issue.TriageStatus != "failed" {
+		t.Fatalf("expected failed triage, got %q", failedDetail.Issue.TriageStatus)
+	}
+}
+
 func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
