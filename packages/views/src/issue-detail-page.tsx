@@ -4858,7 +4858,6 @@ export function IssueDetailPage() {
     queryKeys.workspaceProjectRunbook(workspaceId, projectId, auth.token);
   const [composerEditor, setComposerEditor] = useState<Editor | null>(null);
   const [composerBody, setComposerBody] = useState("");
-  const [composerRuntimeMode, setComposerRuntimeMode] = useState<"local" | "team">("local");
   const [composerFocused, setComposerFocused] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentBody, setEditingCommentBody] = useState("");
@@ -4995,14 +4994,13 @@ export function IssueDetailPage() {
       ? "Agent is working"
       : "Save plain edit"
     : "Save edit";
-  const composerRuntimeModeEffective = canUseTeamRuntime ? composerRuntimeMode : "team";
   const composerHelperText = isSupportedAgentMention
     ? hasActiveSession
       ? `${mentionedAgentConfig?.name} is already working.`
       : !hasProject
         ? "Attach a project before sending this issue to an agent."
         : canUseTeamRuntime
-          ? `${mentionedAgentConfig?.name} will run on the selected Team worker.`
+          ? `${mentionedAgentConfig?.name} will run on the Team worker.`
           : "Team worker sessions require a team workspace."
     : isUnsupportedAgentMention
       ? `@${mentionedAgent} is not available yet.`
@@ -5140,7 +5138,7 @@ export function IssueDetailPage() {
           commentId: comment.commentId,
           provider: agentConfig.provider,
           agentProfile: agentConfig.id,
-          runtimeMode: composerRuntimeModeEffective,
+          runtimeMode: "team",
           command: trimmedBody,
           issue: detail.issue,
           project,
@@ -5154,7 +5152,6 @@ export function IssueDetailPage() {
     },
     onSuccess: async () => {
       setComposerBody("");
-      setComposerRuntimeMode("local");
       composerEditor?.commands.clearContent(false);
       setComposerMentionMatch(null);
       await Promise.all([
@@ -5995,19 +5992,11 @@ export function IssueDetailPage() {
                   {updateIssueStatus.error ? <div className="border-t border-[color:var(--line)] px-3 py-2"><Notice tone="danger">{updateIssueStatus.error.message}</Notice></div> : null}
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[color:var(--line)] px-3 py-2">
                     <div className="flex min-w-[220px] flex-1 flex-wrap items-center gap-2 text-[12px] leading-5 text-[color:var(--muted)]">
-                      {isSupportedAgentMention ? (
-                        <Select
-                          value={composerRuntimeMode}
-                          onValueChange={(value) => setComposerRuntimeMode(value === "team" ? "team" : "local")}
-                        >
-                          <SelectTrigger className="h-8 w-[150px]">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="local">Local runner</SelectItem>
-                            <SelectItem value="team" disabled={!canUseTeamRuntime}>Team worker</SelectItem>
-                          </SelectContent>
-                        </Select>
+                      {isSupportedAgentMention && canUseTeamRuntime ? (
+                        <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[color:var(--line)] bg-[color:var(--surface)] px-2 text-[11px] font-medium text-[color:var(--ink)]">
+                          <Bot className="size-3.5" />
+                          Team worker
+                        </span>
                       ) : null}
                       <span className="min-w-[180px] flex-1">{composerHelperText}</span>
                     </div>
