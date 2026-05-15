@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { MessageSquarePlus, X } from "lucide-react";
-import { type CreateIssueInput } from "@mspace/core";
+import { type CreateIssueInput, type IssueDetail } from "@mspace/core";
 import {
   Button,
   Notice,
@@ -13,8 +13,11 @@ import { IssueDocumentEditor } from "./issue-document-editor";
 export function CreateIssueModal(props: {
   onClose: () => void;
   createIssue: (input: CreateIssueInput) => Promise<{ issueId: string }>;
+  getIssue: (issueId: string) => Promise<IssueDetail>;
+  updateIssue: (issueId: string, input: { title: string }) => Promise<unknown>;
   suggestTitle: (input: Pick<CreateIssueInput, "title" | "body" | "prompt">) => Promise<{ title: string; source: string }>;
   issueQueryKey: readonly unknown[];
+  issueDetailQueryKey: (issueId: string) => readonly unknown[];
   inboxQueryKey: readonly unknown[];
   projectsQueryKey: readonly unknown[];
 }) {
@@ -25,14 +28,13 @@ export function CreateIssueModal(props: {
 
   const submitIssue = useMutation({
     mutationFn: async (body: string) => {
-      const suggestion = await props.suggestTitle({ prompt: body });
-      const title = suggestion.title.trim();
+      const title = draftIssueTitleFromBody(body);
       if (title === "") {
-        throw new Error("Could not generate an issue title. Try rewriting the issue note.");
+        throw new Error("Issue cannot be empty.");
       }
       return props.createIssue({ title, body });
     },
-    onSuccess: async ({ issueId }) => {
+    onSuccess: async ({ issueId }, body) => {
       setPrompt("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: props.issueQueryKey }),
@@ -41,8 +43,30 @@ export function CreateIssueModal(props: {
       ]);
       props.onClose();
       void navigate({ to: "/issues/$issueId", params: { issueId } });
+      void updateIssueTitleInBackground(issueId, body);
     },
   });
+
+  async function updateIssueTitleInBackground(issueId: string, body: string) {
+    const temporaryTitle = draftIssueTitleFromBody(body);
+    try {
+      const suggestion = await props.suggestTitle({ body });
+      const suggestedTitle = suggestion.title.trim();
+      if (suggestedTitle === "" || suggestedTitle === temporaryTitle) return;
+
+      const latest = await props.getIssue(issueId);
+      if (latest.issue.title.trim() !== temporaryTitle) return;
+
+      await props.updateIssue(issueId, { title: suggestedTitle });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: props.issueQueryKey }),
+        queryClient.invalidateQueries({ queryKey: props.issueDetailQueryKey(issueId) }),
+        queryClient.invalidateQueries({ queryKey: props.inboxQueryKey }),
+      ]);
+    } catch {
+      // Keep the draft title. Issue creation must not depend on AI title generation.
+    }
+  }
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -120,4 +144,19 @@ export function CreateIssueModal(props: {
       </section>
     </div>
   );
+}
+
+function draftIssueTitleFromBody(body: string): string {
+  const normalized = body.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+  const firstLine = normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstLine) return "";
+  const collapsed = firstLine.replace(/^#+\s*/, "").split(/\s+/).join(" ");
+  const runes = Array.from(collapsed);
+  if (runes.length > 64) {
+    return `${runes.slice(0, 64).join("")}...`;
+  }
+  return collapsed;
 }
