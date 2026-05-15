@@ -7,22 +7,30 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 )
 
 type Server struct {
-	config Config
-	store  Store
-	github GitHubClient
+	config         Config
+	store          Store
+	github         GitHubClient
+	triageMu       sync.Mutex
+	triageInFlight map[string]struct{}
 }
 
 const serverProtocolVersion = 1
 
 func NewServer(config Config, store Store, github GitHubClient) *Server {
 	config = config.withDefaults()
-	return &Server{config: config, store: store, github: github}
+	return &Server{
+		config:         config,
+		store:          store,
+		github:         github,
+		triageInFlight: map[string]struct{}{},
+	}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -526,6 +534,12 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	for _, issue := range issues {
+		if issue.ParentIssueID == "" && issue.TriageStatus == "pending" && !hasIssueLabelDimension(issue.Labels, issueLabelDimensionType) {
+			s.startIssueTypeTriage(workspaceID, issue.ID)
+		}
+	}
 	writeJSON(w, http.StatusOK, issues)
 }
 
@@ -584,6 +598,9 @@ func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStoreError(w, err)
 		return
+	}
+	if detail.Issue.ParentIssueID == "" && detail.Issue.TriageStatus == "pending" && !hasIssueLabelDimension(detail.Labels, issueLabelDimensionType) {
+		s.startIssueTypeTriage(strings.TrimSpace(chi.URLParam(r, "workspaceID")), detail.Issue.ID)
 	}
 	writeJSON(w, http.StatusOK, detail)
 }

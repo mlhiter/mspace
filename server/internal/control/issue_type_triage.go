@@ -28,7 +28,22 @@ func (s *Server) startIssueTypeTriage(workspaceID, issueID string) {
 	if workspaceID == "" || issueID == "" {
 		return
 	}
-	go s.triageIssueType(workspaceID, issueID)
+	key := workspaceID + "/" + issueID
+	s.triageMu.Lock()
+	if _, ok := s.triageInFlight[key]; ok {
+		s.triageMu.Unlock()
+		return
+	}
+	s.triageInFlight[key] = struct{}{}
+	s.triageMu.Unlock()
+	go func() {
+		defer func() {
+			s.triageMu.Lock()
+			delete(s.triageInFlight, key)
+			s.triageMu.Unlock()
+		}()
+		s.triageIssueType(workspaceID, issueID)
+	}()
 }
 
 func (s *Server) triageIssueType(workspaceID, issueID string) {
