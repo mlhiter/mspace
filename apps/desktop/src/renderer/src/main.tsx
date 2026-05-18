@@ -107,6 +107,20 @@ function RootShell() {
   }, [meQuery.data?.user]);
 
   useEffect(() => {
+    if (!authToken || !meQuery.error) return;
+    const message = meQuery.error instanceof Error ? meQuery.error.message.toLowerCase() : "";
+    if (!message.includes("invalid authorization") && !message.includes("missing authorization")) return;
+
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    window.localStorage.removeItem(SELECTED_WORKSPACE_STORAGE_KEY);
+    setStoredAuthIdentity(null);
+    setAuthToken("");
+    setSelectedWorkspaceId("");
+    setPendingAuthState("");
+    void queryClient.clear();
+  }, [authToken, meQuery.error]);
+
+  useEffect(() => {
     if (!meQuery.data?.user?.name) return;
     setTeamWorkspaceName((value) => value.trim() || defaultTeamWorkspaceName(meQuery.data?.user.name));
   }, [meQuery.data?.user?.name]);
