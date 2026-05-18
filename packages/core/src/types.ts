@@ -348,7 +348,7 @@ export interface AgentSession {
 }
 
 export interface SessionLog {
-  id: number;
+  id: number | string;
   sessionId: string;
   stream: string;
   message: string;
@@ -739,33 +739,15 @@ export interface UpdateCommentInput {
   attachmentIds?: string[];
 }
 
-export interface CreateSessionInput {
+export interface CreateAgentSessionInput {
   provider: string;
   agentProfile?: string;
-  runtimeMode?: "local" | "team" | string;
+  runtimeMode?: "personal" | "team" | string;
   command?: string;
   branch?: string;
   sourceSessionId?: string;
   sourceCommitSha?: string;
   triggerCommentId?: string;
-}
-
-export interface CreateServerIssueTeamSessionInput {
-  workspaceId: string;
-  issueId: string;
-  commentId?: string;
-  provider: string;
-  agentProfile?: string;
-  runtimeMode?: "team" | string;
-  command: string;
-  branch?: string;
-  sourceSessionId?: string;
-  sourceCommitSha?: string;
-  issue: Issue;
-  project: Project;
-  comments?: Comment[];
-  childIssues?: IssueListItem[];
-  labels?: IssueLabel[];
 }
 
 export interface UpdateIssueLabelsInput {
@@ -831,12 +813,6 @@ export interface CreatePullRequestInput {
   sourceCommitSha?: string;
   title?: string;
   draft?: boolean;
-}
-
-export interface SessionStreamEvent {
-  type: "log" | "status" | "deploy-stage";
-  payload: string;
-  stream?: string;
 }
 
 export interface MspaceUser {

@@ -63,7 +63,6 @@ import {
   type SessionFailure,
   type SessionLog,
   type SessionReviewEvidence,
-  type SessionStreamEvent,
   type StartTestDeployInput,
   type UpdateIssueLabelsInput,
   type WorkspaceChange,
@@ -175,21 +174,6 @@ function isClosedIssueStatus(status: string) {
 
 function isIssueClosedForLifecycle(status: string) {
   return isClosedIssueStatus(status) || status === "cancelled";
-}
-
-function useSessionStream(sessionId: string | undefined, onEvent: (event: SessionStreamEvent) => void) {
-  useEffect(() => {
-    if (!sessionId) return;
-    const eventSource = new EventSource(buildApiUrl(`/api/sessions/${sessionId}/stream`));
-    const listener = (event: MessageEvent<string>) => {
-      onEvent(JSON.parse(event.data) as SessionStreamEvent);
-    };
-    eventSource.addEventListener("message", listener as EventListener);
-    return () => {
-      eventSource.removeEventListener("message", listener as EventListener);
-      eventSource.close();
-    };
-  }, [sessionId, onEvent]);
 }
 
 function listOrEmpty<T>(items: T[] | null | undefined): T[] {
@@ -929,6 +913,7 @@ function SessionStatusMark(props: { status: string }) {
 
 function WorkingSessionLine(props: { status: string; agentName: string; runtimeMode?: string; agentStatus?: string; runtimeTaskId?: string }) {
   const team = props.runtimeMode === "team";
+  const workerLabel = team ? "team worker" : "personal worker";
   const status = (props.agentStatus || props.status).trim().toLowerCase();
   const label = team
     ? status === "team-runtime-queued" || props.status === "queued"
@@ -937,8 +922,10 @@ function WorkingSessionLine(props: { status: string; agentName: string; runtimeM
         ? "claimed by a team worker."
         : "running on a team worker."
     : props.status === "queued"
-      ? "waiting to start."
-      : "working...";
+      ? "waiting for a personal worker."
+      : status === "personal-runtime-claimed"
+        ? "claimed by a personal worker."
+        : `running on a ${workerLabel}.`;
   return (
     <div className="inline-flex min-w-0 items-center gap-2 text-[13px] leading-6 text-[color:var(--muted)]">
       <span className="relative flex size-2 shrink-0">
@@ -947,7 +934,7 @@ function WorkingSessionLine(props: { status: string; agentName: string; runtimeM
       </span>
       <span className="truncate">
         <span className="font-medium text-[color:var(--muted-strong)]">{props.agentName}</span> {label}
-        {team && props.runtimeTaskId ? <span className="ml-2 font-mono text-[12px] text-[color:var(--faint)]">{props.runtimeTaskId.slice(0, 8)}</span> : null}
+        {props.runtimeTaskId ? <span className="ml-2 font-mono text-[12px] text-[color:var(--faint)]">{props.runtimeTaskId.slice(0, 8)}</span> : null}
       </span>
     </div>
   );
@@ -1383,7 +1370,19 @@ function issuePullRequestHandoff(handoffs: IssueHandoff[]) {
 }
 
 function changeNodeSourceLabel(node: IssueChangeNode) {
-  return `${node.branch || "detached"} · ${node.shortCommitSha || node.commitSha.slice(0, 12)}`;
+  return node.branch || "No branch captured";
+}
+
+function prSourceBranchNodes(changeNodes: IssueChangeNode[]) {
+  const nodes: IssueChangeNode[] = [];
+  const seen = new Set<string>();
+  for (const node of changeNodes) {
+    const branch = node.branch.trim();
+    if (!branch || node.error || seen.has(branch)) continue;
+    seen.add(branch);
+    nodes.push(node);
+  }
+  return nodes;
 }
 
 function HandoffMeta(props: { label: string; value: string; mono?: boolean; title?: string }) {
@@ -1415,22 +1414,22 @@ function IssueHandoffPanel(props: {
   onCreatePr: (node: IssueChangeNode) => void;
   onRefresh: (handoff: IssueHandoff) => void;
 }) {
-  const nodes = useMemo(() => props.changeNodes.filter((node) => !node.error), [props.changeNodes]);
-  const [sourceCommit, setSourceCommit] = useState(nodes[0]?.commitSha || "");
+  const nodes = useMemo(() => prSourceBranchNodes(props.changeNodes), [props.changeNodes]);
+  const [sourceBranch, setSourceBranch] = useState(nodes[0]?.branch || "");
   useEffect(() => {
     if (nodes.length === 0) {
-      setSourceCommit("");
+      setSourceBranch("");
       return;
     }
-    if (!nodes.some((node) => node.commitSha === sourceCommit)) {
-      setSourceCommit(nodes[0].commitSha);
+    if (!nodes.some((node) => node.branch === sourceBranch)) {
+      setSourceBranch(nodes[0].branch);
     }
-  }, [nodes, sourceCommit]);
-  const selectedNode = nodes.find((node) => node.commitSha === sourceCommit) || nodes[0];
+  }, [nodes, sourceBranch]);
+  const selectedNode = nodes.find((node) => node.branch === sourceBranch) || nodes[0];
   const syncedPR = issuePullRequestHandoff(props.handoffs);
   const primaryHandoff = syncedPR || props.handoffs[0];
   const canCreate = Boolean(selectedNode?.branch) && !syncedPR?.prUrl && !props.isCreatingPr && !props.disabled;
-  const sourceBranch = primaryHandoff?.branch || selectedNode?.branch || "No branch captured";
+  const displayBranch = primaryHandoff?.branch || selectedNode?.branch || "No branch captured";
   const sourceCommitValue =
     primaryHandoff?.headCommitSha ||
     primaryHandoff?.sourceCommitSha ||
@@ -1498,7 +1497,7 @@ function IssueHandoffPanel(props: {
             {syncedPR.prTitle ? <span className="min-w-0 truncate text-[14px] font-medium leading-6 text-[color:var(--text)]">{syncedPR.prTitle}</span> : null}
           </div>
           <div className="grid gap-3 sm:grid-cols-4">
-            <HandoffMeta label="Source branch" value={sourceBranch} mono />
+            <HandoffMeta label="Source branch" value={displayBranch} mono />
             <HandoffMeta label="Head commit" value={sourceCommitValue ? sourceCommitValue.slice(0, 12) : ""} mono title={sourceCommitValue} />
             <HandoffMeta label="Commits" value={commitCount ? `${commitCount}` : ""} mono />
             <HandoffMeta label="Checked" value={checkedAt ? formatRelativeTime(checkedAt) : ""} title={checkedAt ? formatAbsoluteTime(checkedAt) : undefined} />
@@ -1510,14 +1509,14 @@ function IssueHandoffPanel(props: {
           {nodes.length > 1 ? (
             <div className="grid gap-1.5">
               <div className="text-[11px] font-medium leading-4 text-[color:var(--faint)]">Source branch for PR</div>
-              <Select value={selectedNode?.commitSha || "__none"} onValueChange={(value) => setSourceCommit(value === "__none" ? "" : value)}>
+              <Select value={selectedNode?.branch || "__none"} onValueChange={(value) => setSourceBranch(value === "__none" ? "" : value)}>
                 <SelectTrigger className="max-w-full sm:max-w-[380px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none">Select source branch</SelectItem>
                   {nodes.map((node) => (
-                    <SelectItem key={node.id || node.commitSha} value={node.commitSha}>
+                    <SelectItem key={node.branch} value={node.branch}>
                       {changeNodeSourceLabel(node)}
                     </SelectItem>
                   ))}
@@ -1526,7 +1525,7 @@ function IssueHandoffPanel(props: {
             </div>
           ) : null}
           <div className="grid gap-3 sm:grid-cols-3">
-            <HandoffMeta label="Source branch" value={sourceBranch} mono />
+            <HandoffMeta label="Source branch" value={displayBranch} mono />
             <HandoffMeta label="Source commit" value={sourceCommitValue ? sourceCommitValue.slice(0, 12) : ""} mono title={sourceCommitValue} />
             <HandoffMeta label="Status" value={selectedNode?.branch ? "Ready to sync" : "Waiting for captured branch"} />
           </div>
@@ -4975,33 +4974,36 @@ export function IssueDetailPage() {
       : enabledAgents.filter((agent) => mentionKey(agent.mention).startsWith(editingMentionQuery) || agent.name.toLowerCase().startsWith(editingMentionQuery));
   const selectedEditingMentionIndex = editingAgentSuggestions.length === 0 ? 0 : Math.min(activeEditingMentionIndex, editingAgentSuggestions.length - 1);
   const editingMentionMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingMentionMenuDismissed && editingAgentSuggestions.length > 0;
-  const canUseTeamRuntime = auth.workspace?.kind === "team";
+  const runtimeMode = auth.workspace?.kind === "team" ? "team" : "personal";
+  const runtimeLabel = runtimeMode === "team" ? "Team worker" : "Personal worker";
   const canSaveEditingComment =
     Boolean(editingCommentId) &&
     Boolean(editingCommentBody.trim()) &&
     !isUnsupportedEditingAgentMention &&
-    !isSupportedEditingAgentMention &&
+    (!isSupportedEditingAgentMention || hasProject) &&
     !(isSupportedEditingAgentMention && hasActiveSession);
   const editHelperText = isSupportedEditingAgentMention
     ? hasActiveSession
       ? `${editingMentionedAgentConfig?.name} is already working.`
-      : "Edits that mention an agent can start a new Team worker turn only after saving as a plain comment."
+      : !hasProject
+        ? "Attach a project before sending this issue to an agent."
+        : `${editingMentionedAgentConfig?.name} will run on the ${runtimeLabel} after this edit is saved.`
     : isUnsupportedEditingAgentMention
       ? `@${editingMentionedAgent} is not available yet.`
       : "Edit the latest comment before it starts work.";
   const editSaveLabel = isSupportedEditingAgentMention
     ? hasActiveSession
       ? "Agent is working"
-      : "Save plain edit"
+      : !hasProject
+        ? "Attach project"
+        : "Save and start"
     : "Save edit";
   const composerHelperText = isSupportedAgentMention
     ? hasActiveSession
       ? `${mentionedAgentConfig?.name} is already working.`
       : !hasProject
         ? "Attach a project before sending this issue to an agent."
-        : canUseTeamRuntime
-          ? `${mentionedAgentConfig?.name} will run on the Team worker.`
-          : "Team worker sessions require a team workspace."
+        : `${mentionedAgentConfig?.name} will run on the ${runtimeLabel}.`
     : isUnsupportedAgentMention
       ? `@${mentionedAgent} is not available yet.`
       : "Comments stay on the issue. Mention an agent when you want a turn.";
@@ -5041,7 +5043,7 @@ export function IssueDetailPage() {
     let cancelled = false;
     void Promise.all(
       sessions.map(async (session) => {
-        const sessionDetail = await api.getSession(session.id);
+        const sessionDetail = await controlPlaneApi.getSession(auth.token, workspaceId, session.id);
         return [
           session.id,
           {
@@ -5059,31 +5061,7 @@ export function IssueDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [detail?.sessions]);
-
-  const handleSessionEvent = useCallback(
-    (event: SessionStreamEvent) => {
-      if (event.type === "log") {
-        if (!latestSession?.id) return;
-        setSessionSnapshotsById((current) => ({
-          ...current,
-          [latestSession.id]: {
-            logs: [...(current[latestSession.id]?.logs || []), { stream: event.stream || "live", message: event.payload }],
-            changes: current[latestSession.id]?.changes || [],
-          },
-        }));
-        return;
-      }
-      void queryClient.invalidateQueries({ queryKey: issueQueryKey });
-      void queryClient.invalidateQueries({ queryKey: inboxQueryKey });
-      if (latestSession?.id) {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.session(latestSession.id) });
-      }
-    },
-    [inboxQueryKey, issueQueryKey, latestSession?.id, queryClient],
-  );
-
-  useSessionStream(latestSession?.id, handleSessionEvent);
+  }, [auth.token, detail?.sessions, workspaceId]);
 
   useEffect(() => {
     if (issueTab !== "resources" || !issueId || !detail?.testEnvironment) return;
@@ -5128,23 +5106,13 @@ export function IssueDetailPage() {
         if (!project?.id) {
           throw new Error("Attach a project before sending this issue to an agent.");
         }
-        if (!canUseTeamRuntime) {
-          throw new Error("Team worker sessions require a team workspace.");
-        }
         const comment = await controlPlaneApi.addComment(auth.token, workspaceId, issueId, commentInput);
-        await api.createServerIssueTeamSession(issueId, {
-          workspaceId,
-          issueId,
-          commentId: comment.commentId,
+        await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
           provider: agentConfig.provider,
           agentProfile: agentConfig.id,
-          runtimeMode: "team",
+          runtimeMode,
           command: trimmedBody,
-          issue: detail.issue,
-          project,
-          comments: listOrEmpty(detail.comments),
-          childIssues,
-          labels: issueLabels,
+          triggerCommentId: comment.commentId,
         });
         return;
       }
@@ -5164,19 +5132,33 @@ export function IssueDetailPage() {
     Boolean(composerBody.trim()) &&
     !sendComposer.isPending &&
     !isUnsupportedAgentMention &&
-    (!isSupportedAgentMention || (canUseTeamRuntime && hasProject)) &&
+    (!isSupportedAgentMention || hasProject) &&
     !(isSupportedAgentMention && hasActiveSession);
 
   const updateComment = useMutation({
     mutationFn: async (input: { commentId: string; body: string; agentConfig?: AgentProfile }) => {
       const trimmedBody = input.body.trim();
-      if (input.agentConfig) {
-        throw new Error("Agent sessions for server-owned issues are still routed through the local runtime bridge. Save a plain edit for now.");
-      }
       const commentInput = {
         body: trimmedBody,
       };
-      return controlPlaneApi.updateComment(auth.token, workspaceId, issueId, input.commentId, commentInput);
+      const comment = await controlPlaneApi.updateComment(auth.token, workspaceId, issueId, input.commentId, commentInput);
+      if (input.agentConfig) {
+        if (!detail) {
+          throw new Error("Issue is not loaded yet.");
+        }
+        const project = detail.project;
+        if (!project?.id) {
+          throw new Error("Attach a project before sending this issue to an agent.");
+        }
+        await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
+          provider: input.agentConfig.provider,
+          agentProfile: input.agentConfig.id,
+          runtimeMode,
+          command: trimmedBody,
+          triggerCommentId: input.commentId,
+        });
+      }
+      return comment;
     },
     onSuccess: async () => {
       resetEditingCommentState();
@@ -5455,7 +5437,7 @@ export function IssueDetailPage() {
   });
 
   const stopSession = useMutation({
-    mutationFn: (sessionId: string) => api.cancelSession(sessionId),
+    mutationFn: (sessionId: string) => controlPlaneApi.cancelSession(auth.token, workspaceId, sessionId, { reason: "Stopped from Issue Detail." }),
     onSuccess: async (_data, sessionId) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
@@ -5992,10 +5974,10 @@ export function IssueDetailPage() {
                   {updateIssueStatus.error ? <div className="border-t border-[color:var(--line)] px-3 py-2"><Notice tone="danger">{updateIssueStatus.error.message}</Notice></div> : null}
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[color:var(--line)] px-3 py-2">
                     <div className="flex min-w-[220px] flex-1 flex-wrap items-center gap-2 text-[12px] leading-5 text-[color:var(--muted)]">
-                      {isSupportedAgentMention && canUseTeamRuntime ? (
+                      {isSupportedAgentMention ? (
                         <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[color:var(--line)] bg-[color:var(--surface)] px-2 text-[11px] font-medium text-[color:var(--ink)]">
                           <Bot className="size-3.5" />
-                          Team worker
+                          {runtimeLabel}
                         </span>
                       ) : null}
                       <span className="min-w-[180px] flex-1">{composerHelperText}</span>

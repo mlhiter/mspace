@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { Clipboard, Files, GitBranch, GitCommit, GitCompareArrows, HardDrive, SquareTerminal, Trash2 } from "lucide-react";
-import { api, buildApiUrl, queryKeys, type SessionStreamEvent, type WorkspaceChange, type WorkspaceSnapshot } from "@mspace/core";
+import { Clipboard, Files, GitBranch, GitCommit, GitCompareArrows, HardDrive, SquareTerminal } from "lucide-react";
+import { controlPlaneApi, queryKeys, type WorkspaceChange, type WorkspaceSnapshot } from "@mspace/core";
 import {
   Button,
   CodeBlock,
@@ -16,6 +16,7 @@ import {
   cn,
 } from "@mspace/ui";
 import { FileTypeIcon } from "./file-type-icon";
+import { useMspaceAuth } from "./auth-context";
 import { RelativeTime } from "./time";
 import { visibleWorkspaceFileChanges, workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
@@ -63,10 +64,14 @@ function normalizeWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
 export function SessionDetailPage() {
   const { sessionId = "" } = useParams({ strict: false }) as { sessionId?: string };
   const queryClient = useQueryClient();
+  const auth = useMspaceAuth();
+  const workspaceId = auth.workspace?.id || auth.selectedWorkspaceId || "";
+  const serverWorkspaceReady = auth.token !== "" && workspaceId !== "";
   const sessionQuery = useQuery({
     queryKey: queryKeys.session(sessionId),
-    queryFn: () => api.getSession(sessionId),
-    enabled: sessionId.length > 0,
+    queryFn: () => controlPlaneApi.getSession(auth.token, workspaceId, sessionId),
+    enabled: serverWorkspaceReady && sessionId.length > 0,
+    refetchInterval: 4_000,
   });
   const [logs, setLogs] = useState<string[]>([]);
   const [summaryDraft, setSummaryDraft] = useState("");
@@ -133,33 +138,8 @@ export function SessionDetailPage() {
     setSummaryDraft((current) => (current.trim() ? current : generatedSummary));
   }, [generatedSummary, sessionQuery.data]);
 
-  useEffect(() => {
-    if (!sessionId) return;
-    const eventSource = new EventSource(buildApiUrl(`/api/sessions/${sessionId}/stream`));
-    const listener = (event: MessageEvent<string>) => {
-      const payload = JSON.parse(event.data) as SessionStreamEvent;
-      if (payload.type === "log") {
-        setLogs((current) => [...current, payload.payload]);
-      } else {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) });
-      }
-    };
-    eventSource.addEventListener("message", listener as EventListener);
-    return () => {
-      eventSource.removeEventListener("message", listener as EventListener);
-      eventSource.close();
-    };
-  }, [queryClient, sessionId]);
-
   const cancelMutation = useMutation({
-    mutationFn: () => api.cancelSession(sessionId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) });
-    },
-  });
-
-  const cleanupMutation = useMutation({
-    mutationFn: () => api.cleanupSession(sessionId),
+    mutationFn: () => controlPlaneApi.cancelSession(auth.token, workspaceId, sessionId, { reason: "Stopped from Session Detail." }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) });
     },
@@ -178,8 +158,7 @@ export function SessionDetailPage() {
   const workspace = normalizeWorkspace(sessionQuery.data.workspace);
   const sessionActive = ["queued", "running"].includes(session.status);
   const cleanupStatus = session.cleanupStatus || "retained";
-  const canCleanWorktree = !sessionActive && cleanupStatus !== "cleaned" && Boolean(session.workdir);
-  const missingWorkspaceText = cleanupStatus === "cleaned" ? "Session worktree has been cleaned up." : "Workspace has not been created yet.";
+  const missingWorkspaceText = workspace.error || "Workspace has not been reported by the runtime worker yet.";
 
   async function handleCopySummary() {
     try {
@@ -187,15 +166,6 @@ export function SessionDetailPage() {
       setCopyState("copied");
     } catch {
       setCopyState("failed");
-    }
-  }
-
-  function handleCleanWorktree() {
-    const confirmed = window.confirm(
-      `Clean the session worktree?\n\n${session.workdir}\n\nThis removes the local worktree for this session. Logs, comments, evidence, and session metadata stay in mspace.`,
-    );
-    if (confirmed) {
-      cleanupMutation.mutate();
     }
   }
 
@@ -221,27 +191,18 @@ export function SessionDetailPage() {
           >
             Cancel session
           </Button>
-          <Button
-            variant="secondary"
-            disabled={cleanupMutation.isPending || !canCleanWorktree}
-            onClick={handleCleanWorktree}
-          >
-            <Trash2 data-icon />
-            {cleanupMutation.isPending ? "Cleaning..." : cleanupStatus === "cleaned" ? "Worktree cleaned" : "Clean worktree"}
-          </Button>
         </>
       }
     >
       <div className="grid gap-6 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
         <div className="flex flex-col gap-6">
           <Panel title="Session metadata" aside={<StatusBadge value={session.status} />}>
-            {cleanupMutation.error ? <Notice tone="danger">{cleanupMutation.error.message}</Notice> : null}
             <div className="grid gap-3">
               <DataBlock label="Provider" icon={SquareTerminal}>{session.provider}</DataBlock>
               <DataBlock label="Agent profile" icon={SquareTerminal}>{session.agentProfile || "codex"}</DataBlock>
               <DataBlock label="Runtime mode" icon={HardDrive}>{session.runtimeMode}</DataBlock>
               <DataBlock label="Agent status" icon={SquareTerminal}>{session.agentStatus || "not reported yet"}</DataBlock>
-              <DataBlock label="Cleanup status" icon={Trash2}>
+              <DataBlock label="Cleanup status" icon={Files}>
                 {cleanupStatus === "cleaned" ? (
                   session.cleanedAt ? <RelativeTime prefix="cleaned" value={session.cleanedAt} /> : "cleaned"
                 ) : "retained"}

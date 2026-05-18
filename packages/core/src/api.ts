@@ -1,6 +1,7 @@
 import type {
   AgentProfile,
   AgentProfileInput,
+  AgentSession,
   AuthMeResult,
   AuthPollResult,
   AuthStartResult,
@@ -9,13 +10,13 @@ import type {
   Comment,
   ClusterInput,
   CreateCommentInput,
+  CreateAgentSessionInput,
   CreateIssueInput,
   CreateIssueTaskInput,
   CreateProjectInput,
   CreatePullRequestInput,
   CreateRuntimeRegistrationTokenInput,
   CreateRuntimeTaskInput,
-  CreateServerIssueTeamSessionInput,
   CreateWorkspaceInput,
   CreateWorkspaceInvitationInput,
   CreateWorkspaceResult,
@@ -297,11 +298,6 @@ export const api = {
     }),
   getIssueTestEnvironmentResources: (issueId: string) =>
     request<IssueTestEnvironmentResources>(`/api/issues/${issueId}/test-environment/resources`),
-  createServerIssueTeamSession: (issueId: string, input: CreateServerIssueTeamSessionInput) =>
-    request<{ sessionId: string }>(`/api/server-issues/${issueId}/team-session`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
   probeTestEnvironment: (issueId: string) =>
     request<IssueTestEnvironment>(`/api/issues/${issueId}/test-environment/probe`, {
       method: "POST",
@@ -313,16 +309,6 @@ export const api = {
     }),
   refreshIssueHandoff: (issueId: string, handoffId: string) =>
     request<IssueHandoff>(`/api/issues/${issueId}/handoffs/${handoffId}/refresh`, {
-      method: "POST",
-    }),
-  getSession: (sessionId: string) =>
-    request<SessionDetail>(`/api/sessions/${sessionId}`),
-  cancelSession: (sessionId: string) =>
-    request<{ ok: boolean }>(`/api/sessions/${sessionId}/cancel`, {
-      method: "POST",
-    }),
-  cleanupSession: (sessionId: string) =>
-    request<{ ok: boolean }>(`/api/sessions/${sessionId}/cleanup`, {
       method: "POST",
     }),
 };
@@ -489,6 +475,22 @@ export const controlPlaneApi = {
 	getIssue: (token: string, workspaceId: string, issueId: string) =>
 		requestControlPlane<IssueDetail>(`/api/workspaces/${workspaceId}/issues/${issueId}`, {
 			headers: authHeaders(token),
+		}),
+	createAgentSession: (token: string, workspaceId: string, issueId: string, input: CreateAgentSessionInput) =>
+		requestControlPlane<AgentSession>(`/api/workspaces/${workspaceId}/issues/${issueId}/sessions`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
+		}),
+	getSession: (token: string, workspaceId: string, sessionId: string) =>
+		requestControlPlane<SessionDetail>(`/api/workspaces/${workspaceId}/sessions/${sessionId}`, {
+			headers: authHeaders(token),
+		}),
+	cancelSession: (token: string, workspaceId: string, sessionId: string, input: CancelRuntimeTaskInput = {}) =>
+		requestControlPlane<RuntimeTask>(`/api/workspaces/${workspaceId}/sessions/${sessionId}/cancel`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
 		}),
 	updateIssue: (token: string, workspaceId: string, issueId: string, input: UpdateIssueInput) =>
 		requestControlPlane<Issue>(`/api/workspaces/${workspaceId}/issues/${issueId}`, {
