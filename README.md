@@ -179,6 +179,8 @@ Runtime variables:
 | `MSPACE_GITHUB_REDIRECT_URI` | none | GitHub OAuth callback URL for the server. |
 | `MSPACE_RUNTIME_TOKEN` | none | `msw_...` runtime worker registration token used by `pnpm worker`. |
 | `MSPACE_WORKER_CAPABILITIES` | `{"protocolSmoke":true,"codex":false,"dryRun":true}` | Worker capability JSON used by server-side task matching. |
+| `MSPACE_WORKER_VOLUME` | script-specific | Docker volume mounted at `/var/lib/mspace-worker` for worker-managed repo caches, session worktrees, and artifacts. |
+| `MSPACE_WORKER_WORK_ROOT` | `/var/lib/mspace-worker` in Docker | Runtime worker root for `repos/<cache-key>` and `workdirs/<project-id>/<session-id>`. |
 | `MSPACE_WORKER_CODEX_HOME_DIR` | `~/.mspace/codex-worker-home` | Host Codex home copy mounted by the Docker Codex dev worker. |
 | `MSPACE_WORKER_CODEX_CLI_VERSION` | `0.130.0` | Codex CLI version installed by the Docker Codex dev worker image. |
 
@@ -195,6 +197,8 @@ Local data paths:
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional agent-written review snapshot for commands, tests, build/deploy result, summary, risks, and follow-ups. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/branch-name.json` | Optional agent-written source branch proposal such as `{ "branch": "fix/pr-source-branch-selection" }`; mspace normalizes supported prefixes and renames the branch before source capture when safe. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-written project runbook update imported after a successful session. |
+
+Docker-backed workers keep target project source inside the worker work root rather than editing the host repository checkout directly. The dev scripts mount that root as a Docker volume, for example `mspace-worker-dev-root` or `mspace-worker-codex-dev-root`; inside the container, repository caches live under `/var/lib/mspace-worker/repos/<cache-key>` and per-session worktrees live under `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>`.
 
 Legacy local product rows from earlier development snapshots can be copied into the current personal workspace with:
 

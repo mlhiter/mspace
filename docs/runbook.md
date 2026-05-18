@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-15
+> Status: local MVP operations guide, updated 2026-05-18
 
 ## Local Data
 
@@ -19,6 +19,8 @@
 Reusable cluster configs are stored in runner `clusters`. Workspace automation policy is stored in runner `workspace_settings`. Issue test namespace records are stored in runner `issue_test_environments`. Review snapshots are stored in runner `session_review_evidence`; continueable failed-session and failed-environment records are stored in runner `session_failures`; branch and PR delivery records are stored in runner `issue_handoffs`; raw local validation trails stay in runner `session_logs`. Legacy local unread rows may still exist in runner `inbox_items`, but the product Inbox uses server receipts. Agent definitions are still stored in runner `agent_profiles`. Normal signed-in agent sessions, worker logs, cancellation, and source results live in server Postgres runtime tables rather than in runner SQLite.
 
 The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, project runbook revisions, issues, comments, comment reactions, issue label definitions, issue labels, issue events, issue-event receipts, issue watchers, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs in Postgres through `DATABASE_URL`. GitHub sign-in creates a personal workspace by default; personal and team workspaces can both register runtime workers and queue runtime tasks. Invitations and shared members require an explicit team workspace. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
+
+Docker-backed runtime workers store target project source under the worker root volume, not in the host checkout. The dry-run worker defaults to the `mspace-worker-dev-root` Docker volume, and the Codex-capable worker defaults to `mspace-worker-codex-dev-root`; both mount that volume at `/var/lib/mspace-worker`. Inside the container, repository caches live under `/var/lib/mspace-worker/repos/<cache-key>` and per-session worktrees live under `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>`.
 
 For local Codex/Electron development, `scripts/run-mspace-codex-dev.sh` auto-starts Docker Postgres only for local `DATABASE_URL` hosts. The expected durable database is container `mspace-postgres-dev` with named volume `mspace-postgres-data` and image `postgres:16`. The script labels both the container and volume, and refuses to start an existing `mspace-postgres-dev` container if it is mounted to a different `/var/lib/postgresql/data` volume. If the app suddenly looks empty, first check that Docker is serving this named volume rather than a new or anonymous Postgres data directory:
 
@@ -90,7 +92,7 @@ export MSPACE_RUNTIME_TOKEN="msw_..."
 scripts/run-server-worker-dev.sh
 ```
 
-The script builds `worker/Dockerfile.dev`, runs `mspace-worker` inside a container, and stores worker-managed repos/workdirs/artifacts in the `mspace-worker-dev-root` Docker volume. The container connects to the host control plane through `http://host.docker.internal:8787` by default. It advertises `codex:true,dryRun:true` so UI-triggered Team sessions can complete a full control-plane loop without local Codex credentials: the worker clones the repository, creates an isolated worktree, writes `TEAM_RUNTIME_DRY_RUN.md`, commits it, and returns commit/diff metadata to the issue. Real Codex execution still requires Codex CLI/auth to be available inside the worker image or a mounted worker environment; set `MSPACE_WORKER_CAPABILITIES='{"protocolSmoke":true,"codex":true,"dryRun":false}'` only after that worker image is actually able to run `codex app-server`.
+The script builds `worker/Dockerfile.dev`, runs `mspace-worker` inside a container, and stores worker-managed repos/workdirs/artifacts in the `mspace-worker-dev-root` Docker volume. The container connects to the host control plane through `http://host.docker.internal:8787` by default. It advertises `codex:true,dryRun:true` so UI-triggered Team sessions can complete a full control-plane loop without local Codex credentials: the worker clones the repository, creates an isolated worktree, writes `TEAM_RUNTIME_DRY_RUN.md`, commits it, and returns commit/diff metadata to the issue. Dry-run commits are diagnostic records and should not be treated as PR source branches. Real Codex execution still requires Codex CLI/auth to be available inside the worker image or a mounted worker environment; set `MSPACE_WORKER_CAPABILITIES='{"protocolSmoke":true,"codex":true,"dryRun":false}'` only after that worker image is actually able to run `codex app-server`.
 
 To test real Codex execution from a Docker-backed fixed worker, run the Codex-capable dev worker:
 
@@ -99,7 +101,9 @@ export MSPACE_RUNTIME_TOKEN="msw_..."
 scripts/run-server-worker-codex-dev.sh
 ```
 
-The script builds `worker/Dockerfile.codex-dev`, installs the Linux Codex CLI inside the image, and runs the worker with `codex:true,dryRun:false`. It copies `auth.json` and `config.toml` from `${CODEX_HOME:-~/.codex}` into `~/.mspace/codex-worker-home`, mounts that directory as the container `CODEX_HOME`, and adds the container worker root as a trusted Codex project. Use `MSPACE_WORKER_CODEX_HOME_SOURCE` to point at a different prepared Codex home, `MSPACE_WORKER_CODEX_HOME_DIR` to change the mounted copy, and `MSPACE_WORKER_CODEX_CLI_VERSION` to pin a different `@openai/codex` version. This is a local development convenience for the Docker VM simulation; a real team worker should get Codex auth, git credentials, registry credentials, and kubeconfig from its own managed runtime environment.
+The script builds `worker/Dockerfile.codex-dev`, installs the Linux Codex CLI inside the image, and runs the worker with `codex:true,dryRun:false`. It copies `auth.json` and `config.toml` from `${CODEX_HOME:-~/.codex}` into `~/.mspace/codex-worker-home`, mounts that directory as the container `CODEX_HOME`, and adds the container worker root as a trusted Codex project. Use `MSPACE_WORKER_CODEX_HOME_SOURCE` to point at a different prepared Codex home, `MSPACE_WORKER_CODEX_HOME_DIR` to change the mounted copy, `MSPACE_WORKER_VOLUME` to change the worker root volume, and `MSPACE_WORKER_CODEX_CLI_VERSION` to pin a different `@openai/codex` version. This is a local development convenience for the Docker VM simulation; a real team worker should get Codex auth, git credentials, registry credentials, and kubeconfig from its own managed runtime environment.
+
+Worker-issued Codex sessions should not start or keep development servers running by default. They should prefer non-interactive validation such as lint, tests, typecheck, build, or short internal probes. If a temporary server is needed for validation, stop it before the session finishes and do not present container-local `localhost` or `127.0.0.1` as a user-facing preview. A URL is user-facing only when mspace provides a preview/test-environment URL or the user explicitly asked for a mapped local preview.
 
 Cancellation is cooperative. Stopping a worker-backed session requests cancellation on the server task; the worker polls its claimed task and interrupts Codex app-server when it sees `cancelled`.
 
@@ -160,6 +164,8 @@ The root `vercel.json` uses `pnpm install --frozen-lockfile`, builds with `pnpm 
 | `MSPACE_WORKER_LABELS` | Worker | `{}` | JSON object for placement or inventory labels. |
 | `MSPACE_WORKER_POLL_INTERVAL` | Worker | `5s` | How often the worker polls the runtime task queue. |
 | `MSPACE_WORKER_HEARTBEAT_INTERVAL` | Worker | `10s` | How often the worker reports liveness and load. |
+| `MSPACE_WORKER_WORK_ROOT` | Worker | `/tmp/mspace-worker` or `/var/lib/mspace-worker` in Docker | Root directory for worker-managed repository caches, session worktrees, and artifacts. |
+| `MSPACE_WORKER_VOLUME` | Docker worker scripts | `mspace-worker-dev-root` or `mspace-worker-codex-dev-root` | Docker volume mounted at `/var/lib/mspace-worker`. |
 | `MSPACE_WORKER_CODEX_HOME_SOURCE` | Docker Codex worker script | `${CODEX_HOME:-~/.codex}` | Source Codex home copied into a dedicated worker Codex home before container startup. |
 | `MSPACE_WORKER_CODEX_HOME_DIR` | Docker Codex worker script | `~/.mspace/codex-worker-home` | Host directory mounted into the Codex-capable dev worker as `CODEX_HOME`. |
 | `MSPACE_WORKER_CODEX_CLI_VERSION` | Docker Codex worker script | `0.130.0` | `@openai/codex` npm version installed into `worker/Dockerfile.codex-dev`. |

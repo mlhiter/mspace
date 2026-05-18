@@ -1,6 +1,6 @@
 # mspace Control Plane
 
-> Status: architecture direction, runtime registry, and PG-backed team session bridge, updated 2026-05-14
+> Status: architecture direction, runtime registry, and server-owned worker sessions, updated 2026-05-18
 
 ## Decision
 
@@ -166,7 +166,9 @@ The registry and queue slice establishes the control-plane boundary needed for p
 - All runtime backends should report through the same runtime registry, task, log, cancellation, session/evidence, and PR handoff protocol.
 - Kubernetes Job execution remains explicitly deferred as a backend implementation, not as a separate product model.
 
-The first worker daemon exists as `worker/`. It registers, heartbeats, claims matching tasks, completes `protocol_smoke` / `noop` tasks, and can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. The worker forwards system, status, agent, command, file, and tool logs to `runtime_task_logs`, polls its claimed task for cancellation, interrupts Codex when requested, captures a source commit when code changed, and returns worker workdir, artifact dir, source commit, changed files, and diff preview in the task result. For UI-only local testing, the Docker dev worker can advertise `codex:true,dryRun:true`; it still uses the same queue and workspace preparation path, but writes a deterministic dry-run source file and returns a dry-run commit instead of launching Codex.
+The first worker daemon exists as `worker/`. It registers, heartbeats, claims matching tasks, completes `protocol_smoke` / `noop` tasks, and can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers keep those repository caches and worktrees under `/var/lib/mspace-worker`, backed by a Docker volume, so the target project source is isolated from the host checkout. The worker forwards system, status, agent, command, file, and tool logs to `runtime_task_logs`, polls its claimed task for cancellation, interrupts Codex when requested, captures a source commit when code changed, and returns worker workdir, artifact dir, source commit, changed files, and diff preview in the task result.
+
+For UI-only local testing, the Docker dev worker can advertise `codex:true,dryRun:true`; it still uses the same queue and workspace preparation path, but writes a deterministic dry-run source file and returns a dry-run commit instead of launching Codex. Dry-run commits are diagnostic runtime records, not PR source candidates. Real Codex worker sessions should prefer non-interactive validation and must not present container-local `localhost` or `127.0.0.1` URLs as user-facing previews unless mspace provides an explicit preview/test-environment URL or a known host mapping was requested.
 
 Issue Detail now routes agent mentions on server-owned issues directly to the control plane. It writes the server comment, calls `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`, and the server queues a runtime `agent_session` task with repository/session metadata. Workers append logs to `runtime_task_logs`, report Codex thread/turn ids and source metadata in `runtime_tasks.result`, and the server derives session detail plus issue change nodes from those server records. The runner no longer mirrors worker logs/results as source of truth. The remaining integration work is remote credential policy, lower-latency cancellation guarantees, server-owned attachments, and a Kubernetes provider that preserves this same server-side task contract.
 
