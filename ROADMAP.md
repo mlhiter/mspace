@@ -192,7 +192,7 @@ Goal:
 
 Current implementation:
 
-- Captures source commits and branch evidence through `issue_change_nodes`.
+- Captures source commits and semantic source branch evidence through `issue_change_nodes`.
 - Captures issue-level branch / PR delivery state through `issue_handoffs`.
 - Creates or refreshes PR handoff state from Issue Detail using the local runtime's `git`, `gitleaks`, and `gh` identity, with workspace-level opt-in for automatic draft PRs.
 - Keeps session retain and cleanup controls for local worktrees.

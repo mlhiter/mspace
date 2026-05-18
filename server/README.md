@@ -20,6 +20,9 @@ MSPACE_GITHUB_CLIENT_ID=...
 MSPACE_GITHUB_CLIENT_SECRET=...
 MSPACE_GITHUB_REDIRECT_URI=http://127.0.0.1:8787/api/auth/github/callback
 MSPACE_SERVER_ADDR=127.0.0.1:8787
+MSPACE_DEV_POSTGRES_CONTAINER=mspace-postgres-dev
+MSPACE_DEV_POSTGRES_VOLUME=mspace-postgres-data
+MSPACE_DEV_POSTGRES_IMAGE=postgres:16
 ```
 
 Start the server:
@@ -31,6 +34,8 @@ pnpm run server
 The server loads `.env`, `.env.local`, `server/.env`, and `server/.env.local` from the project root. Shell environment variables still take precedence over values from those files.
 
 For local API-shape tests without Postgres, use the in-memory store from tests only. Production and shared development should use Postgres.
+
+When `scripts/run-mspace-codex-dev.sh` needs to auto-start local Docker Postgres, it expects the durable data volume above. It labels the container and volume and rejects an existing `mspace-postgres-dev` container if it points at a different Postgres data volume.
 
 ## Auth Shape
 
@@ -102,7 +107,7 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 
 The workspace Inbox is event-based. `issue_events` stores the append-only review fact, `issue_event_receipts` stores each recipient user's unread/read/archive state, and `issue_watchers` stores the issue-level recipient set. Opening or polling an issue must not clear unread state; clients should call the read-through endpoint after the user intentionally reviews an Inbox row.
 
-Personal workspaces are the default result of GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, and Inbox receipts in Postgres. Invitations, worker registration tokens, registered workers, and runtime task APIs require a workspace with `kind="team"`; those endpoints return `403 Forbidden` for personal workspaces.
+Personal workspaces are the default result of GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent sessions, runtime tasks, worker logs, and runtime results in Postgres. Runtime worker registration and task APIs are available to both personal and team workspaces; team workspaces additionally unlock invitations and shared membership.
 
 Issue `project_id` is optional in the control plane. A user can capture a workspace-level issue before the repository is known, comment on it, and attach a project later through `PUT /api/workspaces/{workspaceID}/issues/{issueID}` with `projectId`. If a create request omits `projectId` and the workspace has exactly one project, the server auto-attaches it; zero or multiple projects leave the issue unassigned. Agent execution, PR handoff, and issue test environments require an attached project.
 
@@ -116,4 +121,4 @@ Runtime registration tokens use the `msw_` prefix and are returned only once. Th
 
 The current queue is intentionally narrow: it records workspace task metadata, required capability JSON, payload/result JSON, claim ownership, timestamps, a compact audit event stream, and worker-appended task logs. Workers can stream Codex app-server status and output back through the log endpoint without the server needing direct network access to the worker environment. Workspace users can request task cancellation; workers poll their claimed task while executing and interrupt Codex app-server when cancellation is requested.
 
-The first worker-side implementation lives in `../worker`. It uses only the server HTTP contract: register with `Authorization: Bearer msw_...`, send heartbeat updates, claim matching tasks, inspect its claimed task for cancellation, append logs, and report status. It completes `protocol_smoke` and `noop` tasks, and it can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Issue Detail can now route an agent turn to Team worker through the local runner bridge and adopt returned worker source commit metadata, changed files, and diff preview; remaining hardening is stronger artifact transfer, remote credential policy, and Kubernetes-provider parity.
+The first worker-side implementation lives in `../worker`. It uses only the server HTTP contract: register with `Authorization: Bearer msw_...`, send heartbeat updates, claim matching tasks, inspect its claimed task for cancellation, append logs, and report status. It completes `protocol_smoke` and `noop` tasks, and it can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Issue Detail routes agent turns directly to `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; returned worker source commit metadata, changed files, and diff preview are exposed from the runtime task result rather than mirrored through the runner.

@@ -7,6 +7,34 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-05-18",
+    title: "Worker preview guardrails and source branches",
+    summary:
+      "mspace tightened Team worker defaults and made PR source branches easier to read from the Commits tab.",
+    items: [
+      "Updated server-issued Codex session instructions to prefer lint, tests, typecheck, builds, and short internal probes over starting long-running dev servers.",
+      "Prevented Docker worker fallback instructions from presenting container-local `localhost` or `127.0.0.1` URLs as preview links unless the user explicitly asks for a mapped local preview.",
+      "Added regression coverage for the server and worker instruction defaults so future sessions keep preview links tied to mspace test environments or known host mappings.",
+      "Moved the PR source selector to branch identity and Source branch copy, so multiple commits on one branch do not look like separate PR sources.",
+      "Added a Codex session artifact for semantic branch names such as `fix/pr-source-branch-selection`, with runner and worker normalization before source capture.",
+    ],
+  },
+  {
+    date: "2026-05-15",
+    title: "Server-owned worker sessions",
+    summary:
+      "mspace simplified runtime architecture so personal and team workspaces use the server as the single session, task, log, and result source of truth.",
+    items: [
+      "Moved Issue Detail agent mentions to the server session API for both personal and team workspaces, removing the runner bridge for server-owned worker sessions.",
+      "Exposed Runtime registry and queue controls from Workspace Settings for personal and team workspaces, while keeping invitations and shared member controls team-only.",
+      "Kept worker logs and returned source metadata in server runtime task records instead of importing worker logs/results into runner SQLite.",
+      "Made the Docker dry-run Server Worker script usable from non-interactive shells while preserving the same queue, claim, log, and source-diff loop.",
+      "Added a Workspace Settings action that starts the local Docker worker by generating and injecting a short-lived internal bootstrap credential, so local team-mode testing no longer requires copying raw worker tokens.",
+      "Added a Codex-capable Docker worker image and startup script that installs the Linux Codex CLI, mounts a dedicated worker Codex home, and advertises `codex:true,dryRun:false` for real Team worker sessions.",
+      "Documented the worker authentication boundary so dry-run testing, local Codex credentials, and future managed team runtime credentials stay distinct.",
+    ],
+  },
+  {
     date: "2026-05-14",
     title: "Legacy personal data import",
     summary:
@@ -14,12 +42,12 @@ export const changelog: ChangelogEntry[] = [
     items: [
       "Added a one-time local SQLite import path so existing personal test issues, comments, labels, reactions, Inbox rows, and project runbooks can be carried into server Postgres.",
       "Documented the import path for development workspaces that still have legacy runner product rows in `~/.mspace/mspace.db`.",
-      "Connected PG-backed team workspace issues to Team worker sessions through the runner bridge, so a shared issue comment can now queue an `agent_session` runtime task instead of stopping at collaboration state.",
+      "Connected PG-backed team workspace issues to Team worker sessions through the first bridge, so a shared issue comment could queue an `agent_session` runtime task instead of stopping at collaboration state.",
       "Let users create workspace-level issues before choosing a project, while keeping project attachment required for agent runs, PR handoff, and test environments.",
       "Made issue creation note-first: mspace creates the issue immediately with a draft title, then refreshes the title in the background while keeping manual edits in Issue Detail.",
       "Fixed server-backed issue type triage so new issues move out of the `Classifying` state once the classifier applies or fails.",
       "Made project attachment explicit from Issue Detail, including creating and attaching a GitHub-backed project from a repository URL found in the issue note.",
-      "Pinned team workspace agent turns to Team worker execution and removed the Local runner choice from team Issue Detail.",
+      "Pinned team workspace agent turns to Team worker execution while preparing the server-owned session path.",
       "Refreshed the README and public website with a curated set of current running screenshots instead of publishing every Issue Detail tab.",
     ],
   },
@@ -34,7 +62,7 @@ export const changelog: ChangelogEntry[] = [
       "Kept runner SQLite focused on local runtime state, attachments, evidence, test environments, PR handoff, and execution metadata.",
       "Made Issues, Projects, Project runbooks, global search, and Issue Detail use server workspace APIs for signed-in workspaces.",
       "Moved team workspace creation into the left workspace menu beside workspace switching.",
-      "Limited Team worker routing, invitations, runtime registration, workers, and task queues to team workspaces.",
+      "Limited Team worker routing, invitations, runtime registration, workers, and task queues to team workspaces before the server-owned runtime queue was generalized.",
       "Updated the workspace menu so users can see whether they are operating in a Personal or Team workspace.",
     ],
   },

@@ -25,7 +25,7 @@ mspace is a review Inbox and Issue workspace for software teams that want coding
 The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, inline child-issue tasks, comments, agent session, branch state, logs, deployment evidence, preview URL, and cleanup decision in one place.
 
 > [!NOTE]
-> mspace is currently a runnable local desktop MVP with a server/control-plane slice. GitHub sign-in creates a personal workspace by default, and signed-in workspace product data lives in server Postgres. Agent execution stays local-first by default, while team workspaces can route work through registered Server Workers.
+> mspace is currently a runnable local desktop MVP with a server/control-plane slice. GitHub sign-in creates a personal workspace by default, and signed-in personal and team workspaces store product state plus runtime session/task/log/result state in server Postgres. Runtime workers claim work from the server queue; team workspaces additionally unlock invitations and shared membership.
 
 ## Screenshots
 
@@ -65,15 +65,15 @@ Production deployment uses the root `vercel.json`:
 ## Features
 
 - Electron desktop app with Inbox, Issues, Agents, Clusters, Projects, Issue Detail, and Session Detail screens.
-- Go server control plane with GitHub OAuth entrypoints, state-bound desktop login polling, Postgres migrations, mspace session tokens, personal/team workspaces, workspace product data, workspace membership, invitations, Inbox receipts, runtime worker registration, and runtime task queues.
+- Go server control plane with GitHub OAuth entrypoints, state-bound desktop login polling, Postgres migrations, mspace session tokens, personal/team workspaces, workspace product data, workspace membership, invitations, Inbox receipts, runtime worker registration, agent sessions, runtime task queues, worker logs, and runtime results.
 - GitHub-authenticated sidebar account/workspace state, plus local issue creator and comment actor display snapshots with human and Codex avatars.
-- Workspace Settings creates team workspaces from the personal default, then exposes Team access and Team Runtime panels for members, one-time invites, worker tokens, workers, task events, and worker logs.
+- Workspace Settings exposes team-only access controls for members and one-time invites, plus runtime panels for personal and team worker tokens, workers, task events, and worker logs.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, Material Icon Theme file icons, and real shadcn/ui source components in `@mspace/ui`.
 - Sidebar global search with a `Command+K` palette for jumping to issues and projects.
-- Go local runner with HTTP APIs, SQLite storage, server-sent events, session logs, git-aware project import, and Codex app-server integration.
+- Go local runner with HTTP APIs, SQLite storage for local validation state, git-aware project import, attachments, cluster/test-environment bookkeeping, and PR handoff.
 - Project import from a local folder or GitHub repository URL, including GitHub remote metadata detection when available.
 - Managed agent profiles stored in SQLite, seeded with internal `@triage` plus user-facing `@codex`, `@bugfix`, and `@design`.
-- Agent mentions from issue comments, with turn queueing, profile instructions, trigger-comment tracking, status updates, and issue timeline updates.
+- Agent mentions from issue comments, with server-side session records, runtime task queueing, profile instructions, trigger-comment tracking, worker logs, status updates, and issue timeline updates.
 - Markdown-backed TipTap writing surfaces for issue creation and human issue comments, including checklist input that becomes child tasks plus image upload, paste, drop, thumbnail previews backed by stable attachment URLs, and lightweight comment reactions.
 - Project runbooks stored by mspace with revision history, edited as Markdown from the Projects settings page, shown from the Issue Detail sidebar in a read-only TipTap modal, and learned from successful agent session artifacts.
 - Per-session git worktrees, workspace inspection, changed file lists, diff previews, commits, and comparison against the project default branch.
@@ -83,9 +83,9 @@ Production deployment uses the root `vercel.json`:
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, reconcile Kubernetes evidence, and check preview status in the background.
 - Issue Resources tab for the current test namespace, showing Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events without accepting cross-namespace input.
 - Issue Evidence tab for the current review packet, with separate full-width pages for previous attempts and Kubernetes snapshot history.
-- Issue-level branch / PR handoff records that keep one current PR with source commit, head commit, commit list, preview URL, evidence summary, local preflight errors, and refreshable PR state.
+- Issue-level branch / PR handoff records that keep one current PR with source branch, source commit, head commit, commit list, preview URL, evidence summary, local preflight errors, and refreshable PR state.
 - Workspace automation settings keep source commit capture always on and let users opt into automatic draft PR creation after captured source commits.
-- Issue Detail can route agent work to a Team worker when the selected workspace is a team workspace; personal workspaces keep Team worker routing disabled.
+- Issue Detail routes normal agent work directly through the server runtime queue for both personal and team workspaces; workers prepare their own repo cache/workdir, run Codex app-server over stdio, and return source metadata in the runtime task result.
 - Structured failure evidence for failed sessions, deploy reconciliation, preview checks, agent interruption, and cleanup failures, shown from Issue Detail Overview and Evidence so users can continue, retry deploy, stop, retain, or clean up instead of treating failure as terminal.
 
 > [!IMPORTANT]
@@ -99,11 +99,11 @@ mspace separates collaboration, execution, and validation:
 
 | Layer | What it owns | Current implementation |
 | --- | --- | --- |
-| Control plane | Users, workspaces, product data, membership, GitHub identity, mspace auth sessions, future GitHub App installations | Go server in `server/`, chi, PostgreSQL through `pgx` |
+| Control plane | Users, workspaces, product data, membership, GitHub identity, mspace auth sessions, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, PostgreSQL through `pgx` |
 | Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review | Electron, React, TanStack Router, React Query, shared `@mspace/ui` |
-| Local runner | API, SQLite state, SSE streams, worktree preparation, Codex session lifecycle | Go, chi, SQLite, `codex app-server --listen stdio://` |
-| Server Worker runtime | Team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
-| Agent runtime | One issue-bound turn in an isolated working directory | Local git worktree or worker-managed workdir under the selected runtime |
+| Local runner | Local desktop facilities that have not moved server-side yet: attachments, clusters, test environments, PR handoff, legacy/local validation state | Go, chi, SQLite |
+| Runtime worker | Personal or team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
+| Agent runtime | One issue-bound turn in an isolated working directory | Worker-managed git workdir under the selected runtime mode |
 | Validation target | Build, deploy, inspect, preview, and cleanup issue test environments | Namespace-scoped Kubernetes workflow triggered from Issue Detail |
 
 The desktop process starts the Go runner automatically on `127.0.0.1:7788` and the server control plane on `127.0.0.1:8787`. Runner and server reuse both require a healthy `/health` response with the expected protocol capabilities, so stale local processes are replaced during desktop development.
@@ -153,7 +153,7 @@ The server automatically loads `.env.local` from the project root. Keep `MSPACE_
 7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
 8. Open the Commits tab to review the issue-level PR card plus the captured commit list, then create or refresh the issue PR from the selected source branch when ready.
 9. Optionally enable automatic draft PRs from Workspace Settings in the workspace menu if this workspace should refresh a draft PR after future source commits.
-10. For team collaboration, sign in with GitHub, create a team workspace from Workspace Settings, invite members, then create a worker token and start a Server Worker before choosing Team worker from Issue Detail.
+10. Create a worker token from Workspace Settings and start a matching personal or team runtime worker before mentioning an agent from Issue Detail. For team collaboration, create a team workspace from the workspace menu and invite members first.
 11. Trigger the manual test deployment action from Issue Detail and keep the preview URL and evidence on the issue.
 12. Use Evidence for the current review packet and command evidence; open Previous attempts or Kubernetes snapshots only when reviewing historical blockers or namespace evidence.
 
@@ -171,23 +171,29 @@ Runtime variables:
 | `MSPACE_SERVER_URL` | `http://127.0.0.1:8787` | Server control-plane URL exposed to the desktop renderer. |
 | `MSPACE_SERVER_START_TIMEOUT_MS` | `30000` | Startup health-check timeout for the server when launched by Electron. |
 | `DATABASE_URL` | none | Postgres connection string for the server control plane. |
+| `MSPACE_DEV_POSTGRES_CONTAINER` | `mspace-postgres-dev` | Local Codex dev helper container name for auto-started Docker Postgres. |
+| `MSPACE_DEV_POSTGRES_VOLUME` | `mspace-postgres-data` | Durable named Docker volume for local control-plane Postgres data. |
+| `MSPACE_DEV_POSTGRES_IMAGE` | `postgres:16` | Docker image used when the local Codex dev helper creates Postgres. |
 | `MSPACE_GITHUB_CLIENT_ID` | none | GitHub OAuth client ID used by the server. |
 | `MSPACE_GITHUB_CLIENT_SECRET` | none | GitHub OAuth client secret; belongs on the server only. |
 | `MSPACE_GITHUB_REDIRECT_URI` | none | GitHub OAuth callback URL for the server. |
 | `MSPACE_RUNTIME_TOKEN` | none | `msw_...` runtime worker registration token used by `pnpm worker`. |
 | `MSPACE_WORKER_CAPABILITIES` | `{"protocolSmoke":true,"codex":false,"dryRun":true}` | Worker capability JSON used by server-side task matching. |
+| `MSPACE_WORKER_CODEX_HOME_DIR` | `~/.mspace/codex-worker-home` | Host Codex home copy mounted by the Docker Codex dev worker. |
+| `MSPACE_WORKER_CODEX_CLI_VERSION` | `0.130.0` | Codex CLI version installed by the Docker Codex dev worker image. |
 
 Local data paths:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.mspace/mspace.db` | SQLite database for runner runtime state such as sessions, evidence, failure records, handoffs, cluster/test-environment records, and local attachment blobs. |
+| `~/.mspace/mspace.db` | SQLite database for runner-owned local state such as legacy/local validation sessions, evidence, failure records, handoffs, cluster/test-environment records, and local attachment blobs. |
 | `~/.mspace/repos/<owner>/<repo>` | Cached clone path for GitHub-imported projects. |
 | `~/.mspace/workdirs/<project-id>/<session-id>` | Git worktree for one agent session. |
 | `~/.mspace/workdirs/_contexts/<session-id>.md` | Session context markdown included in Codex prompts. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional agent-written deployment result; `previewUrl` is copied back to the issue test environment, including from continuation sessions that need to refresh the current preview. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional agent-written review snapshot for commands, tests, build/deploy result, summary, risks, and follow-ups. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/branch-name.json` | Optional agent-written source branch proposal such as `{ "branch": "fix/pr-source-branch-selection" }`; mspace normalizes supported prefixes and renames the branch before source capture when safe. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-written project runbook update imported after a successful session. |
 
 Legacy local product rows from earlier development snapshots can be copied into the current personal workspace with:

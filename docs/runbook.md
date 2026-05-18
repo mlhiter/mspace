@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-14
+> Status: local MVP operations guide, updated 2026-05-15
 
 ## Local Data
 
@@ -13,11 +13,19 @@
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory recorded in `agent_sessions.artifact_dir`. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/test-environment.json` | Optional deploy/test artifact. When it includes `previewUrl`, the runner copies it back to the issue test environment; completed continuation sessions can also refresh the current issue environment this way. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/review-evidence.json` | Optional session review artifact. The runner imports compact commands, tests, build/deploy results, agent summary, risks, and follow-ups into `session_review_evidence`. |
+| `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/branch-name.json` | Optional agent-proposed source branch name. Use `{ "branch": "fix/short-semantic-name" }`; mspace validates Conventional Commit-style prefixes and renames the source branch before capture when safe. |
 | `~/.mspace/workdirs/<project-id>/<session-id>/.mspace/session/project-runbook.md` | Optional agent-learned project runbook artifact. When present after a successful session, the runner stores it as the current project runbook. |
 
-Reusable cluster configs are stored in runner `clusters`. Workspace automation policy is stored in runner `workspace_settings`. Issue test namespace records are stored in runner `issue_test_environments`. Review snapshots are stored in runner `session_review_evidence`; continueable failed-session and failed-environment records are stored in runner `session_failures`; branch and PR delivery records are stored in runner `issue_handoffs`; raw execution trails stay in runner `session_logs`. Legacy local unread rows may still exist in runner `inbox_items`, but the product Inbox uses server receipts. Agent definitions are stored in runner `agent_profiles`. The session worktree path is stored in `agent_sessions.workdir`. Codex-backed sessions also store `agent_profile`, `codex_thread_id`, `codex_turn_id`, `agent_status`, `artifact_dir`, `trigger_comment_id`, `agent_token`, `cleanup_status`, and `cleaned_at`.
+Reusable cluster configs are stored in runner `clusters`. Workspace automation policy is stored in runner `workspace_settings`. Issue test namespace records are stored in runner `issue_test_environments`. Review snapshots are stored in runner `session_review_evidence`; continueable failed-session and failed-environment records are stored in runner `session_failures`; branch and PR delivery records are stored in runner `issue_handoffs`; raw local validation trails stay in runner `session_logs`. Legacy local unread rows may still exist in runner `inbox_items`, but the product Inbox uses server receipts. Agent definitions are still stored in runner `agent_profiles`. Normal signed-in agent sessions, worker logs, cancellation, and source results live in server Postgres runtime tables rather than in runner SQLite.
 
-The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, project runbook revisions, issues, comments, comment reactions, issue label definitions, issue labels, issue events, issue-event receipts, and issue watchers in Postgres through `DATABASE_URL`. GitHub sign-in creates a personal workspace by default; invitations, worker tokens, registered workers, and runtime tasks require an explicit team workspace. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
+The server control plane stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, project runbook revisions, issues, comments, comment reactions, issue label definitions, issue labels, issue events, issue-event receipts, issue watchers, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs in Postgres through `DATABASE_URL`. GitHub sign-in creates a personal workspace by default; personal and team workspaces can both register runtime workers and queue runtime tasks. Invitations and shared members require an explicit team workspace. Local GitHub OAuth configuration should live in `.env.local`, which is ignored by git.
+
+For local Codex/Electron development, `scripts/run-mspace-codex-dev.sh` auto-starts Docker Postgres only for local `DATABASE_URL` hosts. The expected durable database is container `mspace-postgres-dev` with named volume `mspace-postgres-data` and image `postgres:16`. The script labels both the container and volume, and refuses to start an existing `mspace-postgres-dev` container if it is mounted to a different `/var/lib/postgresql/data` volume. If the app suddenly looks empty, first check that Docker is serving this named volume rather than a new or anonymous Postgres data directory:
+
+```bash
+docker inspect mspace-postgres-dev --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}'
+docker exec mspace-postgres-dev psql -U mspace -d mspace -Atc "select count(*) from projects; select count(*) from issues;"
+```
 
 If a signed-in personal workspace is empty after moving product data to Postgres, import the legacy runner product rows once:
 
@@ -58,16 +66,24 @@ cp .env.example .env.local
 pnpm run server
 ```
 
-Run a Server Worker separately after creating a worker token from Workspace Settings:
+For local team-mode testing, start a Docker-backed worker from Workspace Settings:
+
+1. Sign in and select the target workspace.
+2. Open Workspace Settings.
+3. In Runtime, click `Start worker`.
+
+mspace creates a short-lived internal worker bootstrap credential, injects it into the Docker worker process, and refreshes the Workers list after registration. The raw `msw_...` credential is an internal connection detail for worker bootstrap, not the default user-facing setup path. The desktop button starts the Codex-capable Docker worker, so local `CODEX_HOME` must contain a valid `auth.json`.
+
+Run a Server Worker manually only when debugging an external worker or terminal-only setup:
 
 ```bash
 export MSPACE_RUNTIME_TOKEN="msw_..."
 pnpm worker
 ```
 
-The worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, and can execute `agent_session` tasks by preparing its own repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, then starting `codex app-server --listen stdio://` there. Worker logs are appended to the server task log stream. Issue Detail team sessions queue an `agent_session` task with repository and session metadata, import worker logs back into the local session timeline, record returned Codex thread/turn ids, and adopt returned source commit metadata, changed files, and diff preview into the issue's Commits view.
+The worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, and can execute `agent_session` tasks by preparing its own repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, then starting `codex app-server --listen stdio://` there. Worker logs are appended to the server task log stream. Issue Detail sessions queue an `agent_session` task with repository and session metadata; returned Codex thread/turn ids, source commit metadata, changed files, and diff preview stay in the server runtime task result and feed Session Detail plus the issue's Commits view.
 
-To simulate a fixed development server without using the local machine environment, run the worker in Docker:
+To simulate a fixed development server without using the local machine environment from a terminal, run the worker in Docker:
 
 ```bash
 export MSPACE_RUNTIME_TOKEN="msw_..."
@@ -76,7 +92,16 @@ scripts/run-server-worker-dev.sh
 
 The script builds `worker/Dockerfile.dev`, runs `mspace-worker` inside a container, and stores worker-managed repos/workdirs/artifacts in the `mspace-worker-dev-root` Docker volume. The container connects to the host control plane through `http://host.docker.internal:8787` by default. It advertises `codex:true,dryRun:true` so UI-triggered Team sessions can complete a full control-plane loop without local Codex credentials: the worker clones the repository, creates an isolated worktree, writes `TEAM_RUNTIME_DRY_RUN.md`, commits it, and returns commit/diff metadata to the issue. Real Codex execution still requires Codex CLI/auth to be available inside the worker image or a mounted worker environment; set `MSPACE_WORKER_CAPABILITIES='{"protocolSmoke":true,"codex":true,"dryRun":false}'` only after that worker image is actually able to run `codex app-server`.
 
-Cancellation is cooperative. Stopping a Team worker session requests cancellation on the server task; the worker polls its claimed task and interrupts Codex app-server when it sees `cancelled`.
+To test real Codex execution from a Docker-backed fixed worker, run the Codex-capable dev worker:
+
+```bash
+export MSPACE_RUNTIME_TOKEN="msw_..."
+scripts/run-server-worker-codex-dev.sh
+```
+
+The script builds `worker/Dockerfile.codex-dev`, installs the Linux Codex CLI inside the image, and runs the worker with `codex:true,dryRun:false`. It copies `auth.json` and `config.toml` from `${CODEX_HOME:-~/.codex}` into `~/.mspace/codex-worker-home`, mounts that directory as the container `CODEX_HOME`, and adds the container worker root as a trusted Codex project. Use `MSPACE_WORKER_CODEX_HOME_SOURCE` to point at a different prepared Codex home, `MSPACE_WORKER_CODEX_HOME_DIR` to change the mounted copy, and `MSPACE_WORKER_CODEX_CLI_VERSION` to pin a different `@openai/codex` version. This is a local development convenience for the Docker VM simulation; a real team worker should get Codex auth, git credentials, registry credentials, and kubeconfig from its own managed runtime environment.
+
+Cancellation is cooperative. Stopping a worker-backed session requests cancellation on the server task; the worker polls its claimed task and interrupts Codex app-server when it sees `cancelled`.
 
 To test team collaboration through the UI only:
 
@@ -87,7 +112,7 @@ To test team collaboration through the UI only:
 5. Open Workspace Settings and use Team access to create an invite link.
 6. Copy the invite link and open it as another signed-in GitHub identity.
 7. Accept the invite from the Join workspace page.
-8. Confirm Workspace Settings shows both members, then continue with Team Runtime token, worker, task, and Issue Detail team-session testing.
+8. Confirm Workspace Settings shows both members, then continue with Runtime token, worker, task, and Issue Detail session testing.
 
 ## Website
 
@@ -128,13 +153,16 @@ The root `vercel.json` uses `pnpm install --frozen-lockfile`, builds with `pnpm 
 | `MSPACE_SERVER_ADDR` | Server and Electron main process | `127.0.0.1:8787` | Address used when the server control plane listens or is started by desktop. |
 | `MSPACE_SERVER_URL` | Electron preload/renderer | `http://127.0.0.1:8787` | Server control-plane base URL exposed to the renderer. |
 | `MSPACE_SERVER_START_TIMEOUT_MS` | Electron main process | `30000` | How long the desktop waits for the server health check before startup fails. |
-| `MSPACE_RUNTIME_TOKEN` | Worker | none | Runtime registration token with `msw_` prefix. Required by `pnpm worker`. |
+| `MSPACE_RUNTIME_TOKEN` | Worker | none | Internal runtime bootstrap credential with `msw_` prefix. The desktop UI creates and injects this for local Docker workers; set it manually only for external workers or debugging. |
 | `MSPACE_WORKER_NAME` | Worker | host-derived | Stable worker name shown in Workspace Settings. |
 | `MSPACE_WORKER_MODE` | Worker | `team` | Runtime mode reported to the server; `team` or `personal`. |
 | `MSPACE_WORKER_CAPABILITIES` | Worker | `{"protocolSmoke":true,"codex":false,"dryRun":true}` | JSON object used by server-side capability matching. The Docker dev script overrides this to `{"protocolSmoke":true,"codex":true,"dryRun":true}` so UI-triggered Team sessions can be tested without Codex auth. Set `codex:true` and `dryRun:false` for workers intended to run real Codex `agent_session` tasks. |
 | `MSPACE_WORKER_LABELS` | Worker | `{}` | JSON object for placement or inventory labels. |
 | `MSPACE_WORKER_POLL_INTERVAL` | Worker | `5s` | How often the worker polls the runtime task queue. |
 | `MSPACE_WORKER_HEARTBEAT_INTERVAL` | Worker | `10s` | How often the worker reports liveness and load. |
+| `MSPACE_WORKER_CODEX_HOME_SOURCE` | Docker Codex worker script | `${CODEX_HOME:-~/.codex}` | Source Codex home copied into a dedicated worker Codex home before container startup. |
+| `MSPACE_WORKER_CODEX_HOME_DIR` | Docker Codex worker script | `~/.mspace/codex-worker-home` | Host directory mounted into the Codex-capable dev worker as `CODEX_HOME`. |
+| `MSPACE_WORKER_CODEX_CLI_VERSION` | Docker Codex worker script | `0.130.0` | `@openai/codex` npm version installed into `worker/Dockerfile.codex-dev`. |
 | `DATABASE_URL` | Server | none | Postgres connection string for control-plane storage. |
 | `MSPACE_GITHUB_CLIENT_ID` | Server | none | GitHub OAuth App client id. |
 | `MSPACE_GITHUB_CLIENT_SECRET` | Server | none | GitHub OAuth App client secret; keep it server-side only. |
@@ -232,7 +260,7 @@ export MSPACE_RUNTIME_TOKEN="msw_..."
 pnpm worker -- -once
 ```
 
-Use any signed-in workspace id for Inbox checks. Use a team workspace id for invitations, worker tokens, worker lists, and runtime task APIs; personal workspaces intentionally reject those team-only runtime/collaboration-management APIs with `403 Forbidden`.
+Use any signed-in workspace id for Inbox checks, worker tokens, worker lists, and runtime task APIs. Use a team workspace id for invitations and shared member APIs; personal workspaces intentionally reject those team-only collaboration-management APIs with `403 Forbidden`.
 
 Queue a protocol task for that worker:
 

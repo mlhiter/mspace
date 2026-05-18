@@ -28,11 +28,13 @@ Normal source-code agent sessions are captured as issue change nodes when they f
 
 Review evidence is exposed from the same issue detail response as `reviewEvidence`. This is not a diff surface: code changes stay in `changeNodes` and the Commits tab. `reviewEvidence` is the durable session snapshot for commands run, tests, build result, deployment result, preview URL, Kubernetes namespace state, agent summary, risks/follow-ups, and cleanup/retain state. The runner persists compact evidence commands in `session_review_evidence.commands_json`; exploratory command output such as file reads and searches stays in `session_logs` for raw debugging.
 
-Branch and pull request handoff is exposed as `handoffs` on Issue Detail. PR handoff is issue-level: one issue should have one current PR, and commit rows are the review/source evidence that feed that PR. A handoff records branch, source session/commit, head commit, commit list, preview URL, evidence summary, PR URL/number/state/title, and any local preflight error. MVP PR creation runs through the local runtime's `git`, `gitleaks`, and `gh` identity; if a PR already exists for the source branch, `gh pr view <branch>` auto-detects it instead of asking the user to paste a URL. Future hosted/team mode should move GitHub automation to a GitHub App installation token owned by the control plane.
+Branch and pull request handoff is exposed as `handoffs` on Issue Detail. PR handoff is issue-level: one issue should have one current PR, and commit rows are the review/source evidence that feed that PR. A handoff records branch, source session/commit, head commit, commit list, preview URL, evidence summary, PR URL/number/state/title, and any local preflight error. The PR source selector is keyed by `Source branch`, not commit SHA, so multiple captured commits on the same branch collapse into one PR source candidate. MVP PR creation runs through the local runtime's `git`, `gitleaks`, and `gh` identity; if a PR already exists for the source branch, `gh pr view <branch>` auto-detects it instead of asking the user to paste a URL. Future hosted/team mode should move GitHub automation to a GitHub App installation token owned by the control plane.
 
 Failed work is exposed as `failures` on Issue Detail and Session Detail. Each failure belongs to one session and stores a phase, status, failed command, compact error summary/excerpt, cluster/namespace/resource hints, plus links to deployment and review evidence when available. The UI should treat these rows as continueable collaboration state: users can add a follow-up agent instruction, retry deployment from the same selected source commit, stop an active session, or decide to retain/clean up the namespace.
 
 Agents can improve the snapshot by writing `${MSPACE_SESSION_ARTIFACT_DIR}/review-evidence.json`. Supported fields are `commandsRun`, `tests`, `buildResult`, `deploymentResult`, `agentSummary`, `risks`, and `followUps`. `commandsRun` may be an array of command objects or strings; `tests` may be an array or a map; result fields may be objects or short strings. When the artifact is missing, the runner derives evidence from session logs, test-environment state, and Kubernetes evidence, then keeps only evidence-worthy commands such as test/build/deploy commands, dependency install commands, `git diff --check`, `git commit`, Playwright checks, and issue-status update calls. If an earlier test/build/deploy attempt failed but a later attempt passed, the latest result is treated as authoritative and the failed attempt remains available in `session_logs`.
+
+If an agent makes source-code changes, it should also write `${MSPACE_SESSION_ARTIFACT_DIR}/branch-name.json` with a standard branch name such as `{ "branch": "fix/orcai-homepage-layout" }`. mspace accepts Conventional Commit-style prefixes (`feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `perf`, `build`, `ci`, `style`, `revert`), or a `{ "type": "fix", "slug": "orcai-homepage-layout" }` pair, normalizes the slug, and renames the source branch before source capture when the branch has not already been handed off.
 
 Minimal review evidence artifact:
 
@@ -58,11 +60,12 @@ Minimal review evidence artifact:
 
 When a user is signed into a selected workspace, the desktop reads and writes Projects, Issues, Issue Detail comments/tasks/labels, Inbox receipts, and Project runbooks through the server base URL. Personal workspaces still bind to the user's local runner and machine environment for execution, but their product data lives in server Postgres.
 
-The current transition boundary is explicit:
+The current boundary is explicit:
 
 - server Postgres is truth for signed-in workspace projects, runbooks, issues, child tasks, comments, reactions, labels, and Inbox receipts;
-- local runner SQLite is still truth for local execution state, worktrees, sessions, logs, evidence, handoffs, clusters, issue test environments, image attachments, and runtime metadata;
-- PG-backed team workspace issues can start Team worker agent sessions through the runner bridge; personal workspaces keep Team worker routing disabled, and server-owned attachment uploads are still pending.
+- server Postgres is also truth for normal agent sessions, runtime tasks, runtime task logs, cancellation, and runtime results for personal and team workspaces;
+- local runner SQLite is still truth for remaining local-runner facilities: legacy/local validation sessions, logs, evidence, handoffs, clusters, issue test environments, image attachments, and runtime metadata;
+- server-owned attachment uploads are still pending, so image uploads still use the local runner attachment API.
 
 Server workspace endpoints require `Authorization: Bearer <msp-token>`:
 
@@ -86,6 +89,9 @@ Server workspace endpoints require `Authorization: Bearer <msp-token>`:
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}` | Edit the current user's human comment. |
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current user's reaction to a comment. |
 | `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current user's reaction from a comment. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/sessions` | Queue a server-owned `agent_session` runtime task after a supported agent mention. |
+| `GET` | `/api/workspaces/{workspaceID}/sessions/{sessionID}` | Load server-owned session detail derived from the runtime task and worker logs. |
+| `POST` | `/api/workspaces/{workspaceID}/sessions/{sessionID}/cancel` | Request cancellation for the session's runtime task. |
 
 Create a workspace issue before the repository is known:
 
@@ -124,39 +130,32 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues" \
   -d "{\"projectId\":\"$project_id\",\"body\":\"Move workspace issue data to server PG\\n\\n- [ ] Keep runner workdirs local\",\"labelKeys\":[\"type:feat\",\"priority:p1\"]}"
 ```
 
-### PG-backed Team Worker Session Bridge
+### Server Agent Sessions
 
-Issue Detail starts a Team worker turn for a server-owned issue in two steps:
+Issue Detail starts a runtime worker turn for a server-owned issue in two steps:
 
 1. Write the human comment through `POST /api/workspaces/{workspaceID}/issues/{issueID}/comments`.
-2. Call the local runner bridge `POST /api/server-issues/{issueID}/team-session`.
+2. Call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions` with the comment id as `triggerCommentId`.
 
-The runner must first be configured through `POST /api/control-plane/session` with the selected server base URL, `msp_...` token, and workspace id. The bridge requires a team workspace, rejects personal workspaces, rejects workspace mismatches between the payload and the configured runner session, and only accepts `runtimeMode: "team"`.
+Personal workspaces use `runtimeMode: "personal"`; team workspaces use `runtimeMode: "team"`. Both modes share the same server tables, worker claim protocol, task logs, cancellation, and result shape.
 
-Bridge payload:
+Session payload:
 
 ```json
 {
-  "workspaceId": "<team-workspace-id>",
-  "issueId": "<server-issue-id>",
-  "commentId": "<server-comment-id>",
   "provider": "codex",
   "agentProfile": "codex",
   "runtimeMode": "team",
   "command": "@codex implement the fix",
-  "issue": { "id": "<server-issue-id>", "projectId": "<project-id>", "title": "Issue title", "body": "Issue body" },
-  "project": { "id": "<project-id>", "name": "mspace", "remoteUrl": "https://github.com/org/repo.git", "defaultBranch": "main" },
-  "comments": [],
-  "childIssues": [],
-  "labels": []
+  "triggerCommentId": "<server-comment-id>"
 }
 ```
 
-The runner snapshots the server issue, project, comment, child issue, and label state into local SQLite, creates an `agent_sessions` row with the server `commentId` as `trigger_comment_id`, queues a control-plane `runtime_tasks` row with kind `agent_session`, imports worker logs/results back into local session state, and returns `{ "sessionId": "<local-session-id>" }`. Server Issue Detail includes matching Team worker sessions by mapping `runtime_tasks` with `kind="agent_session"` back into its `sessions` field.
+The server validates that the issue has an attached project, snapshots issue/project/runbook/comment/child issue/label context into the runtime task payload, and returns the server `AgentSession`. The worker prepares its own repo cache and workdir, appends logs to `runtime_task_logs`, and reports Codex thread/turn ids plus source branch and commit metadata in `runtime_tasks.result`. Server Issue Detail includes matching sessions by mapping `runtime_tasks` with `kind="agent_session"` back into its `sessions` field, and the Commits tab derives change nodes from task results.
 
 ## Legacy Runner Issue Writing APIs
 
-These endpoints remain for the current runtime bridge, local attachments, and older test data. The desktop product surfaces should use the server workspace endpoints above for both personal and team workspaces.
+These endpoints remain for local attachments, local validation/test-environment flows, PR handoff, and older test data. The desktop product surfaces should use the server workspace endpoints above for both personal and team workspaces.
 
 The desktop uses a rich TipTap editor for issue creation, human comments, project runbook editing, and read-only Issue Detail runbook viewing, but the runner API stores Markdown text. Image uploads are stored as attachment records and inserted into Markdown as stable `/api/attachments/<id>` image URLs, so future storage backends can change without rewriting issue bodies. Issue write APIs require a bearer token:
 
@@ -174,7 +173,6 @@ The desktop uses a rich TipTap editor for issue creation, human comments, projec
 | `PUT` | `/api/issues/{issueID}/comments/{commentID}` | Edit the latest human comment before it has triggered an agent session. |
 | `PUT` | `/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current human user's reaction to a comment. |
 | `DELETE` | `/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current human user's reaction from a comment. |
-| `POST` | `/api/server-issues/{issueID}/team-session` | Bridge a server-owned team workspace issue comment into a Team worker runtime task. |
 
 When `projectId` is omitted, the legacy runner API still infers the best matching existing project from the title, body, and task text and returns `400 Bad Request` if no project exists. The signed-in desktop product should use the server workspace API above, where workspace-level issues can exist without a project until execution is needed.
 
@@ -187,7 +185,7 @@ The desktop API client attaches `Authorization: Bearer <msp-token>` and injects 
 
 These fields are for local UI rendering only. They are not authentication, authorization, or the durable account model; authoritative users and workspaces belong to the server control plane. The runner stores the verified control-plane user id on new human comments as `author_user_id` and uses it to authorize comment edits.
 
-Agent-triggering sessions store the comment id that created the turn. An eligible unconsumed comment edit may add a supported agent mention, then call `POST /api/issues/{issueID}/assign-agent` with that same comment id as `triggerCommentId`. Once a comment has been used as `trigger_comment_id`, it cannot be edited; stop that session and add a corrected comment instead.
+Agent-triggering sessions store the comment id that created the turn. An eligible unconsumed comment edit may add a supported agent mention, then call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions` with that same comment id as `triggerCommentId`. Once a comment has been used as `triggerCommentId`, it cannot be edited; stop that session and add a corrected comment instead.
 
 Image upload constraints:
 
@@ -232,7 +230,7 @@ curl -X POST "$MSPACE_API_BASE/api/control-plane/session" \
   -d '{"serverBaseUrl":"http://127.0.0.1:8787","token":"<msp-token>","workspaceId":"<workspace-id>"}'
 ```
 
-Personal workspaces are the default after GitHub sign-in. Invitations, worker registration tokens, registered workers, and runtime tasks require an explicit team workspace:
+Personal workspaces are the default after GitHub sign-in. Runtime worker tokens, registered workers, runtime tasks, and agent sessions are available in personal and team workspaces. Invitations and shared members require an explicit team workspace:
 
 ```bash
 curl -X POST "$MSPACE_SERVER_BASE/api/workspaces" \

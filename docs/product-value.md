@@ -180,6 +180,7 @@ The workflow should not end at a preview URL. Engineering teams usually need a b
 
 The MVP can keep using the local user's GitHub identity, but the product direction should move toward GitHub App integration:
 
+- PR handoff is branch-based: the selected source branch is what mspace pushes, detects through `gh`, and turns into one current issue PR; captured commits are supporting review evidence for that branch.
 - workspace installs the GitHub App;
 - the server stores installation state;
 - sessions use scoped installation tokens for push and PR actions;
