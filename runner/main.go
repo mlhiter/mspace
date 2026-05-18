@@ -47,7 +47,7 @@ var (
 	errUnsafeSessionWorkdir = errors.New("session workdir is outside the mspace workdir root")
 	errUnauthorized         = errors.New("unauthorized")
 	errForbidden            = errors.New("forbidden")
-	errInvalidRuntimeMode   = errors.New("runtimeMode must be local or team")
+	errInvalidRuntimeMode   = errors.New("runner sessions only support local runtime")
 )
 
 const defaultImportedClusterImageRegistryPrefix = "crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter"
@@ -57,11 +57,13 @@ const agentTokenPrefix = "mspace-agent-"
 const maxIssueAttachmentBytes = 10 * 1024 * 1024
 const runnerProtocolVersion = 1
 const projectRunbookArtifactName = "project-runbook.md"
+const branchNameArtifactName = "branch-name.json"
 const projectRunbookMaxBytes = 128 * 1024
 const projectRunbookPromptLimit = 24 * 1024
 
 var checklistItemPattern = regexp.MustCompile(`^\s*(?:[-*+]|\d+\.)\s+\[([ xX])\]\s+(.+?)\s*$`)
 var pullRequestURLPattern = regexp.MustCompile(`github\.com/[^/]+/[^/]+/pull/(\d+)`)
+var branchSlugUnsafePattern = regexp.MustCompile(`[^a-z0-9]+`)
 
 var allowedCommentReactions = map[string]bool{
 	"thumbs_up":   true,
@@ -585,52 +587,6 @@ type sessionDetail struct {
 	Workspace workspaceSnapshot    `json:"workspace"`
 }
 
-type runtimeTask struct {
-	ID                string          `json:"id"`
-	Status            string          `json:"status"`
-	Result            json.RawMessage `json:"result"`
-	Error             string          `json:"error"`
-	ClaimedByWorkerID string          `json:"claimedByWorkerId"`
-	StartedAt         string          `json:"startedAt"`
-	FinishedAt        string          `json:"finishedAt"`
-}
-
-type runtimeTaskLog struct {
-	ID        string `json:"id"`
-	Stream    string `json:"stream"`
-	Message   string `json:"message"`
-	CreatedAt string `json:"createdAt"`
-}
-
-type runtimeTaskResult struct {
-	ThreadID    string `json:"threadId"`
-	TurnID      string `json:"turnId"`
-	Status      string `json:"status"`
-	CompletedAt string `json:"completedAt"`
-	DryRun      bool   `json:"dryRun"`
-	Workdir     string `json:"workdir"`
-	ArtifactDir string `json:"artifactDir"`
-	Source      struct {
-		CommitSHA      string            `json:"commitSha"`
-		ShortCommitSHA string            `json:"shortCommitSha"`
-		Branch         string            `json:"branch"`
-		Subject        string            `json:"subject"`
-		FilesChanged   int               `json:"filesChanged"`
-		Changes        []workspaceChange `json:"changes"`
-		DiffPreview    string            `json:"diffPreview"`
-		DiffTruncated  bool              `json:"diffTruncated"`
-	} `json:"source"`
-}
-
-type cancelRuntimeTaskInput struct {
-	Reason string `json:"reason"`
-}
-
-type controlPlaneWorkspaceRef struct {
-	ID   string `json:"id"`
-	Kind string `json:"kind"`
-}
-
 type activeWorkItem struct {
 	IssueID         string `json:"issueId"`
 	ProjectID       string `json:"projectId"`
@@ -825,24 +781,6 @@ type sessionRequest struct {
 	TriggerCommentID string `json:"triggerCommentId"`
 }
 
-type serverIssueSessionRequest struct {
-	WorkspaceID     string          `json:"workspaceId"`
-	IssueID         string          `json:"issueId"`
-	CommentID       string          `json:"commentId"`
-	Provider        string          `json:"provider"`
-	AgentProfile    string          `json:"agentProfile"`
-	RuntimeMode     string          `json:"runtimeMode"`
-	Command         string          `json:"command"`
-	Branch          string          `json:"branch"`
-	SourceSessionID string          `json:"sourceSessionId"`
-	SourceCommitSHA string          `json:"sourceCommitSha"`
-	Issue           issue           `json:"issue"`
-	Project         project         `json:"project"`
-	Comments        []comment       `json:"comments"`
-	ChildIssues     []issueListItem `json:"childIssues"`
-	Labels          []issueLabel    `json:"labels"`
-}
-
 type issueTaskInput struct {
 	Title     string `json:"title"`
 	Body      string `json:"body"`
@@ -994,7 +932,6 @@ func main() {
 	router.Delete("/api/issues/{issueID}/comments/{commentID}/reactions/{reaction}", application.handleDeleteCommentReaction)
 	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
 	router.Post("/api/issues/{issueID}/sessions", application.handleCreateSession)
-	router.Post("/api/server-issues/{issueID}/team-session", application.handleCreateServerIssueTeamSession)
 	router.Post("/api/issues/{issueID}/test-deploy", application.handleStartIssueTestDeploy)
 	router.Post("/api/issues/{issueID}/test-environment/cleanup", application.handleRequestIssueTestEnvironmentCleanup)
 	router.Post("/api/issues/{issueID}/test-environment/retain", application.handleRetainIssueTestEnvironment)
@@ -3902,72 +3839,6 @@ func (a *app) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"sessionId": session.ID})
 }
 
-func (a *app) handleCreateServerIssueTeamSession(w http.ResponseWriter, r *http.Request) {
-	issueID := strings.TrimSpace(chi.URLParam(r, "issueID"))
-	actor, ok := a.requireHumanActor(w, r)
-	if !ok {
-		return
-	}
-	var input serverIssueSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if input.IssueID == "" {
-		input.IssueID = issueID
-	}
-	input.WorkspaceID = strings.TrimSpace(input.WorkspaceID)
-	if input.WorkspaceID == "" {
-		_, _, configuredWorkspaceID := a.controlPlaneSession()
-		input.WorkspaceID = configuredWorkspaceID
-	}
-	input.IssueID = strings.TrimSpace(input.IssueID)
-	input.CommentID = strings.TrimSpace(input.CommentID)
-	input.Provider = strings.TrimSpace(input.Provider)
-	input.AgentProfile = strings.TrimSpace(input.AgentProfile)
-	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
-	input.Command = strings.TrimSpace(input.Command)
-	input.Branch = strings.TrimSpace(input.Branch)
-	input.SourceSessionID = strings.TrimSpace(input.SourceSessionID)
-	input.SourceCommitSHA = strings.TrimSpace(input.SourceCommitSHA)
-	if input.IssueID == "" || input.IssueID != issueID {
-		writeError(w, http.StatusBadRequest, errors.New("issue id mismatch"))
-		return
-	}
-	if input.WorkspaceID == "" {
-		writeError(w, http.StatusBadRequest, errors.New("workspace id is required"))
-		return
-	}
-	_, _, configuredWorkspaceID := a.controlPlaneSession()
-	if configuredWorkspaceID != "" && input.WorkspaceID != configuredWorkspaceID {
-		writeError(w, http.StatusForbidden, errors.New("selected workspace does not match runner control-plane session"))
-		return
-	}
-	if input.Command == "" {
-		writeError(w, http.StatusBadRequest, errors.New("session command is required"))
-		return
-	}
-	if input.RuntimeMode == "" {
-		input.RuntimeMode = "team"
-	}
-	if input.RuntimeMode != "team" {
-		writeError(w, http.StatusBadRequest, errors.New("server issue bridge only supports team runtime"))
-		return
-	}
-
-	session, err := a.queueServerIssueTeamSession(input, actor)
-	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, errUnknownAgentProfile) || errors.Is(err, errInvalidRuntimeMode) {
-			status = http.StatusBadRequest
-		}
-		writeError(w, status, err)
-		return
-	}
-
-	writeJSON(w, map[string]string{"sessionId": session.ID})
-}
-
 func (a *app) handleStartIssueTestDeploy(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "issueID")
 	actor, ok := a.requireHumanActor(w, r)
@@ -5342,7 +5213,7 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 	if input.RuntimeMode == "" {
 		input.RuntimeMode = "local"
 	}
-	if input.RuntimeMode != "local" && input.RuntimeMode != "team" {
+	if input.RuntimeMode != "local" {
 		return agentSession{}, errInvalidRuntimeMode
 	}
 	if input.Provider != "" && !strings.EqualFold(input.Provider, "codex") && input.AgentProfile == "" {
@@ -5418,9 +5289,6 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 		displayAgent = profile.Name
 	}
 	modeLabel := "local"
-	if session.RuntimeMode == "team" {
-		modeLabel = "team runtime"
-	}
 	if err := a.updateIssueAssignment(issueID, assignee, "agent", normalizeIssueStatus(detail.Issue.Status), actor, fmt.Sprintf("Assigned to agent `%s` and queued %s session `%s`.", displayAgent, modeLabel, shortID(session.ID))); err != nil {
 		return agentSession{}, err
 	}
@@ -5435,244 +5303,6 @@ func (a *app) queueAgentSession(issueID string, input sessionRequest, actor issu
 
 	go a.runSession(session, detail.Project)
 	return session, nil
-}
-
-func (a *app) queueServerIssueTeamSession(input serverIssueSessionRequest, actor issueActor) (agentSession, error) {
-	if err := a.requireTeamControlPlaneWorkspace(context.Background()); err != nil {
-		return agentSession{}, err
-	}
-	if input.Provider == "" {
-		input.Provider = "codex"
-	}
-	profile := agentProfile{}
-	if isCodexProvider(input.Provider) {
-		var err error
-		profile, err = a.resolveEnabledAgentProfile(input.AgentProfile)
-		if err != nil {
-			return agentSession{}, err
-		}
-		input.Provider = "codex"
-		input.AgentProfile = profile.ID
-	}
-	if input.RuntimeMode != "team" {
-		return agentSession{}, errInvalidRuntimeMode
-	}
-	input.Issue.ID = strings.TrimSpace(firstNonEmpty(input.Issue.ID, input.IssueID))
-	input.Issue.ProjectID = strings.TrimSpace(firstNonEmpty(input.Issue.ProjectID, input.Project.ID))
-	input.Issue.Title = strings.TrimSpace(input.Issue.Title)
-	input.Issue.Body = strings.TrimSpace(input.Issue.Body)
-	input.Issue.Status = normalizeIssueStatus(input.Issue.Status)
-	if input.Issue.Status == "" {
-		input.Issue.Status = "open"
-	}
-	if input.Issue.Assignee == "" {
-		input.Issue.Assignee = input.AgentProfile
-		input.Issue.AssigneeType = "agent"
-	}
-	if input.Issue.AssigneeType == "" {
-		input.Issue.AssigneeType = "agent"
-	}
-	if input.Project.ID == "" || input.Project.ID != input.Issue.ProjectID {
-		input.Project.ID = input.Issue.ProjectID
-	}
-	input.Project.Name = strings.TrimSpace(input.Project.Name)
-	if input.Project.Name == "" {
-		input.Project.Name = "Server project"
-	}
-	input.Project.RepoPath = strings.TrimSpace(input.Project.RepoPath)
-	input.Project.RemoteURL = strings.TrimSpace(input.Project.RemoteURL)
-	if input.Project.RepoPath == "" {
-		input.Project.RepoPath = input.Project.RemoteURL
-	}
-	if input.Project.DefaultBranch == "" {
-		input.Project.DefaultBranch = "main"
-	}
-	if input.Project.SourceType == "" {
-		if input.Project.RemoteURL != "" {
-			input.Project.SourceType = "github"
-		} else {
-			input.Project.SourceType = "local"
-		}
-	}
-	if input.Project.ID == "" || input.Issue.ID == "" || input.Issue.ProjectID == "" {
-		return agentSession{}, errors.New("server issue bridge requires issue and project ids")
-	}
-	if remoteURLForTeamRuntime(input.Project) == "" {
-		return agentSession{}, errors.New("team runtime requires a project remote URL or repository path")
-	}
-	if input.Issue.Title == "" {
-		input.Issue.Title = "Server issue " + shortID(input.Issue.ID)
-	}
-
-	if err := a.upsertServerIssueSnapshot(input, actor); err != nil {
-		return agentSession{}, err
-	}
-
-	sessionID := uuid.NewString()
-	agentToken := agentTokenPrefix + strings.ReplaceAll(uuid.NewString(), "-", "")
-	branch := input.Branch
-	if branch == "" {
-		branch = fmt.Sprintf("mspace/%s/%s", shortID(input.Issue.ID), shortID(sessionID))
-	}
-	session := agentSession{
-		ID:               sessionID,
-		IssueID:          input.Issue.ID,
-		Provider:         input.Provider,
-		AgentProfile:     input.AgentProfile,
-		RuntimeMode:      "team",
-		Command:          input.Command,
-		Status:           "queued",
-		Branch:           branch,
-		Workdir:          plannedSessionWorkdir(a.workdir, input.Project.ID, sessionID),
-		AgentStatus:      "queued",
-		SourceSessionID:  input.SourceSessionID,
-		SourceCommitSHA:  input.SourceCommitSHA,
-		TriggerCommentID: input.CommentID,
-		AgentToken:       agentToken,
-		CleanupStatus:    "retained",
-		CreatedAt:        nowString(),
-		UpdatedAt:        nowString(),
-	}
-	if _, err := a.db.Exec(`
-		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, runtime_task_id, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, source_session_id, source_commit_sha, trigger_comment_id, agent_token, cleanup_status, cleaned_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, session.ID, session.IssueID, session.Provider, session.AgentProfile, session.RuntimeMode, session.RuntimeTaskID, session.Command, session.Status, session.Branch, session.Workdir, session.CodexThreadID, session.CodexTurnID, session.AgentStatus, session.ArtifactDir, session.SourceSessionID, session.SourceCommitSHA, session.TriggerCommentID, session.AgentToken, session.CleanupStatus, session.CleanedAt, session.CreatedAt, session.UpdatedAt); err != nil {
-		return agentSession{}, err
-	}
-
-	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Bridge accepted server-owned issue %s from workspace %s.", shortID(input.Issue.ID), input.WorkspaceID))
-	go a.runSession(session, input.Project)
-	return session, nil
-}
-
-func (a *app) upsertServerIssueSnapshot(input serverIssueSessionRequest, actor issueActor) error {
-	now := nowString()
-	if input.Project.CreatedAt == "" {
-		input.Project.CreatedAt = now
-	}
-	input.Project.UpdatedAt = now
-	if input.Issue.CreatedAt == "" {
-		input.Issue.CreatedAt = now
-	}
-	input.Issue.UpdatedAt = now
-	tx, err := a.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`
-		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, kubeconfig_path, namespace, image_registry_prefix, preview_domain, ingress_class, node_host, default_cluster_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			name = excluded.name,
-			repo_path = excluded.repo_path,
-			source_type = excluded.source_type,
-			remote_url = excluded.remote_url,
-			git_provider = excluded.git_provider,
-			git_owner = excluded.git_owner,
-			git_repo = excluded.git_repo,
-			default_branch = excluded.default_branch,
-			deploy_command = excluded.deploy_command,
-			validation_command = excluded.validation_command,
-			kube_context = excluded.kube_context,
-			kubeconfig_path = excluded.kubeconfig_path,
-			namespace = excluded.namespace,
-			image_registry_prefix = excluded.image_registry_prefix,
-			preview_domain = excluded.preview_domain,
-			ingress_class = excluded.ingress_class,
-			node_host = excluded.node_host,
-			default_cluster_id = excluded.default_cluster_id,
-			updated_at = excluded.updated_at
-	`, input.Project.ID, input.Project.Name, input.Project.RepoPath, input.Project.SourceType, input.Project.RemoteURL, input.Project.GitProvider, input.Project.GitOwner, input.Project.GitRepo, input.Project.DefaultBranch, input.Project.DeployCommand, input.Project.ValidationCommand, input.Project.KubeContext, input.Project.KubeconfigPath, input.Project.Namespace, input.Project.ImageRegistryPrefix, input.Project.PreviewDomain, input.Project.IngressClass, input.Project.NodeHost, input.Project.DefaultClusterID, input.Project.CreatedAt, input.Project.UpdatedAt); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO project_runbooks (project_id, content, status, source, source_session_id, content_hash, created_at, updated_at)
-		VALUES (?, '', 'empty', '', '', '', ?, ?)
-		ON CONFLICT(project_id) DO NOTHING
-	`, input.Project.ID, now, now); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`
-		INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET
-			project_id = excluded.project_id,
-			parent_issue_id = excluded.parent_issue_id,
-			sort_order = excluded.sort_order,
-			title = excluded.title,
-			body = excluded.body,
-			status = excluded.status,
-			close_reason = excluded.close_reason,
-			triage_status = excluded.triage_status,
-			assignee = excluded.assignee,
-			assignee_type = excluded.assignee_type,
-			creator_name = excluded.creator_name,
-			creator_avatar_url = excluded.creator_avatar_url,
-			environment_url = excluded.environment_url,
-			updated_at = excluded.updated_at
-	`, input.Issue.ID, input.Issue.ProjectID, nullableString(input.Issue.ParentIssueID), input.Issue.SortOrder, input.Issue.Title, input.Issue.Body, input.Issue.Status, input.Issue.CloseReason, input.Issue.TriageStatus, input.Issue.Assignee, input.Issue.AssigneeType, input.Issue.CreatorName, input.Issue.CreatorAvatar, input.Issue.EnvironmentURL, input.Issue.CreatedAt, input.Issue.UpdatedAt); err != nil {
-		return err
-	}
-	for _, child := range input.ChildIssues {
-		child.ID = strings.TrimSpace(child.ID)
-		if child.ID == "" {
-			continue
-		}
-		child.ProjectID = firstNonEmpty(child.ProjectID, input.Project.ID)
-		child.ParentIssueID = firstNonEmpty(child.ParentIssueID, input.Issue.ID)
-		child.Status = normalizeIssueStatus(child.Status)
-		if child.Status == "" {
-			child.Status = "open"
-		}
-		if child.CreatedAt == "" {
-			child.CreatedAt = now
-		}
-		child.UpdatedAt = now
-		if _, err := tx.Exec(`
-			INSERT INTO issues (id, project_id, parent_issue_id, sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
-			ON CONFLICT(id) DO UPDATE SET
-				project_id = excluded.project_id,
-				parent_issue_id = excluded.parent_issue_id,
-				sort_order = excluded.sort_order,
-				title = excluded.title,
-				body = excluded.body,
-				status = excluded.status,
-				triage_status = excluded.triage_status,
-				assignee = excluded.assignee,
-				assignee_type = excluded.assignee_type,
-				updated_at = excluded.updated_at
-		`, child.ID, child.ProjectID, nullableString(child.ParentIssueID), child.SortOrder, child.Title, child.Body, child.Status, child.CloseReason, child.TriageStatus, child.Assignee, child.AssigneeType, input.Issue.CreatorName, input.Issue.CreatorAvatar, child.CreatedAt, child.UpdatedAt); err != nil {
-			return err
-		}
-	}
-	if input.CommentID != "" {
-		commentBody := input.Command
-		for _, c := range input.Comments {
-			if c.ID == input.CommentID {
-				commentBody = c.Body
-				break
-			}
-		}
-		if _, err := tx.Exec(`
-			INSERT INTO comments (id, issue_id, author_type, author_user_id, author_name, author_avatar_url, body, created_at, updated_at)
-			VALUES (?, ?, 'human', ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(id) DO UPDATE SET
-				body = excluded.body,
-				updated_at = excluded.updated_at
-		`, input.CommentID, input.Issue.ID, actor.UserID, commentActorName(actor), actor.AvatarURL, commentBody, now, now); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-func nullableString(value string) any {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return strings.TrimSpace(value)
 }
 
 func (a *app) issueHasActiveSession(issueID string) bool {
@@ -6023,17 +5653,6 @@ func (a *app) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, detailErr)
 		return
 	}
-	if detail.Session.RuntimeMode == "team" && strings.TrimSpace(detail.Session.RuntimeTaskID) != "" && (detail.Session.Status == "queued" || detail.Session.Status == "running") {
-		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-		err := a.cancelTeamRuntimeTask(ctx, detail.Session.RuntimeTaskID, "Stopped session "+shortID(sessionID)+" by "+commentActorName(actor)+".")
-		cancel()
-		if err != nil {
-			a.appendSessionLog(sessionID, "system", "Unable to request team runtime cancellation: "+err.Error())
-			writeError(w, http.StatusBadGateway, err)
-			return
-		}
-		a.appendSessionLog(sessionID, "system", "Requested cancellation for team runtime task "+detail.Session.RuntimeTaskID+".")
-	}
 	a.mu.Lock()
 	canceller := a.cancellers[sessionID]
 	if canceller.cancel != nil {
@@ -6046,11 +5665,7 @@ func (a *app) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 			a.updateSessionStatus(sessionID, "cancelled")
 			a.updateSessionAgentStatus(sessionID, "cancelled")
 			if detail.Session.Status == "running" {
-				if detail.Session.RuntimeMode == "team" && strings.TrimSpace(detail.Session.RuntimeTaskID) != "" {
-					a.appendSessionLog(sessionID, "system", "Stop requested after the runner lost its in-memory wait handle. The matching team runtime task has been asked to cancel.")
-				} else {
-					a.appendSessionLog(sessionID, "system", "Stop requested after the runner lost its in-memory handle for this session. No live process was attached in the current runner.")
-				}
+				a.appendSessionLog(sessionID, "system", "Stop requested after the runner lost its in-memory handle for this session. No live process was attached in the current runner.")
 			}
 			a.markIssueTestEnvironmentSessionInterrupted(detail.Session)
 			detail.Session.Status = "cancelled"
@@ -6133,11 +5748,6 @@ func (a *app) runSession(session agentSession, project project) {
 		return
 	}
 
-	if session.RuntimeMode == "team" {
-		a.runTeamRuntimeSession(ctx, session, project)
-		return
-	}
-
 	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Preparing workspace for branch %s", session.Branch))
 	preparedSession, err := a.prepareSessionWorkspace(session, project)
 	if err != nil {
@@ -6209,85 +5819,6 @@ func (a *app) runSession(session agentSession, project project) {
 	a.completeSuccessfulSession(session, project, changeNode)
 }
 
-func (a *app) runTeamRuntimeSession(ctx context.Context, session agentSession, project project) {
-	if err := a.requireTeamControlPlaneWorkspace(ctx); err != nil {
-		a.failSession(session, &project, err)
-		return
-	}
-	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Preparing team runtime context for branch %s", session.Branch))
-	contextPath, err := a.writeSessionContext(session, project)
-	if err != nil {
-		a.failSession(session, &project, fmt.Errorf("write session context: %w", err))
-		return
-	}
-	artifactDir := filepath.Join(a.workdir, "_team_artifacts", session.ID)
-	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-		a.failSession(session, &project, fmt.Errorf("create session artifact dir: %w", err))
-		return
-	}
-	session.ArtifactDir = artifactDir
-	a.updateSessionArtifactDir(session.ID, artifactDir)
-
-	prompt := session.Command
-	if isCodexProvider(session.Provider) {
-		prompt, err = a.buildCodexSessionPrompt(session, project, contextPath, artifactDir)
-		if err != nil {
-			a.failSession(session, &project, fmt.Errorf("build codex prompt: %w", err))
-			return
-		}
-	}
-
-	a.updateSessionStatus(session.ID, "running")
-	a.updateSessionAgentStatus(session.ID, "team-runtime-queued")
-	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Queueing team runtime task for %s session. The server worker will prepare its own workspace.", session.Provider))
-	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Source repository: %s", remoteURLForTeamRuntime(project)))
-	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Session branch: %s", session.Branch))
-	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Session context: %s", contextPath))
-	a.addSystemComment(session.IssueID, fmt.Sprintf(
-		"Started team runtime session `%s` on branch `%s`.\n\nServer Worker will prepare an isolated workspace from `%s`.\nContext: `%s`",
-		shortID(session.ID),
-		session.Branch,
-		remoteURLForTeamRuntime(project),
-		contextPath,
-	))
-
-	task, err := a.createTeamRuntimeAgentTask(ctx, session, project, prompt)
-	if err != nil {
-		a.failSession(session, &project, fmt.Errorf("queue team runtime task: %w", err))
-		return
-	}
-	session.RuntimeTaskID = task.ID
-	a.updateSessionRuntimeTaskID(session.ID, task.ID)
-	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Team runtime task queued: %s", task.ID))
-	err = a.waitTeamRuntimeTask(ctx, session, task.ID)
-	if ctx.Err() == context.Canceled || errors.Is(err, context.Canceled) {
-		cancelActor := a.sessionCancelActor(session.ID)
-		a.updateSessionStatus(session.ID, "cancelled")
-		a.updateSessionAgentStatus(session.ID, "cancelled")
-		session.Status = "cancelled"
-		session.AgentStatus = "cancelled"
-		a.appendSessionLog(session.ID, "system", "Team runtime session cancelled.")
-		a.recordSessionFailure(session, project, errors.New("Session stopped by "+commentActorName(cancelActor)+"."), nil, "agent_interrupted", "stopped")
-		a.addSystemComment(session.IssueID, fmt.Sprintf("Stopped session `%s` by %s.", shortID(session.ID), commentActorName(cancelActor)))
-		return
-	}
-	if err != nil {
-		a.failSession(session, &project, err)
-		return
-	}
-
-	result, _ := a.loadTeamRuntimeTaskResult(ctx, task.ID)
-	a.applyTeamRuntimeResult(session.ID, result)
-	session = a.sessionWithTeamRuntimeResult(session, result)
-	a.importProjectRunbookArtifact(session, project)
-	changeNode, err := a.recordTeamRuntimeSourceChangeNode(session, project, result)
-	if err != nil {
-		a.failSession(session, &project, fmt.Errorf("record source commit: %w", err))
-		return
-	}
-	a.completeSuccessfulSession(session, project, changeNode)
-}
-
 func (a *app) completeSuccessfulSession(session agentSession, project project, changeNode *issueChangeNode) {
 	a.updateSessionStatus(session.ID, "completed")
 	a.updateSessionAgentStatus(session.ID, "completed")
@@ -6322,338 +5853,6 @@ func (a *app) completeSuccessfulSession(session agentSession, project project, c
 	a.maybeAutoCreateIssuePullRequest(session, project, changeNode)
 }
 
-func (a *app) createTeamRuntimeAgentTask(ctx context.Context, session agentSession, project project, prompt string) (runtimeTask, error) {
-	contextPath := filepath.Join(a.workdir, "_contexts", session.ID+".md")
-	contextMarkdown := ""
-	if data, err := os.ReadFile(contextPath); err == nil {
-		contextMarkdown = string(data)
-	}
-	repoURL := remoteURLForTeamRuntime(project)
-	if strings.TrimSpace(repoURL) == "" {
-		return runtimeTask{}, errors.New("team runtime requires a project remote URL or a repository path reachable from the worker")
-	}
-	payload := map[string]any{
-		"prompt":                prompt,
-		"developerInstructions": buildMspaceCodexDeveloperInstructions(),
-		"approvalPolicy":        "never",
-		"sandbox":               "danger-full-access",
-		"env":                   envSliceToMap(a.buildSessionEnv(session, project, contextPath)),
-		"issueId":               session.IssueID,
-		"sessionId":             session.ID,
-		"projectId":             project.ID,
-		"branch":                session.Branch,
-		"sourceCommitSha":       session.SourceCommitSHA,
-		"contextMarkdown":       contextMarkdown,
-		"artifactDir":           session.ArtifactDir,
-		"agentProfile":          session.AgentProfile,
-		"repository": map[string]any{
-			"url":           repoURL,
-			"defaultBranch": project.DefaultBranch,
-			"sourceType":    project.SourceType,
-			"provider":      project.GitProvider,
-			"owner":         project.GitOwner,
-			"repo":          project.GitRepo,
-		},
-	}
-	body := map[string]any{
-		"issueId":              session.IssueID,
-		"sessionId":            session.ID,
-		"projectId":            project.ID,
-		"kind":                 "agent_session",
-		"runtimeMode":          "team",
-		"requiredCapabilities": map[string]bool{"codex": true},
-		"payload":              payload,
-	}
-	var task runtimeTask
-	if err := a.controlPlaneJSON(ctx, http.MethodPost, "/api/workspaces/{workspaceID}/runtime-tasks", body, http.StatusCreated, &task); err != nil {
-		return runtimeTask{}, err
-	}
-	return task, nil
-}
-
-func remoteURLForTeamRuntime(project project) string {
-	if strings.TrimSpace(project.RemoteURL) != "" {
-		return strings.TrimSpace(project.RemoteURL)
-	}
-	return strings.TrimSpace(project.RepoPath)
-}
-
-func (a *app) waitTeamRuntimeTask(ctx context.Context, session agentSession, taskID string) error {
-	seenLogs := map[string]bool{}
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		task, err := a.loadTeamRuntimeTask(ctx, taskID)
-		if err != nil {
-			return err
-		}
-		a.importTeamRuntimeLogs(ctx, session.ID, taskID, seenLogs)
-		a.updateSessionAgentStatus(session.ID, teamRuntimeAgentStatus(task.Status))
-		switch task.Status {
-		case "completed":
-			a.importTeamRuntimeTaskResult(session.ID, task)
-			a.importTeamRuntimeLogs(ctx, session.ID, taskID, seenLogs)
-			return nil
-		case "failed":
-			a.importTeamRuntimeTaskResult(session.ID, task)
-			if strings.TrimSpace(task.Error) != "" {
-				return errors.New(task.Error)
-			}
-			return errors.New("team runtime task failed")
-		case "cancelled":
-			return context.Canceled
-		}
-
-		select {
-		case <-ctx.Done():
-			return context.Canceled
-		case <-ticker.C:
-		}
-	}
-}
-
-func (a *app) loadTeamRuntimeTask(ctx context.Context, taskID string) (runtimeTask, error) {
-	var tasks []runtimeTask
-	if err := a.controlPlaneJSON(ctx, http.MethodGet, "/api/workspaces/{workspaceID}/runtime-tasks", nil, http.StatusOK, &tasks); err != nil {
-		return runtimeTask{}, err
-	}
-	for _, task := range tasks {
-		if task.ID == taskID {
-			return task, nil
-		}
-	}
-	return runtimeTask{}, fmt.Errorf("team runtime task %s was not found", taskID)
-}
-
-func (a *app) cancelTeamRuntimeTask(ctx context.Context, taskID, reason string) error {
-	taskID = strings.TrimSpace(taskID)
-	if taskID == "" {
-		return nil
-	}
-	var task runtimeTask
-	if err := a.controlPlaneJSON(ctx, http.MethodPost, "/api/workspaces/{workspaceID}/runtime-tasks/"+url.PathEscape(taskID)+"/cancel", cancelRuntimeTaskInput{Reason: reason}, http.StatusOK, &task); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (a *app) importTeamRuntimeLogs(ctx context.Context, sessionID, taskID string, seen map[string]bool) {
-	var logs []runtimeTaskLog
-	if err := a.controlPlaneJSON(ctx, http.MethodGet, "/api/workspaces/{workspaceID}/runtime-tasks/"+url.PathEscape(taskID)+"/logs", nil, http.StatusOK, &logs); err != nil {
-		if len(seen) == 0 {
-			a.appendSessionLog(sessionID, "system", "Unable to read team runtime logs yet: "+err.Error())
-		}
-		return
-	}
-	for _, log := range logs {
-		if seen[log.ID] {
-			continue
-		}
-		seen[log.ID] = true
-		stream := strings.TrimSpace(log.Stream)
-		if stream == "" {
-			stream = "runtime"
-		}
-		a.appendSessionLog(sessionID, stream, log.Message)
-	}
-}
-
-func (a *app) importTeamRuntimeTaskResult(sessionID string, task runtimeTask) {
-	if len(task.Result) == 0 {
-		return
-	}
-	var result runtimeTaskResult
-	if err := json.Unmarshal(task.Result, &result); err != nil {
-		return
-	}
-	a.updateSessionCodexThread(sessionID, result.ThreadID)
-	a.updateSessionCodexTurn(sessionID, result.TurnID)
-}
-
-func (a *app) loadTeamRuntimeTaskResult(ctx context.Context, taskID string) (runtimeTaskResult, error) {
-	task, err := a.loadTeamRuntimeTask(ctx, taskID)
-	if err != nil {
-		return runtimeTaskResult{}, err
-	}
-	return parseRuntimeTaskResult(task.Result)
-}
-
-func parseRuntimeTaskResult(raw json.RawMessage) (runtimeTaskResult, error) {
-	if len(raw) == 0 {
-		return runtimeTaskResult{}, nil
-	}
-	var result runtimeTaskResult
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return runtimeTaskResult{}, err
-	}
-	return result, nil
-}
-
-func (a *app) applyTeamRuntimeResult(sessionID string, result runtimeTaskResult) {
-	a.updateSessionCodexThread(sessionID, result.ThreadID)
-	a.updateSessionCodexTurn(sessionID, result.TurnID)
-	if strings.TrimSpace(result.Workdir) != "" {
-		a.updateSessionWorkdir(sessionID, result.Workdir)
-	}
-	if strings.TrimSpace(result.ArtifactDir) != "" {
-		a.updateSessionArtifactDir(sessionID, result.ArtifactDir)
-	}
-}
-
-func (a *app) sessionWithTeamRuntimeResult(session agentSession, result runtimeTaskResult) agentSession {
-	if strings.TrimSpace(result.Workdir) != "" {
-		session.Workdir = strings.TrimSpace(result.Workdir)
-	}
-	if strings.TrimSpace(result.ArtifactDir) != "" {
-		session.ArtifactDir = strings.TrimSpace(result.ArtifactDir)
-	}
-	return session
-}
-
-func (a *app) recordTeamRuntimeSourceChangeNode(session agentSession, project project, result runtimeTaskResult) (*issueChangeNode, error) {
-	if !shouldRecordSourceChangeNode(session) {
-		return nil, nil
-	}
-	if strings.TrimSpace(result.Source.CommitSHA) == "" {
-		a.appendSessionLog(session.ID, "system", "Team runtime completed with no source changes to commit.")
-		return nil, nil
-	}
-	node := issueChangeNode{
-		ID:             uuid.NewString(),
-		IssueID:        session.IssueID,
-		SessionID:      session.ID,
-		CommitSHA:      strings.TrimSpace(result.Source.CommitSHA),
-		ShortCommitSHA: firstNonEmpty(result.Source.ShortCommitSHA, shortCommitSHA(result.Source.CommitSHA)),
-		Branch:         firstNonEmpty(result.Source.Branch, session.Branch),
-		Subject:        strings.TrimSpace(result.Source.Subject),
-		FilesChanged:   result.Source.FilesChanged,
-		Changes:        result.Source.Changes,
-		DiffPreview:    strings.TrimSpace(result.Source.DiffPreview),
-		DiffTruncated:  result.Source.DiffTruncated,
-		Source:         "team-runtime",
-		RemoteWorkdir:  strings.TrimSpace(result.Workdir),
-		ArtifactDir:    strings.TrimSpace(result.ArtifactDir),
-		CreatedAt:      nowString(),
-	}
-	if node.FilesChanged == 0 {
-		node.FilesChanged = len(node.Changes)
-	}
-	if err := a.saveIssueChangeNode(node); err != nil {
-		return nil, err
-	}
-	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Captured team runtime source commit %s with %d changed files.", shortCommitSHA(node.CommitSHA), node.FilesChanged))
-	a.broker.publish(session.ID, sessionEvent{Type: "status", Payload: "source-commit"})
-	return &node, nil
-}
-
-func teamRuntimeAgentStatus(status string) string {
-	switch status {
-	case "queued":
-		return "team-runtime-queued"
-	case "claimed":
-		return "team-runtime-claimed"
-	case "running":
-		return "team-runtime-running"
-	case "completed":
-		return "completed"
-	case "failed":
-		return "failed"
-	case "cancelled":
-		return "cancelled"
-	default:
-		if strings.TrimSpace(status) == "" {
-			return "team-runtime"
-		}
-		return "team-runtime-" + status
-	}
-}
-
-func (a *app) controlPlaneJSON(ctx context.Context, method, path string, input any, expectedStatus int, output any) error {
-	baseURL, token, workspaceID := a.controlPlaneSession()
-	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(token) == "" || strings.TrimSpace(workspaceID) == "" {
-		return errors.New("sign in to mspace and select a workspace before using team runtime")
-	}
-	path = strings.ReplaceAll(path, "{workspaceID}", url.PathEscape(workspaceID))
-	var body io.Reader
-	if input != nil {
-		payload, err := json.Marshal(input)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(payload)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(baseURL, "/")+path, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	if input != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	res, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != expectedStatus {
-		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		message := strings.TrimSpace(string(body))
-		if message == "" {
-			message = fmt.Sprintf("control plane returned HTTP %d", res.StatusCode)
-		}
-		if res.StatusCode == http.StatusNotFound && method == http.MethodPost && strings.HasSuffix(path, "/cancel") {
-			message = "team runtime task is already final or unavailable for cancellation: " + message
-		}
-		return errors.New(message)
-	}
-	if output == nil {
-		return nil
-	}
-	return json.NewDecoder(res.Body).Decode(output)
-}
-
-func (a *app) requireTeamControlPlaneWorkspace(ctx context.Context) error {
-	baseURL, token, workspaceID := a.controlPlaneSession()
-	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(token) == "" || strings.TrimSpace(workspaceID) == "" {
-		return errors.New("sign in to mspace and select a workspace before using team runtime")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/api/auth/me", nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	res, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		message := strings.TrimSpace(string(body))
-		if message == "" {
-			message = fmt.Sprintf("control plane returned HTTP %d", res.StatusCode)
-		}
-		return errors.New(message)
-	}
-	var payload struct {
-		Workspaces []controlPlaneWorkspaceRef `json:"workspaces"`
-	}
-	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
-		return err
-	}
-	for _, workspace := range payload.Workspaces {
-		if workspace.ID != workspaceID {
-			continue
-		}
-		if strings.TrimSpace(workspace.Kind) == "team" {
-			return nil
-		}
-		return errors.New("team runtime requires a team workspace; create or switch to a team workspace in Workspace Settings")
-	}
-	return errors.New("selected workspace is not available for team runtime")
-}
-
 func envSliceToMap(values []string) map[string]string {
 	env := map[string]string{}
 	for _, value := range values {
@@ -6679,6 +5878,7 @@ func (a *app) recordSourceChangeNode(session agentSession, project project) (*is
 	if err := ensureGitRepository(gitPath, session.Workdir); err != nil {
 		return nil, err
 	}
+	session = a.applySemanticBranchName(session, project, gitPath)
 
 	output, err := runGitWriteWithIndexLockRetry(gitPath, session.Workdir, nil, "add", "-A", "--", ".")
 	if err != nil {
@@ -6862,6 +6062,144 @@ func shouldRecordSourceChangeNode(session agentSession) bool {
 		return false
 	}
 	return !isSystemTestEnvironmentCommand(session.Command)
+}
+
+type branchNameArtifact struct {
+	Branch string `json:"branch"`
+	Type   string `json:"type"`
+	Slug   string `json:"slug"`
+}
+
+func (a *app) applySemanticBranchName(session agentSession, project project, gitPath string) agentSession {
+	currentBranch := strings.TrimSpace(session.Branch)
+	targetBranch, ok, err := readSemanticBranchName(session)
+	if err != nil {
+		a.appendSessionLog(session.ID, "system", "Semantic branch name ignored: "+err.Error())
+		return session
+	}
+	if !ok || targetBranch == "" || targetBranch == currentBranch {
+		return session
+	}
+	if err := validateGitBranchName(gitPath, session.Workdir, targetBranch); err != nil {
+		a.appendSessionLog(session.ID, "system", "Semantic branch name ignored: "+err.Error())
+		return session
+	}
+	if exists, err := gitRefExists(gitPath, project.RepoPath, "refs/heads/"+targetBranch); err != nil {
+		a.appendSessionLog(session.ID, "system", "Semantic branch name ignored: "+err.Error())
+		return session
+	} else if exists {
+		targetBranch = addBranchSessionSuffix(targetBranch, session.ID)
+		if err := validateGitBranchName(gitPath, session.Workdir, targetBranch); err != nil {
+			a.appendSessionLog(session.ID, "system", "Semantic branch fallback ignored: "+err.Error())
+			return session
+		}
+	}
+	output, err := runGitWriteWithIndexLockRetry(gitPath, session.Workdir, nil, "branch", "-m", targetBranch)
+	if err != nil {
+		a.appendSessionLog(session.ID, "system", fmt.Sprintf("Semantic branch rename failed: %s", formatCommandFailure(err, output)))
+		return session
+	}
+	session.Branch = targetBranch
+	a.updateSessionBranch(session.ID, targetBranch)
+	a.appendSessionLog(session.ID, "system", fmt.Sprintf("Renamed source branch from %s to %s.", currentBranch, targetBranch))
+	return session
+}
+
+func readSemanticBranchName(session agentSession) (string, bool, error) {
+	artifactPath := branchNameArtifactPath(session)
+	if artifactPath == "" {
+		return "", false, nil
+	}
+	data, err := os.ReadFile(artifactPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	var artifact branchNameArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return "", false, fmt.Errorf("parse %s: %w", branchNameArtifactName, err)
+	}
+	branch, err := normalizeSemanticBranchArtifact(artifact)
+	if err != nil {
+		return "", true, err
+	}
+	return branch, true, nil
+}
+
+func branchNameArtifactPath(session agentSession) string {
+	if strings.TrimSpace(session.ArtifactDir) != "" {
+		return filepath.Join(session.ArtifactDir, branchNameArtifactName)
+	}
+	if strings.TrimSpace(session.Workdir) != "" {
+		return filepath.Join(session.Workdir, ".mspace", "session", branchNameArtifactName)
+	}
+	return ""
+}
+
+func normalizeSemanticBranchArtifact(artifact branchNameArtifact) (string, error) {
+	branch := strings.ToLower(strings.TrimSpace(artifact.Branch))
+	if branch == "" {
+		branchType := strings.ToLower(strings.TrimSpace(artifact.Type))
+		slug := strings.ToLower(strings.TrimSpace(artifact.Slug))
+		if branchType != "" && slug != "" {
+			branch = branchType + "/" + slug
+		}
+	}
+	if branch == "" {
+		return "", errors.New("branch name artifact did not include branch or type/slug")
+	}
+	parts := strings.SplitN(branch, "/", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("branch %q must use <type>/<slug>", branch)
+	}
+	branchType := strings.TrimSpace(parts[0])
+	slug := normalizeBranchSlug(parts[1])
+	if !allowedSemanticBranchType(branchType) {
+		return "", fmt.Errorf("branch type %q is not supported", branchType)
+	}
+	if slug == "" {
+		return "", fmt.Errorf("branch %q has an empty slug", branch)
+	}
+	return branchType + "/" + slug, nil
+}
+
+func normalizeBranchSlug(value string) string {
+	slug := strings.ToLower(strings.TrimSpace(value))
+	slug = strings.Trim(slug, "/")
+	slug = branchSlugUnsafePattern.ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+	const maxSlugLength = 48
+	if len(slug) > maxSlugLength {
+		slug = strings.Trim(slug[:maxSlugLength], "-")
+	}
+	return slug
+}
+
+func allowedSemanticBranchType(value string) bool {
+	switch value {
+	case "feat", "fix", "chore", "docs", "refactor", "test", "perf", "build", "ci", "style", "revert":
+		return true
+	default:
+		return false
+	}
+}
+
+func addBranchSessionSuffix(branch, sessionID string) string {
+	branchType, slug, ok := strings.Cut(branch, "/")
+	if !ok {
+		return branch + "-" + shortStableID(sessionID)
+	}
+	suffix := shortStableID(sessionID)
+	maxSlugLength := 48 - len(suffix) - 1
+	if maxSlugLength < 12 {
+		maxSlugLength = 12
+	}
+	if len(slug) > maxSlugLength {
+		slug = strings.Trim(slug[:maxSlugLength], "-")
+	}
+	return branchType + "/" + strings.Trim(slug+"-"+suffix, "-")
 }
 
 func (a *app) issueTitleForCommit(issueID string) string {
@@ -9285,16 +8623,6 @@ func (a *app) loadSessionDetail(sessionID string) (sessionDetail, error) {
 	detail.Failures = failures
 
 	detail.Workspace = inspectWorkspace(detail.Session.Workdir, detail.Project.DefaultBranch)
-	if detail.Session.RuntimeMode == "team" && strings.TrimSpace(detail.Session.Workdir) == "" && strings.TrimSpace(detail.Session.RuntimeTaskID) != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		task, err := a.loadTeamRuntimeTask(ctx, detail.Session.RuntimeTaskID)
-		cancel()
-		if err == nil {
-			result, _ := parseRuntimeTaskResult(task.Result)
-			detail.Session = a.sessionWithTeamRuntimeResult(detail.Session, result)
-			detail.Workspace = inspectWorkspace(detail.Session.Workdir, detail.Project.DefaultBranch)
-		}
-	}
 	if detail.Session.CleanupStatus == "cleaned" && !detail.Workspace.Exists {
 		detail.Workspace.Error = "Session worktree has been cleaned up."
 	}
@@ -10215,6 +9543,17 @@ func (a *app) updateSessionWorkdir(sessionID, workdir string) {
 	a.broker.publish(sessionID, sessionEvent{Type: "status", Payload: "workdir"})
 }
 
+func (a *app) updateSessionBranch(sessionID, branch string) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return
+	}
+	_, _ = a.db.Exec(`
+		UPDATE agent_sessions SET branch = ?, updated_at = ? WHERE id = ?
+	`, branch, nowString(), sessionID)
+	a.broker.publish(sessionID, sessionEvent{Type: "status", Payload: "branch"})
+}
+
 func (a *app) updateSessionRuntimeTaskID(sessionID, taskID string) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
@@ -10853,6 +10192,23 @@ func nowString() string {
 }
 
 func shortID(value string) string {
+	if len(value) <= 8 {
+		return value
+	}
+	return value[:8]
+}
+
+func shortStableID(value string) string {
+	value = strings.Trim(strings.TrimSpace(value), "-")
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == '-' || r == '_' || r == '/'
+	})
+	for index := len(parts) - 1; index >= 0; index-- {
+		part := strings.TrimSpace(parts[index])
+		if len(part) >= 8 {
+			return part[:8]
+		}
+	}
 	if len(value) <= 8 {
 		return value
 	}

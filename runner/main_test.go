@@ -2129,6 +2129,9 @@ func TestRecordSourceChangeNodeCommitsWorkspace(t *testing.T) {
 	if node.FilesChanged != 1 || len(node.Changes) != 1 || node.Changes[0].Path != "app.txt" {
 		t.Fatalf("expected only app.txt to be committed, got %+v", node)
 	}
+	if node.Branch != "mspace/issue/session-1" {
+		t.Fatalf("expected fallback branch to remain unchanged, got %q", node.Branch)
+	}
 	if strings.Contains(node.DiffPreview, ".mspace") {
 		t.Fatalf("expected .mspace artifacts to be excluded, diff=%s", node.DiffPreview)
 	}
@@ -2147,6 +2150,93 @@ func TestRecordSourceChangeNodeCommitsWorkspace(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected one issue change node row, got %d", count)
+	}
+}
+
+func TestRecordSourceChangeNodeRenamesBranchFromArtifact(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for source branch rename test")
+	}
+
+	repoDir := t.TempDir()
+	runGit(t, repoDir, "init", "-b", "main")
+	runGit(t, repoDir, "config", "user.name", "mspace test")
+	runGit(t, repoDir, "config", "user.email", "mspace@example.com")
+	writeFile(t, filepath.Join(repoDir, "README.md"), "# demo\n")
+	runGit(t, repoDir, "add", "README.md")
+	runGit(t, repoDir, "commit", "-m", "base")
+
+	workdirRoot := filepath.Join(t.TempDir(), "workdirs")
+	sessionWorkdir := filepath.Join(workdirRoot, "project-1", "session-abcdef123456")
+	if err := os.MkdirAll(filepath.Dir(sessionWorkdir), 0o755); err != nil {
+		t.Fatalf("create worktree parent: %v", err)
+	}
+	runGit(t, repoDir, "worktree", "add", "-b", "mspace/issue/session-abcdef123456", sessionWorkdir, "HEAD")
+	writeFile(t, filepath.Join(sessionWorkdir, "app.txt"), "hello\n")
+	artifactDir := filepath.Join(sessionWorkdir, ".mspace", "session")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	writeFile(t, filepath.Join(artifactDir, branchNameArtifactName), `{"branch":"Fix/Polish ORCAI Homepage!!!"}`)
+
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "mspace.db"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	application := &app{db: db, broker: newEventBroker(), workdir: workdirRoot, repoRoot: t.TempDir()}
+	if err := application.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	now := nowString()
+	project := project{ID: "project-1", Name: "Demo", RepoPath: repoDir, SourceType: "local", DefaultBranch: "main", CreatedAt: now, UpdatedAt: now}
+	if _, err := db.Exec(`
+		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
+		VALUES (?, ?, ?, ?, '', '', '', '', ?, '', '', '', '', ?, ?)
+	`, project.ID, project.Name, project.RepoPath, project.SourceType, project.DefaultBranch, project.CreatedAt, project.UpdatedAt); err != nil {
+		t.Fatalf("insert project: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
+		VALUES ('issue-1', ?, 'Polish ORCAI homepage', '', 'running', 'codex', 'agent', '', ?, ?)
+	`, project.ID, now, now); err != nil {
+		t.Fatalf("insert issue: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, command, status, branch, workdir, codex_thread_id, codex_turn_id, agent_status, artifact_dir, cleanup_status, cleaned_at, created_at, updated_at)
+		VALUES ('session-abcdef123456', 'issue-1', 'codex', 'codex', 'local', 'Implement the issue.', 'running', 'mspace/issue/session-abcdef123456', ?, '', '', 'running', ?, 'retained', '', ?, ?)
+	`, sessionWorkdir, artifactDir, now, now); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	node, err := application.recordSourceChangeNode(agentSession{
+		ID:          "session-abcdef123456",
+		IssueID:     "issue-1",
+		Command:     "Implement the issue.",
+		Status:      "running",
+		Branch:      "mspace/issue/session-abcdef123456",
+		Workdir:     sessionWorkdir,
+		ArtifactDir: artifactDir,
+	}, project)
+	if err != nil {
+		t.Fatalf("record source change node failed: %v", err)
+	}
+	if node == nil {
+		t.Fatal("expected source change node")
+	}
+	if node.Branch != "fix/polish-orcai-homepage" {
+		t.Fatalf("expected semantic branch, got %q", node.Branch)
+	}
+	if branch := strings.TrimSpace(gitOutput(t, sessionWorkdir, "branch", "--show-current")); branch != node.Branch {
+		t.Fatalf("expected worktree branch %q, got %q", node.Branch, branch)
+	}
+	var storedBranch string
+	if err := db.QueryRow(`SELECT branch FROM agent_sessions WHERE id = 'session-abcdef123456'`).Scan(&storedBranch); err != nil {
+		t.Fatalf("query stored session branch: %v", err)
+	}
+	if storedBranch != node.Branch {
+		t.Fatalf("expected stored session branch %q, got %q", node.Branch, storedBranch)
 	}
 }
 
@@ -2758,306 +2848,9 @@ func TestPrepareSessionWorkspaceChecksOutSourceCommit(t *testing.T) {
 	}
 }
 
-func TestQueueAgentSessionRoutesTeamRuntimeThroughControlPlane(t *testing.T) {
+func TestQueueAgentSessionRejectsTeamRuntime(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is required for team runtime session test")
-	}
-
-	application, db := newAuthTestApp(t)
-	humanToken := configureTestHumanAuth(t, application)
-	repoDir := t.TempDir()
-	runGit(t, repoDir, "init", "-b", "main")
-	runGit(t, repoDir, "config", "user.name", "mspace test")
-	runGit(t, repoDir, "config", "user.email", "mspace@example.com")
-	writeFile(t, filepath.Join(repoDir, "README.md"), "# demo\n")
-	runGit(t, repoDir, "add", "README.md")
-	runGit(t, repoDir, "commit", "-m", "base")
-	insertAuthTestIssue(t, db, "issue-1", "", "Team runtime issue", "open")
-	if _, err := db.Exec(`UPDATE projects SET repo_path = ?, default_branch = 'main' WHERE id = 'project-1'`, repoDir); err != nil {
-		t.Fatalf("update project repo: %v", err)
-	}
-
-	controlPlaneToken := "human-token"
-	workspaceID := "workspace-1"
-	taskCreated := false
-	taskPollCount := 0
-	var taskPayload struct {
-		IssueID              string          `json:"issueId"`
-		SessionID            string          `json:"sessionId"`
-		ProjectID            string          `json:"projectId"`
-		Kind                 string          `json:"kind"`
-		RuntimeMode          string          `json:"runtimeMode"`
-		RequiredCapabilities map[string]bool `json:"requiredCapabilities"`
-		Payload              struct {
-			Workdir         string            `json:"workdir"`
-			Prompt          string            `json:"prompt"`
-			Env             map[string]string `json:"env"`
-			Branch          string            `json:"branch"`
-			ContextMarkdown string            `json:"contextMarkdown"`
-			Repository      struct {
-				URL           string `json:"url"`
-				DefaultBranch string `json:"defaultBranch"`
-			} `json:"repository"`
-		} `json:"payload"`
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+controlPlaneToken {
-			writeError(w, http.StatusUnauthorized, errUnauthorized)
-			return
-		}
-		switch {
-		case r.URL.Path == "/api/auth/me":
-			writeJSON(w, map[string]any{
-				"user":       map[string]string{"id": "user-1", "name": "Test Human"},
-				"workspaces": []map[string]string{{"id": workspaceID, "kind": "team"}},
-			})
-		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks" && r.Method == http.MethodPost:
-			if err := json.NewDecoder(r.Body).Decode(&taskPayload); err != nil {
-				t.Fatalf("decode runtime task: %v", err)
-			}
-			taskCreated = true
-			writeJSONStatus(t, w, http.StatusCreated, runtimeTask{ID: "runtime-task-1", Status: "queued"})
-		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks" && r.Method == http.MethodGet:
-			taskPollCount++
-			result := json.RawMessage(`{
-					"threadId":"thread-team",
-					"turnId":"turn-team",
-					"status":"completed",
-					"workdir":"/worker/workdirs/project-1/session-1",
-					"artifactDir":"/worker/workdirs/project-1/session-1/.mspace/session",
-					"source":{
-						"commitSha":"1111111111111111111111111111111111111111",
-						"shortCommitSha":"111111111111",
-						"branch":"mspace/issue/session",
-						"subject":"mspace: Team runtime issue",
-						"filesChanged":1,
-						"changes":[{"statusCode":"A","path":"worker-output.txt"}],
-						"diffPreview":"commit 1111111111111111111111111111111111111111\nAuthor: mspace\n\n    mspace: Team runtime issue\n\n diff --git a/worker-output.txt b/worker-output.txt\n new file mode 100644\n",
-						"diffTruncated":false
-					}
-				}`)
-			writeJSON(w, []runtimeTask{{ID: "runtime-task-1", Status: "completed", Result: result}})
-		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks/runtime-task-1/logs":
-			writeJSON(w, []runtimeTaskLog{
-				{ID: "log-1", Stream: "agent", Message: "Team runtime completed.", CreatedAt: nowString()},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-	application.controlPlaneBaseURL = server.URL
-	application.controlPlaneToken = controlPlaneToken
-	application.controlPlaneWorkspaceID = workspaceID
-
-	router := chi.NewRouter()
-	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
-	create := httptest.NewRecorder()
-	router.ServeHTTP(create, authRequest(http.MethodPost, "/api/issues/issue-1/assign-agent", `{"provider":"codex","agentProfile":"codex","runtimeMode":"team","command":"make a small change"}`, humanToken))
-	if create.Code != http.StatusOK {
-		t.Fatalf("expected team session create to return 200, got %d body=%s", create.Code, create.Body.String())
-	}
-	var response struct {
-		SessionID string `json:"sessionId"`
-	}
-	if err := json.NewDecoder(create.Body).Decode(&response); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	waitForCondition(t, 5*time.Second, func() bool {
-		var status, agentStatus string
-		_ = db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus)
-		return status == "completed" && agentStatus == "completed"
-	}, func() string {
-		var status, agentStatus string
-		_ = db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus)
-		rows, _ := db.Query(`SELECT stream, message FROM session_logs WHERE session_id = ? ORDER BY id`, response.SessionID)
-		defer func() {
-			if rows != nil {
-				_ = rows.Close()
-			}
-		}()
-		var logs []string
-		if rows != nil {
-			for rows.Next() {
-				var stream, message string
-				_ = rows.Scan(&stream, &message)
-				logs = append(logs, stream+": "+message)
-			}
-		}
-		return "status=" + status + " agentStatus=" + agentStatus + " logs=" + strings.Join(logs, " | ")
-	})
-	if !taskCreated || taskPollCount == 0 {
-		t.Fatalf("expected control-plane task creation and polling, created=%v polls=%d", taskCreated, taskPollCount)
-	}
-	if taskPayload.Kind != "agent_session" || taskPayload.RuntimeMode != "team" || !taskPayload.RequiredCapabilities["codex"] {
-		t.Fatalf("unexpected runtime task payload: %+v", taskPayload)
-	}
-	if taskPayload.IssueID != "issue-1" || taskPayload.SessionID != response.SessionID || taskPayload.ProjectID != "project-1" {
-		t.Fatalf("runtime task lost issue/session/project identity: %+v", taskPayload)
-	}
-	if !strings.Contains(taskPayload.Payload.Prompt, "make a small change") || taskPayload.Payload.Workdir != "" || taskPayload.Payload.Env["MSPACE_SESSION_ID"] != response.SessionID {
-		t.Fatalf("unexpected agent payload: %+v", taskPayload.Payload)
-	}
-	if taskPayload.Payload.Repository.URL == "" || taskPayload.Payload.Repository.DefaultBranch != "main" || taskPayload.Payload.Branch == "" || !strings.Contains(taskPayload.Payload.ContextMarkdown, "Team runtime issue") {
-		t.Fatalf("team runtime payload did not include repo/session bootstrap spec: %+v", taskPayload.Payload)
-	}
-	var runtimeMode, threadID, turnID string
-	if err := db.QueryRow(`SELECT runtime_mode, codex_thread_id, codex_turn_id FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&runtimeMode, &threadID, &turnID); err != nil {
-		t.Fatalf("query session: %v", err)
-	}
-	if runtimeMode != "team" || threadID != "thread-team" || turnID != "turn-team" {
-		t.Fatalf("unexpected session runtime metadata mode=%q thread=%q turn=%q", runtimeMode, threadID, turnID)
-	}
-	assertSessionLogContains(t, db, response.SessionID, "Team runtime completed.")
-	var commitSHA, changesJSON, diffPreview, source, remoteWorkdir string
-	if err := db.QueryRow(`SELECT commit_sha, changes_json, diff_preview, source, remote_workdir FROM issue_change_nodes WHERE session_id = ?`, response.SessionID).Scan(&commitSHA, &changesJSON, &diffPreview, &source, &remoteWorkdir); err != nil {
-		t.Fatalf("query remote change node: %v", err)
-	}
-	if commitSHA != "1111111111111111111111111111111111111111" || source != "team-runtime" || remoteWorkdir == "" || !strings.Contains(changesJSON, "worker-output.txt") || !strings.Contains(diffPreview, "worker-output.txt") {
-		t.Fatalf("unexpected remote change node commit=%q source=%q remoteWorkdir=%q changes=%s diff=%s", commitSHA, source, remoteWorkdir, changesJSON, diffPreview)
-	}
-}
-
-func TestCreateServerIssueTeamSessionQueuesRuntimeTask(t *testing.T) {
-	application, db := newAuthTestApp(t)
-	controlPlaneToken := configureTestHumanAuth(t, application)
-	workspaceID := "workspace-1"
-	repoURL := "https://github.com/mlhiter/mspace.git"
-	taskCreated := false
-	var taskPayload struct {
-		IssueID              string          `json:"issueId"`
-		SessionID            string          `json:"sessionId"`
-		ProjectID            string          `json:"projectId"`
-		Kind                 string          `json:"kind"`
-		RuntimeMode          string          `json:"runtimeMode"`
-		RequiredCapabilities map[string]bool `json:"requiredCapabilities"`
-		Payload              struct {
-			Prompt          string `json:"prompt"`
-			AgentProfile    string `json:"agentProfile"`
-			Branch          string `json:"branch"`
-			ContextMarkdown string `json:"contextMarkdown"`
-			Repository      struct {
-				URL           string `json:"url"`
-				DefaultBranch string `json:"defaultBranch"`
-			} `json:"repository"`
-		} `json:"payload"`
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+controlPlaneToken {
-			writeError(w, http.StatusUnauthorized, errUnauthorized)
-			return
-		}
-		switch {
-		case r.URL.Path == "/api/auth/me":
-			writeJSON(w, map[string]any{
-				"user":       map[string]string{"id": "user-1", "name": "Test Human"},
-				"workspaces": []map[string]string{{"id": workspaceID, "kind": "team"}},
-			})
-		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks" && r.Method == http.MethodPost:
-			if err := json.NewDecoder(r.Body).Decode(&taskPayload); err != nil {
-				t.Fatalf("decode runtime task: %v", err)
-			}
-			taskCreated = true
-			writeJSONStatus(t, w, http.StatusCreated, runtimeTask{ID: "runtime-task-server-issue", Status: "queued"})
-		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks" && r.Method == http.MethodGet:
-			writeJSON(w, []runtimeTask{{ID: "runtime-task-server-issue", Status: "running"}})
-		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks/runtime-task-server-issue/logs":
-			writeJSON(w, []runtimeTaskLog{{ID: "log-1", Stream: "agent", Message: "Server issue task started.", CreatedAt: nowString()}})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-	application.controlPlaneBaseURL = server.URL
-	application.controlPlaneToken = controlPlaneToken
-	application.controlPlaneWorkspaceID = workspaceID
-
-	router := chi.NewRouter()
-	router.Post("/api/server-issues/{issueID}/team-session", application.handleCreateServerIssueTeamSession)
-	body := `{
-		"workspaceId":"workspace-1",
-		"issueId":"server-issue-1",
-		"commentId":"server-comment-1",
-		"provider":"codex",
-		"agentProfile":"codex",
-		"runtimeMode":"team",
-		"command":"@codex wire the bridge",
-		"issue":{
-			"id":"server-issue-1",
-			"projectId":"server-project-1",
-			"title":"PG issue bridge",
-			"body":"Connect the shared workspace issue to Team worker.",
-			"status":"open",
-			"triageStatus":"pending",
-			"creatorName":"Test Human",
-			"creatorAvatarUrl":"https://example.com/avatar.png"
-		},
-		"project":{
-			"id":"server-project-1",
-			"name":"mspace",
-			"repoPath":"",
-			"sourceType":"github",
-			"remoteUrl":"https://github.com/mlhiter/mspace.git",
-			"gitProvider":"github",
-			"gitOwner":"mlhiter",
-			"gitRepo":"mspace",
-			"defaultBranch":"main"
-		},
-		"comments":[{"id":"server-comment-1","issueId":"server-issue-1","authorType":"human","authorUserId":"user-1","authorName":"Test Human","body":"@codex wire the bridge","createdAt":"2026-05-14T00:00:00Z","updatedAt":"2026-05-14T00:00:00Z"}]
-	}`
-	create := httptest.NewRecorder()
-	router.ServeHTTP(create, authRequest(http.MethodPost, "/api/server-issues/server-issue-1/team-session", body, controlPlaneToken))
-	if create.Code != http.StatusOK {
-		t.Fatalf("expected server issue team session create to return 200, got %d body=%s", create.Code, create.Body.String())
-	}
-	var response struct {
-		SessionID string `json:"sessionId"`
-	}
-	if err := json.NewDecoder(create.Body).Decode(&response); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	waitForCondition(t, 5*time.Second, func() bool {
-		var runtimeTaskID string
-		_ = db.QueryRow(`SELECT runtime_task_id FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&runtimeTaskID)
-		return runtimeTaskID == "runtime-task-server-issue"
-	}, func() string {
-		var status, agentStatus, runtimeTaskID string
-		_ = db.QueryRow(`SELECT status, agent_status, runtime_task_id FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus, &runtimeTaskID)
-		return "status=" + status + " agentStatus=" + agentStatus + " runtimeTaskID=" + runtimeTaskID + " logs=" + strings.Join(sessionLogMessages(db, response.SessionID), " | ")
-	})
-	if !taskCreated {
-		t.Fatalf("expected runtime task to be created")
-	}
-	if taskPayload.IssueID != "server-issue-1" || taskPayload.SessionID != response.SessionID || taskPayload.ProjectID != "server-project-1" {
-		t.Fatalf("runtime task lost server issue identity: %+v", taskPayload)
-	}
-	if taskPayload.Kind != "agent_session" || taskPayload.RuntimeMode != "team" || !taskPayload.RequiredCapabilities["codex"] {
-		t.Fatalf("unexpected runtime task routing payload: %+v", taskPayload)
-	}
-	if taskPayload.Payload.Repository.URL != repoURL || taskPayload.Payload.Repository.DefaultBranch != "main" || taskPayload.Payload.AgentProfile != "codex" {
-		t.Fatalf("unexpected team runtime payload: %+v", taskPayload.Payload)
-	}
-	if !strings.Contains(taskPayload.Payload.ContextMarkdown, "PG issue bridge") || !strings.Contains(taskPayload.Payload.ContextMarkdown, "@codex wire the bridge") {
-		t.Fatalf("context did not include server issue snapshot: %s", taskPayload.Payload.ContextMarkdown)
-	}
-	var issueTitle, commentBody, triggerCommentID string
-	if err := db.QueryRow(`SELECT title FROM issues WHERE id = 'server-issue-1'`).Scan(&issueTitle); err != nil {
-		t.Fatalf("query bridged issue: %v", err)
-	}
-	if err := db.QueryRow(`SELECT body FROM comments WHERE id = 'server-comment-1'`).Scan(&commentBody); err != nil {
-		t.Fatalf("query bridged comment: %v", err)
-	}
-	if err := db.QueryRow(`SELECT trigger_comment_id FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&triggerCommentID); err != nil {
-		t.Fatalf("query trigger comment: %v", err)
-	}
-	if issueTitle != "PG issue bridge" || commentBody != "@codex wire the bridge" || triggerCommentID != "server-comment-1" {
-		t.Fatalf("unexpected bridged snapshot issue=%q comment=%q trigger=%q", issueTitle, commentBody, triggerCommentID)
-	}
-}
-
-func TestQueueAgentSessionRejectsTeamRuntimeFromPersonalWorkspace(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git is required for team runtime session test")
+		t.Skip("git is required for runtime session test")
 	}
 
 	application, db := newAuthTestApp(t)
@@ -3074,131 +2867,20 @@ func TestQueueAgentSessionRejectsTeamRuntimeFromPersonalWorkspace(t *testing.T) 
 		t.Fatalf("update project repo: %v", err)
 	}
 
-	controlPlaneToken := "human-token"
-	workspaceID := "workspace-1"
-	taskCreated := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+controlPlaneToken {
-			writeError(w, http.StatusUnauthorized, errUnauthorized)
-			return
-		}
-		switch {
-		case r.URL.Path == "/api/auth/me":
-			writeJSON(w, map[string]any{
-				"user":       map[string]string{"id": "user-1", "name": "Test Human"},
-				"workspaces": []map[string]string{{"id": workspaceID, "kind": "personal"}},
-			})
-		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks":
-			taskCreated = true
-			http.NotFound(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-	application.controlPlaneBaseURL = server.URL
-	application.controlPlaneToken = controlPlaneToken
-	application.controlPlaneWorkspaceID = workspaceID
-
 	router := chi.NewRouter()
 	router.Post("/api/issues/{issueID}/assign-agent", application.handleAssignIssueToAgent)
 	create := httptest.NewRecorder()
 	router.ServeHTTP(create, authRequest(http.MethodPost, "/api/issues/issue-1/assign-agent", `{"provider":"codex","agentProfile":"codex","runtimeMode":"team","command":"make a small change"}`, humanToken))
-	if create.Code != http.StatusOK {
-		t.Fatalf("expected session create to return 200 before async runtime validation, got %d body=%s", create.Code, create.Body.String())
+	if create.Code != http.StatusBadRequest {
+		t.Fatalf("expected team runtime to be rejected, got %d body=%s", create.Code, create.Body.String())
 	}
-	var response struct {
-		SessionID string `json:"sessionId"`
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM agent_sessions`).Scan(&count); err != nil {
+		t.Fatalf("count sessions: %v", err)
 	}
-	if err := json.NewDecoder(create.Body).Decode(&response); err != nil {
-		t.Fatalf("decode response: %v", err)
+	if count != 0 {
+		t.Fatalf("expected no local session to be queued for team runtime, got %d", count)
 	}
-	waitForCondition(t, 5*time.Second, func() bool {
-		var status, agentStatus string
-		_ = db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus)
-		return status == "failed" && agentStatus == "failed" && sessionLogContains(db, response.SessionID, "team runtime requires a team workspace")
-	}, func() string {
-		var status, agentStatus string
-		_ = db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = ?`, response.SessionID).Scan(&status, &agentStatus)
-		return "status=" + status + " agentStatus=" + agentStatus + " logs=" + strings.Join(sessionLogMessages(db, response.SessionID), " | ")
-	})
-	if taskCreated {
-		t.Fatalf("personal workspace should not create a team runtime task")
-	}
-	assertSessionLogContains(t, db, response.SessionID, "team runtime requires a team workspace")
-}
-
-func TestCancelTeamRuntimeSessionRequestsControlPlaneCancellation(t *testing.T) {
-	application, db := newAuthTestApp(t)
-	_ = configureTestHumanAuth(t, application)
-	now := nowString()
-	if _, err := db.Exec(`
-		INSERT INTO projects (id, name, repo_path, source_type, remote_url, git_provider, git_owner, git_repo, default_branch, deploy_command, validation_command, kube_context, namespace, created_at, updated_at)
-		VALUES ('project-1', 'Demo', '/tmp/demo', 'local', '', '', '', '', 'main', '', '', '', '', ?, ?)
-	`, now, now); err != nil {
-		t.Fatalf("insert project: %v", err)
-	}
-	if _, err := db.Exec(`
-		INSERT INTO issues (id, project_id, title, body, status, assignee, assignee_type, environment_url, created_at, updated_at)
-			VALUES ('issue-1', 'project-1', 'Team cancel issue', '', 'open', 'codex', 'agent', '', ?, ?)
-	`, now, now); err != nil {
-		t.Fatalf("insert issue: %v", err)
-	}
-	if _, err := db.Exec(`
-		INSERT INTO agent_sessions (id, issue_id, provider, agent_profile, runtime_mode, runtime_task_id, command, status, branch, workdir, agent_status, cleanup_status, cleaned_at, created_at, updated_at)
-		VALUES ('session-team', 'issue-1', 'codex', 'codex', 'team', 'runtime-task-1', 'run it', 'running', 'mspace/issue/session-team', ?, 'team-runtime-running', 'retained', '', ?, ?)
-	`, t.TempDir(), now, now); err != nil {
-		t.Fatalf("insert team session: %v", err)
-	}
-
-	controlPlaneToken := "human-token"
-	workspaceID := "workspace-1"
-	var cancelPayload cancelRuntimeTaskInput
-	cancelRequested := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+controlPlaneToken {
-			writeError(w, http.StatusUnauthorized, errUnauthorized)
-			return
-		}
-		switch {
-		case r.URL.Path == "/api/auth/me":
-			writeJSON(w, map[string]any{
-				"user":       map[string]string{"id": "user-1", "name": "Test Human"},
-				"workspaces": []map[string]string{{"id": workspaceID, "kind": "team"}},
-			})
-		case r.URL.Path == "/api/workspaces/"+workspaceID+"/runtime-tasks/runtime-task-1/cancel" && r.Method == http.MethodPost:
-			cancelRequested = true
-			if err := json.NewDecoder(r.Body).Decode(&cancelPayload); err != nil {
-				t.Fatalf("decode cancel task payload: %v", err)
-			}
-			writeJSONStatus(t, w, http.StatusOK, runtimeTask{ID: "runtime-task-1", Status: "cancelled", Error: cancelPayload.Reason})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-	application.controlPlaneBaseURL = server.URL
-	application.controlPlaneToken = controlPlaneToken
-	application.controlPlaneWorkspaceID = workspaceID
-
-	router := chi.NewRouter()
-	router.Post("/api/sessions/{sessionID}/cancel", application.handleCancelSession)
-	cancel := httptest.NewRecorder()
-	router.ServeHTTP(cancel, authRequest(http.MethodPost, "/api/sessions/session-team/cancel", `{}`, controlPlaneToken))
-	if cancel.Code != http.StatusOK {
-		t.Fatalf("expected cancel to return 200, got %d body=%s", cancel.Code, cancel.Body.String())
-	}
-	if !cancelRequested || !strings.Contains(cancelPayload.Reason, "Stopped session") {
-		t.Fatalf("expected control-plane cancellation request, requested=%v payload=%+v", cancelRequested, cancelPayload)
-	}
-	var status, agentStatus string
-	if err := db.QueryRow(`SELECT status, agent_status FROM agent_sessions WHERE id = 'session-team'`).Scan(&status, &agentStatus); err != nil {
-		t.Fatalf("query cancelled session: %v", err)
-	}
-	if status != "cancelled" || agentStatus != "cancelled" {
-		t.Fatalf("expected local team session cancelled, got status=%q agentStatus=%q", status, agentStatus)
-	}
-	assertSessionLogContains(t, db, "session-team", "Requested cancellation for team runtime task runtime-task-1.")
 }
 
 func TestNormalizeIssueLabelKeys(t *testing.T) {

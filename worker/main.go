@@ -26,6 +26,9 @@ import (
 
 const workerVersion = "0.1.0"
 const codexProtocolLineLimit = 16 * 1024 * 1024
+const branchNameArtifactName = "branch-name.json"
+
+var branchSlugUnsafePattern = regexp.MustCompile(`[^a-z0-9]+`)
 
 type config struct {
 	ServerURL         string
@@ -161,6 +164,12 @@ type agentSessionSource struct {
 	Changes        []workspaceChange `json:"changes"`
 	DiffPreview    string            `json:"diffPreview"`
 	DiffTruncated  bool              `json:"diffTruncated"`
+}
+
+type branchNameArtifact struct {
+	Branch string `json:"branch"`
+	Type   string `json:"type"`
+	Slug   string `json:"slug"`
 }
 
 type workspaceChange struct {
@@ -1294,6 +1303,7 @@ func captureAgentSessionSource(ctx context.Context, runtimeClient *runtimeClient
 	if err := runGitCommand(ctx, gitPath, payload.Workdir, "rev-parse", "--is-inside-work-tree"); err != nil {
 		return agentSessionSource{}, err
 	}
+	payload = applySemanticWorkerBranchName(ctx, runtimeClient, workerID, taskID, gitPath, payload)
 	if err := runGitCommand(ctx, gitPath, payload.Workdir, "add", "-A", "--", "."); err != nil {
 		return agentSessionSource{}, fmt.Errorf("stage source changes: %w", err)
 	}
@@ -1325,6 +1335,191 @@ func captureAgentSessionSource(ctx context.Context, runtimeClient *runtimeClient
 	}
 	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: fmt.Sprintf("Captured worker source commit %s with %d changed files.", source.ShortCommitSHA, source.FilesChanged)})
 	return source, nil
+}
+
+func applySemanticWorkerBranchName(ctx context.Context, runtimeClient *runtimeClient, workerID, taskID, gitPath string, payload agentSessionPayload) agentSessionPayload {
+	currentBranch := strings.TrimSpace(payload.Branch)
+	targetBranch, ok, err := readSemanticWorkerBranchName(payload)
+	if err != nil {
+		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Semantic branch name ignored: " + err.Error()})
+		return payload
+	}
+	if !ok || targetBranch == "" || targetBranch == currentBranch {
+		return payload
+	}
+	if err := validateWorkerBranchName(ctx, gitPath, payload.Workdir, targetBranch); err != nil {
+		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Semantic branch name ignored: " + err.Error()})
+		return payload
+	}
+	if exists, err := workerBranchExists(ctx, gitPath, payload.Workdir, targetBranch); err == nil && exists {
+		targetBranch = addBranchSessionSuffix(targetBranch, payload.SessionID)
+		if err := validateWorkerBranchName(ctx, gitPath, payload.Workdir, targetBranch); err != nil {
+			_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Semantic branch fallback ignored: " + err.Error()})
+			return payload
+		}
+	} else if err != nil {
+		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Semantic branch name ignored: " + err.Error()})
+		return payload
+	}
+	if currentBranch == "" {
+		payload.Branch = targetBranch
+		return payload
+	}
+	if err := runGitCommand(ctx, gitPath, payload.Workdir, "branch", "-m", targetBranch); err != nil {
+		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Semantic branch rename failed: " + err.Error()})
+		return payload
+	}
+	payload.Branch = targetBranch
+	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: fmt.Sprintf("Renamed source branch from %s to %s.", currentBranch, targetBranch)})
+	return payload
+}
+
+func readSemanticWorkerBranchName(payload agentSessionPayload) (string, bool, error) {
+	artifactPath := branchNameArtifactPath(payload)
+	if artifactPath == "" {
+		return "", false, nil
+	}
+	data, err := os.ReadFile(artifactPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	var artifact branchNameArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return "", false, fmt.Errorf("parse %s: %w", branchNameArtifactName, err)
+	}
+	branch, err := normalizeSemanticBranchArtifact(artifact)
+	if err != nil {
+		return "", true, err
+	}
+	return branch, true, nil
+}
+
+func branchNameArtifactPath(payload agentSessionPayload) string {
+	if strings.TrimSpace(payload.ArtifactDir) != "" {
+		return filepath.Join(payload.ArtifactDir, branchNameArtifactName)
+	}
+	if strings.TrimSpace(payload.Workdir) != "" {
+		return filepath.Join(payload.Workdir, ".mspace", "session", branchNameArtifactName)
+	}
+	return ""
+}
+
+func normalizeSemanticBranchArtifact(artifact branchNameArtifact) (string, error) {
+	branch := strings.ToLower(strings.TrimSpace(artifact.Branch))
+	if branch == "" {
+		branchType := strings.ToLower(strings.TrimSpace(artifact.Type))
+		slug := strings.ToLower(strings.TrimSpace(artifact.Slug))
+		if branchType != "" && slug != "" {
+			branch = branchType + "/" + slug
+		}
+	}
+	if branch == "" {
+		return "", errors.New("branch name artifact did not include branch or type/slug")
+	}
+	parts := strings.SplitN(branch, "/", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("branch %q must use <type>/<slug>", branch)
+	}
+	branchType := strings.TrimSpace(parts[0])
+	slug := normalizeBranchSlug(parts[1])
+	if !allowedSemanticBranchType(branchType) {
+		return "", fmt.Errorf("branch type %q is not supported", branchType)
+	}
+	if slug == "" {
+		return "", fmt.Errorf("branch %q has an empty slug", branch)
+	}
+	return branchType + "/" + slug, nil
+}
+
+func normalizeBranchSlug(value string) string {
+	slug := strings.ToLower(strings.TrimSpace(value))
+	slug = strings.Trim(slug, "/")
+	slug = branchSlugUnsafePattern.ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+	const maxSlugLength = 48
+	if len(slug) > maxSlugLength {
+		slug = strings.Trim(slug[:maxSlugLength], "-")
+	}
+	return slug
+}
+
+func allowedSemanticBranchType(value string) bool {
+	switch value {
+	case "feat", "fix", "chore", "docs", "refactor", "test", "perf", "build", "ci", "style", "revert":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateWorkerBranchName(ctx context.Context, gitPath, workdir, branch string) error {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return errors.New("branch is required")
+	}
+	if strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("invalid branch name %q", branch)
+	}
+	if err := runGitCommand(ctx, gitPath, workdir, "check-ref-format", "--branch", branch); err != nil {
+		return fmt.Errorf("invalid branch name %q: %w", branch, err)
+	}
+	return nil
+}
+
+func workerBranchExists(ctx context.Context, gitPath, workdir, branch string) (bool, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return false, nil
+	}
+	cmd := exec.CommandContext(ctx, gitPath, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	if workdir != "" {
+		cmd.Dir = workdir
+	}
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, errors.New(formatCommandFailure(err, output))
+}
+
+func addBranchSessionSuffix(branch, sessionID string) string {
+	branchType, slug, ok := strings.Cut(branch, "/")
+	if !ok {
+		return branch + "-" + shortStableID(sessionID)
+	}
+	suffix := shortStableID(sessionID)
+	maxSlugLength := 48 - len(suffix) - 1
+	if maxSlugLength < 12 {
+		maxSlugLength = 12
+	}
+	if len(slug) > maxSlugLength {
+		slug = strings.Trim(slug[:maxSlugLength], "-")
+	}
+	return branchType + "/" + strings.Trim(slug+"-"+suffix, "-")
+}
+
+func shortStableID(value string) string {
+	value = strings.Trim(strings.TrimSpace(value), "-")
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == '-' || r == '_' || r == '/'
+	})
+	for index := len(parts) - 1; index >= 0; index-- {
+		part := strings.TrimSpace(parts[index])
+		if len(part) >= 8 {
+			return part[:8]
+		}
+	}
+	if len(value) <= 8 {
+		return value
+	}
+	return value[:8]
 }
 
 func existingWorkerHeadSource(ctx context.Context, gitPath string, payload agentSessionPayload) (agentSessionSource, error) {
@@ -1504,8 +1699,13 @@ Follow these mspace rules:
 - Keep changes focused on the task and avoid unrelated refactors.
 - Do not commit, push, create a pull request, or delete workdirs unless the task prompt explicitly asks for it.
 - Run relevant validation when practical, and report exactly what passed or failed.
-- Answer directly. Do not introduce yourself.
-- Finish with a concise summary of changes, validation, and remaining risks.
+- Do not start or keep a development server running unless the user explicitly asks for a preview or a live server.
+- For ordinary validation, prefer non-interactive checks such as lint, tests, typecheck, build, or short one-shot HTTP probes.
+- If a temporary server is required for validation, stop it before finishing and report it only as an internal validation step.
+	- Do not present container-local localhost or 127.0.0.1 URLs as user-accessible preview URLs. Only report a URL when mspace provides an explicit preview/test-environment URL or the user asked for a local preview and the host mapping is known.
+	- Answer directly. Do not introduce yourself.
+	- If you make source-code changes, write ${MSPACE_SESSION_ARTIFACT_DIR}/branch-name.json before finishing. Use JSON like { "branch": "fix/short-semantic-name" }. The branch must use a Conventional Commit type prefix such as feat/, fix/, chore/, docs/, refactor/, test/, perf/, build/, or ci/, and the slug should summarize the actual diff in lowercase words separated by hyphens.
+	- Finish with a concise summary of changes, validation, and remaining risks.
 	`)
 }
 
