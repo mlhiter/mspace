@@ -648,9 +648,6 @@ func (s *MemoryStore) CreateRuntimeRegistrationToken(_ Context, userID, workspac
 		}
 		return RuntimeRegistrationTokenResult{}, ErrForbidden
 	}
-	if !s.isTeamWorkspace(workspaceID) {
-		return RuntimeRegistrationTokenResult{}, ErrForbidden
-	}
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
 		name = "Runtime worker token"
@@ -692,9 +689,6 @@ func (s *MemoryStore) ListRuntimeRegistrationTokens(_ Context, userID, workspace
 		}
 		return nil, ErrForbidden
 	}
-	if !s.isTeamWorkspace(workspaceID) {
-		return nil, ErrForbidden
-	}
 	tokens := []RuntimeRegistrationToken{}
 	for _, token := range s.runtimeTokens {
 		if token.Record.WorkspaceID == strings.TrimSpace(workspaceID) {
@@ -715,9 +709,6 @@ func (s *MemoryStore) RevokeRuntimeRegistrationToken(_ Context, userID, workspac
 		if !s.isWorkspaceMember(workspaceID, userID) {
 			return RuntimeRegistrationToken{}, ErrNotFound
 		}
-		return RuntimeRegistrationToken{}, ErrForbidden
-	}
-	if !s.isTeamWorkspace(workspaceID) {
 		return RuntimeRegistrationToken{}, ErrForbidden
 	}
 	workspaceID = strings.TrimSpace(workspaceID)
@@ -744,9 +735,6 @@ func (s *MemoryStore) AuthenticateRuntimeRegistrationToken(_ Context, token stri
 	}
 	record, ok := s.runtimeTokens[tokenHash(token)]
 	if !ok || record.Record.Revoked {
-		return RuntimeRegistration{}, ErrNotFound
-	}
-	if !s.isTeamWorkspace(record.Record.WorkspaceID) {
 		return RuntimeRegistration{}, ErrNotFound
 	}
 	expiresAt, err := time.Parse(time.RFC3339, record.Record.ExpiresAt)
@@ -848,9 +836,6 @@ func (s *MemoryStore) ListRuntimeWorkers(_ Context, userID, workspaceID string) 
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return nil, ErrNotFound
 	}
-	if !s.isTeamWorkspace(workspaceID) {
-		return nil, ErrForbidden
-	}
 	workers := []RuntimeWorker{}
 	for _, worker := range s.runtimeWorkers {
 		if worker.WorkspaceID == strings.TrimSpace(workspaceID) {
@@ -873,9 +858,6 @@ func (s *MemoryStore) CreateRuntimeTask(_ Context, userID, workspaceID string, i
 	workspaceID = strings.TrimSpace(workspaceID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return RuntimeTask{}, ErrNotFound
-	}
-	if !s.isTeamWorkspace(workspaceID) {
-		return RuntimeTask{}, ErrForbidden
 	}
 	normalized, err := normalizeCreateRuntimeTaskInput(input)
 	if err != nil {
@@ -1245,9 +1227,152 @@ func (s *MemoryStore) GetIssue(_ Context, userID, workspaceID, issueID string) (
 		Sessions:        s.issueAgentSessionsLocked(workspaceID, issueID),
 		Evidence:        []any{},
 		Failures:        []any{},
-		ChangeNodes:     []any{},
+		ChangeNodes:     s.issueChangeNodesLocked(workspaceID, issueID),
 		ReviewEvidence:  []any{},
 		Handoffs:        []any{},
+	}, nil
+}
+
+func (s *MemoryStore) CreateAgentSession(_ Context, userID, workspaceID, issueID string, input CreateAgentSessionInput) (AgentSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return AgentSession{}, ErrNotFound
+	}
+	workspace, ok := s.workspaceLocked(workspaceID)
+	if !ok {
+		return AgentSession{}, ErrNotFound
+	}
+	issue, ok := s.issues[issueID]
+	if !ok || issue.WorkspaceID != workspaceID {
+		return AgentSession{}, ErrNotFound
+	}
+	if issue.ProjectID == "" {
+		return AgentSession{}, errors.New("attach a project before starting an agent session")
+	}
+	project, ok := s.projects[issue.ProjectID]
+	if !ok || project.WorkspaceID != workspaceID {
+		return AgentSession{}, ErrNotFound
+	}
+	normalized := normalizeCreateAgentSessionInput(input)
+	if normalized.Command == "" {
+		return AgentSession{}, errors.New("command is required")
+	}
+	if normalized.Provider != "codex" {
+		return AgentSession{}, errors.New("provider must be codex")
+	}
+	if normalized.RuntimeMode == "" {
+		normalized.RuntimeMode = workspace.Kind
+	}
+	if normalized.RuntimeMode != "personal" && normalized.RuntimeMode != "team" {
+		return AgentSession{}, errors.New("runtimeMode must be personal or team")
+	}
+	sessionID, err := newAgentSessionID()
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if normalized.Branch == "" {
+		normalized.Branch = defaultAgentSessionBranch(issueID, sessionID)
+	}
+	comments := []Comment{}
+	for _, comment := range s.comments {
+		if comment.IssueID == issueID {
+			comments = append(comments, comment)
+		}
+	}
+	sort.Slice(comments, func(i, j int) bool {
+		return comments[i].CreatedAt > comments[j].CreatedAt
+	})
+	childIssues := []IssueListItem{}
+	for _, child := range s.issues {
+		if child.ParentIssueID == issueID {
+			childIssues = append(childIssues, s.issueListItemLocked(child))
+		}
+	}
+	runbook := s.projectRunbooks[project.ID]
+	payload, err := json.Marshal(buildAgentSessionPayload(sessionID, issue, project, runbook, comments, s.issueLabels[issueID], childIssues, normalized))
+	if err != nil {
+		return AgentSession{}, err
+	}
+	capabilities, err := json.Marshal(map[string]bool{"codex": true})
+	if err != nil {
+		return AgentSession{}, err
+	}
+	s.nextID++
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := RuntimeTask{
+		ID:                   fmt.Sprintf("runtime-task-%04d", s.nextID),
+		WorkspaceID:          workspaceID,
+		IssueID:              issue.ID,
+		SessionID:            sessionID,
+		ProjectID:            project.ID,
+		Kind:                 "agent_session",
+		Status:               "queued",
+		Priority:             0,
+		RuntimeMode:          normalized.RuntimeMode,
+		RequiredCapabilities: json.RawMessage(capabilities),
+		Payload:              json.RawMessage(payload),
+		Result:               json.RawMessage(`{}`),
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	s.runtimeTasks[task.ID] = task
+	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, "", userID, "created", json.RawMessage(fmt.Sprintf(`{"kind":%q,"runtimeMode":%q,"status":%q}`, task.Kind, task.RuntimeMode, task.Status)))
+	return runtimeTaskToAgentSession(task)
+}
+
+func (s *MemoryStore) GetSession(_ Context, userID, workspaceID, sessionID string) (SessionDetail, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	sessionID = strings.TrimSpace(sessionID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return SessionDetail{}, ErrNotFound
+	}
+	var task RuntimeTask
+	for _, candidate := range s.runtimeTasks {
+		if candidate.WorkspaceID == workspaceID && candidate.Kind == "agent_session" && (candidate.SessionID == sessionID || candidate.ID == sessionID) {
+			task = candidate
+			break
+		}
+	}
+	if task.ID == "" {
+		return SessionDetail{}, ErrNotFound
+	}
+	session, err := runtimeTaskToAgentSession(task)
+	if err != nil {
+		return SessionDetail{}, err
+	}
+	issue, ok := s.issues[task.IssueID]
+	if !ok || issue.WorkspaceID != workspaceID {
+		return SessionDetail{}, ErrNotFound
+	}
+	project := s.projects[task.ProjectID]
+	logs := []SessionLog{}
+	for _, log := range s.runtimeTaskLogs {
+		if log.WorkspaceID != workspaceID || log.TaskID != task.ID {
+			continue
+		}
+		logs = append(logs, SessionLog{ID: log.ID, SessionID: session.ID, Stream: log.Stream, Message: log.Message, CreatedAt: log.CreatedAt})
+	}
+	sort.Slice(logs, func(i, j int) bool {
+		if logs[i].CreatedAt == logs[j].CreatedAt {
+			return logs[i].ID < logs[j].ID
+		}
+		return logs[i].CreatedAt < logs[j].CreatedAt
+	})
+	return SessionDetail{
+		Session:   session,
+		Issue:     issue,
+		Project:   project,
+		Logs:      logs,
+		Evidence:  []any{},
+		Failures:  []any{},
+		Workspace: workspaceSnapshotFromRuntimeTask(task),
 	}, nil
 }
 
@@ -1257,52 +1382,9 @@ func (s *MemoryStore) issueAgentSessionsLocked(workspaceID, issueID string) []Ag
 		if task.WorkspaceID != workspaceID || task.IssueID != issueID || task.Kind != "agent_session" {
 			continue
 		}
-		sessionStatus, agentStatus := runtimeTaskSessionStatus(task.Status, task.Error)
-		session := AgentSession{
-			ID:              firstNonEmpty(task.SessionID, task.ID),
-			IssueID:         task.IssueID,
-			Provider:        "codex",
-			AgentProfile:    "codex",
-			RuntimeMode:     firstNonEmpty(task.RuntimeMode, "team"),
-			RuntimeTaskID:   task.ID,
-			Status:          sessionStatus,
-			AgentStatus:     agentStatus,
-			CleanupStatus:   "retained",
-			CreatedAt:       task.CreatedAt,
-			UpdatedAt:       task.UpdatedAt,
-			SourceCommitSHA: "",
-		}
-		var payload struct {
-			Prompt          string `json:"prompt"`
-			AgentProfile    string `json:"agentProfile"`
-			Branch          string `json:"branch"`
-			SourceCommitSHA string `json:"sourceCommitSha"`
-			ArtifactDir     string `json:"artifactDir"`
-		}
-		if len(task.Payload) > 0 && json.Unmarshal(task.Payload, &payload) == nil {
-			session.Command = strings.TrimSpace(payload.Prompt)
-			session.AgentProfile = firstNonEmpty(payload.AgentProfile, session.AgentProfile)
-			session.Branch = strings.TrimSpace(payload.Branch)
-			session.SourceCommitSHA = strings.TrimSpace(payload.SourceCommitSHA)
-			session.ArtifactDir = strings.TrimSpace(payload.ArtifactDir)
-		}
-		var result struct {
-			ThreadID    string `json:"threadId"`
-			TurnID      string `json:"turnId"`
-			Workdir     string `json:"workdir"`
-			ArtifactDir string `json:"artifactDir"`
-			Source      struct {
-				CommitSHA string `json:"commitSha"`
-				Branch    string `json:"branch"`
-			} `json:"source"`
-		}
-		if len(task.Result) > 0 && json.Unmarshal(task.Result, &result) == nil {
-			session.CodexThreadID = result.ThreadID
-			session.CodexTurnID = result.TurnID
-			session.Workdir = result.Workdir
-			session.ArtifactDir = firstNonEmpty(result.ArtifactDir, session.ArtifactDir)
-			session.SourceCommitSHA = firstNonEmpty(result.Source.CommitSHA, session.SourceCommitSHA)
-			session.Branch = firstNonEmpty(result.Source.Branch, session.Branch)
+		session, err := runtimeTaskToAgentSession(task)
+		if err != nil {
+			continue
 		}
 		sessions = append(sessions, session)
 	}
@@ -1313,6 +1395,27 @@ func (s *MemoryStore) issueAgentSessionsLocked(workspaceID, issueID string) []Ag
 		return sessions[i].CreatedAt > sessions[j].CreatedAt
 	})
 	return sessions
+}
+
+func (s *MemoryStore) issueChangeNodesLocked(workspaceID, issueID string) []IssueChangeNode {
+	nodes := []IssueChangeNode{}
+	for _, task := range s.runtimeTasks {
+		if task.WorkspaceID != workspaceID || task.IssueID != issueID || task.Kind != "agent_session" {
+			continue
+		}
+		node := runtimeTaskChangeNode(task)
+		if node.CommitSHA == "" && node.Error == "" {
+			continue
+		}
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].CreatedAt == nodes[j].CreatedAt {
+			return nodes[i].ID > nodes[j].ID
+		}
+		return nodes[i].CreatedAt > nodes[j].CreatedAt
+	})
+	return nodes
 }
 
 func (s *MemoryStore) UpdateIssue(_ Context, userID, workspaceID, issueID string, input UpdateIssueInput) (Issue, error) {
@@ -1601,9 +1704,6 @@ func (s *MemoryStore) ListRuntimeTasks(_ Context, userID, workspaceID string) ([
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return nil, ErrNotFound
 	}
-	if !s.isTeamWorkspace(workspaceID) {
-		return nil, ErrForbidden
-	}
 	tasks := []RuntimeTask{}
 	for _, task := range s.runtimeTasks {
 		if task.WorkspaceID == workspaceID {
@@ -1630,9 +1730,6 @@ func (s *MemoryStore) ListRuntimeTaskEvents(_ Context, userID, workspaceID, task
 	taskID = strings.TrimSpace(taskID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return nil, ErrNotFound
-	}
-	if !s.isTeamWorkspace(workspaceID) {
-		return nil, ErrForbidden
 	}
 	task, ok := s.runtimeTasks[taskID]
 	if !ok || task.WorkspaceID != workspaceID {
@@ -1662,9 +1759,6 @@ func (s *MemoryStore) ListRuntimeTaskLogs(_ Context, userID, workspaceID, taskID
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return nil, ErrNotFound
 	}
-	if !s.isTeamWorkspace(workspaceID) {
-		return nil, ErrForbidden
-	}
 	task, ok := s.runtimeTasks[taskID]
 	if !ok || task.WorkspaceID != workspaceID {
 		return nil, ErrNotFound
@@ -1692,9 +1786,6 @@ func (s *MemoryStore) CancelRuntimeTask(_ Context, userID, workspaceID, taskID s
 	taskID = strings.TrimSpace(taskID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return RuntimeTask{}, ErrNotFound
-	}
-	if !s.isTeamWorkspace(workspaceID) {
-		return RuntimeTask{}, ErrForbidden
 	}
 	task, ok := s.runtimeTasks[taskID]
 	if !ok || task.WorkspaceID != workspaceID {
@@ -2039,6 +2130,18 @@ func (s *MemoryStore) workspaceName(workspaceID string) string {
 		}
 	}
 	return "Workspace"
+}
+
+func (s *MemoryStore) workspaceLocked(workspaceID string) (Workspace, bool) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	for _, workspaces := range s.workspaces {
+		for _, workspace := range workspaces {
+			if workspace.ID == workspaceID {
+				return workspace, true
+			}
+		}
+	}
+	return Workspace{}, false
 }
 
 func (s *MemoryStore) isTeamWorkspace(workspaceID string) bool {

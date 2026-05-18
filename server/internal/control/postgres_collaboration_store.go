@@ -444,7 +444,7 @@ func (s *PostgresStore) GetIssue(ctx Context, userID, workspaceID, issueID strin
 		Sessions:        []AgentSession{},
 		Evidence:        []any{},
 		Failures:        []any{},
-		ChangeNodes:     []any{},
+		ChangeNodes:     []IssueChangeNode{},
 		ReviewEvidence:  []any{},
 		Handoffs:        []any{},
 	}
@@ -483,7 +483,206 @@ func (s *PostgresStore) GetIssue(ctx Context, userID, workspaceID, issueID strin
 	if err != nil {
 		return IssueDetail{}, err
 	}
+	detail.ChangeNodes, err = s.listIssueChangeNodes(dbctx, workspaceID, issueID)
+	if err != nil {
+		return IssueDetail{}, err
+	}
 	return detail, nil
+}
+
+func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, issueID string, input CreateAgentSessionInput) (AgentSession, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	issueID = strings.TrimSpace(issueID)
+	normalized := normalizeCreateAgentSessionInput(input)
+	if normalized.Command == "" {
+		return AgentSession{}, errors.New("command is required")
+	}
+	if normalized.Provider != "codex" {
+		return AgentSession{}, errors.New("provider must be codex")
+	}
+	workspace, err := loadWorkspaceForUser(dbctx, s.pool, workspaceID, userID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if normalized.RuntimeMode == "" {
+		normalized.RuntimeMode = workspace.Kind
+	}
+	if normalized.RuntimeMode != "personal" && normalized.RuntimeMode != "team" {
+		return AgentSession{}, errors.New("runtimeMode must be personal or team")
+	}
+	issue, err := loadIssue(dbctx, s.pool, workspaceID, issueID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if issue.ProjectID == "" {
+		return AgentSession{}, errors.New("attach a project before starting an agent session")
+	}
+	project, err := resolveIssueProject(dbctx, s.pool, workspaceID, issue.ProjectID, "")
+	if err != nil {
+		return AgentSession{}, err
+	}
+	sessionID, err := newAgentSessionID()
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if normalized.Branch == "" {
+		normalized.Branch = defaultAgentSessionBranch(issueID, sessionID)
+	}
+	runbook, _ := loadProjectRunbookSnapshot(dbctx, s.pool, workspaceID, project.ID)
+	comments, err := s.listIssueComments(dbctx, workspaceID, issueID, userID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	labels, err := s.listIssueLabels(dbctx, workspaceID, issueID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	childIssues, err := s.listChildIssues(dbctx, workspaceID, issueID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	payload, err := json.Marshal(buildAgentSessionPayload(sessionID, issue, project, runbook, comments, labels, childIssues, normalized))
+	if err != nil {
+		return AgentSession{}, err
+	}
+	capabilities, err := json.Marshal(map[string]bool{"codex": true})
+	if err != nil {
+		return AgentSession{}, err
+	}
+	task, err := s.CreateRuntimeTask(ctx, userID, workspaceID, CreateRuntimeTaskInput{
+		IssueID:              issue.ID,
+		SessionID:            sessionID,
+		ProjectID:            project.ID,
+		Kind:                 "agent_session",
+		Priority:             0,
+		RuntimeMode:          normalized.RuntimeMode,
+		RequiredCapabilities: capabilities,
+		Payload:              payload,
+	})
+	if err != nil {
+		return AgentSession{}, err
+	}
+	return runtimeTaskToAgentSession(task)
+}
+
+func (s *PostgresStore) GetSession(ctx Context, userID, workspaceID, sessionID string) (SessionDetail, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	sessionID = strings.TrimSpace(sessionID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return SessionDetail{}, err
+	}
+	task, err := s.getAgentSessionRuntimeTask(dbctx, workspaceID, sessionID)
+	if err != nil {
+		return SessionDetail{}, err
+	}
+	session, err := runtimeTaskToAgentSession(task)
+	if err != nil {
+		return SessionDetail{}, err
+	}
+	issue, err := loadIssue(dbctx, s.pool, workspaceID, task.IssueID)
+	if err != nil {
+		return SessionDetail{}, err
+	}
+	project := Project{}
+	if task.ProjectID != "" {
+		project, err = resolveIssueProject(dbctx, s.pool, workspaceID, task.ProjectID, "")
+		if err != nil {
+			return SessionDetail{}, err
+		}
+	}
+	taskLogs, err := s.ListRuntimeTaskLogs(ctx, userID, workspaceID, task.ID)
+	if err != nil {
+		return SessionDetail{}, err
+	}
+	logs := make([]SessionLog, 0, len(taskLogs))
+	for _, log := range taskLogs {
+		logs = append(logs, SessionLog{
+			ID:        log.ID,
+			SessionID: session.ID,
+			Stream:    log.Stream,
+			Message:   log.Message,
+			CreatedAt: log.CreatedAt,
+		})
+	}
+	return SessionDetail{
+		Session:   session,
+		Issue:     issue,
+		Project:   project,
+		Logs:      logs,
+		Evidence:  []any{},
+		Failures:  []any{},
+		Workspace: workspaceSnapshotFromRuntimeTask(task),
+	}, nil
+}
+
+func (s *PostgresStore) getAgentSessionRuntimeTask(ctx context.Context, workspaceID, sessionID string) (RuntimeTask, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+			id::text,
+			workspace_id::text,
+			issue_id,
+			session_id,
+			project_id,
+			kind,
+			status,
+			priority,
+			runtime_mode,
+			required_capabilities,
+			payload,
+			result,
+			COALESCE(claimed_by_worker_id::text, ''),
+			claimed_at,
+			started_at,
+			finished_at,
+			error,
+			created_at,
+			updated_at
+		FROM runtime_tasks
+		WHERE workspace_id = $1
+			AND kind = 'agent_session'
+			AND (session_id = $2 OR id::text = $2)
+	`, workspaceID, sessionID)
+	task, err := scanRuntimeTask(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RuntimeTask{}, ErrNotFound
+	}
+	return task, err
+}
+
+func loadWorkspaceForUser(ctx context.Context, q queryer, workspaceID, userID string) (Workspace, error) {
+	row := q.QueryRow(ctx, `
+		SELECT w.id::text, w.name, w.slug, w.kind, wm.role, w.created_at, w.updated_at
+		FROM workspace_members wm
+		JOIN workspaces w ON w.id = wm.workspace_id
+		WHERE wm.workspace_id = $1 AND wm.user_id = $2
+	`, workspaceID, userID)
+	var workspace Workspace
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Workspace{}, ErrNotFound
+		}
+		return Workspace{}, err
+	}
+	workspace.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	workspace.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return workspace, nil
+}
+
+func loadProjectRunbookSnapshot(ctx context.Context, q queryer, workspaceID, projectID string) (ProjectRunbook, error) {
+	row := q.QueryRow(ctx, `
+		SELECT project_id::text, content, status, source, source_session_id, content_hash, created_at, updated_at
+		FROM project_runbooks
+		WHERE workspace_id = $1 AND project_id = $2
+	`, workspaceID, projectID)
+	runbook, err := scanProjectRunbook(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ProjectRunbook{}, ErrNotFound
+	}
+	return runbook, err
 }
 
 func (s *PostgresStore) UpdateIssue(ctx Context, userID, workspaceID, issueID string, input UpdateIssueInput) (Issue, error) {
@@ -1007,7 +1206,53 @@ func (s *PostgresStore) listIssueAgentSessions(ctx context.Context, workspaceID,
 	return sessions, rows.Err()
 }
 
+func (s *PostgresStore) listIssueChangeNodes(ctx context.Context, workspaceID, issueID string) ([]IssueChangeNode, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			id::text,
+			issue_id,
+			session_id,
+			project_id,
+			status,
+			runtime_mode,
+			payload,
+			result,
+			error,
+			created_at,
+			updated_at
+		FROM runtime_tasks
+		WHERE workspace_id = $1 AND issue_id = $2 AND kind = 'agent_session'
+		ORDER BY created_at DESC, id DESC
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(issueID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	nodes := []IssueChangeNode{}
+	for rows.Next() {
+		task, err := scanRuntimeTaskAgentSessionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		node := runtimeTaskChangeNode(task)
+		if node.CommitSHA == "" && node.Error == "" {
+			continue
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes, rows.Err()
+}
+
 func scanRuntimeTaskAgentSession(row scanner) (AgentSession, error) {
+	task, err := scanRuntimeTaskAgentSessionRow(row)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	return runtimeTaskToAgentSession(task)
+}
+
+func scanRuntimeTaskAgentSessionRow(row scanner) (RuntimeTask, error) {
 	var runtimeTaskID, issueID, sessionID, projectID, status, runtimeMode, errorText string
 	var payloadBytes, resultBytes []byte
 	var createdAt, updatedAt time.Time
@@ -1024,17 +1269,37 @@ func scanRuntimeTaskAgentSession(row scanner) (AgentSession, error) {
 		&createdAt,
 		&updatedAt,
 	); err != nil {
-		return AgentSession{}, err
+		return RuntimeTask{}, err
 	}
+	return RuntimeTask{
+		ID:                   runtimeTaskID,
+		IssueID:              issueID,
+		SessionID:            sessionID,
+		ProjectID:            projectID,
+		Kind:                 "agent_session",
+		Status:               status,
+		RuntimeMode:          runtimeMode,
+		RequiredCapabilities: json.RawMessage(`{}`),
+		Payload:              copyRawMessage(json.RawMessage(payloadBytes)),
+		Result:               copyRawMessage(json.RawMessage(resultBytes)),
+		Error:                errorText,
+		CreatedAt:            createdAt.UTC().Format(time.RFC3339),
+		UpdatedAt:            updatedAt.UTC().Format(time.RFC3339),
+	}, nil
+}
 
+func runtimeTaskToAgentSession(task RuntimeTask) (AgentSession, error) {
 	var payload struct {
-		Prompt          string `json:"prompt"`
-		AgentProfile    string `json:"agentProfile"`
-		Branch          string `json:"branch"`
-		SourceCommitSHA string `json:"sourceCommitSha"`
-		ArtifactDir     string `json:"artifactDir"`
+		Prompt           string `json:"prompt"`
+		AgentProfile     string `json:"agentProfile"`
+		Provider         string `json:"provider"`
+		Branch           string `json:"branch"`
+		SourceSessionID  string `json:"sourceSessionId"`
+		SourceCommitSHA  string `json:"sourceCommitSha"`
+		TriggerCommentID string `json:"triggerCommentId"`
+		ArtifactDir      string `json:"artifactDir"`
 	}
-	_ = json.Unmarshal(payloadBytes, &payload)
+	_ = json.Unmarshal(task.Payload, &payload)
 
 	var result struct {
 		ThreadID    string `json:"threadId"`
@@ -1046,39 +1311,48 @@ func scanRuntimeTaskAgentSession(row scanner) (AgentSession, error) {
 			Branch    string `json:"branch"`
 		} `json:"source"`
 	}
-	_ = json.Unmarshal(resultBytes, &result)
+	_ = json.Unmarshal(task.Result, &result)
 
-	sessionStatus, agentStatus := runtimeTaskSessionStatus(status, errorText)
+	sessionStatus, agentStatus := runtimeTaskSessionStatus(task.Status, task.Error, task.RuntimeMode)
 	return AgentSession{
-		ID:              firstNonEmpty(sessionID, runtimeTaskID),
-		IssueID:         issueID,
-		Provider:        "codex",
-		AgentProfile:    firstNonEmpty(payload.AgentProfile, "codex"),
-		RuntimeMode:     firstNonEmpty(runtimeMode, "team"),
-		RuntimeTaskID:   runtimeTaskID,
-		Command:         strings.TrimSpace(payload.Prompt),
-		Status:          sessionStatus,
-		Branch:          firstNonEmpty(result.Source.Branch, payload.Branch),
-		Workdir:         result.Workdir,
-		CodexThreadID:   result.ThreadID,
-		CodexTurnID:     result.TurnID,
-		AgentStatus:     agentStatus,
-		ArtifactDir:     firstNonEmpty(result.ArtifactDir, payload.ArtifactDir),
-		SourceCommitSHA: firstNonEmpty(result.Source.CommitSHA, payload.SourceCommitSHA),
-		CleanupStatus:   "retained",
-		CreatedAt:       createdAt.UTC().Format(time.RFC3339),
-		UpdatedAt:       updatedAt.UTC().Format(time.RFC3339),
+		ID:               firstNonEmpty(task.SessionID, task.ID),
+		IssueID:          task.IssueID,
+		Provider:         firstNonEmpty(payload.Provider, "codex"),
+		AgentProfile:     firstNonEmpty(payload.AgentProfile, "codex"),
+		RuntimeMode:      firstNonEmpty(task.RuntimeMode, "team"),
+		RuntimeTaskID:    task.ID,
+		Command:          strings.TrimSpace(payload.Prompt),
+		Status:           sessionStatus,
+		Branch:           firstNonEmpty(result.Source.Branch, payload.Branch),
+		Workdir:          result.Workdir,
+		CodexThreadID:    result.ThreadID,
+		CodexTurnID:      result.TurnID,
+		AgentStatus:      agentStatus,
+		ArtifactDir:      firstNonEmpty(result.ArtifactDir, payload.ArtifactDir),
+		SourceSessionID:  payload.SourceSessionID,
+		SourceCommitSHA:  firstNonEmpty(result.Source.CommitSHA, payload.SourceCommitSHA),
+		TriggerCommentID: payload.TriggerCommentID,
+		CleanupStatus:    "retained",
+		CreatedAt:        task.CreatedAt,
+		UpdatedAt:        task.UpdatedAt,
 	}, nil
 }
 
-func runtimeTaskSessionStatus(status, errorText string) (string, string) {
+func runtimeTaskSessionStatus(status, errorText, runtimeMode string) (string, string) {
+	prefix := "runtime"
+	switch strings.TrimSpace(runtimeMode) {
+	case "team":
+		prefix = "team-runtime"
+	case "personal":
+		prefix = "personal-runtime"
+	}
 	switch strings.TrimSpace(status) {
 	case "queued":
-		return "queued", "team-runtime-queued"
+		return "queued", prefix + "-queued"
 	case "claimed":
-		return "running", "team-runtime-claimed"
+		return "running", prefix + "-claimed"
 	case "running":
-		return "running", "team-runtime-running"
+		return "running", prefix + "-running"
 	case "completed":
 		return "completed", "completed"
 	case "failed":
@@ -1089,8 +1363,244 @@ func runtimeTaskSessionStatus(status, errorText string) (string, string) {
 		if strings.TrimSpace(errorText) != "" {
 			return "failed", "failed"
 		}
-		return "queued", "team-runtime"
+		return "queued", prefix
 	}
+}
+
+func buildAgentSessionPayload(sessionID string, issue Issue, project Project, runbook ProjectRunbook, comments []Comment, labels []IssueLabel, childIssues []IssueListItem, input CreateAgentSessionInput) map[string]any {
+	return map[string]any{
+		"workdir":               "",
+		"provider":              input.Provider,
+		"prompt":                input.Command,
+		"developerInstructions": defaultAgentSessionDeveloperInstructions(input.RuntimeMode),
+		"approvalPolicy":        "never",
+		"sandbox":               "danger-full-access",
+		"env": map[string]string{
+			"MSPACE_API_BASE_URL":      "",
+			"MSPACE_ISSUE_ID":          issue.ID,
+			"MSPACE_SESSION_ID":        sessionID,
+			"MSPACE_AGENT_PROFILE":     input.AgentProfile,
+			"MSPACE_SESSION_BRANCH":    input.Branch,
+			"MSPACE_SOURCE_SESSION_ID": input.SourceSessionID,
+			"MSPACE_SOURCE_COMMIT_SHA": input.SourceCommitSHA,
+		},
+		"issueId":          issue.ID,
+		"sessionId":        sessionID,
+		"projectId":        project.ID,
+		"agentProfile":     input.AgentProfile,
+		"branch":           input.Branch,
+		"sourceSessionId":  input.SourceSessionID,
+		"sourceCommitSha":  input.SourceCommitSHA,
+		"triggerCommentId": input.TriggerCommentID,
+		"contextMarkdown":  buildAgentSessionContext(issue, project, runbook, comments, labels, childIssues, input),
+		"artifactDir":      "",
+		"repository": map[string]string{
+			"url":           firstNonEmpty(project.RemoteURL, project.RepoPath),
+			"defaultBranch": project.DefaultBranch,
+			"sourceType":    project.SourceType,
+			"provider":      project.GitProvider,
+			"owner":         project.GitOwner,
+			"repo":          project.GitRepo,
+		},
+	}
+}
+
+func defaultAgentSessionDeveloperInstructions(runtimeMode string) string {
+	mode := "runtime worker"
+	if strings.TrimSpace(runtimeMode) == "team" {
+		mode = "team runtime worker"
+	} else if strings.TrimSpace(runtimeMode) == "personal" {
+		mode = "personal runtime worker"
+	}
+	return strings.TrimSpace(`
+You are running as a Codex coding agent inside an mspace ` + mode + `.
+
+Follow these mspace rules:
+- Work in the provided workdir for this task.
+- Inspect the repository before changing code.
+- Keep changes focused on the issue and avoid unrelated refactors.
+- Do not push, create a pull request, or delete workdirs unless the task prompt explicitly asks for it.
+- Run relevant validation when practical, and report exactly what passed or failed.
+- Do not start or keep a development server running unless the user explicitly asks for a preview or a live server.
+- For ordinary validation, prefer non-interactive checks such as lint, tests, typecheck, build, or short one-shot HTTP probes.
+- If a temporary server is required for validation, stop it before finishing and report it only as an internal validation step.
+	- Do not present container-local localhost or 127.0.0.1 URLs as user-accessible preview URLs. Only report a URL when mspace provides an explicit preview/test-environment URL or the user asked for a local preview and the host mapping is known.
+	- Answer directly. Do not introduce yourself.
+	- If you make source-code changes, write ${MSPACE_SESSION_ARTIFACT_DIR}/branch-name.json before finishing. Use JSON like { "branch": "fix/short-semantic-name" }. The branch must use a Conventional Commit type prefix such as feat/, fix/, chore/, docs/, refactor/, test/, perf/, build/, or ci/, and the slug should summarize the actual diff in lowercase words separated by hyphens.
+	- Finish with a concise summary of changes, validation, and remaining risks.
+	`)
+}
+
+func buildAgentSessionContext(issue Issue, project Project, runbook ProjectRunbook, comments []Comment, labels []IssueLabel, childIssues []IssueListItem, input CreateAgentSessionInput) string {
+	var builder strings.Builder
+	builder.WriteString("# mspace agent session\n\n")
+	builder.WriteString("## Issue\n")
+	builder.WriteString("ID: " + issue.ID + "\n")
+	builder.WriteString("Title: " + issue.Title + "\n")
+	builder.WriteString("Status: " + issue.Status + "\n")
+	if issue.Body != "" {
+		builder.WriteString("\n" + issue.Body + "\n")
+	}
+	if len(labels) > 0 {
+		builder.WriteString("\n## Labels\n")
+		for _, label := range labels {
+			builder.WriteString("- " + label.Dimension + ": " + label.Name + "\n")
+		}
+	}
+	if len(childIssues) > 0 {
+		builder.WriteString("\n## Child Issues\n")
+		for _, child := range childIssues {
+			builder.WriteString("- [" + child.Status + "] " + child.Title + "\n")
+		}
+	}
+	builder.WriteString("\n## Project\n")
+	builder.WriteString("Name: " + project.Name + "\n")
+	builder.WriteString("Repository: " + firstNonEmpty(project.RemoteURL, project.RepoPath, "not configured") + "\n")
+	builder.WriteString("Default branch: " + firstNonEmpty(project.DefaultBranch, "main") + "\n")
+	if runbook.Content != "" {
+		builder.WriteString("\n## Project Runbook\n")
+		builder.WriteString(runbook.Content + "\n")
+	}
+	if len(comments) > 0 {
+		builder.WriteString("\n## Recent Comments\n")
+		maxComments := len(comments)
+		if maxComments > 12 {
+			maxComments = 12
+		}
+		for i := maxComments - 1; i >= 0; i-- {
+			comment := comments[i]
+			author := firstNonEmpty(comment.AuthorName, comment.AuthorType, "unknown")
+			builder.WriteString("\n### " + author + " at " + comment.CreatedAt + "\n")
+			builder.WriteString(comment.Body + "\n")
+		}
+	}
+	builder.WriteString("\n## Current Request\n")
+	builder.WriteString(input.Command + "\n")
+	return builder.String()
+}
+
+func defaultAgentSessionBranch(issueID, sessionID string) string {
+	return "mspace/" + shortIdentifier(issueID) + "/" + shortIdentifier(sessionID)
+}
+
+func shortIdentifier(value string) string {
+	value = strings.Trim(strings.TrimSpace(value), "-")
+	if len(value) <= 8 {
+		return value
+	}
+	return value[:8]
+}
+
+func runtimeTaskChangeNode(task RuntimeTask) IssueChangeNode {
+	source := runtimeTaskSource(task)
+	if source.CommitSHA == "" && strings.TrimSpace(task.Error) == "" {
+		return IssueChangeNode{}
+	}
+	return IssueChangeNode{
+		ID:             firstNonEmpty(source.CommitSHA, task.ID),
+		IssueID:        task.IssueID,
+		SessionID:      firstNonEmpty(task.SessionID, task.ID),
+		CommitSHA:      source.CommitSHA,
+		ShortCommitSHA: firstNonEmpty(source.ShortCommitSHA, shortCommitSHA(source.CommitSHA)),
+		Branch:         source.Branch,
+		Subject:        source.Subject,
+		FilesChanged:   source.FilesChanged,
+		Changes:        source.Changes,
+		DiffPreview:    source.DiffPreview,
+		DiffTruncated:  source.DiffTruncated,
+		Error:          firstNonEmpty(source.Error, task.Error),
+		Source:         "runtime-task",
+		RemoteWorkdir:  source.Workdir,
+		ArtifactDir:    source.ArtifactDir,
+		CreatedAt:      task.UpdatedAt,
+	}
+}
+
+type runtimeTaskSourceSnapshot struct {
+	CommitSHA      string            `json:"commitSha"`
+	ShortCommitSHA string            `json:"shortCommitSha"`
+	Branch         string            `json:"branch"`
+	Subject        string            `json:"subject"`
+	FilesChanged   int               `json:"filesChanged"`
+	Changes        []WorkspaceChange `json:"changes"`
+	DiffPreview    string            `json:"diffPreview"`
+	DiffTruncated  bool              `json:"diffTruncated"`
+	Error          string            `json:"error"`
+	Workdir        string            `json:"workdir"`
+	ArtifactDir    string            `json:"artifactDir"`
+}
+
+func runtimeTaskSource(task RuntimeTask) runtimeTaskSourceSnapshot {
+	var result struct {
+		Workdir     string                    `json:"workdir"`
+		ArtifactDir string                    `json:"artifactDir"`
+		Source      runtimeTaskSourceSnapshot `json:"source"`
+	}
+	_ = json.Unmarshal(task.Result, &result)
+	source := result.Source
+	source.Workdir = firstNonEmpty(source.Workdir, result.Workdir)
+	source.ArtifactDir = firstNonEmpty(source.ArtifactDir, result.ArtifactDir)
+	if source.Branch == "" {
+		var payload struct {
+			Branch string `json:"branch"`
+		}
+		_ = json.Unmarshal(task.Payload, &payload)
+		source.Branch = payload.Branch
+	}
+	if source.Error == "" && task.Status == "failed" {
+		source.Error = task.Error
+	}
+	if source.Changes == nil {
+		source.Changes = []WorkspaceChange{}
+	}
+	return source
+}
+
+func workspaceSnapshotFromRuntimeTask(task RuntimeTask) WorkspaceSnapshot {
+	source := runtimeTaskSource(task)
+	hasChanges := source.CommitSHA != "" || len(source.Changes) > 0
+	return WorkspaceSnapshot{
+		Exists:          source.Workdir != "",
+		IsGitRepository: source.Workdir != "",
+		HasChanges:      hasChanges,
+		ChangedFiles:    source.FilesChanged,
+		UntrackedFiles:  0,
+		Head:            source.CommitSHA,
+		ShortHead:       firstNonEmpty(source.ShortCommitSHA, shortCommitSHA(source.CommitSHA)),
+		Branch:          source.Branch,
+		StatusLines:     []string{},
+		Changes:         source.Changes,
+		DiffPreview:     source.DiffPreview,
+		DiffTruncated:   source.DiffTruncated,
+		Comparison: WorkspaceComparison{
+			BaseRef:        "",
+			MergeBase:      "",
+			MergeBaseShort: "",
+			AheadCount:     boolToInt(source.CommitSHA != ""),
+			BehindCount:    0,
+			CommitLines:    []string{},
+			Changes:        source.Changes,
+			DiffPreview:    source.DiffPreview,
+			DiffTruncated:  source.DiffTruncated,
+			Error:          source.Error,
+		},
+		Error: source.Error,
+	}
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func shortCommitSHA(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
 }
 
 func scanIssueAndProject(row scanner) (Issue, Project, error) {

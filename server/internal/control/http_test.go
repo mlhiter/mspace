@@ -575,6 +575,51 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 	if len(detail.Comments) != 2 || detail.Comments[0].Body != "Server comment" || len(detail.Comments[0].Reactions) != 1 || detail.Comments[0].Reactions[0].Reaction != "rocket" {
 		t.Fatalf("unexpected comments: %+v", detail.Comments)
 	}
+
+	createSessionRecorder := httptest.NewRecorder()
+	createSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/sessions", strings.NewReader(`{"provider":"codex","agentProfile":"codex","runtimeMode":"personal","command":"@codex update the docs","triggerCommentId":"`+commentResult.CommentID+`"}`))
+	createSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createSessionRecorder, createSessionReq)
+	if createSessionRecorder.Code != http.StatusCreated {
+		t.Fatalf("create agent session status=%d body=%s", createSessionRecorder.Code, createSessionRecorder.Body.String())
+	}
+	var session AgentSession
+	if err := json.Unmarshal(createSessionRecorder.Body.Bytes(), &session); err != nil {
+		t.Fatalf("parse agent session: %v", err)
+	}
+	if session.ID == "" || session.RuntimeTaskID == "" || session.RuntimeMode != "personal" || session.Status != "queued" || session.TriggerCommentID != commentResult.CommentID {
+		t.Fatalf("unexpected agent session: %+v", session)
+	}
+
+	getSessionRecorder := httptest.NewRecorder()
+	getSessionReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+personalWorkspaceID+"/sessions/"+session.ID, nil)
+	getSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(getSessionRecorder, getSessionReq)
+	if getSessionRecorder.Code != http.StatusOK {
+		t.Fatalf("get agent session status=%d body=%s", getSessionRecorder.Code, getSessionRecorder.Body.String())
+	}
+	var sessionDetail SessionDetail
+	if err := json.Unmarshal(getSessionRecorder.Body.Bytes(), &sessionDetail); err != nil {
+		t.Fatalf("parse session detail: %v", err)
+	}
+	if sessionDetail.Session.ID != session.ID || sessionDetail.Issue.ID != createIssueResult.IssueID || sessionDetail.Project.ID != personalProject.ID {
+		t.Fatalf("unexpected session detail: %+v", sessionDetail)
+	}
+
+	cancelSessionRecorder := httptest.NewRecorder()
+	cancelSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/sessions/"+session.ID+"/cancel", strings.NewReader(`{"reason":"user stopped session"}`))
+	cancelSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(cancelSessionRecorder, cancelSessionReq)
+	if cancelSessionRecorder.Code != http.StatusOK {
+		t.Fatalf("cancel agent session status=%d body=%s", cancelSessionRecorder.Code, cancelSessionRecorder.Body.String())
+	}
+	var cancelledTask RuntimeTask
+	if err := json.Unmarshal(cancelSessionRecorder.Body.Bytes(), &cancelledTask); err != nil {
+		t.Fatalf("parse cancelled session task: %v", err)
+	}
+	if cancelledTask.ID != session.RuntimeTaskID || cancelledTask.Status != "cancelled" {
+		t.Fatalf("unexpected cancelled session task: %+v", cancelledTask)
+	}
 }
 
 func TestCreateWorkspaceIssueWithoutProject(t *testing.T) {
@@ -766,8 +811,30 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	personalTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"personal runner","expiresInHours":12}`))
 	personalTokenReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(personalTokenRecorder, personalTokenReq)
-	if personalTokenRecorder.Code != http.StatusForbidden {
-		t.Fatalf("personal runtime token should be forbidden, status=%d body=%s", personalTokenRecorder.Code, personalTokenRecorder.Body.String())
+	if personalTokenRecorder.Code != http.StatusCreated {
+		t.Fatalf("create personal runtime token status=%d body=%s", personalTokenRecorder.Code, personalTokenRecorder.Body.String())
+	}
+	var personalTokenResult RuntimeRegistrationTokenResult
+	if err := json.Unmarshal(personalTokenRecorder.Body.Bytes(), &personalTokenResult); err != nil {
+		t.Fatalf("parse personal runtime token: %v", err)
+	}
+	if !strings.HasPrefix(personalTokenResult.Token, "msw_") || personalTokenResult.RegistrationToken.WorkspaceID != personalWorkspaceID {
+		t.Fatalf("unexpected personal runtime token result: %+v", personalTokenResult)
+	}
+
+	personalRegisterRecorder := httptest.NewRecorder()
+	personalRegisterReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"personal-worker-1","mode":"personal","version":"0.1.0","capabilities":{"codex":true},"labels":{"host":"local"}}`))
+	personalRegisterReq.Header.Set("Authorization", "Bearer "+personalTokenResult.Token)
+	router.ServeHTTP(personalRegisterRecorder, personalRegisterReq)
+	if personalRegisterRecorder.Code != http.StatusCreated {
+		t.Fatalf("register personal worker status=%d body=%s", personalRegisterRecorder.Code, personalRegisterRecorder.Body.String())
+	}
+	var personalWorker RuntimeWorker
+	if err := json.Unmarshal(personalRegisterRecorder.Body.Bytes(), &personalWorker); err != nil {
+		t.Fatalf("parse personal worker: %v", err)
+	}
+	if personalWorker.ID == "" || personalWorker.WorkspaceID != personalWorkspaceID || personalWorker.Mode != "personal" {
+		t.Fatalf("unexpected personal worker: %+v", personalWorker)
 	}
 
 	createTokenRecorder := httptest.NewRecorder()
@@ -893,8 +960,15 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	personalTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"agent_session","runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
 	personalTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(personalTaskRecorder, personalTaskReq)
-	if personalTaskRecorder.Code != http.StatusForbidden {
-		t.Fatalf("personal runtime task should be forbidden, status=%d body=%s", personalTaskRecorder.Code, personalTaskRecorder.Body.String())
+	if personalTaskRecorder.Code != http.StatusCreated {
+		t.Fatalf("create personal runtime task status=%d body=%s", personalTaskRecorder.Code, personalTaskRecorder.Body.String())
+	}
+	var personalTask RuntimeTask
+	if err := json.Unmarshal(personalTaskRecorder.Body.Bytes(), &personalTask); err != nil {
+		t.Fatalf("parse personal runtime task: %v", err)
+	}
+	if personalTask.WorkspaceID != personalWorkspaceID || personalTask.Status != "queued" {
+		t.Fatalf("unexpected personal runtime task: %+v", personalTask)
 	}
 
 	createTokenRecorder := httptest.NewRecorder()
@@ -1113,11 +1187,22 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	if len(events) != 4 {
 		t.Fatalf("expected 4 runtime task events, got %+v", events)
 	}
-	eventKinds := []string{events[0].Kind, events[1].Kind, events[2].Kind, events[3].Kind}
-	if strings.Join(eventKinds, ",") != "created,claimed,status_changed,status_changed" {
-		t.Fatalf("unexpected task event kinds: %+v", eventKinds)
+	counts := map[string]int{}
+	var createdEvent RuntimeTaskEvent
+	var claimedEvent RuntimeTaskEvent
+	for _, event := range events {
+		counts[event.Kind]++
+		if event.Kind == "created" {
+			createdEvent = event
+		}
+		if event.Kind == "claimed" {
+			claimedEvent = event
+		}
 	}
-	if events[0].ActorUserID != user.ID || events[1].WorkerID != worker.ID {
+	if counts["created"] != 1 || counts["claimed"] != 1 || counts["status_changed"] != 2 {
+		t.Fatalf("unexpected task event kinds: %+v", events)
+	}
+	if createdEvent.ActorUserID != user.ID || claimedEvent.WorkerID != worker.ID {
 		t.Fatalf("unexpected task event actors: %+v", events)
 	}
 

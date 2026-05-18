@@ -51,6 +51,14 @@ func newWorkspaceInvitationToken() (string, error) {
 	return "msi_" + value, nil
 }
 
+func newAgentSessionID() (string, error) {
+	value, err := randomHex(8)
+	if err != nil {
+		return "", fmt.Errorf("generate agent session id: %w", err)
+	}
+	return "session-" + value, nil
+}
+
 func tokenHash(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])

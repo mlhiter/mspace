@@ -322,18 +322,18 @@ type IssueLabelDefinition struct {
 }
 
 type IssueDetail struct {
-	Issue           Issue           `json:"issue"`
-	Project         Project         `json:"project"`
-	TestEnvironment any             `json:"testEnvironment"`
-	ChildIssues     []IssueListItem `json:"childIssues"`
-	Labels          []IssueLabel    `json:"labels"`
-	Comments        []Comment       `json:"comments"`
-	Sessions        []AgentSession  `json:"sessions"`
-	Evidence        []any           `json:"evidence"`
-	Failures        []any           `json:"failures"`
-	ChangeNodes     []any           `json:"changeNodes"`
-	ReviewEvidence  []any           `json:"reviewEvidence"`
-	Handoffs        []any           `json:"handoffs"`
+	Issue           Issue             `json:"issue"`
+	Project         Project           `json:"project"`
+	TestEnvironment any               `json:"testEnvironment"`
+	ChildIssues     []IssueListItem   `json:"childIssues"`
+	Labels          []IssueLabel      `json:"labels"`
+	Comments        []Comment         `json:"comments"`
+	Sessions        []AgentSession    `json:"sessions"`
+	Evidence        []any             `json:"evidence"`
+	Failures        []any             `json:"failures"`
+	ChangeNodes     []IssueChangeNode `json:"changeNodes"`
+	ReviewEvidence  []any             `json:"reviewEvidence"`
+	Handoffs        []any             `json:"handoffs"`
 }
 
 type AgentSession struct {
@@ -358,6 +358,90 @@ type AgentSession struct {
 	CleanedAt        string `json:"cleanedAt"`
 	CreatedAt        string `json:"createdAt"`
 	UpdatedAt        string `json:"updatedAt"`
+}
+
+type SessionLog struct {
+	ID        string `json:"id"`
+	SessionID string `json:"sessionId"`
+	Stream    string `json:"stream"`
+	Message   string `json:"message"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type WorkspaceChange struct {
+	StatusCode   string `json:"statusCode"`
+	Path         string `json:"path"`
+	PreviousPath string `json:"previousPath"`
+}
+
+type WorkspaceComparison struct {
+	BaseRef        string            `json:"baseRef"`
+	MergeBase      string            `json:"mergeBase"`
+	MergeBaseShort string            `json:"mergeBaseShort"`
+	AheadCount     int               `json:"aheadCount"`
+	BehindCount    int               `json:"behindCount"`
+	CommitLines    []string          `json:"commitLines"`
+	Changes        []WorkspaceChange `json:"changes"`
+	DiffPreview    string            `json:"diffPreview"`
+	DiffTruncated  bool              `json:"diffTruncated"`
+	Error          string            `json:"error"`
+}
+
+type WorkspaceSnapshot struct {
+	Exists          bool                `json:"exists"`
+	IsGitRepository bool                `json:"isGitRepository"`
+	HasChanges      bool                `json:"hasChanges"`
+	ChangedFiles    int                 `json:"changedFiles"`
+	UntrackedFiles  int                 `json:"untrackedFiles"`
+	Head            string              `json:"head"`
+	ShortHead       string              `json:"shortHead"`
+	Branch          string              `json:"branch"`
+	StatusLines     []string            `json:"statusLines"`
+	Changes         []WorkspaceChange   `json:"changes"`
+	DiffPreview     string              `json:"diffPreview"`
+	DiffTruncated   bool                `json:"diffTruncated"`
+	Comparison      WorkspaceComparison `json:"comparison"`
+	Error           string              `json:"error"`
+}
+
+type IssueChangeNode struct {
+	ID             string            `json:"id"`
+	IssueID        string            `json:"issueId"`
+	SessionID      string            `json:"sessionId"`
+	CommitSHA      string            `json:"commitSha"`
+	ShortCommitSHA string            `json:"shortCommitSha"`
+	Branch         string            `json:"branch"`
+	Subject        string            `json:"subject"`
+	FilesChanged   int               `json:"filesChanged"`
+	Changes        []WorkspaceChange `json:"changes"`
+	DiffPreview    string            `json:"diffPreview"`
+	DiffTruncated  bool              `json:"diffTruncated"`
+	Error          string            `json:"error"`
+	Source         string            `json:"source"`
+	RemoteWorkdir  string            `json:"remoteWorkdir"`
+	ArtifactDir    string            `json:"artifactDir"`
+	CreatedAt      string            `json:"createdAt"`
+}
+
+type SessionDetail struct {
+	Session   AgentSession      `json:"session"`
+	Issue     Issue             `json:"issue"`
+	Project   Project           `json:"project"`
+	Logs      []SessionLog      `json:"logs"`
+	Evidence  []any             `json:"evidence"`
+	Failures  []any             `json:"failures"`
+	Workspace WorkspaceSnapshot `json:"workspace"`
+}
+
+type CreateAgentSessionInput struct {
+	Provider         string `json:"provider"`
+	AgentProfile     string `json:"agentProfile"`
+	RuntimeMode      string `json:"runtimeMode"`
+	Command          string `json:"command"`
+	Branch           string `json:"branch"`
+	SourceSessionID  string `json:"sourceSessionId"`
+	SourceCommitSHA  string `json:"sourceCommitSha"`
+	TriggerCommentID string `json:"triggerCommentId"`
 }
 
 type CreateIssueInput struct {
@@ -591,6 +675,8 @@ type Store interface {
 	ListIssues(ctx Context, userID, workspaceID string) ([]IssueListItem, error)
 	CreateIssue(ctx Context, user User, workspaceID string, input CreateIssueInput) (string, error)
 	GetIssue(ctx Context, userID, workspaceID, issueID string) (IssueDetail, error)
+	CreateAgentSession(ctx Context, userID, workspaceID, issueID string, input CreateAgentSessionInput) (AgentSession, error)
+	GetSession(ctx Context, userID, workspaceID, sessionID string) (SessionDetail, error)
 	UpdateIssue(ctx Context, userID, workspaceID, issueID string, input UpdateIssueInput) (Issue, error)
 	CreateIssueTask(ctx Context, userID, workspaceID, issueID string, input IssueTaskInput) (IssueListItem, error)
 	DeleteIssueTask(ctx Context, userID, workspaceID, issueID, taskID string) error

@@ -63,6 +63,9 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/workspaces/{workspaceID}/issues/suggest-title", s.handleSuggestIssueTitle)
 	r.Post("/api/workspaces/{workspaceID}/issues", s.handleCreateIssue)
 	r.Get("/api/workspaces/{workspaceID}/issues/{issueID}", s.handleGetIssue)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/sessions", s.handleCreateAgentSession)
+	r.Get("/api/workspaces/{workspaceID}/sessions/{sessionID}", s.handleGetSession)
+	r.Post("/api/workspaces/{workspaceID}/sessions/{sessionID}/cancel", s.handleCancelAgentSession)
 	r.Put("/api/workspaces/{workspaceID}/issues/{issueID}", s.handleUpdateIssue)
 	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/tasks", s.handleCreateIssueTask)
 	r.Delete("/api/workspaces/{workspaceID}/issues/{issueID}/tasks/{taskID}", s.handleDeleteIssueTask)
@@ -603,6 +606,62 @@ func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		s.startIssueTypeTriage(strings.TrimSpace(chi.URLParam(r, "workspaceID")), detail.Issue.ID)
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleCreateAgentSession(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateAgentSessionInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	session, err := s.store.CreateAgentSession(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, session)
+}
+
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	detail, err := s.store.GetSession(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "sessionID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleCancelAgentSession(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CancelRuntimeTaskInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	sessionID := strings.TrimSpace(chi.URLParam(r, "sessionID"))
+	session, err := s.store.GetSession(r.Context(), user.ID, workspaceID, sessionID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	task, err := s.store.CancelRuntimeTask(r.Context(), user.ID, workspaceID, session.Session.RuntimeTaskID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
 }
 
 func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {

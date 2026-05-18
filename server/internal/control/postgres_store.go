@@ -774,9 +774,6 @@ func (s *PostgresStore) CreateRuntimeRegistrationToken(ctx Context, userID, work
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
 		return RuntimeRegistrationTokenResult{}, err
 	}
-	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
-		return RuntimeRegistrationTokenResult{}, err
-	}
 
 	token, err := newRuntimeRegistrationToken()
 	if err != nil {
@@ -798,9 +795,6 @@ func (s *PostgresStore) CreateRuntimeRegistrationToken(ctx Context, userID, work
 func (s *PostgresStore) ListRuntimeRegistrationTokens(ctx Context, userID, workspaceID string) ([]RuntimeRegistrationToken, error) {
 	dbctx := asContext(ctx)
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
-		return nil, err
-	}
-	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(dbctx, `
@@ -838,9 +832,6 @@ func (s *PostgresStore) RevokeRuntimeRegistrationToken(ctx Context, userID, work
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
 		return RuntimeRegistrationToken{}, err
 	}
-	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
-		return RuntimeRegistrationToken{}, err
-	}
 	row := s.pool.QueryRow(dbctx, `
 		UPDATE runtime_registration_tokens
 		SET revoked = true, updated_at = now()
@@ -866,11 +857,9 @@ func (s *PostgresStore) AuthenticateRuntimeRegistrationToken(ctx Context, token 
 	err := s.pool.QueryRow(asContext(ctx), `
 		SELECT rt.id::text, rt.workspace_id::text
 		FROM runtime_registration_tokens rt
-		JOIN workspaces w ON w.id = rt.workspace_id
 		WHERE rt.token_hash = $1
 			AND rt.revoked = false
 			AND rt.expires_at > now()
-			AND w.kind = 'team'
 	`, tokenHash(token)).Scan(&registration.TokenID, &registration.WorkspaceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RuntimeRegistration{}, ErrNotFound
@@ -981,9 +970,6 @@ func (s *PostgresStore) ListRuntimeWorkers(ctx Context, userID, workspaceID stri
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return nil, err
 	}
-	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
-		return nil, err
-	}
 	rows, err := s.pool.Query(dbctx, `
 		SELECT id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, last_seen_at, created_at, updated_at
 		FROM runtime_workers
@@ -1025,9 +1011,6 @@ func (s *PostgresStore) CreateRuntimeTask(ctx Context, userID, workspaceID strin
 	defer tx.Rollback(dbctx)
 
 	if err := ensureWorkspaceMember(dbctx, tx, workspaceID, userID); err != nil {
-		return RuntimeTask{}, err
-	}
-	if err := ensureTeamWorkspace(dbctx, tx, workspaceID); err != nil {
 		return RuntimeTask{}, err
 	}
 	row := tx.QueryRow(dbctx, `
@@ -1087,9 +1070,6 @@ func (s *PostgresStore) ListRuntimeTasks(ctx Context, userID, workspaceID string
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return nil, err
 	}
-	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
-		return nil, err
-	}
 	rows, err := s.pool.Query(dbctx, `
 		SELECT
 			id::text,
@@ -1140,9 +1120,6 @@ func (s *PostgresStore) ListRuntimeTaskEvents(ctx Context, userID, workspaceID, 
 	workspaceID = strings.TrimSpace(workspaceID)
 	taskID = strings.TrimSpace(taskID)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
-		return nil, err
-	}
-	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
 		return nil, err
 	}
 	var exists bool
@@ -1196,9 +1173,6 @@ func (s *PostgresStore) ListRuntimeTaskLogs(ctx Context, userID, workspaceID, ta
 	workspaceID = strings.TrimSpace(workspaceID)
 	taskID = strings.TrimSpace(taskID)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
-		return nil, err
-	}
-	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
 		return nil, err
 	}
 	var exists bool
@@ -1263,9 +1237,6 @@ func (s *PostgresStore) CancelRuntimeTask(ctx Context, userID, workspaceID, task
 	defer tx.Rollback(dbctx)
 
 	if err := ensureWorkspaceMember(dbctx, tx, workspaceID, userID); err != nil {
-		return RuntimeTask{}, err
-	}
-	if err := ensureTeamWorkspace(dbctx, tx, workspaceID); err != nil {
 		return RuntimeTask{}, err
 	}
 	row := tx.QueryRow(dbctx, `
@@ -2084,6 +2055,24 @@ func normalizeCreateRuntimeTaskInput(input CreateRuntimeTaskInput) (CreateRuntim
 	input.RequiredCapabilities = requiredCapabilities
 	input.Payload = payload
 	return input, nil
+}
+
+func normalizeCreateAgentSessionInput(input CreateAgentSessionInput) CreateAgentSessionInput {
+	input.Provider = strings.ToLower(strings.TrimSpace(input.Provider))
+	if input.Provider == "" {
+		input.Provider = "codex"
+	}
+	input.AgentProfile = strings.TrimSpace(input.AgentProfile)
+	if input.AgentProfile == "" {
+		input.AgentProfile = "codex"
+	}
+	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
+	input.Command = strings.TrimSpace(input.Command)
+	input.Branch = strings.TrimSpace(input.Branch)
+	input.SourceSessionID = strings.TrimSpace(input.SourceSessionID)
+	input.SourceCommitSHA = strings.TrimSpace(input.SourceCommitSHA)
+	input.TriggerCommentID = strings.TrimSpace(input.TriggerCommentID)
+	return input
 }
 
 func normalizeUpdateRuntimeTaskStatusInput(input UpdateRuntimeTaskStatusInput) (UpdateRuntimeTaskStatusInput, bool, error) {
