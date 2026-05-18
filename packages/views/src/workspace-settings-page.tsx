@@ -64,7 +64,7 @@ const defaultSettingsForm: UpdateWorkspaceSettingsInput = {
 };
 
 const defaultTokenForm: CreateRuntimeRegistrationTokenInput = {
-	name: "Team runtime worker",
+	name: "Workspace runtime worker",
 	expiresInHours: 24,
 };
 
@@ -91,7 +91,7 @@ const defaultTaskForm: RuntimeTaskForm = {
 	projectId: "",
 	kind: "protocol_smoke",
 	priority: "0",
-	runtimeMode: "team",
+	runtimeMode: "personal",
 	requiredCapabilities: `{"protocolSmoke":true}`,
 	payload: `{"source":"workspace-settings"}`,
 };
@@ -103,7 +103,7 @@ export function WorkspaceSettingsPage() {
 	const isSignedIn = auth.status === "signed-in" && auth.token !== "";
 	const isTeamWorkspace = auth.workspace?.kind === "team";
 	const runtimeEnabled = isSignedIn && workspaceID !== "";
-	const teamRuntimeEnabled = runtimeEnabled && isTeamWorkspace;
+	const defaultRuntimeMode = isTeamWorkspace ? "team" : "personal";
 
 	const settingsQuery = useQuery({
 		queryKey: queryKeys.workspaceSettings,
@@ -112,32 +112,32 @@ export function WorkspaceSettingsPage() {
 	const tokensQuery = useQuery({
 		queryKey: queryKeys.runtimeRegistrationTokens(workspaceID, auth.token),
 		queryFn: () => controlPlaneApi.listRuntimeRegistrationTokens(auth.token, workspaceID),
-		enabled: teamRuntimeEnabled,
-		refetchInterval: teamRuntimeEnabled ? 15_000 : false,
+		enabled: runtimeEnabled,
+		refetchInterval: runtimeEnabled ? 15_000 : false,
 	});
 	const membersQuery = useQuery({
 		queryKey: queryKeys.workspaceMembers(workspaceID, auth.token),
 		queryFn: () => controlPlaneApi.listWorkspaceMembers(auth.token, workspaceID),
-		enabled: teamRuntimeEnabled,
-		refetchInterval: teamRuntimeEnabled ? 15_000 : false,
+		enabled: runtimeEnabled && isTeamWorkspace,
+		refetchInterval: runtimeEnabled && isTeamWorkspace ? 15_000 : false,
 	});
 	const invitationsQuery = useQuery({
 		queryKey: queryKeys.workspaceInvitations(workspaceID, auth.token),
 		queryFn: () => controlPlaneApi.listWorkspaceInvitations(auth.token, workspaceID),
-		enabled: teamRuntimeEnabled && (auth.workspace?.role === "owner" || auth.workspace?.role === "admin"),
-		refetchInterval: teamRuntimeEnabled ? 15_000 : false,
+		enabled: runtimeEnabled && isTeamWorkspace && (auth.workspace?.role === "owner" || auth.workspace?.role === "admin"),
+		refetchInterval: runtimeEnabled && isTeamWorkspace ? 15_000 : false,
 	});
 	const workersQuery = useQuery({
 		queryKey: queryKeys.runtimeWorkers(workspaceID, auth.token),
 		queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceID),
-		enabled: teamRuntimeEnabled,
-		refetchInterval: teamRuntimeEnabled ? 5_000 : false,
+		enabled: runtimeEnabled,
+		refetchInterval: runtimeEnabled ? 5_000 : false,
 	});
 	const tasksQuery = useQuery({
 		queryKey: queryKeys.runtimeTasks(workspaceID, auth.token),
 		queryFn: () => controlPlaneApi.listRuntimeTasks(auth.token, workspaceID),
-		enabled: teamRuntimeEnabled,
-		refetchInterval: teamRuntimeEnabled ? 5_000 : false,
+		enabled: runtimeEnabled,
+		refetchInterval: runtimeEnabled ? 5_000 : false,
 	});
 
 	const [form, setForm] = useState<UpdateWorkspaceSettingsInput>(defaultSettingsForm);
@@ -148,6 +148,8 @@ export function WorkspaceSettingsPage() {
 	const [tokenForm, setTokenForm] = useState<CreateRuntimeRegistrationTokenInput>(defaultTokenForm);
 	const [createdToken, setCreatedToken] = useState<RuntimeRegistrationTokenResult | null>(null);
 	const [copyState, setCopyState] = useState("");
+	const [dockerWorkerStatus, setDockerWorkerStatus] = useState("");
+	const [dockerWorkerError, setDockerWorkerError] = useState("");
 	const [taskModalOpen, setTaskModalOpen] = useState(false);
 	const [taskForm, setTaskForm] = useState<RuntimeTaskForm>(defaultTaskForm);
 	const [taskFormError, setTaskFormError] = useState("");
@@ -159,6 +161,10 @@ export function WorkspaceSettingsPage() {
 			autoCreateDraftPr: settingsQuery.data.autoCreateDraftPr,
 		});
 	}, [settingsQuery.data]);
+
+	useEffect(() => {
+		setTaskForm((current) => ({ ...current, runtimeMode: defaultRuntimeMode }));
+	}, [defaultRuntimeMode]);
 
 	const saveSettings = useMutation({
 		mutationFn: api.updateWorkspaceSettings,
@@ -196,6 +202,36 @@ export function WorkspaceSettingsPage() {
 			await queryClient.invalidateQueries({ queryKey: queryKeys.runtimeRegistrationTokens(workspaceID, auth.token) });
 		},
 	});
+	const startDockerWorker = useMutation({
+		mutationFn: async () => {
+			if (!window.mspaceDesktop?.startDockerWorker) {
+				throw new Error("Desktop worker startup is only available in the mspace desktop app.");
+			}
+			return window.mspaceDesktop.startDockerWorker({
+				authToken: auth.token,
+				workspaceId: workspaceID,
+				mode: defaultRuntimeMode,
+				serverUrl: "http://host.docker.internal:8787",
+				codex: true,
+				workerName: `local-docker-${defaultRuntimeMode}-worker`,
+			});
+		},
+		onMutate: () => {
+			setDockerWorkerError("");
+			setDockerWorkerStatus("Starting Docker worker");
+		},
+		onSuccess: async (result) => {
+			setDockerWorkerStatus(`${result.containerName} is starting`);
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: queryKeys.runtimeRegistrationTokens(workspaceID, auth.token) }),
+				queryClient.invalidateQueries({ queryKey: queryKeys.runtimeWorkers(workspaceID, auth.token) }),
+			]);
+		},
+		onError: (error) => {
+			setDockerWorkerStatus("");
+			setDockerWorkerError(error instanceof Error ? error.message : "Docker worker could not be started.");
+		},
+	});
 	const revokeToken = useMutation({
 		mutationFn: (tokenID: string) => controlPlaneApi.revokeRuntimeRegistrationToken(auth.token, workspaceID, tokenID),
 		onSuccess: async () => {
@@ -207,7 +243,7 @@ export function WorkspaceSettingsPage() {
 		onSuccess: async (task) => {
 			setSelectedTaskID(task.id);
 			setTaskModalOpen(false);
-			setTaskForm(defaultTaskForm);
+			setTaskForm({ ...defaultTaskForm, runtimeMode: defaultRuntimeMode });
 			setTaskFormError("");
 			await queryClient.invalidateQueries({ queryKey: queryKeys.runtimeTasks(workspaceID, auth.token) });
 		},
@@ -229,19 +265,29 @@ export function WorkspaceSettingsPage() {
 	const members = membersQuery.data || [];
 	const invitations = invitationsQuery.data || [];
 	const canManageWorkspace = auth.workspace?.role === "owner" || auth.workspace?.role === "admin";
+	const canStartLocalWorker = runtimeEnabled && canManageWorkspace && Boolean(window.mspaceDesktop?.startDockerWorker);
 	const onlineWorkerCount = workers.filter((worker) => worker.status === "online").length;
 	const queuedTaskCount = tasks.filter((task) => task.status === "queued").length;
 	const runtimeError = isTeamWorkspace
 		? membersQuery.error || invitationsQuery.error || tokensQuery.error || workersQuery.error || tasksQuery.error
-		: null;
+		: tokensQuery.error || workersQuery.error || tasksQuery.error;
 
 	function refreshRuntime() {
-		void Promise.all([membersQuery.refetch(), invitationsQuery.refetch(), tokensQuery.refetch(), workersQuery.refetch(), tasksQuery.refetch()]);
+		const refreshes: Array<Promise<unknown>> = [tokensQuery.refetch(), workersQuery.refetch(), tasksQuery.refetch()];
+		if (isTeamWorkspace) {
+			refreshes.push(membersQuery.refetch(), invitationsQuery.refetch());
+		}
+		void Promise.all(refreshes);
+	}
+
+	function startLocalDockerWorker() {
+		if (!canStartLocalWorker || startDockerWorker.isPending) return;
+		startDockerWorker.mutate();
 	}
 
 	function submitInvitation(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!teamRuntimeEnabled || !canManageWorkspace) return;
+		if (!runtimeEnabled || !isTeamWorkspace || !canManageWorkspace) return;
 		createInvitation.mutate({
 			email: invitationForm.email?.trim() || "",
 			role: invitationForm.role,
@@ -251,7 +297,7 @@ export function WorkspaceSettingsPage() {
 
 	function submitToken(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!teamRuntimeEnabled) return;
+		if (!runtimeEnabled) return;
 		createToken.mutate({
 			name: tokenForm.name.trim() || defaultTokenForm.name,
 			expiresInHours: tokenForm.expiresInHours,
@@ -260,7 +306,7 @@ export function WorkspaceSettingsPage() {
 
 	function submitTask(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!teamRuntimeEnabled) return;
+		if (!runtimeEnabled) return;
 		setTaskFormError("");
 		try {
 			createTask.mutate(normalizeRuntimeTaskForm(taskForm));
@@ -282,7 +328,7 @@ export function WorkspaceSettingsPage() {
 	async function copyDockerWorkerCommand() {
 		if (!createdToken?.token) return;
 		try {
-			await navigator.clipboard.writeText(buildDockerWorkerCommand(createdToken.token));
+			await navigator.clipboard.writeText(buildDockerWorkerCommand(createdToken.token, defaultRuntimeMode));
 			setCopyState("Command copied");
 		} catch {
 			setCopyState("Copy failed");
@@ -302,7 +348,7 @@ export function WorkspaceSettingsPage() {
 	return (
 		<PageFrame
 			title="Workspace settings"
-			subtitle="Runtime policy, delivery automation, and team worker access for this workspace."
+			subtitle="Runtime policy, delivery automation, and worker access for this workspace."
 			actions={
 				isDirty || saveSettings.isPending ? (
 					<Button
@@ -327,6 +373,8 @@ export function WorkspaceSettingsPage() {
 				{runtimeError ? <Notice tone="danger">{runtimeError.message}</Notice> : null}
 				{createInvitation.error ? <Notice tone="danger">{createInvitation.error.message}</Notice> : null}
 				{revokeInvitation.error ? <Notice tone="danger">{revokeInvitation.error.message}</Notice> : null}
+				{dockerWorkerError ? <Notice tone="danger">{dockerWorkerError}</Notice> : null}
+				{dockerWorkerStatus ? <Notice>{dockerWorkerStatus}. The Workers list will update after the container registers.</Notice> : null}
 
 				<SettingsSection
 					title="Automation"
@@ -358,14 +406,14 @@ export function WorkspaceSettingsPage() {
 					<>
 						<SettingsSection
 							title="Team access"
-							description="Workspace members share the same control-plane runtime, Inbox receipts, and worker queue for team-mode sessions."
-							meta={teamRuntimeEnabled ? `${members.length} members` : "GitHub sign-in required"}
+							description="Team members share server-owned issues, Inbox receipts, runtime sessions, and worker queues."
+							meta={runtimeEnabled ? `${members.length} members` : "GitHub sign-in required"}
 							actions={
 								<Button
 									type="button"
 									variant="secondary"
 									size="sm"
-									disabled={!teamRuntimeEnabled || !canManageWorkspace}
+									disabled={!runtimeEnabled || !canManageWorkspace}
 									onClick={() => setInvitationModalOpen(true)}
 								>
 									<MailPlus data-icon />
@@ -373,17 +421,17 @@ export function WorkspaceSettingsPage() {
 								</Button>
 							}
 						>
-							{teamRuntimeEnabled ? (
+							{runtimeEnabled ? (
 								<div className="grid gap-0">
 									<div className="grid gap-3 border-b border-[color:var(--line)] p-4 md:grid-cols-3">
 										<RuntimeSummaryCard icon={UsersRound} label="Members" value={`${members.length}`} meta={`${canManageWorkspace ? "Invite link enabled" : "Invite link admin-only"}`} />
 										<RuntimeSummaryCard icon={MailPlus} label="Open invites" value={`${activeInvitationCount(invitations)}`} meta={`${invitations.length} recent invitations`} />
 										<RuntimeSummaryCard icon={ShieldCheck} label="Your role" value={auth.workspace?.role || "member"} meta={auth.workspace?.name || "Selected workspace"} />
 									</div>
-									<MemberList members={members} loading={membersQuery.isPending && teamRuntimeEnabled} currentUserID={auth.user?.id || ""} />
+									<MemberList members={members} loading={membersQuery.isPending && runtimeEnabled} currentUserID={auth.user?.id || ""} />
 									<InvitationList
 										invitations={invitations}
-										loading={invitationsQuery.isPending && teamRuntimeEnabled && canManageWorkspace}
+										loading={invitationsQuery.isPending && runtimeEnabled && canManageWorkspace}
 										canManage={canManageWorkspace}
 										disabled={revokeInvitation.isPending}
 										onRevoke={(invitationID) => revokeInvitation.mutate(invitationID)}
@@ -395,96 +443,115 @@ export function WorkspaceSettingsPage() {
 								</div>
 							)}
 						</SettingsSection>
-
-						<SettingsSection
-							title="Team runtime"
-							description="Team mode uses a server queue and workers that pull tasks from their own execution environment."
-							meta={teamRuntimeEnabled ? auth.workspace?.name : "GitHub sign-in required"}
-							actions={
-								<Button type="button" variant="secondary" size="sm" disabled={!teamRuntimeEnabled} onClick={refreshRuntime}>
-									<RefreshCw data-icon />
-									Refresh
-								</Button>
-							}
-						>
-							{teamRuntimeEnabled ? (
-								<div className="grid gap-0">
-									<div className="grid gap-3 border-b border-[color:var(--line)] p-4 md:grid-cols-3">
-										<RuntimeSummaryCard icon={SquareTerminal} label="Personal runtime" value="Local runner" meta="Desktop-owned execution" />
-										<RuntimeSummaryCard icon={ServerCog} label="Team workers" value={`${onlineWorkerCount} online`} meta={`${workers.length} registered`} />
-										<RuntimeSummaryCard icon={ListChecks} label="Task queue" value={`${queuedTaskCount} queued`} meta={`${tasks.length} recent tasks`} />
-									</div>
-									<SettingsRow
-										icon={Settings2}
-										title="Control plane"
-										description="The server owns worker identity, registration tokens, task claims, and task status. Codex execution is still a worker-side responsibility."
-										control={<StatusPill>{auth.workspace?.role || "member"}</StatusPill>}
-									/>
-									<SettingsRow
-										icon={ServerCog}
-										title="Docker server worker"
-										description="For UI testing, run the dev worker in Docker. It uses a container work root, advertises codex dry-run capability, and returns a committed source diff without using the local machine runtime."
-										control={<StatusPill>dry run</StatusPill>}
-									/>
-								</div>
-							) : (
-								<div className="p-4">
-									<Notice>
-										Sign in with GitHub from the workspace menu before managing team worker tokens, registered workers, or queued runtime tasks.
-									</Notice>
-								</div>
-							)}
-						</SettingsSection>
-
-						<RuntimePanel
-							title="Worker registration tokens"
-							description="Create short-lived bootstrap tokens for worker daemons. Raw token values are shown once."
-							actions={
-								<Button type="button" variant="secondary" size="sm" disabled={!teamRuntimeEnabled} onClick={() => setTokenModalOpen(true)}>
-									<Plus data-icon />
-									New token
-								</Button>
-							}
-						>
-							<RegistrationTokenList
-								tokens={tokens}
-								loading={tokensQuery.isPending && teamRuntimeEnabled}
-								disabled={!teamRuntimeEnabled || revokeToken.isPending}
-								onRevoke={(tokenID) => revokeToken.mutate(tokenID)}
-							/>
-						</RuntimePanel>
-
-						<RuntimePanel
-							title="Workers"
-							description="Workers register from their own environment, then heartbeat with mode, load, capabilities, and labels."
-						>
-							<WorkerList workers={workers} loading={workersQuery.isPending && teamRuntimeEnabled} />
-						</RuntimePanel>
-
-						<RuntimePanel
-							title="Task queue"
-							description="Queued task records are claimed by matching online workers. Payloads should reference context, not carry credentials."
-							actions={
-								<Button type="button" variant="secondary" size="sm" disabled={!teamRuntimeEnabled} onClick={() => setTaskModalOpen(true)}>
-									<Plus data-icon />
-									Queue task
-								</Button>
-							}
-						>
-							<TaskList
-								tasks={tasks}
-								workers={workers}
-								loading={tasksQuery.isPending && teamRuntimeEnabled}
-								token={auth.token}
-								workspaceID={workspaceID}
-								selectedTaskID={selectedTaskID}
-								onSelectTask={setSelectedTaskID}
-								cancellingTaskID={cancelTask.variables || ""}
-								onCancelTask={(taskID) => cancelTask.mutate(taskID)}
-							/>
-						</RuntimePanel>
 					</>
 				) : null}
+				<SettingsSection
+					title="Runtime"
+					description="Connect local or team-owned workers to the server queue. Bootstrap credentials are generated internally."
+					meta={runtimeEnabled ? auth.workspace?.name : "GitHub sign-in required"}
+					actions={
+						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={refreshRuntime}>
+							<RefreshCw data-icon />
+							Refresh
+						</Button>
+					}
+				>
+					{runtimeEnabled ? (
+						<div className="grid gap-0">
+							<div className="grid gap-3 border-b border-[color:var(--line)] p-4 md:grid-cols-3">
+								<RuntimeSummaryCard icon={SquareTerminal} label="Runtime mode" value={isTeamWorkspace ? "Team" : "Personal"} meta="Server-owned queue" />
+								<RuntimeSummaryCard icon={ServerCog} label="Workers" value={`${onlineWorkerCount} online`} meta={`${workers.length} registered`} />
+								<RuntimeSummaryCard icon={ListChecks} label="Task queue" value={`${queuedTaskCount} queued`} meta={`${tasks.length} recent tasks`} />
+							</div>
+							<SettingsRow
+								icon={Settings2}
+								title="Control plane"
+								description="The server owns session records, worker identity, task claims, logs, status, cancellation, and results."
+								control={<StatusPill>{auth.workspace?.kind || "workspace"}</StatusPill>}
+							/>
+							<SettingsRow
+								icon={ServerCog}
+								title="Local Docker worker"
+								description="Start a Docker-backed Codex worker for local team-mode testing. mspace creates a short-lived bootstrap credential and injects it into the container."
+								control={
+									<Button
+										type="button"
+										variant="secondary"
+										size="sm"
+										disabled={!canStartLocalWorker || startDockerWorker.isPending}
+										onClick={startLocalDockerWorker}
+									>
+										<SquareTerminal data-icon />
+										{startDockerWorker.isPending ? "Starting" : "Start worker"}
+									</Button>
+								}
+							/>
+							{!canManageWorkspace ? (
+								<div className="border-t border-[color:var(--line)] px-4 py-3">
+									<Notice>Only workspace owners and admins can connect runtime workers.</Notice>
+								</div>
+							) : !window.mspaceDesktop?.startDockerWorker ? (
+								<div className="border-t border-[color:var(--line)] px-4 py-3">
+									<Notice>Automatic Docker startup is available from the desktop app. Use the advanced setup command when running in a browser.</Notice>
+								</div>
+							) : null}
+						</div>
+					) : (
+						<div className="p-4">
+							<Notice>
+								Sign in with GitHub from the workspace menu before managing worker tokens, registered workers, or queued runtime tasks.
+							</Notice>
+						</div>
+					)}
+				</SettingsSection>
+
+				<RuntimePanel
+					title="Advanced worker credentials"
+					description="Manual bootstrap credentials are available for external workers and debugging. Most local testing should use Start worker above."
+					actions={
+						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={() => setTokenModalOpen(true)}>
+							<Plus data-icon />
+							Create credential
+						</Button>
+					}
+				>
+					<RegistrationTokenList
+						tokens={tokens}
+						loading={tokensQuery.isPending && runtimeEnabled}
+						disabled={!runtimeEnabled || revokeToken.isPending}
+						onRevoke={(tokenID) => revokeToken.mutate(tokenID)}
+					/>
+				</RuntimePanel>
+
+				<RuntimePanel
+					title="Workers"
+					description="Workers register from their own environment, then heartbeat with mode, load, capabilities, and labels."
+				>
+					<WorkerList workers={workers} loading={workersQuery.isPending && runtimeEnabled} />
+				</RuntimePanel>
+
+				<RuntimePanel
+					title="Task queue"
+					description="Queued task records are claimed by matching online workers. Payloads should reference context, not carry credentials."
+					actions={
+						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={() => setTaskModalOpen(true)}>
+							<Plus data-icon />
+							Queue task
+						</Button>
+					}
+				>
+					<TaskList
+						tasks={tasks}
+						workers={workers}
+						loading={tasksQuery.isPending && runtimeEnabled}
+						token={auth.token}
+						workspaceID={workspaceID}
+						selectedTaskID={selectedTaskID}
+						onSelectTask={setSelectedTaskID}
+						cancellingTaskID={cancelTask.variables || ""}
+						onCancelTask={(taskID) => cancelTask.mutate(taskID)}
+					/>
+				</RuntimePanel>
 				{cancelTask.error ? <Notice tone="danger">{cancelTask.error.message}</Notice> : null}
 
 				<SettingsSection
@@ -548,7 +615,7 @@ export function WorkspaceSettingsPage() {
 							<Button type="button" variant="secondary" onClick={() => setInvitationModalOpen(false)}>
 								Cancel
 							</Button>
-							<Button type="submit" disabled={!teamRuntimeEnabled || !canManageWorkspace || createInvitation.isPending}>
+							<Button type="submit" disabled={!runtimeEnabled || !isTeamWorkspace || !canManageWorkspace || createInvitation.isPending}>
 								<MailPlus data-icon />
 								{createInvitation.isPending ? "Creating" : "Create invite"}
 							</Button>
@@ -586,14 +653,14 @@ export function WorkspaceSettingsPage() {
 			) : null}
 
 			{tokenModalOpen ? (
-				<Modal title="New worker token" description="Give this token to one worker daemon during setup. mspace stores only a hash and prefix." onClose={() => setTokenModalOpen(false)}>
+				<Modal title="Create manual worker credential" description="Use this only for external workers or debugging. Local Docker workers can be started without handling the credential." onClose={() => setTokenModalOpen(false)}>
 					<form className="grid gap-4" onSubmit={submitToken}>
 						{createToken.error ? <Notice tone="danger">{createToken.error.message}</Notice> : null}
 						<Field label="Name" hint="Use a name that identifies the machine or team-owned runtime.">
 							<Input
 								value={tokenForm.name}
 								onChange={(event) => setTokenForm({ ...tokenForm, name: event.target.value })}
-								placeholder="Team runtime worker"
+								placeholder="Workspace runtime worker"
 							/>
 						</Field>
 						<Field label="Expires">
@@ -617,9 +684,9 @@ export function WorkspaceSettingsPage() {
 							<Button type="button" variant="secondary" onClick={() => setTokenModalOpen(false)}>
 								Cancel
 							</Button>
-							<Button type="submit" disabled={!teamRuntimeEnabled || createToken.isPending}>
+							<Button type="submit" disabled={!runtimeEnabled || createToken.isPending}>
 								<KeyRound data-icon />
-								{createToken.isPending ? "Creating" : "Create token"}
+								{createToken.isPending ? "Creating" : "Create credential"}
 							</Button>
 						</div>
 					</form>
@@ -627,36 +694,39 @@ export function WorkspaceSettingsPage() {
 			) : null}
 
 			{createdToken ? (
-				<Modal title="Worker token created" description="Copy it now. The raw token will not be shown again." onClose={() => {
+				<Modal title="Manual worker credential created" description="The raw credential is shown once. Prefer the setup command unless you are wiring a custom worker." onClose={() => {
 					setCreatedToken(null);
 					setCopyState("");
 				}}>
 					<div className="grid gap-4">
-						<div className="rounded-[9px] bg-[color:var(--code-bg)] px-3 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)]">
-							{createdToken.token}
-						</div>
 						<div className="text-[12px] leading-5 text-[color:var(--muted)]">
 							Prefix {createdToken.registrationToken.tokenPrefix} expires <RelativeTime value={createdToken.registrationToken.expiresAt} />.
 						</div>
 						<div className="grid gap-2">
-							<div className="text-[12px] font-medium leading-5 text-[color:var(--muted)]">Docker dev worker</div>
+							<div className="text-[12px] font-medium leading-5 text-[color:var(--muted)]">Setup command</div>
 							<div className="overflow-auto rounded-[9px] bg-[color:var(--code-bg)] px-3 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)]">
-								{buildDockerWorkerCommand(createdToken.token)}
+								{buildDockerWorkerCommand(createdToken.token, defaultRuntimeMode)}
 							</div>
 							<div className="text-[12px] leading-5 text-[color:var(--muted)]">
-								This dry-run worker can complete Team sessions from the UI by cloning a worker-accessible repository and returning a committed test diff.
+								This dry-run worker can complete workspace sessions from the UI by cloning a worker-accessible repository and returning a committed test diff.
 							</div>
 						</div>
+						<details className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+							<summary className="cursor-pointer text-[12px] font-medium leading-5 text-[color:var(--muted)]">Show raw credential</summary>
+							<div className="mt-2 rounded-[7px] bg-[color:var(--code-bg)] px-3 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)]">
+								{createdToken.token}
+							</div>
+						</details>
 						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
 							<Button type="button" variant="secondary" onClick={copyCreatedToken}>
 								<Copy data-icon />
-								{copyState || "Copy token"}
+								{copyState || "Copy raw credential"}
 							</Button>
-							<Button type="button" variant="secondary" onClick={copyDockerWorkerCommand}>
+							<Button type="button" onClick={copyDockerWorkerCommand}>
 								<SquareTerminal data-icon />
 								Copy command
 							</Button>
-							<Button type="button" onClick={() => {
+							<Button type="button" variant="secondary" onClick={() => {
 								setCreatedToken(null);
 								setCopyState("");
 							}}>
@@ -713,7 +783,7 @@ export function WorkspaceSettingsPage() {
 							<Button type="button" variant="secondary" onClick={() => setTaskModalOpen(false)}>
 								Cancel
 							</Button>
-							<Button type="submit" disabled={!teamRuntimeEnabled || createTask.isPending}>
+							<Button type="submit" disabled={!runtimeEnabled || createTask.isPending}>
 								<ListChecks data-icon />
 								{createTask.isPending ? "Queueing" : "Queue task"}
 							</Button>
@@ -909,9 +979,9 @@ function RegistrationTokenList(props: {
 	disabled: boolean;
 	onRevoke: (tokenID: string) => void;
 }) {
-	if (props.loading) return <LoadingBlock>Loading registration tokens...</LoadingBlock>;
+	if (props.loading) return <LoadingBlock>Loading worker credentials...</LoadingBlock>;
 	if (props.tokens.length === 0) {
-		return <EmptyRuntimeBlock icon={KeyRound} title="No worker tokens" body="Create a token when you are ready to connect a team runtime worker." />;
+		return <EmptyRuntimeBlock icon={KeyRound} title="No manual credentials" body="Start a local worker above, or create a manual credential for an external runtime." />;
 	}
 	return (
 		<div>
@@ -956,7 +1026,7 @@ function RegistrationTokenList(props: {
 function WorkerList(props: { workers: RuntimeWorker[]; loading: boolean }) {
 	if (props.loading) return <LoadingBlock>Loading workers...</LoadingBlock>;
 	if (props.workers.length === 0) {
-		return <EmptyRuntimeBlock icon={ServerCog} title="No workers registered" body="Start a worker daemon with a valid msw token to make team mode claim work." />;
+		return <EmptyRuntimeBlock icon={ServerCog} title="No workers connected" body="Start the local Docker worker or connect an external runtime to claim workspace tasks." />;
 	}
 	return (
 		<div>
@@ -1257,9 +1327,9 @@ function buildInviteLink(token: string) {
 	return `${window.location.origin}${window.location.pathname}${hash}`;
 }
 
-function buildDockerWorkerCommand(token: string) {
+function buildDockerWorkerCommand(token: string, mode: "personal" | "team") {
 	const escapedToken = token.replaceAll("'", "'\\''");
-	return `MSPACE_RUNTIME_TOKEN='${escapedToken}' scripts/run-server-worker-dev.sh`;
+	return `MSPACE_RUNTIME_TOKEN='${escapedToken}' MSPACE_WORKER_MODE='${mode}' scripts/run-server-worker-dev.sh`;
 }
 
 function Modal(props: { title: string; description: string; onClose: () => void; children: ReactNode }) {

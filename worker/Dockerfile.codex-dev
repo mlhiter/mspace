@@ -1,0 +1,29 @@
+FROM node:22-bookworm AS node-runtime
+
+FROM golang:1.24-bookworm
+
+ARG CODEX_CLI_VERSION=0.130.0
+
+COPY --from=node-runtime /usr/local /usr/local
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates python3 \
+  && npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
+  && node --version \
+  && npm --version \
+  && codex --version \
+  && rm -rf /var/lib/apt/lists/* /root/.npm
+
+WORKDIR /workspace
+
+COPY worker/go.mod ./worker/go.mod
+RUN cd worker && go mod download
+
+COPY worker ./worker
+RUN cd worker && go build -o /usr/local/bin/mspace-worker .
+
+ENV CODEX_HOME=/var/lib/mspace-codex \
+    MSPACE_WORKER_WORK_ROOT=/var/lib/mspace-worker \
+    MSPACE_WORKER_CAPABILITIES='{"protocolSmoke":true,"codex":true,"dryRun":false}'
+
+ENTRYPOINT ["/usr/local/bin/mspace-worker"]

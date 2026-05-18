@@ -19,6 +19,20 @@ const desktopAPI = {
   selectKubeconfigFiles: () => ipcRenderer.invoke("mspace:select-kubeconfig-files") as Promise<string[]>,
   openExternal: (url: string) => ipcRenderer.invoke("mspace:open-external", url) as Promise<void>,
   openPath: (path: string) => ipcRenderer.invoke("mspace:open-path", path) as Promise<string>,
+  startDockerWorker: (input: {
+    authToken: string;
+    workspaceId: string;
+    mode?: "personal" | "team";
+    serverUrl?: string;
+    codex?: boolean;
+    containerName?: string;
+    workerName?: string;
+  }) => ipcRenderer.invoke("mspace:start-docker-worker", input) as Promise<{
+    ok: boolean;
+    status: string;
+    containerName: string;
+    script: string;
+  }>,
 };
 
 contextBridge.exposeInMainWorld("mspaceDesktop", desktopAPI);

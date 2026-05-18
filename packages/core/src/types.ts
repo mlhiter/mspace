@@ -920,6 +920,20 @@ export interface MspaceDesktopAPI {
   selectKubeconfigFiles?: () => Promise<string[]>;
   openExternal?: (url: string) => Promise<void>;
   openPath?: (path: string) => Promise<string>;
+  startDockerWorker?: (input: {
+    authToken: string;
+    workspaceId: string;
+    mode?: "personal" | "team";
+    serverUrl?: string;
+    codex?: boolean;
+    containerName?: string;
+    workerName?: string;
+  }) => Promise<{
+    ok: boolean;
+    status: string;
+    containerName: string;
+    script: string;
+  }>;
 }
 
 declare global {
