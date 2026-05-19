@@ -27,6 +27,8 @@ import (
 const workerVersion = "0.1.0"
 const codexProtocolLineLimit = 16 * 1024 * 1024
 const branchNameArtifactName = "branch-name.json"
+const testEnvironmentArtifactName = "test-environment.json"
+const reviewEvidenceArtifactName = "review-evidence.json"
 
 var branchSlugUnsafePattern = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -145,14 +147,16 @@ type repositorySpec struct {
 }
 
 type agentSessionResult struct {
-	ThreadID    string             `json:"threadId"`
-	TurnID      string             `json:"turnId"`
-	Status      string             `json:"status"`
-	CompletedAt string             `json:"completedAt"`
-	DryRun      bool               `json:"dryRun"`
-	Workdir     string             `json:"workdir"`
-	ArtifactDir string             `json:"artifactDir"`
-	Source      agentSessionSource `json:"source"`
+	ThreadID        string                       `json:"threadId"`
+	TurnID          string                       `json:"turnId"`
+	Status          string                       `json:"status"`
+	CompletedAt     string                       `json:"completedAt"`
+	DryRun          bool                         `json:"dryRun"`
+	Workdir         string                       `json:"workdir"`
+	ArtifactDir     string                       `json:"artifactDir"`
+	Source          agentSessionSource           `json:"source"`
+	TestEnvironment *agentSessionTestEnvironment `json:"testEnvironment,omitempty"`
+	ReviewEvidence  *reviewEvidenceArtifact     `json:"reviewEvidence,omitempty"`
 }
 
 type agentSessionSource struct {
@@ -176,6 +180,42 @@ type workspaceChange struct {
 	StatusCode   string `json:"statusCode"`
 	Path         string `json:"path"`
 	PreviousPath string `json:"previousPath"`
+}
+
+type agentSessionTestEnvironment struct {
+	PreviewURL      string `json:"previewUrl"`
+	PreviewURLSnake string `json:"preview_url,omitempty"`
+	URL             string `json:"url,omitempty"`
+}
+
+type reviewEvidenceArtifact struct {
+	AgentSummary     string                  `json:"agentSummary"`
+	CommandsRun      []reviewEvidenceCommand `json:"commandsRun"`
+	Tests            []reviewEvidenceCheck   `json:"tests"`
+	BuildResult      reviewEvidenceResult    `json:"buildResult"`
+	DeploymentResult reviewEvidenceResult    `json:"deploymentResult"`
+	Risks            []string                `json:"risks"`
+	FollowUps        []string                `json:"followUps"`
+}
+
+type reviewEvidenceCommand struct {
+	Command   string `json:"command"`
+	Status    string `json:"status"`
+	Category  string `json:"category"`
+	Summary   string `json:"summary"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type reviewEvidenceCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
+}
+
+type reviewEvidenceResult struct {
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
+	Details string `json:"details"`
 }
 
 type codexAppServerClient struct {
@@ -630,7 +670,7 @@ func runDryRunAgentSession(ctx context.Context, runtimeClient *runtimeClient, cf
 	if err != nil {
 		return agentSessionResult{}, err
 	}
-	return agentSessionResult{
+	result := agentSessionResult{
 		ThreadID:    "dry-run-thread-" + shortTaskID(taskID),
 		TurnID:      "dry-run-turn-" + shortTaskID(taskID),
 		Status:      "completed",
@@ -639,7 +679,9 @@ func runDryRunAgentSession(ctx context.Context, runtimeClient *runtimeClient, cf
 		Workdir:     payload.Workdir,
 		ArtifactDir: payload.ArtifactDir,
 		Source:      source,
-	}, nil
+	}
+	result.attachArtifacts(payload)
+	return result, nil
 }
 
 func writeDryRunAgentSessionFiles(payload agentSessionPayload, taskID string) error {
@@ -845,7 +887,17 @@ func runCodexAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg
 		return agentSessionResult{}, err
 	}
 	result.Source = source
+	result.attachArtifacts(payload)
 	return result, nil
+}
+
+func (result *agentSessionResult) attachArtifacts(payload agentSessionPayload) {
+	if artifact, ok := readTestEnvironmentArtifact(payload); ok {
+		result.TestEnvironment = &artifact
+	}
+	if artifact, ok := readReviewEvidenceArtifact(payload); ok {
+		result.ReviewEvidence = &artifact
+	}
 }
 
 func startCodexAppServer(codexPath string, payload agentSessionPayload) (*codexAppServerClient, error) {
@@ -1407,6 +1459,67 @@ func branchNameArtifactPath(payload agentSessionPayload) string {
 	return ""
 }
 
+func artifactPath(payload agentSessionPayload, name string) string {
+	if strings.TrimSpace(payload.ArtifactDir) != "" {
+		return filepath.Join(payload.ArtifactDir, name)
+	}
+	if strings.TrimSpace(payload.Workdir) != "" {
+		return filepath.Join(payload.Workdir, ".mspace", "session", name)
+	}
+	return ""
+}
+
+func readTestEnvironmentArtifact(payload agentSessionPayload) (agentSessionTestEnvironment, bool) {
+	path := artifactPath(payload, testEnvironmentArtifactName)
+	if path == "" {
+		return agentSessionTestEnvironment{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return agentSessionTestEnvironment{}, false
+	}
+	var artifact agentSessionTestEnvironment
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return agentSessionTestEnvironment{}, false
+	}
+	if previewURL := firstNonEmpty(artifact.PreviewURL, artifact.PreviewURLSnake, artifact.URL); previewURL != "" {
+		artifact.PreviewURL = previewURL
+	}
+	return artifact, artifact.PreviewURL != ""
+}
+
+func readReviewEvidenceArtifact(payload agentSessionPayload) (reviewEvidenceArtifact, bool) {
+	path := artifactPath(payload, reviewEvidenceArtifactName)
+	if path == "" {
+		return reviewEvidenceArtifact{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return reviewEvidenceArtifact{}, false
+	}
+	var raw struct {
+		AgentSummary     string          `json:"agentSummary"`
+		CommandsRun      json.RawMessage `json:"commandsRun"`
+		Tests            json.RawMessage `json:"tests"`
+		BuildResult      json.RawMessage `json:"buildResult"`
+		DeploymentResult json.RawMessage `json:"deploymentResult"`
+		Risks            json.RawMessage `json:"risks"`
+		FollowUps        json.RawMessage `json:"followUps"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return reviewEvidenceArtifact{}, false
+	}
+	return reviewEvidenceArtifact{
+		AgentSummary:     strings.TrimSpace(raw.AgentSummary),
+		CommandsRun:      parseReviewCommandsValue(raw.CommandsRun),
+		Tests:            parseReviewChecksValue(raw.Tests),
+		BuildResult:      parseReviewResultValue(raw.BuildResult),
+		DeploymentResult: parseReviewResultValue(raw.DeploymentResult),
+		Risks:            parseReviewStringListValue(raw.Risks),
+		FollowUps:        parseReviewStringListValue(raw.FollowUps),
+	}, true
+}
+
 func normalizeSemanticBranchArtifact(artifact branchNameArtifact) (string, error) {
 	branch := strings.ToLower(strings.TrimSpace(artifact.Branch))
 	if branch == "" {
@@ -1453,6 +1566,183 @@ func allowedSemanticBranchType(value string) bool {
 	default:
 		return false
 	}
+}
+
+func parseReviewCommandsValue(data json.RawMessage) []reviewEvidenceCommand {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var commands []reviewEvidenceCommand
+	if err := json.Unmarshal(data, &commands); err == nil {
+		return normalizeReviewCommands(commands)
+	}
+	var commandStrings []string
+	if err := json.Unmarshal(data, &commandStrings); err == nil {
+		commands = make([]reviewEvidenceCommand, 0, len(commandStrings))
+		for _, command := range commandStrings {
+			command = strings.TrimSpace(command)
+			if command == "" {
+				continue
+			}
+			commands = append(commands, reviewEvidenceCommand{Command: command})
+		}
+		return normalizeReviewCommands(commands)
+	}
+	return nil
+}
+
+func parseReviewChecksValue(data json.RawMessage) []reviewEvidenceCheck {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var checks []reviewEvidenceCheck
+	if err := json.Unmarshal(data, &checks); err == nil {
+		return normalizeReviewChecks(checks)
+	}
+	var checkMap map[string]any
+	if err := json.Unmarshal(data, &checkMap); err == nil {
+		checks = make([]reviewEvidenceCheck, 0, len(checkMap))
+		for name, value := range checkMap {
+			summary := reviewEvidenceValueText(value)
+			checks = append(checks, reviewEvidenceCheck{
+				Name:    strings.TrimSpace(name),
+				Status:  inferReviewStatus(summary),
+				Summary: truncate(summary, 600),
+			})
+		}
+		return normalizeReviewChecks(checks)
+	}
+	return nil
+}
+
+func parseReviewResultValue(data json.RawMessage) reviewEvidenceResult {
+	if len(data) == 0 || string(data) == "null" {
+		return reviewEvidenceResult{}
+	}
+	var result reviewEvidenceResult
+	if err := json.Unmarshal(data, &result); err == nil {
+		result.Status = normalizeReviewStatus(result.Status)
+		result.Summary = strings.TrimSpace(result.Summary)
+		result.Details = truncate(strings.TrimSpace(result.Details), 1200)
+		return result
+	}
+	var summary string
+	if err := json.Unmarshal(data, &summary); err == nil {
+		summary = strings.TrimSpace(summary)
+		return reviewEvidenceResult{Status: inferReviewStatus(summary), Summary: summary}
+	}
+	summary = reviewEvidenceValueText(data)
+	return reviewEvidenceResult{Status: inferReviewStatus(summary), Summary: truncate(summary, 600)}
+}
+
+func parseReviewStringListValue(data json.RawMessage) []string {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal(data, &values); err == nil {
+		return normalizeStringList(values)
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err == nil {
+		return normalizeStringList([]string{value})
+	}
+	var valueMap map[string]any
+	if err := json.Unmarshal(data, &valueMap); err == nil {
+		values = make([]string, 0, len(valueMap))
+		for key, value := range valueMap {
+			text := strings.TrimSpace(reviewEvidenceValueText(value))
+			if text == "" {
+				continue
+			}
+			values = append(values, fmt.Sprintf("%s: %s", key, text))
+		}
+		return normalizeStringList(values)
+	}
+	return nil
+}
+
+func reviewEvidenceValueText(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case json.RawMessage:
+		var decoded any
+		if err := json.Unmarshal(typed, &decoded); err == nil {
+			return reviewEvidenceValueText(decoded)
+		}
+		return strings.TrimSpace(string(typed))
+	default:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(data))
+	}
+}
+
+func normalizeReviewCommands(commands []reviewEvidenceCommand) []reviewEvidenceCommand {
+	result := make([]reviewEvidenceCommand, 0, len(commands))
+	for _, command := range commands {
+		command.Command = strings.TrimSpace(command.Command)
+		if command.Command == "" {
+			continue
+		}
+		command.Status = normalizeReviewStatus(command.Status)
+		command.Category = strings.TrimSpace(command.Category)
+		command.Summary = truncate(strings.TrimSpace(command.Summary), 600)
+		result = append(result, command)
+	}
+	return result
+}
+
+func normalizeReviewChecks(checks []reviewEvidenceCheck) []reviewEvidenceCheck {
+	result := make([]reviewEvidenceCheck, 0, len(checks))
+	for _, check := range checks {
+		check.Name = strings.TrimSpace(check.Name)
+		if check.Name == "" {
+			continue
+		}
+		check.Status = normalizeReviewStatus(check.Status)
+		check.Summary = truncate(strings.TrimSpace(check.Summary), 600)
+		result = append(result, check)
+	}
+	return result
+}
+
+func normalizeReviewStatus(status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case "success", "succeeded", "ok", "pass":
+		return "passed"
+	case "failure", "error", "fail":
+		return "failed"
+	default:
+		return status
+	}
+}
+
+func inferReviewStatus(text string) string {
+	lower := strings.ToLower(text)
+	switch {
+	case strings.Contains(lower, "failed") || strings.Contains(lower, " failure") || strings.Contains(lower, "error"):
+		return "failed"
+	case strings.Contains(lower, "passed") || strings.Contains(lower, "success") || strings.Contains(lower, " ok"):
+		return "passed"
+	default:
+		return ""
+	}
+}
+
+func normalizeStringList(values []string) []string {
+	result := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func validateWorkerBranchName(ctx context.Context, gitPath, workdir, branch string) error {
