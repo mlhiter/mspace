@@ -251,7 +251,7 @@ else
   ensure_ready_local_postgres_is_expected
 fi
 
-for port in 8787 7788; do
+for port in 8787; do
   pids="$(lsof -tiTCP:$port -sTCP:LISTEN || true)"
   if [ -n "$pids" ]; then
     echo "Stopping existing mspace process on 127.0.0.1:$port: $pids"

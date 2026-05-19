@@ -11,7 +11,6 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ensureRunnerStarted, getRunnerBaseUrl, stopRunner } from "./runner-manager";
 import { ensureServerStarted, getServerBaseUrl, stopServer } from "./server-manager";
 
 let mainWindow: BrowserWindow | null = null;
@@ -263,7 +262,6 @@ function createWindow(iconPath = resolveBrandIconPath()): void {
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
       additionalArguments: [
-        `--mspace-runner-url=${getRunnerBaseUrl()}`,
         `--mspace-server-url=${getServerBaseUrl()}`,
       ],
       sandbox: false,
@@ -289,7 +287,6 @@ app.whenReady().then(async () => {
   registerKubeconfigFilePicker();
   registerOpenHandlers();
   registerDockerWorkerHandlers();
-  await ensureRunnerStarted();
   try {
     await ensureServerStarted();
   } catch (error) {
@@ -308,7 +305,6 @@ app.on("window-all-closed", async () => {
   if (process.platform !== "darwin") {
     await stopDockerWorker();
     await stopServer();
-    await stopRunner();
     app.quit();
   }
 });
@@ -316,5 +312,4 @@ app.on("window-all-closed", async () => {
 app.on("before-quit", async () => {
   await stopDockerWorker();
   await stopServer();
-  await stopRunner();
 });

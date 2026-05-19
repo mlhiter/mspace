@@ -6,10 +6,6 @@ function readArgument(name: string): string | undefined {
 }
 
 const desktopAPI = {
-  apiBaseUrl:
-    readArgument("mspace-runner-url") ||
-    process.env.MSPACE_RUNNER_URL ||
-    "http://127.0.0.1:7788",
   serverBaseUrl:
     readArgument("mspace-server-url") ||
     process.env.MSPACE_SERVER_URL ||
