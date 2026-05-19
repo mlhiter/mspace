@@ -46,7 +46,7 @@ jobs:
           go-version: "1.24.0"
           cache-dependency-path: |
             server/go.sum
-            runner/go.sum
+            worker/go.sum
 
       - name: Test server
         working-directory: server
@@ -55,14 +55,6 @@ jobs:
       - name: Build server
         working-directory: server
         run: go build ./cmd/server
-
-      - name: Test runner
-        working-directory: runner
-        run: go test ./...
-
-      - name: Build runner
-        working-directory: runner
-        run: go build ./...
 
       - name: Test worker
         working-directory: worker
@@ -84,7 +76,6 @@ jobs:
             echo "- Desktop build: passed"
             echo "- Website build: passed"
             echo "- Server tests/build: passed"
-            echo "- Runner tests/build: passed"
             echo "- Worker tests/build: passed"
             echo
             echo "This workflow validates the tagged source. It does not publish installers, container images, npm packages, or production deployments."

@@ -4,7 +4,7 @@ mspace uses GitHub Releases for project-level releases. A release is a repositor
 
 ## Version Model
 
-- Use one repository version for the desktop app, website, server, runner, worker, and shared packages.
+- Use one repository version for the desktop app, website, server, worker, and shared packages.
 - Use annotated tags named `vMAJOR.MINOR.PATCH`.
 - Use `v0.x.0` for user-visible milestones and `v0.x.y` for focused fixes to the latest milestone.
 - Use `v0.x.0-rc.N` only when a release candidate needs dogfood before becoming the stable tag.
@@ -64,8 +64,6 @@ pnpm --filter @mspace/desktop build
 pnpm --filter @mspace/website build
 (cd server && go test ./...)
 (cd server && go build ./cmd/server)
-(cd runner && go test ./...)
-(cd runner && go build ./...)
 (cd worker && go test ./...)
 (cd worker && go build ./...)
 ```

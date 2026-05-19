@@ -294,8 +294,8 @@ export function App() {
             <h2>Local development. Kubernetes validation. Server-owned collaboration.</h2>
             <p>
               The MVP is local-first, but the product boundary is already clear: the server owns
-              users and workspace state, the runner owns execution, and Kubernetes is the
-              validation target.
+              workspace state and runtime records, workers claim execution tasks, and Kubernetes is
+              the validation target.
             </p>
           </div>
           <div className="control-points">
@@ -320,8 +320,8 @@ export function App() {
           <div className="topology-arrow">claim</div>
           <div className="topology-node">
             <span>02</span>
-            <strong>Go runner</strong>
-            <p>SQLite state, HTTP API, SSE, worktree prep</p>
+            <strong>Runtime worker</strong>
+            <p>Server task claim, worktree prep, Codex logs</p>
           </div>
           <div className="topology-arrow">turn</div>
           <div className="topology-node">
