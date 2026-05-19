@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cloud, Clock3, FileUp, Globe2, HardDrive, Network, Settings2, Trash2, X } from "lucide-react";
 import {
-  api,
+  controlPlaneApi,
   queryKeys,
   type Cluster,
   type ClusterInput,
@@ -27,6 +27,7 @@ import {
   cn,
 } from "@mspace/ui";
 import { RelativeTime } from "./time";
+import { useMspaceAuth } from "./auth-context";
 
 const DEFAULT_KUBE_IMPORT_PROMPT_KEY = "mspace.clusters.defaultKubeImportPrompted";
 
@@ -59,9 +60,14 @@ function clusterToForm(cluster: Cluster): ClusterInput {
 export function ClustersPage() {
   const { t } = useMspaceTranslation();
   const queryClient = useQueryClient();
+  const auth = useMspaceAuth();
+  const workspaceId = auth.workspace?.id || "";
+  const workspaceReady = auth.status === "signed-in" && Boolean(auth.token && workspaceId);
+  const clustersQueryKey = queryKeys.clusters(workspaceId, auth.token);
   const clustersQuery = useQuery({
-    queryKey: queryKeys.clusters,
-    queryFn: api.listClusters,
+    queryKey: clustersQueryKey,
+    queryFn: () => controlPlaneApi.listClusters(auth.token, workspaceId),
+    enabled: workspaceReady,
   });
   const [settingsCluster, setSettingsCluster] = useState<Cluster | null>(null);
   const [settingsForm, setSettingsForm] = useState<ClusterInput>(emptyClusterForm);
@@ -72,14 +78,14 @@ export function ClustersPage() {
   const [importSummary, setImportSummary] = useState("");
 
   const importKubeconfigs = useMutation({
-    mutationFn: api.importKubeconfigFiles,
+    mutationFn: (paths: string[]) => controlPlaneApi.importKubeconfigFiles(auth.token, workspaceId, paths),
     onSuccess: async () => {
       setImportSummary("");
-      await queryClient.invalidateQueries({ queryKey: queryKeys.clusters });
+      await queryClient.invalidateQueries({ queryKey: clustersQueryKey });
     },
   });
   const discoverDefaultKubeconfigs = useMutation({
-    mutationFn: api.discoverDefaultKubeconfigs,
+    mutationFn: () => controlPlaneApi.discoverDefaultKubeconfigs(auth.token, workspaceId),
     onSuccess: async (result) => {
       setDefaultDiscovery(result);
       setSelectedDefaultPaths(result.candidates.map((candidate) => candidate.path));
@@ -89,22 +95,22 @@ export function ClustersPage() {
   const updateCluster = useMutation({
     mutationFn: (input: ClusterInput) => {
       if (!settingsCluster) throw new Error(t("clusters.noClusterSelected"));
-      return api.updateCluster(settingsCluster.id, input);
+      return controlPlaneApi.updateCluster(auth.token, workspaceId, settingsCluster.id, input);
     },
     onSuccess: async () => {
       setSettingsCluster(null);
       setSettingsForm(emptyClusterForm);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
+        queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
       ]);
     },
   });
   const deleteCluster = useMutation({
-    mutationFn: api.deleteCluster,
+    mutationFn: (clusterId: string) => controlPlaneApi.deleteCluster(auth.token, workspaceId, clusterId),
     onSuccess: async () => {
       setSettingsCluster(null);
       setSettingsForm(emptyClusterForm);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.clusters });
+      await queryClient.invalidateQueries({ queryKey: clustersQueryKey });
     },
   });
 
@@ -130,6 +136,10 @@ export function ClustersPage() {
   async function importFromPicker() {
     setImportSummary("");
     importKubeconfigs.reset();
+    if (!workspaceReady) {
+      setImportSummary(t("workspace.signInRequired"));
+      return;
+    }
     if (!window.mspaceDesktop?.selectKubeconfigFiles) {
       setImportSummary(t("clusters.pickerDesktopOnly"));
       return;
@@ -139,18 +149,19 @@ export function ClustersPage() {
     importKubeconfigs.mutate(paths, {
       onSuccess: async (result) => {
         setImportSummary(formatImportResult(result));
-        await queryClient.invalidateQueries({ queryKey: queryKeys.clusters });
+        await queryClient.invalidateQueries({ queryKey: clustersQueryKey });
       },
     });
   }
 
   useEffect(() => {
+    if (!workspaceReady) return;
     if (clustersQuery.isPending || clusters.length > 0) return;
     if (window.localStorage.getItem(DEFAULT_KUBE_IMPORT_PROMPT_KEY) === "1") return;
     if (defaultDiscoveryRequested || discoverDefaultKubeconfigs.isPending) return;
     setDefaultDiscoveryRequested(true);
     discoverDefaultKubeconfigs.mutate();
-  }, [clusters.length, clustersQuery.isPending, defaultDiscoveryRequested, discoverDefaultKubeconfigs]);
+  }, [clusters.length, clustersQuery.isPending, defaultDiscoveryRequested, discoverDefaultKubeconfigs, workspaceReady]);
 
   function closeDefaultImportPrompt() {
     window.localStorage.setItem(DEFAULT_KUBE_IMPORT_PROMPT_KEY, "1");
@@ -162,7 +173,7 @@ export function ClustersPage() {
       title={t("clusters.title")}
       subtitle={t("clusters.subtitle")}
       actions={
-        <Button variant="secondary" onClick={importFromPicker} disabled={importKubeconfigs.isPending}>
+        <Button variant="secondary" onClick={importFromPicker} disabled={!workspaceReady || importKubeconfigs.isPending}>
           <FileUp data-icon />
           {importKubeconfigs.isPending ? t("clusters.importing") : t("clusters.importKubeconfig")}
         </Button>
@@ -183,7 +194,7 @@ export function ClustersPage() {
             title={t("clusters.emptyTitle")}
             body={t("clusters.emptyBody")}
             action={
-              <Button variant="secondary" onClick={importFromPicker} disabled={importKubeconfigs.isPending}>
+              <Button variant="secondary" onClick={importFromPicker} disabled={!workspaceReady || importKubeconfigs.isPending}>
                 <FileUp data-icon />
                 {t("clusters.importKubeconfig")}
               </Button>
@@ -247,7 +258,7 @@ export function ClustersPage() {
             importKubeconfigs.mutate(selectedDefaultPaths, {
               onSuccess: async (result) => {
                 setImportSummary(formatImportResult(result));
-                await queryClient.invalidateQueries({ queryKey: queryKeys.clusters });
+                await queryClient.invalidateQueries({ queryKey: clustersQueryKey });
               },
             });
           }}

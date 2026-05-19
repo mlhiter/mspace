@@ -36,8 +36,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  api,
-  buildApiUrl,
   controlPlaneApi,
   getStoredAuthIdentity,
   queryKeys,
@@ -90,6 +88,7 @@ import {
 import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import { FileTypeIcon } from "./file-type-icon";
 import { IssueDocumentEditor } from "./issue-document-editor";
+import { useResolvedIssueImageSrc } from "./attachment-image";
 import { codexAvatarDataUrl } from "./agent-avatar";
 import { useMspaceAuth } from "./auth-context";
 import {
@@ -490,13 +489,7 @@ function RichText(props: { children: string; basePath?: string; className?: stri
               </a>
             );
           },
-          img: ({ src = "", alt = "" }) => (
-            <img
-              src={attachmentImageSrc(String(src))}
-              alt={alt}
-              className="my-3 max-h-[520px] max-w-full rounded-[8px] object-contain shadow-[0_0_0_1px_var(--line)]"
-            />
-          ),
+          img: MarkdownImage,
           p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
           ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
           ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
@@ -632,9 +625,22 @@ function stringsOrEmpty(value: string) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function attachmentImageSrc(src: string) {
-  if (src.startsWith("/api/attachments/")) return buildApiUrl(src);
-  return src;
+function MarkdownImage(props: { src?: string; alt?: string }) {
+  const image = useResolvedIssueImageSrc(String(props.src || ""));
+  if (!image.src) {
+    return (
+      <span className="my-3 block rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+        {image.loading ? "Loading image" : "Image unavailable"}
+      </span>
+    );
+  }
+  return (
+    <img
+      src={image.src}
+      alt={props.alt || ""}
+      className="my-3 max-h-[520px] max-w-full rounded-[8px] object-contain shadow-[0_0_0_1px_var(--line)]"
+    />
+  );
 }
 
 function splitColumns(line: string) {
@@ -1460,7 +1466,7 @@ function IssueHandoffPanel(props: {
             <div>
               <div>{t("issueDetail.handoff.pullRequest")}</div>
               <div className="mt-0.5 text-[12px] font-normal leading-5 text-[color:var(--muted)]">
-                {props.disabledReason || (props.disabled ? t("issueDetail.handoff.runnerBacked") : t("issueDetail.handoff.description"))}
+                {props.disabledReason || t("issueDetail.handoff.description")}
               </div>
             </div>
           </div>
@@ -1482,7 +1488,7 @@ function IssueHandoffPanel(props: {
             variant="secondary"
             size="sm"
             disabled={!canCreate}
-            title={props.disabledReason || (props.disabled ? t("issueDetail.handoff.serverRunnerBacked") : !selectedNode?.branch ? t("issueDetail.handoff.branchRequired") : undefined)}
+            title={props.disabledReason || (!selectedNode?.branch ? t("issueDetail.handoff.branchRequired") : undefined)}
             onClick={() => selectedNode && props.onCreatePr(selectedNode)}
           >
             <GitPullRequest data-icon />
@@ -1558,8 +1564,8 @@ function IssueCommitsTab(props: {
   sessions: AgentSession[];
   agents: AgentProfile[];
   handoffs: IssueHandoff[];
-  runnerActionsDisabled?: boolean;
-  runnerActionsDisabledReason?: string;
+  actionsDisabled?: boolean;
+  actionsDisabledReason?: string;
   isCreatingPr: boolean;
   refreshingHandoffId: string;
   createPrError: Error | null;
@@ -1586,8 +1592,8 @@ function IssueCommitsTab(props: {
         <IssueHandoffPanel
           changeNodes={nodes}
           handoffs={props.handoffs}
-          disabled={props.runnerActionsDisabled}
-          disabledReason={props.runnerActionsDisabledReason}
+          disabled={props.actionsDisabled}
+          disabledReason={props.actionsDisabledReason}
           isCreatingPr={props.isCreatingPr}
           refreshingHandoffId={props.refreshingHandoffId}
           createError={props.createPrError}
@@ -1616,8 +1622,8 @@ function IssueCommitsTab(props: {
       <IssueHandoffPanel
         changeNodes={nodes}
         handoffs={props.handoffs}
-        disabled={props.runnerActionsDisabled}
-        disabledReason={props.runnerActionsDisabledReason}
+        disabled={props.actionsDisabled}
+        disabledReason={props.actionsDisabledReason}
         isCreatingPr={props.isCreatingPr}
         refreshingHandoffId={props.refreshingHandoffId}
         createError={props.createPrError}
@@ -1747,8 +1753,9 @@ export function IssueCommitDetailPage() {
     refetchInterval: 4_000,
   });
   const agentsQuery = useQuery({
-    queryKey: queryKeys.agents,
-    queryFn: api.listAgents,
+    queryKey: queryKeys.agents(workspaceId, auth.token),
+    queryFn: () => controlPlaneApi.listAgents(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
   });
 
   const detail = issueQuery.data;
@@ -4884,6 +4891,9 @@ export function IssueDetailPage() {
   const inboxQueryKey = queryKeys.workspaceInbox(workspaceId, auth.token);
   const labelDefinitionsQueryKey = queryKeys.workspaceIssueLabelDefinitions(workspaceId, auth.token);
   const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
+  const agentsQueryKey = queryKeys.agents(workspaceId, auth.token);
+  const clustersQueryKey = queryKeys.clusters(workspaceId, auth.token);
+  const issueResourcesQueryKey = queryKeys.issueResources(workspaceId, issueId, auth.token);
   const projectRunbookKey = (projectId: string) =>
     queryKeys.workspaceProjectRunbook(workspaceId, projectId, auth.token);
   const [composerEditor, setComposerEditor] = useState<Editor | null>(null);
@@ -4930,12 +4940,14 @@ export function IssueDetailPage() {
     refetchInterval: 4_000,
   });
   const agentsQuery = useQuery({
-    queryKey: queryKeys.agents,
-    queryFn: api.listAgents,
+    queryKey: agentsQueryKey,
+    queryFn: () => controlPlaneApi.listAgents(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
   });
   const clustersQuery = useQuery({
-    queryKey: queryKeys.clusters,
-    queryFn: api.listClusters,
+    queryKey: clustersQueryKey,
+    queryFn: () => controlPlaneApi.listClusters(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
   });
   const projectsQuery = useQuery({
     queryKey: projectsQueryKey,
@@ -4955,8 +4967,8 @@ export function IssueDetailPage() {
 
   const detail = issueQuery.data;
   const resourcesQuery = useQuery({
-    queryKey: queryKeys.issueResources(issueId),
-    queryFn: () => api.getIssueTestEnvironmentResources(issueId),
+    queryKey: issueResourcesQueryKey,
+    queryFn: () => controlPlaneApi.getIssueTestEnvironmentResources(auth.token, workspaceId, issueId),
     enabled: false,
     retry: false,
   });
@@ -5479,12 +5491,12 @@ export function IssueDetailPage() {
   });
 
   const startTestDeploy = useMutation({
-    mutationFn: (input: StartTestDeployInput) => api.startTestDeploy(issueId, input),
+    mutationFn: (input: StartTestDeployInput) => controlPlaneApi.startTestDeploy(auth.token, workspaceId, issueId, input),
     onSuccess: async (data) => {
       setTestDeployOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.issueResources(issueId) }),
+        queryClient.invalidateQueries({ queryKey: issueResourcesQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.session(data.sessionId) }),
         queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
@@ -5492,11 +5504,11 @@ export function IssueDetailPage() {
   });
 
   const cleanupTestEnvironment = useMutation({
-    mutationFn: () => api.requestTestEnvironmentCleanup(issueId, { agentProfile: "codex" }),
+    mutationFn: () => controlPlaneApi.requestTestEnvironmentCleanup(auth.token, workspaceId, issueId, { agentProfile: "codex" }),
     onSuccess: async (data) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.issueResources(issueId) }),
+        queryClient.invalidateQueries({ queryKey: issueResourcesQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.session(data.sessionId) }),
         queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
@@ -5504,31 +5516,45 @@ export function IssueDetailPage() {
   });
 
   const retainTestEnvironment = useMutation({
-    mutationFn: () => api.retainTestEnvironment(issueId),
+    mutationFn: () => controlPlaneApi.retainTestEnvironment(auth.token, workspaceId, issueId),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.issueResources(issueId) }),
+        queryClient.invalidateQueries({ queryKey: issueResourcesQueryKey }),
         queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
   const probeTestEnvironment = useMutation({
-    mutationFn: () => api.probeTestEnvironment(issueId),
+    mutationFn: () => controlPlaneApi.probeTestEnvironment(auth.token, workspaceId, issueId),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.issueResources(issueId) }),
+        queryClient.invalidateQueries({ queryKey: issueResourcesQueryKey }),
         queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
       ]);
     },
   });
+  const uploadIssueImage = useCallback(
+    async (file: File) => {
+      if (!serverWorkspaceReady) {
+        throw new Error(t("workspace.signInRequired"));
+      }
+      const attachment = await controlPlaneApi.uploadIssueAttachment(auth.token, workspaceId, issueId, file);
+      return {
+        id: attachment.id,
+        url: `/api/attachments/${attachment.id}`,
+        filename: attachment.filename || file.name,
+      };
+    },
+    [auth.token, issueId, serverWorkspaceReady, t, workspaceId],
+  );
   const createPullRequest = useMutation({
     mutationFn: (node: IssueChangeNode) => {
       if (!hasProject) {
         throw new Error(t("issueDetail.handoff.requiresProject"));
       }
-      return api.createPullRequest(issueId, {
+      return controlPlaneApi.createPullRequest(auth.token, workspaceId, issueId, {
         sourceSessionId: node.sessionId,
         sourceCommitSha: node.commitSha,
       });
@@ -5542,7 +5568,7 @@ export function IssueDetailPage() {
       if (!hasProject) {
         throw new Error(t("issueDetail.handoff.requiresProject"));
       }
-      return api.refreshIssueHandoff(issueId, handoff.id);
+      return controlPlaneApi.refreshIssueHandoff(auth.token, workspaceId, issueId, handoff.id);
     },
     onSettled: async () => {
       await invalidateIssueHandoffSurfaces();
@@ -5877,7 +5903,7 @@ export function IssueDetailPage() {
                           onEditFocus={handleEditingCommentFocus}
                           onEditBlur={handleEditingCommentBlur}
                           onEditKeyDown={handleEditingCommentKeyDown}
-                          onEditImageUpload={undefined}
+                          onEditImageUpload={uploadIssueImage}
                           onSaveEdit={() => {
                             if (!canSaveEditingComment) return;
                             updateComment.mutate({
@@ -5979,7 +6005,7 @@ export function IssueDetailPage() {
                         setComposerBody(value);
                         setMentionMenuDismissed(false);
                       }}
-                      onImageUpload={undefined}
+                      onImageUpload={uploadIssueImage}
                       onReady={setComposerEditor}
                       onEditorStateChange={syncComposerEditorState}
                       onFocus={(editor) => {
@@ -6049,8 +6075,8 @@ export function IssueDetailPage() {
               sessions={listOrEmpty(detail.sessions)}
               agents={agents}
               handoffs={handoffs}
-              runnerActionsDisabled={serverWorkspaceReady || !hasProject}
-              runnerActionsDisabledReason={!hasProject ? t("issueDetail.handoff.requiresProject") : undefined}
+              actionsDisabled={!serverWorkspaceReady || !hasProject}
+              actionsDisabledReason={!hasProject ? t("issueDetail.handoff.requiresProject") : undefined}
               isCreatingPr={createPullRequest.isPending}
               refreshingHandoffId={refreshIssueHandoff.isPending ? refreshIssueHandoff.variables?.id || "" : ""}
               createPrError={createPullRequest.error}
@@ -6150,7 +6176,7 @@ export function IssueDetailPage() {
                 cluster={testCluster}
                 sessions={listOrEmpty(detail.sessions)}
                 hasActiveSession={hasActiveSession}
-                disabled={serverWorkspaceReady || !hasProject}
+                disabled={!serverWorkspaceReady || !hasProject}
                 disabledReason={!hasProject ? t("issueDetail.environment.requiresProject") : undefined}
                 startError={startTestDeploy.error}
                 cleanupError={cleanupTestEnvironment.error}

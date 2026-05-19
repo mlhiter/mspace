@@ -15,7 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { api, controlPlaneApi, queryKeys, type Cluster, type CreateProjectInput, type Project } from "@mspace/core";
+import { controlPlaneApi, queryKeys, type Cluster, type CreateProjectInput, type Project } from "@mspace/core";
 import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
@@ -82,6 +82,7 @@ export function ProjectsPage() {
   const workspaceId = auth.workspace?.id || "";
   const serverWorkspaceReady = Boolean(auth.token && workspaceId);
   const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
+  const clustersQueryKey = queryKeys.clusters(workspaceId, auth.token);
   const projectRunbookKey = (projectId: string) =>
     queryKeys.workspaceProjectRunbook(workspaceId, projectId, auth.token);
   const projectsQuery = useQuery({
@@ -90,8 +91,9 @@ export function ProjectsPage() {
     enabled: serverWorkspaceReady,
   });
   const clustersQuery = useQuery({
-    queryKey: queryKeys.clusters,
-    queryFn: api.listClusters,
+    queryKey: clustersQueryKey,
+    queryFn: () => controlPlaneApi.listClusters(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
   });
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<CreateProjectInput>(emptyProjectForm);
@@ -107,7 +109,7 @@ export function ProjectsPage() {
       setCreateOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
+        queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
       ]);
     },
   });
@@ -140,7 +142,7 @@ export function ProjectsPage() {
       setSettingsForm(projectToForm(updatedProject));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
+        queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
         projectID ? queryClient.invalidateQueries({ queryKey: projectRunbookKey(projectID) }) : Promise.resolve(),
       ]);
     },
@@ -152,7 +154,7 @@ export function ProjectsPage() {
       setSettingsForm(emptyProjectForm);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.clusters }),
+        queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
       ]);
     },
   });

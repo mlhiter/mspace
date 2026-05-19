@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, CheckCircle2, Circle, Clock3, Plus, Save, Settings2, SquareTerminal, X } from "lucide-react";
-import { api, queryKeys, type AgentProfile, type AgentProfileInput } from "@mspace/core";
+import { controlPlaneApi, queryKeys, type AgentProfile, type AgentProfileInput } from "@mspace/core";
 import { useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
@@ -21,6 +21,7 @@ import {
   cn,
 } from "@mspace/ui";
 import { RelativeTime } from "./time";
+import { useMspaceAuth } from "./auth-context";
 
 const emptyAgentForm: AgentProfileInput = {
   name: "",
@@ -57,9 +58,14 @@ function normalizeAgentForm(form: AgentProfileInput): AgentProfileInput {
 export function AgentsPage() {
   const { t } = useMspaceTranslation();
   const queryClient = useQueryClient();
+  const auth = useMspaceAuth();
+  const workspaceId = auth.workspace?.id || "";
+  const workspaceReady = auth.status === "signed-in" && Boolean(auth.token && workspaceId);
+  const agentsQueryKey = queryKeys.agents(workspaceId, auth.token);
   const agentsQuery = useQuery({
-    queryKey: queryKeys.agents,
-    queryFn: api.listAgents,
+    queryKey: agentsQueryKey,
+    queryFn: () => controlPlaneApi.listAgents(auth.token, workspaceId),
+    enabled: workspaceReady,
   });
   const agents = useMemo(() => agentsQuery.data || [], [agentsQuery.data]);
   const enabledCount = agents.filter((agent) => agent.enabled).length;
@@ -69,23 +75,23 @@ export function AgentsPage() {
   const [settingsForm, setSettingsForm] = useState<AgentProfileInput>(emptyAgentForm);
 
   const createAgent = useMutation({
-    mutationFn: (input: AgentProfileInput) => api.createAgent(input),
+    mutationFn: (input: AgentProfileInput) => controlPlaneApi.createAgent(auth.token, workspaceId, input),
     onSuccess: async () => {
       setCreateForm(emptyAgentForm);
       setCreateOpen(false);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.agents });
+      await queryClient.invalidateQueries({ queryKey: agentsQueryKey });
     },
   });
 
   const updateAgent = useMutation({
     mutationFn: (input: AgentProfileInput) => {
       if (!settingsAgent) throw new Error("No agent selected.");
-      return api.updateAgent(settingsAgent.id, input);
+      return controlPlaneApi.updateAgent(auth.token, workspaceId, settingsAgent.id, input);
     },
     onSuccess: async () => {
       setSettingsAgent(null);
       setSettingsForm(emptyAgentForm);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.agents });
+      await queryClient.invalidateQueries({ queryKey: agentsQueryKey });
     },
   });
 
@@ -122,6 +128,7 @@ export function AgentsPage() {
         </Button>
       }
     >
+      {!workspaceReady ? <Notice>{t("workspace.signInRequired")}</Notice> : null}
       {agentsQuery.isPending ? (
         <div className="rounded-[10px] bg-[color:var(--surface)] px-4 py-6 text-[13px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
           {t("agents.loading")}

@@ -274,15 +274,17 @@ export interface CommentReactionSummary {
 
 export interface IssueAttachment {
   id: string;
+  workspaceId: string;
   issueId: string;
   commentId: string;
   filename: string;
   contentType: string;
   sizeBytes: number;
   storageBackend: string;
-  url: string;
+  storageKey?: string;
   createdAt: string;
   updatedAt: string;
+  boundAt?: string;
 }
 
 export interface IssueLabel {
@@ -913,7 +915,6 @@ export interface AuthMeResult {
 }
 
 export interface MspaceDesktopAPI {
-  apiBaseUrl: string;
   serverBaseUrl: string;
   appVersion: string;
   selectProjectFolder?: () => Promise<string | null>;

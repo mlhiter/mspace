@@ -9,7 +9,7 @@ import { TaskItem } from "@tiptap/extension-task-item";
 import { TaskList } from "@tiptap/extension-task-list";
 import { Placeholder } from "@tiptap/extension-placeholder";
 import { Bold, Code2, Heading1, Heading2, ImageOff, ImagePlus, Italic, List, ListChecks, Loader2, Quote, type LucideIcon } from "lucide-react";
-import { buildApiUrl } from "@mspace/core";
+import { useResolvedIssueImageSrc } from "./attachment-image";
 
 type UploadedIssueImage = {
   id: string;
@@ -56,21 +56,21 @@ const IssueImage = Image.extend({
   },
 
   renderHTML({ HTMLAttributes }) {
-    const src = attachmentDisplaySrc(String(HTMLAttributes.src || ""));
-    return ["img", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, { src })];
+    return ["img", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)];
   },
 });
 
 function IssueImagePreview(props: ReactNodeViewProps) {
-  const src = attachmentDisplaySrc(String(props.node.attrs.src || ""));
+  const rawSrc = String(props.node.attrs.src || "");
+  const image = useResolvedIssueImageSrc(rawSrc);
   const alt = String(props.node.attrs.alt || "");
   const title = String(props.node.attrs.title || "");
-  const label = issueImageLabel(alt || title || src);
+  const label = issueImageLabel(alt || title || rawSrc);
   const [status, setStatus] = useState<"loading" | "loaded" | "failed">("loading");
 
   useEffect(() => {
-    setStatus("loading");
-  }, [src]);
+    setStatus(!rawSrc.trim() || image.error ? "failed" : "loading");
+  }, [rawSrc, image.src, image.error]);
 
   return (
     <NodeViewWrapper
@@ -85,16 +85,18 @@ function IssueImagePreview(props: ReactNodeViewProps) {
         .join(" ")}
       data-drag-handle
     >
-      <img
-        src={src}
-        alt={alt || label}
-        title={title || label}
-        className="mspace-doc-editor-image"
-        draggable="false"
-        decoding="async"
-        onLoad={() => setStatus("loaded")}
-        onError={() => setStatus("failed")}
-      />
+      {image.src ? (
+        <img
+          src={image.src}
+          alt={alt || label}
+          title={title || label}
+          className="mspace-doc-editor-image"
+          draggable="false"
+          decoding="async"
+          onLoad={() => setStatus("loaded")}
+          onError={() => setStatus("failed")}
+        />
+      ) : null}
       {status !== "loaded" ? (
         <figcaption className="mspace-doc-editor-image-fallback">
           {status === "loading" ? <Loader2 data-icon className="mspace-doc-editor-spinner" /> : <ImageOff data-icon />}
@@ -301,11 +303,6 @@ export function IssueDocumentEditor(props: {
       {editor && isEditable ? <IssueEditorBubbleMenu editor={editor} /> : null}
     </div>
   );
-}
-
-function attachmentDisplaySrc(src: string) {
-  if (src.startsWith("/api/attachments/")) return buildApiUrl(src);
-  return src;
 }
 
 function issueImageLabel(value: string) {

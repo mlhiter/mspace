@@ -25,7 +25,6 @@ import {
 	type LucideIcon,
 } from "lucide-react";
 import {
-	api,
 	controlPlaneApi,
 	queryKeys,
 	type CreateRuntimeRegistrationTokenInput,
@@ -105,12 +104,14 @@ export function WorkspaceSettingsPage() {
 	const isSignedIn = auth.status === "signed-in" && auth.token !== "";
 	const isTeamWorkspace = auth.workspace?.kind === "team";
 	const runtimeEnabled = isSignedIn && workspaceID !== "";
+	const settingsQueryKey = queryKeys.workspaceSettings(workspaceID, auth.token);
 	const defaultRuntimeMode = isTeamWorkspace ? "team" : "personal";
 	const runtimeModeLabel = isTeamWorkspace ? t("workspaceSettings.summary.team") : t("workspaceSettings.summary.personal");
 
 	const settingsQuery = useQuery({
-		queryKey: queryKeys.workspaceSettings,
-		queryFn: api.getWorkspaceSettings,
+		queryKey: settingsQueryKey,
+		queryFn: () => controlPlaneApi.getWorkspaceSettings(auth.token, workspaceID),
+		enabled: runtimeEnabled,
 	});
 	const tokensQuery = useQuery({
 		queryKey: queryKeys.runtimeRegistrationTokens(workspaceID, auth.token),
@@ -170,10 +171,11 @@ export function WorkspaceSettingsPage() {
 	}, [defaultRuntimeMode]);
 
 	const saveSettings = useMutation({
-		mutationFn: api.updateWorkspaceSettings,
+		mutationFn: (input: UpdateWorkspaceSettingsInput) =>
+			controlPlaneApi.updateWorkspaceSettings(auth.token, workspaceID, input),
 		onSuccess: async (settings) => {
 			setForm({ autoCreateDraftPr: settings.autoCreateDraftPr });
-			await queryClient.invalidateQueries({ queryKey: queryKeys.workspaceSettings });
+			await queryClient.invalidateQueries({ queryKey: settingsQueryKey });
 		},
 	});
 	const createInvitation = useMutation({

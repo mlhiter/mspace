@@ -22,6 +22,7 @@ import type {
   CreateWorkspaceResult,
   CreateWorkspaceIssueEventInput,
   Issue,
+  IssueAttachment,
   IssueDetail,
   IssueHandoff,
   IssueLabel,
@@ -71,7 +72,7 @@ export interface StoredAuthIdentity {
 }
 
 export const queryKeys = {
-  agents: ["agents"] as const,
+  agents: (workspaceId: string, token: string) => ["agents", workspaceId, token] as const,
   authMe: (token: string) => ["auth-me", token] as const,
   authPoll: (state: string) => ["auth-github-result", state] as const,
 	workspaceInbox: (workspaceId: string, token: string) => ["workspace-inbox", workspaceId, token] as const,
@@ -90,15 +91,12 @@ export const queryKeys = {
   workspaceProjects: (workspaceId: string, token: string) => ["workspace-projects", workspaceId, token] as const,
   workspaceProjectRunbook: (workspaceId: string, projectId: string, token: string) =>
     ["workspace-project-runbook", workspaceId, projectId, token] as const,
-	workspaceSettings: ["workspace-settings"] as const,
-  clusters: ["clusters"] as const,
-  issueResources: (issueId: string) => ["issue-resources", issueId] as const,
+  workspaceSettings: (workspaceId: string, token: string) => ["workspace-settings", workspaceId, token] as const,
+  clusters: (workspaceId: string, token: string) => ["clusters", workspaceId, token] as const,
+  issueResources: (workspaceId: string, issueId: string, token: string) =>
+    ["issue-resources", workspaceId, issueId, token] as const,
   session: (sessionId: string) => ["session", sessionId] as const,
 };
-
-export function getApiBaseUrl(): string {
-  return window.mspaceDesktop?.apiBaseUrl || "http://127.0.0.1:7788";
-}
 
 export function getControlPlaneBaseUrl(): string {
   return window.mspaceDesktop?.serverBaseUrl || "http://127.0.0.1:8787";
@@ -127,7 +125,7 @@ export function getStoredAuthIdentity(): StoredAuthIdentity {
   }
 }
 
-function getStoredAuthToken(): string {
+export function getStoredAuthToken(): string {
   try {
     return browserStorage()?.getItem(AUTH_TOKEN_STORAGE_KEY)?.trim() || "";
   } catch {
@@ -153,10 +151,6 @@ export function setStoredAuthIdentity(user: MspaceUser | null | undefined): void
   } catch {
     // localStorage is best-effort; API calls still fall back to the local actor.
   }
-}
-
-export function buildApiUrl(path: string): string {
-  return `${getApiBaseUrl()}${path}`;
 }
 
 export function buildControlPlaneUrl(path: string): string {
@@ -208,14 +202,6 @@ async function requestURL<T>(url: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getStoredAuthToken();
-  return requestURL<T>(buildApiUrl(path), {
-    ...init,
-    headers: mergeHeaders(token ? authHeaders(token) : undefined, init?.headers),
-  });
-}
-
 async function requestControlPlane<T>(path: string, init?: RequestInit): Promise<T> {
   return requestURL<T>(buildControlPlaneUrl(path), init);
 }
@@ -225,93 +211,6 @@ function authHeaders(token: string): HeadersInit {
     Authorization: `Bearer ${token}`,
   };
 }
-
-export const api = {
-  health: () =>
-    request<{
-      ok: boolean;
-      version: string;
-      runnerProtocol?: number;
-      capabilities?: Record<string, boolean>;
-    }>("/health"),
-  configureControlPlaneSession: (input: { serverBaseUrl: string; token: string; workspaceId: string }) =>
-    request<{ ok: boolean }>("/api/control-plane/session", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  getWorkspaceSettings: () => request<WorkspaceSettings>("/api/workspace/settings"),
-  updateWorkspaceSettings: (input: UpdateWorkspaceSettingsInput) =>
-    request<WorkspaceSettings>("/api/workspace/settings", {
-      method: "PUT",
-      body: JSON.stringify(input),
-    }),
-  listAgents: () => request<AgentProfile[]>("/api/agents"),
-  createAgent: (input: AgentProfileInput) =>
-    request<AgentProfile>("/api/agents", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  updateAgent: (agentId: string, input: AgentProfileInput) =>
-    request<AgentProfile>(`/api/agents/${agentId}`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    }),
-  listClusters: () => request<Cluster[]>("/api/clusters"),
-  createCluster: (input: ClusterInput) =>
-    request<Cluster>("/api/clusters", {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  updateCluster: (clusterId: string, input: ClusterInput) =>
-    request<Cluster>(`/api/clusters/${clusterId}`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    }),
-  deleteCluster: (clusterId: string) =>
-    request<{ ok: boolean }>(`/api/clusters/${clusterId}`, {
-      method: "DELETE",
-    }),
-  discoverDefaultKubeconfigs: () =>
-    request<KubeconfigDiscoveryResult>("/api/clusters/discover-defaults"),
-  importDefaultKubeconfigs: () =>
-    request<KubeconfigImportResult>("/api/clusters/import-defaults", {
-      method: "POST",
-    }),
-  importKubeconfigFiles: (paths: string[]) =>
-    request<KubeconfigImportResult>("/api/clusters/import", {
-      method: "POST",
-      body: JSON.stringify({ paths }),
-    }),
-  startTestDeploy: (issueId: string, input: StartTestDeployInput) =>
-    request<{ sessionId: string; testEnvironment: IssueTestEnvironment }>(`/api/issues/${issueId}/test-deploy`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  requestTestEnvironmentCleanup: (issueId: string, input?: { agentProfile?: string }) =>
-    request<{ sessionId: string; testEnvironment: IssueTestEnvironment }>(`/api/issues/${issueId}/test-environment/cleanup`, {
-      method: "POST",
-      body: JSON.stringify(input || {}),
-    }),
-  retainTestEnvironment: (issueId: string) =>
-    request<IssueTestEnvironment>(`/api/issues/${issueId}/test-environment/retain`, {
-      method: "POST",
-    }),
-  getIssueTestEnvironmentResources: (issueId: string) =>
-    request<IssueTestEnvironmentResources>(`/api/issues/${issueId}/test-environment/resources`),
-  probeTestEnvironment: (issueId: string) =>
-    request<IssueTestEnvironment>(`/api/issues/${issueId}/test-environment/probe`, {
-      method: "POST",
-    }),
-  createPullRequest: (issueId: string, input: CreatePullRequestInput) =>
-    request<IssueHandoff>(`/api/issues/${issueId}/handoffs/create-pr`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  refreshIssueHandoff: (issueId: string, handoffId: string) =>
-    request<IssueHandoff>(`/api/issues/${issueId}/handoffs/${handoffId}/refresh`, {
-      method: "POST",
-    }),
-};
 
 export const controlPlaneApi = {
   startGitHubLogin: () =>
@@ -456,6 +355,63 @@ export const controlPlaneApi = {
 		requestControlPlane<IssueLabelDefinition[]>(`/api/workspaces/${workspaceId}/issue-label-definitions`, {
 			headers: authHeaders(token),
 		}),
+  getWorkspaceSettings: (token: string, workspaceId: string) =>
+    requestControlPlane<WorkspaceSettings>(`/api/workspaces/${workspaceId}/workspace/settings`, {
+      headers: authHeaders(token),
+    }),
+  updateWorkspaceSettings: (token: string, workspaceId: string, input: UpdateWorkspaceSettingsInput) =>
+    requestControlPlane<WorkspaceSettings>(`/api/workspaces/${workspaceId}/workspace/settings`, {
+      method: "PUT",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  listAgents: (token: string, workspaceId: string) =>
+    requestControlPlane<AgentProfile[]>(`/api/workspaces/${workspaceId}/agents`, {
+      headers: authHeaders(token),
+    }),
+  createAgent: (token: string, workspaceId: string, input: AgentProfileInput) =>
+    requestControlPlane<AgentProfile>(`/api/workspaces/${workspaceId}/agents`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  updateAgent: (token: string, workspaceId: string, agentId: string, input: AgentProfileInput) =>
+    requestControlPlane<AgentProfile>(`/api/workspaces/${workspaceId}/agents/${agentId}`, {
+      method: "PUT",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  listClusters: (token: string, workspaceId: string) =>
+    requestControlPlane<Cluster[]>(`/api/workspaces/${workspaceId}/clusters`, {
+      headers: authHeaders(token),
+    }),
+  createCluster: (token: string, workspaceId: string, input: ClusterInput) =>
+    requestControlPlane<Cluster>(`/api/workspaces/${workspaceId}/clusters`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  updateCluster: (token: string, workspaceId: string, clusterId: string, input: ClusterInput) =>
+    requestControlPlane<Cluster>(`/api/workspaces/${workspaceId}/clusters/${clusterId}`, {
+      method: "PUT",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  deleteCluster: (token: string, workspaceId: string, clusterId: string) =>
+    requestControlPlane<{ ok: boolean }>(`/api/workspaces/${workspaceId}/clusters/${clusterId}`, {
+      method: "DELETE",
+      headers: authHeaders(token),
+    }),
+  discoverDefaultKubeconfigs: (token: string, workspaceId: string) =>
+    requestControlPlane<KubeconfigDiscoveryResult>(`/api/workspaces/${workspaceId}/clusters/discover-defaults`, {
+      headers: authHeaders(token),
+    }),
+  importKubeconfigFiles: (token: string, workspaceId: string, paths: string[]) =>
+    requestControlPlane<KubeconfigImportResult>(`/api/workspaces/${workspaceId}/clusters/import`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ paths }),
+    }),
 	listIssues: (token: string, workspaceId: string) =>
 		requestControlPlane<IssueListItem[]>(`/api/workspaces/${workspaceId}/issues`, {
 			headers: authHeaders(token),
@@ -492,6 +448,43 @@ export const controlPlaneApi = {
 			headers: authHeaders(token),
 			body: JSON.stringify(input),
 		}),
+  startTestDeploy: (token: string, workspaceId: string, issueId: string, input: StartTestDeployInput) =>
+    requestControlPlane<{ sessionId: string; testEnvironment: IssueTestEnvironment }>(`/api/workspaces/${workspaceId}/issues/${issueId}/test-deploy`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  requestTestEnvironmentCleanup: (token: string, workspaceId: string, issueId: string, input?: { agentProfile?: string }) =>
+    requestControlPlane<{ sessionId: string; testEnvironment: IssueTestEnvironment }>(`/api/workspaces/${workspaceId}/issues/${issueId}/test-environment/cleanup`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input || {}),
+    }),
+  retainTestEnvironment: (token: string, workspaceId: string, issueId: string) =>
+    requestControlPlane<IssueTestEnvironment>(`/api/workspaces/${workspaceId}/issues/${issueId}/test-environment/retain`, {
+      method: "POST",
+      headers: authHeaders(token),
+    }),
+  getIssueTestEnvironmentResources: (token: string, workspaceId: string, issueId: string) =>
+    requestControlPlane<IssueTestEnvironmentResources>(`/api/workspaces/${workspaceId}/issues/${issueId}/test-environment/resources`, {
+      headers: authHeaders(token),
+    }),
+  probeTestEnvironment: (token: string, workspaceId: string, issueId: string) =>
+    requestControlPlane<IssueTestEnvironment>(`/api/workspaces/${workspaceId}/issues/${issueId}/test-environment/probe`, {
+      method: "POST",
+      headers: authHeaders(token),
+    }),
+  createPullRequest: (token: string, workspaceId: string, issueId: string, input: CreatePullRequestInput) =>
+    requestControlPlane<IssueHandoff>(`/api/workspaces/${workspaceId}/issues/${issueId}/handoffs/create-pr`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  refreshIssueHandoff: (token: string, workspaceId: string, issueId: string, handoffId: string) =>
+    requestControlPlane<IssueHandoff>(`/api/workspaces/${workspaceId}/issues/${issueId}/handoffs/${handoffId}/refresh`, {
+      method: "POST",
+      headers: authHeaders(token),
+    }),
 	updateIssue: (token: string, workspaceId: string, issueId: string, input: UpdateIssueInput) =>
 		requestControlPlane<Issue>(`/api/workspaces/${workspaceId}/issues/${issueId}`, {
 			method: "PUT",
@@ -515,6 +508,15 @@ export const controlPlaneApi = {
 			headers: authHeaders(token),
 			body: JSON.stringify(input),
 		}),
+	uploadIssueAttachment: (token: string, workspaceId: string, issueId: string, file: File) => {
+		const form = new FormData();
+		form.append("file", file, file.name);
+		return requestControlPlane<IssueAttachment>(`/api/workspaces/${workspaceId}/issues/${issueId}/attachments`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: form,
+		});
+	},
 	addComment: (token: string, workspaceId: string, issueId: string, input: CreateCommentInput) =>
 		requestControlPlane<{ ok: boolean; commentId: string }>(`/api/workspaces/${workspaceId}/issues/${issueId}/comments`, {
 			method: "POST",
