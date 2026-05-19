@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-05-14
+> Status: local MVP implementation snapshot, updated 2026-05-19
 
 ## IA Goal
 
@@ -38,6 +38,7 @@ Navigation rules:
 - Clusters is reusable test cluster access: kubeconfig import, reachability status, registry, and exposure defaults.
 - Projects is configuration and project-level history.
 - Workspace Settings is accessed from the workspace identity menu instead of the main rail, because it controls local automation policy for the current workspace rather than daily issue work.
+- Language switching also lives in the workspace identity menu, because English/Simplified Chinese is a global desktop preference rather than a route-specific action.
 - Session detail is deep-linked from issues and remains an operational fallback view, not a primary home.
 
 The fact that Inbox is first does not mean Kubernetes is secondary. It means the product starts from work intake, then routes that work into a local development flow plus a Kubernetes-backed validation flow.
@@ -86,7 +87,7 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. The workspace menu owns workspace switching, team workspace creation, and the entry into Workspace Settings. Workspace Settings owns local automation policy such as automatic draft PR creation, team-only access controls, and runtime worker/queue controls for the selected workspace. Session detail remains deep-linked from issue work.
+The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. The workspace menu owns workspace switching, team workspace creation, language switching, and the entry into Workspace Settings. Workspace Settings owns local automation policy such as automatic draft PR creation, team-only access controls, and runtime worker/queue controls for the selected workspace. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
@@ -98,6 +99,7 @@ Current implementation principles:
 - Session Detail can be more operational, but should still preserve the same paper workspace tone;
 - shadcn/ui primitives are the base for buttons, cards, inputs, fields, badges, alerts, separators, selects, scroll areas, and textareas;
 - lucide-react icons should carry common actions where a familiar symbol is clearer than text.
+- visible shell and main workflow copy should use the shared English/Simplified Chinese locale resources; technical identifiers, logs, user-authored content, branch names, commit hashes, Kubernetes names, and runtime protocol values should remain literal.
 
 Avoid hero sections, marketing copy, decorative dashboards, and high-saturation visual effects in the product shell. mspace should feel like a calm operations workspace that happens to run serious Kubernetes-backed agent sessions.
 

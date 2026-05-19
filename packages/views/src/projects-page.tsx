@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { api, controlPlaneApi, queryKeys, type Cluster, type CreateProjectInput, type Project } from "@mspace/core";
+import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
   CollectionEmptyState,
@@ -75,6 +76,7 @@ function projectToForm(project: Project): CreateProjectInput {
 }
 
 export function ProjectsPage() {
+  const { t } = useMspaceTranslation();
   const queryClient = useQueryClient();
   const auth = useMspaceAuth();
   const workspaceId = auth.workspace?.id || "";
@@ -112,14 +114,14 @@ export function ProjectsPage() {
   const settingsRunbookQuery = useQuery({
     queryKey: settingsProject ? projectRunbookKey(settingsProject.id) : projectRunbookKey("__none"),
     queryFn: () => {
-      if (!settingsProject) throw new Error("Project settings are not open.");
+      if (!settingsProject) throw new Error(t("projects.settingsNotOpen"));
       return controlPlaneApi.getProjectRunbook(auth.token, workspaceId, settingsProject.id);
     },
     enabled: Boolean(settingsProject && serverWorkspaceReady),
   });
   const saveProjectSettings = useMutation({
     mutationFn: async () => {
-      if (!settingsProject) throw new Error("Project settings are not open.");
+      if (!settingsProject) throw new Error(t("projects.settingsNotOpen"));
       const input = {
         id: settingsProject.id,
         ...settingsForm,
@@ -166,7 +168,7 @@ export function ProjectsPage() {
   async function pickProjectFolder() {
     setFolderPickerError("");
     if (!window.mspaceDesktop?.selectProjectFolder) {
-      setFolderPickerError("Folder picker is only available in the desktop app.");
+      setFolderPickerError(t("projects.folderPickerDesktopOnly"));
       return;
     }
 
@@ -237,16 +239,16 @@ export function ProjectsPage() {
     return (
       <PageFrame
         title={settingsForm.name || settingsProject.name}
-        subtitle="Project settings"
+        subtitle={t("projects.settingsSubtitle")}
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button type="button" variant="secondary" onClick={closeSettings} disabled={saveProjectSettings.isPending}>
               <ArrowLeft data-icon />
-              Projects
+              {t("projects.backToProjects")}
             </Button>
             <Button type="button" onClick={() => saveProjectSettings.mutate()} disabled={settingsSaveDisabled}>
               <Save data-icon />
-              {saveProjectSettings.isPending ? "Saving..." : settingsRunbookQuery.isLoading ? "Loading..." : "Save"}
+              {saveProjectSettings.isPending ? t("projects.saving") : settingsRunbookQuery.isLoading ? t("projects.loading") : t("projects.save")}
             </Button>
           </div>
         }
@@ -264,10 +266,10 @@ export function ProjectsPage() {
                 <InlineMeta icon={BookOpenText}>session {runbookMeta.sourceSessionId.slice(0, 8)}</InlineMeta>
               ) : null}
             </div>
-            <Field label="Runbook" hint={runbookHint(settingsProject, runbookMeta?.updatedAt || "")}>
+            <Field label={t("projects.runbook")} hint={runbookHint(settingsProject, runbookMeta?.updatedAt || "")}>
               <IssueDocumentEditor
                 variant="runbook"
-                ariaLabel="Project runbook"
+                ariaLabel={t("projects.runbookAria")}
                 value={runbookDraft}
                 editable={!settingsRunbookQuery.isLoading}
                 onChange={setRunbookDraft}
@@ -283,15 +285,19 @@ export function ProjectsPage() {
 
             {settingsProjectHasWork ? (
               <Notice>
-                This project has {settingsProject.issueCount} issue{settingsProject.issueCount === 1 ? "" : "s"} and{" "}
-                {settingsProject.sessionCount} session{settingsProject.sessionCount === 1 ? "" : "s"}.
+                {t("projects.hasWorkNotice", {
+                  issues: settingsProject.issueCount,
+                  issueSuffix: settingsProject.issueCount === 1 ? "" : "s",
+                  sessions: settingsProject.sessionCount,
+                  sessionSuffix: settingsProject.sessionCount === 1 ? "" : "s",
+                })}
               </Notice>
             ) : null}
 
             <section className="rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
-              <div className="mb-3 text-[14px] font-semibold leading-5 text-[color:var(--text)]">Project</div>
+              <div className="mb-3 text-[14px] font-semibold leading-5 text-[color:var(--text)]">{t("projects.project")}</div>
               <div className="grid gap-3">
-                <Field label="Name">
+                <Field label={t("projects.projectName")}>
                   <Input
                     value={settingsForm.name}
                     onChange={(event) => setSettingsForm({ ...settingsForm, name: event.target.value })}
@@ -300,7 +306,7 @@ export function ProjectsPage() {
                 <div className="grid gap-1.5 rounded-[8px] bg-[color:var(--block)] p-3 text-[13px] shadow-[inset_0_0_0_1px_var(--line)]">
                   <div className="flex items-center gap-2 text-[color:var(--muted-strong)]">
                     {settingsProject.sourceType === "github" ? <GitBranch data-icon /> : <HardDrive data-icon />}
-                    <span className="font-medium">{settingsProject.sourceType === "github" ? "GitHub repository" : "Local repository"}</span>
+                    <span className="font-medium">{settingsProject.sourceType === "github" ? t("projects.githubRepository") : t("projects.localRepository")}</span>
                   </div>
                   <div className="break-all font-mono text-[12px] leading-4 text-[color:var(--muted)]">
                     {repositoryLabel}
@@ -310,26 +316,26 @@ export function ProjectsPage() {
             </section>
 
             <section className="rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
-              <div className="mb-3 text-[14px] font-semibold leading-5 text-[color:var(--text)]">Runtime</div>
+              <div className="mb-3 text-[14px] font-semibold leading-5 text-[color:var(--text)]">{t("projects.runtime")}</div>
               <ClusterSelectField
                 clusters={clusters}
                 value={settingsForm.defaultClusterId}
                 onChange={(defaultClusterId) => setSettingsForm({ ...settingsForm, defaultClusterId })}
-                hint={defaultCluster ? `${defaultCluster.kubeContext || defaultCluster.name}` : "No default cluster selected."}
+                hint={defaultCluster ? `${defaultCluster.kubeContext || defaultCluster.name}` : t("projects.noDefaultClusterSelected")}
               />
             </section>
 
             <section className="rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
-              <div className="mb-3 text-[14px] font-semibold leading-5 text-[color:var(--text)]">Danger zone</div>
+              <div className="mb-3 text-[14px] font-semibold leading-5 text-[color:var(--text)]">{t("projects.dangerZone")}</div>
               <Button
                 type="button"
                 variant="danger"
                 disabled={settingsProjectHasWork || deleteProject.isPending || settingsSaveDisabled}
-                title={settingsProjectHasWork ? "Projects with issues or sessions cannot be deleted yet." : undefined}
+                title={settingsProjectHasWork ? t("projects.deleteDisabledTitle") : undefined}
                 onClick={() => deleteProject.mutate(settingsProject.id)}
               >
                 <Trash2 data-icon />
-                {deleteProject.isPending ? "Deleting..." : "Delete project"}
+                {deleteProject.isPending ? t("projects.deleting") : t("projects.deleteProject")}
               </Button>
             </section>
           </aside>
@@ -340,34 +346,34 @@ export function ProjectsPage() {
 
   return (
     <PageFrame
-      title="Projects"
-      subtitle="Projects are the durable code workspaces agents can receive issues against. Creation stays light; runtime details can be adjusted after the project exists."
+      title={t("projects.title")}
+      subtitle={t("projects.subtitle")}
       actions={
         <Button variant="secondary" onClick={openCreateModal}>
           <Plus data-icon />
-          New project
+          {t("projects.newProject")}
         </Button>
       }
     >
       {projects.length === 0 ? (
         <CollectionEmptyState
           icon={Boxes}
-          title="No projects yet"
-          body="Add a local folder or GitHub repository first. Issues and sessions attach after that."
+          title={t("projects.emptyTitle")}
+          body={t("projects.emptyBody")}
           action={
             <Button variant="secondary" onClick={openCreateModal}>
               <Plus data-icon />
-              New project
+              {t("projects.newProject")}
             </Button>
           }
         />
       ) : (
         <div className="rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="grid grid-cols-[minmax(180px,1.1fr)_minmax(220px,1.5fr)_150px_56px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
-            <span>Project</span>
-            <span>Repository</span>
-            <span>Work</span>
-            <span className="text-right">Actions</span>
+            <span>{t("projects.project")}</span>
+            <span>{t("projects.repository")}</span>
+            <span>{t("projects.work")}</span>
+            <span className="text-right">{t("projects.actions")}</span>
           </div>
           <div className="divide-y divide-[color:var(--line)]">
             {projects.map((project) => (
@@ -378,12 +384,12 @@ export function ProjectsPage() {
       )}
 
       {createOpen ? (
-        <Modal title="New project" description="Start with the least information mspace needs. Agents can discover deployment details from the issue and repository later." onClose={() => setCreateOpen(false)}>
+        <Modal title={t("projects.newProject")} description={t("projects.createDescription")} onClose={() => setCreateOpen(false)}>
           <form className="flex flex-col gap-4" onSubmit={submitCreate}>
             {createProject.error ? <Notice tone="danger">{createProject.error.message}</Notice> : null}
             {folderPickerError ? <Notice tone="danger">{folderPickerError}</Notice> : null}
 
-            <Field label="Project name" hint="Optional. Leave empty to use the folder or repository name.">
+            <Field label={t("projects.projectName")} hint={t("projects.projectNameHint")}>
               <Input
                 value={createForm.name}
                 onChange={(event) => setCreateForm({ ...createForm, name: event.target.value })}
@@ -394,9 +400,9 @@ export function ProjectsPage() {
             <div className="grid gap-3">
               <SourceButton
                 icon={<FolderOpen data-icon />}
-                title="Local folder"
-                description="Use an existing folder on this machine. mspace detects the GitHub remote automatically when it can."
-                action="Choose folder"
+                title={t("projects.localFolder")}
+                description={t("projects.localFolderDescription")}
+                action={t("projects.chooseFolder")}
                 active={Boolean(createForm.repoPath)}
                 onClick={pickProjectFolder}
               />
@@ -404,12 +410,12 @@ export function ProjectsPage() {
 
               <div className="flex items-center gap-3 text-[12px] text-[color:var(--faint)]">
                 <span className="h-px flex-1 bg-[color:var(--line)]" />
-                or paste a repository URL
+                {t("projects.pasteRepositoryUrl")}
                 <span className="h-px flex-1 bg-[color:var(--line)]" />
               </div>
 
               <div className="rounded-[10px] bg-[color:var(--block)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
-                <Field label="GitHub repository URL">
+                <Field label={t("projects.githubRepositoryUrl")}>
                   <div className="relative">
                     <GitBranch data-icon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--muted)]" />
                     <Input
@@ -434,15 +440,15 @@ export function ProjectsPage() {
               clusters={clusters}
               value={createForm.defaultClusterId}
               onChange={(defaultClusterId) => setCreateForm({ ...createForm, defaultClusterId })}
-              hint="Optional. Issue deploys use this cluster by default."
+              hint={t("projects.optionalDefaultCluster")}
             />
 
             <div className="mt-1 flex justify-end gap-2">
               <Button type="button" variant="secondary" onClick={() => setCreateOpen(false)} disabled={createProject.isPending}>
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button type="submit" disabled={!canCreate || createProject.isPending}>
-                {createProject.isPending ? "Creating..." : "Create project"}
+                {createProject.isPending ? t("projects.creating") : t("projects.createProject")}
               </Button>
             </div>
           </form>
@@ -454,11 +460,12 @@ export function ProjectsPage() {
 
 function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: () => void }) {
   const { project } = props;
+  const { t } = useMspaceTranslation();
   const defaultCluster = props.clusters.find((cluster) => cluster.id === project.defaultClusterId);
   const githubLabel =
     project.gitProvider === "github" && project.gitOwner && project.gitRepo
       ? `${project.gitOwner}/${project.gitRepo}`
-      : project.remoteUrl || "No remote detected";
+      : project.remoteUrl || t("projects.noRemoteDetected");
   const updatedAt = project.latestIssueUpdatedAt || project.updatedAt;
 
   return (
@@ -486,8 +493,8 @@ function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: 
       </div>
 
       <div className="text-[13px] leading-5 text-[color:var(--muted)]">
-        <div>{project.issueCount} issues</div>
-        <div>{project.sessionCount} sessions</div>
+        <div>{t("projects.issues", { count: project.issueCount })}</div>
+        <div>{t("projects.sessions", { count: project.sessionCount })}</div>
       </div>
 
       <div className="flex justify-end">
@@ -495,8 +502,8 @@ function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: 
           variant="ghost"
           size="icon"
           className="text-[color:var(--muted)] hover:text-[color:var(--text)]"
-          aria-label={`Project settings for ${project.name}`}
-          title="Project settings"
+          aria-label={`${t("projects.settings")} ${project.name}`}
+          title={t("projects.settings")}
           onClick={props.onSettings}
         >
           <Settings data-icon />
@@ -507,19 +514,19 @@ function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: 
 }
 
 function runbookStatusLabel(project: Project): string {
-  if (project.runbookStatus === "stale") return "Runbook stale";
-  if (project.runbookStatus === "learned") return "Runbook learned";
-  return "No runbook yet";
+  if (project.runbookStatus === "stale") return translate("projects.runbookStale");
+  if (project.runbookStatus === "learned") return translate("projects.runbookLearned");
+  return translate("projects.noRunbookYet");
 }
 
 function runbookHint(project: Project, runbookUpdatedAt: string): string {
   if (project.runbookStatus === "stale") {
-    return "Marked stale. Edit the Markdown or let the next agent session replace it from a session artifact.";
+    return translate("projects.runbookStaleHint");
   }
   if (runbookUpdatedAt || project.runbookUpdatedAt) {
-    return `Last updated ${runbookUpdatedAt || project.runbookUpdatedAt}. Agents receive this as advisory project memory.`;
+    return translate("projects.runbookUpdatedHint", { time: runbookUpdatedAt || project.runbookUpdatedAt });
   }
-  return "Agents can create this automatically. Human edits should stay as Markdown notes, not command-form fields.";
+  return translate("projects.runbookEmptyHint");
 }
 
 function runbookPlaceholder(): string {
@@ -543,11 +550,12 @@ function ClusterSelectField(props: {
   hint?: string;
   onChange: (clusterId: string) => void;
 }) {
+  const { t } = useMspaceTranslation();
   return (
-    <Field label="Default cluster" hint={props.hint}>
+    <Field label={t("projects.defaultCluster")} hint={props.hint}>
       {props.clusters.length === 0 ? (
         <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-          Create a cluster first to enable reusable test deployments.
+          {t("projects.createClusterFirst")}
         </div>
       ) : (
         <Select
@@ -558,7 +566,7 @@ function ClusterSelectField(props: {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="__none">No default cluster</SelectItem>
+            <SelectItem value="__none">{t("projects.noDefaultCluster")}</SelectItem>
             {props.clusters.map((cluster) => (
               <SelectItem key={cluster.id} value={cluster.id}>
                 {cluster.name}
@@ -572,6 +580,8 @@ function ClusterSelectField(props: {
 }
 
 function Modal(props: { title: string; description: string; onClose: () => void; children: ReactNode; compact?: boolean }) {
+  const { t } = useMspaceTranslation();
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") props.onClose();
@@ -583,7 +593,7 @@ function Modal(props: { title: string; description: string; onClose: () => void;
 
   return (
     <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
-      <button type="button" aria-label="Close modal backdrop" className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <button type="button" aria-label={t("projects.closeBackdrop")} className="absolute inset-0 cursor-default" onClick={props.onClose} />
       <section
         role="dialog"
         aria-modal="true"
@@ -606,7 +616,7 @@ function Modal(props: { title: string; description: string; onClose: () => void;
           </div>
           <button
             type="button"
-            aria-label="Close modal"
+            aria-label={t("projects.closeModal")}
             className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
             onClick={props.onClose}
           >

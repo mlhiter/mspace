@@ -5,10 +5,12 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import { CheckCircle2, MailPlus, ShieldCheck } from "lucide-react";
 import { controlPlaneApi, queryKeys, SELECTED_WORKSPACE_STORAGE_KEY, type AuthMeResult } from "@mspace/core";
 import { Button, Notice, PageFrame } from "@mspace/ui";
+import { useMspaceTranslation } from "@mspace/i18n";
 import { useMspaceAuth } from "./auth-context";
 import { RelativeTime } from "./time";
 
 export function WorkspaceInvitePage() {
+	const { t } = useMspaceTranslation();
 	const { token = "" } = useParams({ strict: false }) as { token?: string };
 	const auth = useMspaceAuth();
 	const queryClient = useQueryClient();
@@ -36,13 +38,13 @@ export function WorkspaceInvitePage() {
 
 	return (
 		<PageFrame
-			title="Join workspace"
-			subtitle="Accept an invite link to add this GitHub identity to a shared mspace workspace."
+			title={t("workspaceInvite.title")}
+			subtitle={t("workspaceInvite.subtitle")}
 			actions={
 				accepted ? (
 					<Button type="button" onClick={() => navigate({ to: "/settings" })}>
 						<ShieldCheck data-icon />
-						Open workspace
+						{t("workspaceInvite.openWorkspace")}
 					</Button>
 				) : null
 			}
@@ -55,31 +57,31 @@ export function WorkspaceInvitePage() {
 						</div>
 						<div className="min-w-0 flex-1">
 							<h2 className="text-[16px] font-semibold leading-6 text-[color:var(--text)]">
-								{accepted ? `Joined ${accepted.workspace.name}` : "Workspace invite"}
+								{accepted ? t("workspaceInvite.joinedTitle", { workspace: accepted.workspace.name }) : t("workspaceInvite.inviteTitle")}
 							</h2>
 							<p className="mt-1 text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
 								{accepted
-									? "This account can now use the shared workspace, team runtime registry, and server-backed Inbox receipts."
-									: "Sign in with GitHub, then accept the invite to join the workspace on this machine."}
+									? t("workspaceInvite.joinedBody")
+									: t("workspaceInvite.inviteBody")}
 							</p>
 						</div>
 					</div>
 
 					<div className="mt-5 grid gap-3 rounded-[9px] bg-[color:var(--block)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
-						<InviteFact label="Invite token" value={inviteTokenPrefix || "missing"} mono />
-						<InviteFact label="Current account" value={auth.user?.name || auth.user?.email || "Not signed in"} />
+						<InviteFact label={t("workspaceInvite.inviteToken")} value={inviteTokenPrefix || t("workspaceInvite.missing")} mono />
+						<InviteFact label={t("workspaceInvite.currentAccount")} value={auth.user?.name || auth.user?.email || t("workspaceInvite.notSignedIn")} />
 						{accepted ? (
 							<>
-								<InviteFact label="Workspace" value={accepted.workspace.name} />
-								<InviteFact label="Role" value={accepted.workspace.role} />
-								<InviteFact label="Accepted" value={<RelativeTime value={accepted.invitation.acceptedAt} />} />
+								<InviteFact label={t("workspaceInvite.workspace")} value={accepted.workspace.name} />
+								<InviteFact label={t("workspaceInvite.role")} value={accepted.workspace.role} />
+								<InviteFact label={t("workspaceInvite.accepted")} value={<RelativeTime value={accepted.invitation.acceptedAt} />} />
 							</>
 						) : null}
 					</div>
 
 					{auth.status !== "signed-in" ? (
 						<div className="mt-4">
-							<Notice>Use the workspace menu in the left rail to sign in with GitHub, then return to this invite page.</Notice>
+							<Notice>{t("workspaceInvite.signInNotice")}</Notice>
 						</div>
 					) : null}
 					{acceptInvite.error ? (
@@ -90,13 +92,13 @@ export function WorkspaceInvitePage() {
 					{accepted ? (
 						<div className="mt-4 flex items-center gap-2 rounded-[8px] bg-[color:var(--success-soft)] px-3 py-2 text-[13px] font-medium leading-5 text-[color:var(--success)]">
 							<CheckCircle2 data-icon />
-							Invite accepted
+							{t("workspaceInvite.inviteAccepted")}
 						</div>
 					) : (
 						<div className="mt-5 flex justify-end">
 							<Button type="button" disabled={!canAccept || acceptInvite.isPending} onClick={() => acceptInvite.mutate()}>
 								<MailPlus data-icon />
-								{acceptInvite.isPending ? "Joining" : "Join workspace"}
+								{acceptInvite.isPending ? t("workspaceInvite.joining") : t("workspaceInvite.joinWorkspace")}
 							</Button>
 						</div>
 					)}

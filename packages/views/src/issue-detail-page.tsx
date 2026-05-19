@@ -87,6 +87,7 @@ import {
   StatusBadge,
   cn,
 } from "@mspace/ui";
+import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import { FileTypeIcon } from "./file-type-icon";
 import { IssueDocumentEditor } from "./issue-document-editor";
 import { codexAvatarDataUrl } from "./agent-avatar";
@@ -181,14 +182,14 @@ function listOrEmpty<T>(items: T[] | null | undefined): T[] {
 }
 
 const COMMENT_REACTION_OPTIONS = [
-  { reaction: "thumbs_up", emoji: "👍", label: "Thumbs up" },
-  { reaction: "thumbs_down", emoji: "👎", label: "Thumbs down" },
-  { reaction: "laugh", emoji: "😄", label: "Laugh" },
-  { reaction: "hooray", emoji: "🎉", label: "Hooray" },
-  { reaction: "confused", emoji: "😕", label: "Confused" },
-  { reaction: "heart", emoji: "❤️", label: "Heart" },
-  { reaction: "rocket", emoji: "🚀", label: "Rocket" },
-  { reaction: "eyes", emoji: "👀", label: "Eyes" },
+  { reaction: "thumbs_up", emoji: "👍", labelKey: "issueDetail.reactions.thumbsUp" },
+  { reaction: "thumbs_down", emoji: "👎", labelKey: "issueDetail.reactions.thumbsDown" },
+  { reaction: "laugh", emoji: "😄", labelKey: "issueDetail.reactions.laugh" },
+  { reaction: "hooray", emoji: "🎉", labelKey: "issueDetail.reactions.hooray" },
+  { reaction: "confused", emoji: "😕", labelKey: "issueDetail.reactions.confused" },
+  { reaction: "heart", emoji: "❤️", labelKey: "issueDetail.reactions.heart" },
+  { reaction: "rocket", emoji: "🚀", labelKey: "issueDetail.reactions.rocket" },
+  { reaction: "eyes", emoji: "👀", labelKey: "issueDetail.reactions.eyes" },
 ] as const;
 
 function commentReactionOption(reaction: string) {
@@ -278,7 +279,7 @@ function fallbackAgent(agentId: string): AgentProfile {
     name: id.charAt(0).toUpperCase() + id.slice(1),
     mention: `@${id}`,
     provider: "codex",
-    description: "Agent profile",
+    description: translate("agents.agent"),
     instructions: "",
     enabled: true,
     builtIn: false,
@@ -293,9 +294,9 @@ function sessionAgent(session: AgentSession, agents: AgentProfile[]) {
 }
 
 function formatMentionPlaceholder(agents: AgentProfile[]) {
-  if (agents.length === 0) return "Write a reply.";
+  if (agents.length === 0) return translate("issueDetail.composer.noAgentsPlaceholder");
   const mentions = agents.slice(0, 3).map((agent) => agent.mention).join(", ");
-  return `Write a reply. Mention ${mentions}.`;
+  return translate("issueDetail.composer.placeholderWithMentions", { mentions });
 }
 
 function testDeployDefaults(detail: IssueDetail, clusters: Cluster[]): StartTestDeployInput {
@@ -319,23 +320,26 @@ function testDeployDefaults(detail: IssueDetail, clusters: Cluster[]): StartTest
 }
 
 function previewStrategy(environment: IssueTestEnvironment | null | undefined) {
-  if (!environment) return "not requested";
+  if (!environment) return translate("issueDetail.environment.notRequested");
   if (environment.exposureMode === "ingress" || environment.previewDomain) return environment.ingressClass ? `Ingress · ${environment.ingressClass}` : "Ingress";
   return environment.nodeHost ? `NodePort · ${environment.nodeHost}` : "NodePort";
 }
 
 function cleanupDecisionLabel(status: string) {
-  if (status === "retained") return "Retained for debug";
-  if (status === "cleanup_requested") return "Cleanup requested";
-  if (status === "cleaned") return "Cleaned";
-  if (status === "cleanup_failed") return "Cleanup failed";
-  return status ? status.replace(/[_-]+/g, " ") : "Not decided";
+  if (status === "retained") return translate("issueDetail.environment.retainedForDebug");
+  if (status === "not_decided") return translate("issueDetail.environment.notDecided");
+  if (status === "cleanup_requested") return translate("issueDetail.environment.cleanupRequested");
+  if (status === "cleaned") return translate("issueDetail.environment.cleaned");
+  if (status === "cleanup_failed") return translate("issueDetail.environment.cleanupFailed");
+  return status ? status.replace(/[_-]+/g, " ") : translate("issueDetail.environment.notDecided");
 }
 
 function namespaceStatusLabel(status: string) {
-  if (!status) return "Not requested";
-  if (status === "active") return "Active";
-  if (status === "planned") return "Planned";
+  if (!status) return translate("issueDetail.environment.notRequested");
+  if (status === "not_requested") return translate("issueDetail.environment.notRequested");
+  if (status === "active") return translate("issueDetail.environment.active");
+  if (status === "planned") return translate("issueDetail.environment.planned");
+  if (["deploying", "preview_unverified", "deploy_failed", "deploy_interrupted", "cleanup_requested", "cleanup_failed", "cleaned", "retained"].includes(status)) return translate(`issueStatus.${status}`);
   return status.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
@@ -653,10 +657,10 @@ function resourceName(value: string) {
 
 function resourceKindLabel(kind: string) {
   const normalized = normalizeResourceKind(kind);
-  if (normalized === "pod") return "Pods";
-  if (normalized === "deployment") return "Deployments";
-  if (normalized === "service") return "Services";
-  if (normalized === "ingress") return "Ingresses";
+  if (normalized === "pod") return translate("issueDetail.resources.pods");
+  if (normalized === "deployment") return translate("issueDetail.resources.deployments");
+  if (normalized === "service") return translate("issueDetail.resources.services");
+  if (normalized === "ingress") return translate("issueDetail.resources.ingresses");
   return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}s`;
 }
 
@@ -775,7 +779,14 @@ function parseEvidenceDetails(evidence: DeploymentEvidence): ParsedEvidence {
 }
 
 function EvidenceStatusPill(props: { tone: EvidenceTone }) {
-  const label = props.tone === "healthy" ? "Healthy" : props.tone === "warning" ? "Needs attention" : props.tone === "failed" ? "Collection failed" : "Collected";
+  const label =
+    props.tone === "healthy"
+      ? translate("issueDetail.evidence.healthy")
+      : props.tone === "warning"
+        ? translate("issueDetail.evidence.needsAttention")
+        : props.tone === "failed"
+          ? translate("issueDetail.evidence.collectionFailed")
+          : translate("issueDetail.evidence.collected");
   const Icon = props.tone === "failed" || props.tone === "warning" ? CircleAlert : props.tone === "healthy" ? CheckCircle2 : CircleDot;
   return (
     <span
@@ -824,7 +835,7 @@ function ResourceStatePill(props: { resource: EvidenceResource }) {
       )}
       title={props.resource.primaryLabel}
     >
-      {props.resource.primaryValue || "unknown"}
+      {props.resource.primaryValue || translate("common.unknown")}
     </span>
   );
 }
@@ -869,9 +880,9 @@ function EvidenceEvents(props: { events: EvidenceEvent[] }) {
   return (
     <section className="mt-4">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="text-[12px] font-semibold leading-5 text-[color:var(--muted-strong)]">Recent events</div>
+        <div className="text-[12px] font-semibold leading-5 text-[color:var(--muted-strong)]">{translate("issueDetail.evidence.recentEvents")}</div>
         {props.events.length > visibleEvents.length ? (
-          <div className="text-[12px] leading-5 text-[color:var(--faint)]">+{props.events.length - visibleEvents.length} older</div>
+          <div className="text-[12px] leading-5 text-[color:var(--faint)]">{translate("issueDetail.evidence.older", { count: props.events.length - visibleEvents.length })}</div>
         ) : null}
       </div>
       <div className="overflow-hidden rounded-[8px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
@@ -879,7 +890,7 @@ function EvidenceEvents(props: { events: EvidenceEvent[] }) {
           const warning = event.type.toLowerCase() === "warning";
           return (
             <div key={`${event.lastSeen}-${event.reason}-${event.object}-${index}`} className="grid gap-1 px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] md:grid-cols-[72px_112px_minmax(0,1fr)] md:gap-3">
-              <div className="font-mono text-[11px] tabular-nums text-[color:var(--faint)]">{event.lastSeen || "event"}</div>
+              <div className="font-mono text-[11px] tabular-nums text-[color:var(--faint)]">{event.lastSeen || translate("issueDetail.evidence.event")}</div>
               <div className={cn("inline-flex min-w-0 items-center gap-1.5 font-medium", warning ? "text-[color:var(--warning)]" : "text-[color:var(--muted-strong)]")}>
                 {warning ? <CircleAlert data-icon /> : <CircleDot data-icon />}
                 <span className="truncate">{event.reason || event.type}</span>
@@ -900,8 +911,8 @@ function SessionStatusMark(props: { status: string }) {
   if (props.status === "completed") {
     return (
       <span
-        aria-label="completed"
-        title="completed"
+        aria-label={translate("issueDetail.timeline.completed")}
+        title={translate("issueDetail.timeline.completed")}
         className="grid size-7 shrink-0 place-items-center rounded-full bg-[color:var(--success-soft)] text-[color:var(--success)]"
       >
         <CheckCircle2 data-icon />
@@ -913,19 +924,18 @@ function SessionStatusMark(props: { status: string }) {
 
 function WorkingSessionLine(props: { status: string; agentName: string; runtimeMode?: string; agentStatus?: string; runtimeTaskId?: string }) {
   const team = props.runtimeMode === "team";
-  const workerLabel = team ? "team worker" : "personal worker";
   const status = (props.agentStatus || props.status).trim().toLowerCase();
   const label = team
     ? status === "team-runtime-queued" || props.status === "queued"
-      ? "waiting for a team worker."
+      ? translate("issueDetail.timeline.waitingForTeamWorker")
       : status === "team-runtime-claimed"
-        ? "claimed by a team worker."
-        : "running on a team worker."
+        ? translate("issueDetail.timeline.claimedByTeamWorker")
+        : translate("issueDetail.timeline.runningOnTeamWorker")
     : props.status === "queued"
-      ? "waiting for a personal worker."
+      ? translate("issueDetail.timeline.waitingForPersonalWorker")
       : status === "personal-runtime-claimed"
-        ? "claimed by a personal worker."
-        : `running on a ${workerLabel}.`;
+        ? translate("issueDetail.timeline.claimedByPersonalWorker")
+        : translate("issueDetail.timeline.runningOnPersonalWorker");
   return (
     <div className="inline-flex min-w-0 items-center gap-2 text-[13px] leading-6 text-[color:var(--muted)]">
       <span className="relative flex size-2 shrink-0">
@@ -951,7 +961,7 @@ function StopSessionButton(props: { isStopping?: boolean; onStop: () => void }) 
       onClick={props.onStop}
     >
       <CircleStop data-icon />
-      {props.isStopping ? "Stopping" : "Stop"}
+      {props.isStopping ? translate("issueDetail.timeline.stopping") : translate("issueDetail.timeline.stop")}
     </Button>
   );
 }
@@ -989,7 +999,7 @@ function SessionFileChanges(props: { changes: WorkspaceChange[]; workdir: string
         );
       })}
       {visibleChanges.length > changes.length ? (
-        <span className="text-[12px] leading-5 text-[color:var(--muted)]">+{visibleChanges.length - changes.length} more</span>
+        <span className="text-[12px] leading-5 text-[color:var(--muted)]">{translate("issueDetail.timeline.moreFiles", { count: visibleChanges.length - changes.length })}</span>
       ) : null}
     </div>
   );
@@ -1009,16 +1019,17 @@ function IssueSubTabs(props: {
   active: IssueTab;
   onChange: (tab: IssueTab) => void;
 }) {
+  const { t } = useMspaceTranslation();
   const tabs: Array<{ value: IssueTab; label: string; icon: typeof CircleDot }> = [
-    { value: "overview", label: "Overview", icon: CircleDot },
-    { value: "commits", label: "Commits", icon: GitCommit },
-    { value: "sessions", label: "Sessions", icon: History },
-    { value: "resources", label: "Resources", icon: Boxes },
-    { value: "evidence", label: "Evidence", icon: CheckCircle2 },
+    { value: "overview", label: t("issueDetail.tabs.overview"), icon: CircleDot },
+    { value: "commits", label: t("issueDetail.tabs.commits"), icon: GitCommit },
+    { value: "sessions", label: t("issueDetail.tabs.sessions"), icon: History },
+    { value: "resources", label: t("issueDetail.tabs.resources"), icon: Boxes },
+    { value: "evidence", label: t("issueDetail.tabs.evidence"), icon: CheckCircle2 },
   ];
 
   return (
-    <div className="mb-7 flex min-w-0 flex-wrap gap-1 border-b border-[color:var(--line)] pb-2" role="tablist" aria-label="Issue sections">
+    <div className="mb-7 flex min-w-0 flex-wrap gap-1 border-b border-[color:var(--line)] pb-2" role="tablist" aria-label={t("issueDetail.tabs.sections")}>
       {tabs.map((tab) => {
         const Icon = tab.icon;
         const active = props.active === tab.value;
@@ -1048,7 +1059,7 @@ function IssueSubTabs(props: {
 function ChangeNodeFileList(props: { changes: WorkspaceChange[]; workdir: string }) {
   const visibleChanges = visibleWorkspaceFileChanges(props.changes);
   if (visibleChanges.length === 0) {
-    return <div className="text-[13px] leading-6 text-[color:var(--muted)]">No changed files were reported for this commit.</div>;
+    return <div className="text-[13px] leading-6 text-[color:var(--muted)]">{translate("issueDetail.commits.noChangedFiles")}</div>;
   }
   return (
     <div className="grid gap-1.5">
@@ -1113,7 +1124,7 @@ function parseDiffGitLine(line: string) {
 function displayDiffPath(file: ParsedDiffFile) {
   if (file.newPath && file.newPath !== "/dev/null") return file.newPath;
   if (file.oldPath && file.oldPath !== "/dev/null") return file.oldPath;
-  return "Changed file";
+  return translate("issueDetail.commits.changedFile");
 }
 
 function parseUnifiedDiffPreview(text: string) {
@@ -1226,7 +1237,7 @@ function DiffPreview(props: { text: string; truncated: boolean; fileIdPrefix?: s
     <div className="overflow-hidden rounded-[9px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
       {props.truncated ? (
         <div className="border-b border-[color:var(--line)] bg-[color:var(--warning-soft)] px-3 py-2 text-[12px] leading-5 text-[color:var(--warning)]">
-          Diff preview was truncated at the stored limit.
+          {translate("issueDetail.commits.diffPreviewTruncated")}
         </div>
       ) : null}
       <div className={cn("overflow-auto", props.constrained === false ? "" : "max-h-[680px]")}>
@@ -1242,7 +1253,7 @@ function DiffPreview(props: { text: string; truncated: boolean; fileIdPrefix?: s
 
 function DiffFallback(props: { rows: ParsedDiffRow[] }) {
   if (props.rows.length === 0) {
-    return <div className="px-3 py-2 text-[13px] leading-6 text-[color:var(--muted)]">No diff rows were found in this preview.</div>;
+    return <div className="px-3 py-2 text-[13px] leading-6 text-[color:var(--muted)]">{translate("issueDetail.commits.noDiffRows")}</div>;
   }
   return (
     <div className="grid min-w-[720px] gap-0 py-1 font-mono text-[12px] leading-5">
@@ -1341,15 +1352,15 @@ function handoffMatchesNode(handoff: IssueHandoff, node: IssueChangeNode) {
 
 function handoffTitle(handoff: IssueHandoff) {
   if (handoff.prNumber > 0) return `PR #${handoff.prNumber}`;
-  if (handoff.prUrl) return "Pull request";
-  return "Branch";
+  if (handoff.prUrl) return translate("issueDetail.handoff.pullRequest");
+  return translate("issueDetail.handoff.branch");
 }
 
 function handoffStateLabel(handoff: IssueHandoff) {
-  if (handoff.error) return "Needs attention";
+  if (handoff.error) return translate("issueDetail.handoff.needsAttention");
   if (handoff.prState) return handoff.prState.replace(/[_-]+/g, " ").toLowerCase();
-  if (handoff.prUrl) return "Synced";
-  return "Branch";
+  if (handoff.prUrl) return translate("issueDetail.handoff.synced");
+  return translate("issueDetail.handoff.branch");
 }
 
 function HandoffStatusPill(props: { handoff: IssueHandoff }) {
@@ -1370,7 +1381,7 @@ function issuePullRequestHandoff(handoffs: IssueHandoff[]) {
 }
 
 function changeNodeSourceLabel(node: IssueChangeNode) {
-  return node.branch || "No branch captured";
+  return node.branch || translate("issueDetail.handoff.noBranchCaptured");
 }
 
 function prSourceBranchNodes(changeNodes: IssueChangeNode[]) {
@@ -1396,7 +1407,7 @@ function HandoffMeta(props: { label: string; value: string; mono?: boolean; titl
         )}
         title={props.title || props.value}
       >
-        {props.value || "Not recorded"}
+        {props.value || translate("issueDetail.handoff.notRecorded")}
       </div>
     </div>
   );
@@ -1414,6 +1425,7 @@ function IssueHandoffPanel(props: {
   onCreatePr: (node: IssueChangeNode) => void;
   onRefresh: (handoff: IssueHandoff) => void;
 }) {
+  const { t } = useMspaceTranslation();
   const nodes = useMemo(() => prSourceBranchNodes(props.changeNodes), [props.changeNodes]);
   const [sourceBranch, setSourceBranch] = useState(nodes[0]?.branch || "");
   useEffect(() => {
@@ -1429,7 +1441,7 @@ function IssueHandoffPanel(props: {
   const syncedPR = issuePullRequestHandoff(props.handoffs);
   const primaryHandoff = syncedPR || props.handoffs[0];
   const canCreate = Boolean(selectedNode?.branch) && !syncedPR?.prUrl && !props.isCreatingPr && !props.disabled;
-  const displayBranch = primaryHandoff?.branch || selectedNode?.branch || "No branch captured";
+  const displayBranch = primaryHandoff?.branch || selectedNode?.branch || translate("issueDetail.handoff.noBranchCaptured");
   const sourceCommitValue =
     primaryHandoff?.headCommitSha ||
     primaryHandoff?.sourceCommitSha ||
@@ -1446,9 +1458,9 @@ function IssueHandoffPanel(props: {
           </span>
           <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold leading-5 text-[color:var(--text)]">
             <div>
-              <div>Pull request</div>
+              <div>{t("issueDetail.handoff.pullRequest")}</div>
               <div className="mt-0.5 text-[12px] font-normal leading-5 text-[color:var(--muted)]">
-                {props.disabledReason || (props.disabled ? "PR handoff is still runner-backed for this issue." : "One issue-level PR, backed by the commits below.")}
+                {props.disabledReason || (props.disabled ? t("issueDetail.handoff.runnerBacked") : t("issueDetail.handoff.description"))}
               </div>
             </div>
           </div>
@@ -1457,11 +1469,11 @@ function IssueHandoffPanel(props: {
           <div className="flex shrink-0 flex-wrap items-center gap-1.5">
             <Button type="button" variant="ghost" size="sm" onClick={() => void openRichLink(syncedPR.prUrl)}>
               <ExternalLink data-icon />
-              Open PR
+              {t("issueDetail.handoff.openPr")}
             </Button>
             <Button type="button" variant="ghost" size="sm" disabled={props.disabled || props.refreshingHandoffId === syncedPR.id} onClick={() => props.onRefresh(syncedPR)}>
               <RefreshCw data-icon />
-              {props.refreshingHandoffId === syncedPR.id ? "Refreshing" : "Refresh"}
+              {props.refreshingHandoffId === syncedPR.id ? t("issueDetail.handoff.refreshing") : t("issueDetail.handoff.refresh")}
             </Button>
           </div>
         ) : (
@@ -1470,11 +1482,11 @@ function IssueHandoffPanel(props: {
             variant="secondary"
             size="sm"
             disabled={!canCreate}
-            title={props.disabledReason || (props.disabled ? "PR handoff for server-owned issues still uses the local runner bridge." : !selectedNode?.branch ? "A captured branch is required before PR sync." : undefined)}
+            title={props.disabledReason || (props.disabled ? t("issueDetail.handoff.serverRunnerBacked") : !selectedNode?.branch ? t("issueDetail.handoff.branchRequired") : undefined)}
             onClick={() => selectedNode && props.onCreatePr(selectedNode)}
           >
             <GitPullRequest data-icon />
-            {props.isCreatingPr ? "Syncing" : "Create or sync PR"}
+            {props.isCreatingPr ? t("issueDetail.handoff.syncing") : t("issueDetail.handoff.createOrSyncPr")}
           </Button>
         )}
       </div>
@@ -1497,10 +1509,10 @@ function IssueHandoffPanel(props: {
             {syncedPR.prTitle ? <span className="min-w-0 truncate text-[14px] font-medium leading-6 text-[color:var(--text)]">{syncedPR.prTitle}</span> : null}
           </div>
           <div className="grid gap-3 sm:grid-cols-4">
-            <HandoffMeta label="Source branch" value={displayBranch} mono />
-            <HandoffMeta label="Head commit" value={sourceCommitValue ? sourceCommitValue.slice(0, 12) : ""} mono title={sourceCommitValue} />
-            <HandoffMeta label="Commits" value={commitCount ? `${commitCount}` : ""} mono />
-            <HandoffMeta label="Checked" value={checkedAt ? formatRelativeTime(checkedAt) : ""} title={checkedAt ? formatAbsoluteTime(checkedAt) : undefined} />
+            <HandoffMeta label={t("issueDetail.handoff.sourceBranch")} value={displayBranch} mono />
+            <HandoffMeta label={t("issueDetail.handoff.headCommit")} value={sourceCommitValue ? sourceCommitValue.slice(0, 12) : ""} mono title={sourceCommitValue} />
+            <HandoffMeta label={t("issueDetail.handoff.commits")} value={commitCount ? `${commitCount}` : ""} mono />
+            <HandoffMeta label={t("issueDetail.handoff.checked")} value={checkedAt ? formatRelativeTime(checkedAt) : ""} title={checkedAt ? formatAbsoluteTime(checkedAt) : undefined} />
           </div>
           {syncedPR.error ? <Notice tone="danger">{syncedPR.error}</Notice> : null}
         </div>
@@ -1508,13 +1520,13 @@ function IssueHandoffPanel(props: {
         <div className="grid gap-3 border-t border-[color:var(--line)] pt-3">
           {nodes.length > 1 ? (
             <div className="grid gap-1.5">
-              <div className="text-[11px] font-medium leading-4 text-[color:var(--faint)]">Source branch for PR</div>
+              <div className="text-[11px] font-medium leading-4 text-[color:var(--faint)]">{t("issueDetail.handoff.sourceBranchForPr")}</div>
               <Select value={selectedNode?.branch || "__none"} onValueChange={(value) => setSourceBranch(value === "__none" ? "" : value)}>
                 <SelectTrigger className="max-w-full sm:max-w-[380px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none">Select source branch</SelectItem>
+                  <SelectItem value="__none">{t("issueDetail.handoff.selectSourceBranch")}</SelectItem>
                   {nodes.map((node) => (
                     <SelectItem key={node.branch} value={node.branch}>
                       {changeNodeSourceLabel(node)}
@@ -1525,12 +1537,12 @@ function IssueHandoffPanel(props: {
             </div>
           ) : null}
           <div className="grid gap-3 sm:grid-cols-3">
-            <HandoffMeta label="Source branch" value={displayBranch} mono />
-            <HandoffMeta label="Source commit" value={sourceCommitValue ? sourceCommitValue.slice(0, 12) : ""} mono title={sourceCommitValue} />
-            <HandoffMeta label="Status" value={selectedNode?.branch ? "Ready to sync" : "Waiting for captured branch"} />
+            <HandoffMeta label={t("issueDetail.handoff.sourceBranch")} value={displayBranch} mono />
+            <HandoffMeta label={t("issueDetail.handoff.sourceCommit")} value={sourceCommitValue ? sourceCommitValue.slice(0, 12) : ""} mono title={sourceCommitValue} />
+            <HandoffMeta label={t("issueDetail.handoff.status")} value={selectedNode?.branch ? t("issueDetail.handoff.readyToSync") : t("issueDetail.handoff.waitingForBranch")} />
           </div>
           {primaryHandoff?.error ? <Notice tone="danger">{primaryHandoff.error}</Notice> : null}
-          <div className="text-[12px] leading-5 text-[color:var(--muted)]">mspace will ask GitHub for a PR on this branch before creating a new one.</div>
+          <div className="text-[12px] leading-5 text-[color:var(--muted)]">{t("issueDetail.handoff.githubLookupHint")}</div>
         </div>
       )}
 
@@ -1555,6 +1567,7 @@ function IssueCommitsTab(props: {
   onCreatePr: (node: IssueChangeNode) => void;
   onRefreshHandoff: (handoff: IssueHandoff) => void;
 }) {
+  const { t } = useMspaceTranslation();
   const nodes = listOrEmpty(props.changeNodes);
 
   if (nodes.length === 0) {
@@ -1564,11 +1577,11 @@ function IssueCommitsTab(props: {
           <div className="flex min-w-0 items-center gap-2">
             <GitCommit data-icon className="shrink-0 text-[color:var(--muted)]" />
             <div className="min-w-0">
-              <h2 className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">Commits</h2>
-              <div className="text-[12px] leading-5 text-[color:var(--muted)]">Captured commits open into a dedicated review page.</div>
+              <h2 className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">{t("issueDetail.commits.title")}</h2>
+              <div className="text-[12px] leading-5 text-[color:var(--muted)]">{t("issueDetail.commits.emptyDescription")}</div>
             </div>
           </div>
-          <InlineMeta>0 captured</InlineMeta>
+          <InlineMeta>{t("issueDetail.commits.captured", { count: 0 })}</InlineMeta>
         </div>
         <IssueHandoffPanel
           changeNodes={nodes}
@@ -1582,7 +1595,7 @@ function IssueCommitsTab(props: {
           onCreatePr={props.onCreatePr}
           onRefresh={props.onRefreshHandoff}
         />
-        <Notice>No commits have been captured for this issue yet. Run an agent session that changes code, then each captured commit will appear here with its diff.</Notice>
+        <Notice>{t("issueDetail.commits.empty")}</Notice>
       </section>
     );
   }
@@ -1593,11 +1606,11 @@ function IssueCommitsTab(props: {
         <div className="flex min-w-0 items-center gap-2">
           <GitCommit data-icon className="shrink-0 text-[color:var(--muted)]" />
           <div className="min-w-0">
-            <h2 className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">Commits</h2>
-            <div className="text-[12px] leading-5 text-[color:var(--muted)]">Select a captured commit to inspect its files and diff.</div>
+            <h2 className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">{t("issueDetail.commits.title")}</h2>
+            <div className="text-[12px] leading-5 text-[color:var(--muted)]">{t("issueDetail.commits.description")}</div>
           </div>
         </div>
-        <InlineMeta>{nodes.length} captured</InlineMeta>
+        <InlineMeta>{t("issueDetail.commits.captured", { count: nodes.length })}</InlineMeta>
       </div>
 
       <IssueHandoffPanel
@@ -1634,6 +1647,7 @@ function CommitListRow(props: {
   session?: AgentSession;
   agents: AgentProfile[];
 }) {
+  const { t } = useMspaceTranslation();
   const agent = props.session ? sessionAgent(props.session, props.agents) : undefined;
   return (
     <Link
@@ -1647,14 +1661,14 @@ function CommitListRow(props: {
           {props.node.shortCommitSha || props.node.commitSha.slice(0, 12)}
         </span>
         <span className="ml-auto shrink-0 rounded-full bg-[color:var(--block)] px-2 py-0.5 text-[11px] leading-4 text-[color:var(--muted-strong)]">
-          {props.node.filesChanged} files
+          {t("issueDetail.commits.files", { count: props.node.filesChanged })}
         </span>
       </div>
-      <div className="line-clamp-2 text-[13px] leading-5 text-[color:var(--muted-strong)]">{props.node.subject || "No commit subject"}</div>
+      <div className="line-clamp-2 text-[13px] leading-5 text-[color:var(--muted-strong)]">{props.node.subject || t("issueDetail.commits.noSubject")}</div>
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] leading-4 text-[color:var(--faint)]">
         <span>{agent?.name || "Codex"}</span>
-        <span>Session {props.node.sessionId.slice(0, 8)}</span>
-        <span>{props.node.branch || "detached"}</span>
+        <span>{t("issueDetail.commits.session")} {props.node.sessionId.slice(0, 8)}</span>
+        <span>{props.node.branch || t("issueDetail.commits.detached")}</span>
         <span title={formatAbsoluteTime(props.node.createdAt)}>{formatRelativeTime(props.node.createdAt)}</span>
       </div>
     </Link>
@@ -1662,6 +1676,7 @@ function CommitListRow(props: {
 }
 
 function CommitReviewFilesNav(props: { node: IssueChangeNode; workdir: string; fileIdPrefix: string }) {
+  const { t } = useMspaceTranslation();
   const [query, setQuery] = useState("");
   const changes = visibleWorkspaceFileChanges(listOrEmpty(props.node.changes));
   const normalizedQuery = query.trim().toLowerCase();
@@ -1677,7 +1692,7 @@ function CommitReviewFilesNav(props: { node: IssueChangeNode; workdir: string; f
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter files..."
+            placeholder={t("issueDetail.commits.filterFiles")}
             className="h-9 pl-8"
           />
         </div>
@@ -1710,7 +1725,7 @@ function CommitReviewFilesNav(props: { node: IssueChangeNode; workdir: string; f
           </div>
         ) : (
           <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)]">
-            No files match this filter.
+            {t("issueDetail.commits.noFilterMatches")}
           </div>
         )}
       </div>
@@ -1719,6 +1734,7 @@ function CommitReviewFilesNav(props: { node: IssueChangeNode; workdir: string; f
 }
 
 export function IssueCommitDetailPage() {
+  const { t } = useMspaceTranslation();
   const { issueId = "", commitSha = "" } = useParams({ strict: false }) as { issueId?: string; commitSha?: string };
   const commitRef = decodeURIComponent(commitSha);
   const auth = useMspaceAuth();
@@ -1745,8 +1761,8 @@ export function IssueCommitDetailPage() {
 
   if (!detail) {
     return (
-      <PageFrame title="Commit" subtitle="Load captured source changes for this issue.">
-        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? "Loading commit..." : "Issue not found."}</div>
+      <PageFrame title={t("issueDetail.commits.commit")} subtitle={t("issueDetail.commits.detailSubtitle")}>
+        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? t("issueDetail.commits.loading") : t("issueDetail.page.notFound")}</div>
       </PageFrame>
     );
   }
@@ -1754,16 +1770,16 @@ export function IssueCommitDetailPage() {
   if (!selectedNode) {
     return (
       <PageFrame
-        title="Commit not found"
-        subtitle="This issue does not have a captured commit with that SHA."
+        title={t("issueDetail.commits.notFound")}
+        subtitle={t("issueDetail.commits.notFoundSubtitle")}
         breadcrumbs={[
           { label: "mspace", to: "/inbox" },
-          { label: "Issues", to: "/issues" },
+          { label: t("issueDetail.page.issues"), to: "/issues" },
           { label: detail.issue.title, to: "/issues/$issueId", params: { issueId }, search: issueTabSearch("commits") },
-          { label: "Commit" },
+          { label: t("issueDetail.commits.commit") },
         ]}
       >
-        <Notice>No captured commit matched {commitRef || "this route"}.</Notice>
+        <Notice>{t("issueDetail.commits.noMatch", { commitRef: commitRef || t("issueDetail.commits.thisRoute") })}</Notice>
       </PageFrame>
     );
   }
@@ -1771,10 +1787,10 @@ export function IssueCommitDetailPage() {
   return (
     <PageFrame
       title={selectedNode.shortCommitSha || selectedNode.commitSha.slice(0, 12)}
-      subtitle={selectedNode.subject || "No commit subject"}
+      subtitle={selectedNode.subject || t("issueDetail.commits.noSubject")}
       breadcrumbs={[
         { label: "mspace", to: "/inbox" },
-        { label: "Issues", to: "/issues" },
+        { label: t("issueDetail.page.issues"), to: "/issues" },
         { label: detail.issue.title, to: "/issues/$issueId", params: { issueId }, search: issueTabSearch("commits") },
         { label: selectedNode.shortCommitSha || selectedNode.commitSha.slice(0, 12) },
       ]}
@@ -1783,10 +1799,10 @@ export function IssueCommitDetailPage() {
         <Button type="button" variant="ghost" size="sm" asChild>
           <Link to="/issues/$issueId" params={{ issueId }} search={issueTabSearch("commits")}>
             <ArrowLeft data-icon />
-            Back to issue
+            {t("issueDetail.page.backToIssue")}
           </Link>
         </Button>
-        {selectedNode.diffTruncated ? <InlineMeta>Diff truncated</InlineMeta> : null}
+        {selectedNode.diffTruncated ? <InlineMeta>{t("issueDetail.commits.diffTruncated")}</InlineMeta> : null}
       </div>
 
       <section className="mb-4 rounded-[10px] bg-[color:var(--paper)] px-4 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
@@ -1796,9 +1812,9 @@ export function IssueCommitDetailPage() {
         </div>
         <div className="mt-2 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
           <span>{selectedAgent?.name || "Codex"}</span>
-          <span>Session {selectedNode.sessionId.slice(0, 8)}</span>
-          <span>{selectedNode.branch || "detached"}</span>
-          <span>{selectedNode.filesChanged} files</span>
+          <span>{t("issueDetail.commits.session")} {selectedNode.sessionId.slice(0, 8)}</span>
+          <span>{selectedNode.branch || t("issueDetail.commits.detached")}</span>
+          <span>{t("issueDetail.commits.files", { count: selectedNode.filesChanged })}</span>
           <span title={formatAbsoluteTime(selectedNode.createdAt)}>{formatRelativeTime(selectedNode.createdAt)}</span>
         </div>
       </section>
@@ -1814,7 +1830,7 @@ export function IssueCommitDetailPage() {
             <DiffPreview text={selectedNode.diffPreview} truncated={selectedNode.diffTruncated} fileIdPrefix={fileIdPrefix} constrained={false} />
           ) : (
             <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-              No diff preview is available for this commit.
+              {t("issueDetail.commits.noDiffPreview")}
             </div>
           )}
         </main>
@@ -1824,9 +1840,10 @@ export function IssueCommitDetailPage() {
 }
 
 function IssueSessionsTab(props: { sessions: AgentSession[]; agents: AgentProfile[] }) {
+  const { t } = useMspaceTranslation();
   const sessions = listOrEmpty(props.sessions);
   if (sessions.length === 0) {
-    return <Notice>No agent sessions have run on this issue yet.</Notice>;
+    return <Notice>{t("issueDetail.sessions.empty")}</Notice>;
   }
   return (
     <section className="grid gap-2">
@@ -1858,10 +1875,11 @@ function IssueResourcesTab(props: {
   error?: Error | null;
   onRefresh: () => void;
 }) {
+  const { t } = useMspaceTranslation();
   const environment = props.environment;
   const resources = props.resources;
   if (!environment) {
-    return <Notice>No issue test environment has been created yet. Deploy a test environment before inspecting namespace resources.</Notice>;
+    return <Notice>{t("issueDetail.resources.noEnvironment")}</Notice>;
   }
 
   return (
@@ -1873,9 +1891,9 @@ function IssueResourcesTab(props: {
               <Boxes data-icon />
             </div>
             <div className="min-w-0">
-              <h2 className="text-[15px] font-semibold leading-6 text-[color:var(--text)]">Namespace resources</h2>
+              <h2 className="text-[15px] font-semibold leading-6 text-[color:var(--text)]">{t("issueDetail.resources.namespaceResources")}</h2>
               <div className="mt-1 min-w-0 break-all font-mono text-[12px] leading-5 text-[color:var(--muted)]">
-                {environment.namespace || "namespace pending"}
+                {environment.namespace || t("issueDetail.resources.namespacePending")}
               </div>
             </div>
           </div>
@@ -1883,12 +1901,12 @@ function IssueResourcesTab(props: {
             {resources?.refreshedAt ? (
               <span className="inline-flex items-center gap-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
                 <Clock3 data-icon className="text-[color:var(--faint)]" />
-                Refreshed {formatRelativeTime(resources.refreshedAt)}
+                {t("issueDetail.resources.refreshed", { time: formatRelativeTime(resources.refreshedAt) })}
               </span>
             ) : null}
             <Button type="button" variant="secondary" size="sm" disabled={props.isFetching} onClick={props.onRefresh}>
               <RefreshCw data-icon className={cn(props.isFetching && "motion-safe:animate-spin")} />
-              {props.isFetching ? "Refreshing" : "Refresh"}
+              {props.isFetching ? t("issueDetail.resources.refreshing") : t("issueDetail.resources.refresh")}
             </Button>
           </div>
         </div>
@@ -1896,7 +1914,7 @@ function IssueResourcesTab(props: {
       </div>
 
       {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
-      {props.isLoading && !resources ? <Notice>Loading namespace resources...</Notice> : null}
+      {props.isLoading && !resources ? <Notice>{t("issueDetail.resources.loading")}</Notice> : null}
       {resources?.errors.length ? (
         <Notice>
           {resources.errors.map((item) => `${item.section}: ${item.message}`).join(" · ")}
@@ -1906,48 +1924,48 @@ function IssueResourcesTab(props: {
       {resources ? (
         <>
           <ResourceMetricStrip resources={resources} />
-          <KubernetesResourceSection title="Pods" count={resources.pods.length} empty="No pods were found in this issue namespace.">
+          <KubernetesResourceSection title={t("issueDetail.resources.pods")} count={resources.pods.length} empty={t("issueDetail.resources.noPods")}>
             <div className="grid gap-2">
               {resources.pods.map((pod) => (
                 <article key={pod.name} className="overflow-hidden rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
                   <ResourceRowHeader
                     title={pod.name}
-                    status={pod.phase || "Unknown"}
+                    status={pod.phase || t("common.unknown")}
                     icon={pod.phase === "Running" || pod.phase === "Succeeded" ? CheckCircle2 : pod.phase === "Failed" ? CircleAlert : CircleDot}
                     tone={pod.phase === "Running" || pod.phase === "Succeeded" ? "success" : pod.phase === "Failed" ? "danger" : "neutral"}
                   />
                   <div className="grid md:grid-cols-4">
-                    <ResourceFact label="Ready" value={`${pod.readyContainers}/${pod.totalContainers}`} />
-                    <ResourceFact label="Restarts" value={String(pod.restarts)} />
-                    <ResourceFact label="Node" value={pod.nodeName || "not scheduled"} mono />
-                    <ResourceFact label="Pod IP" value={pod.podIp || "not assigned"} mono />
+                    <ResourceFact label={t("issueDetail.resources.ready")} value={`${pod.readyContainers}/${pod.totalContainers}`} />
+                    <ResourceFact label={t("issueDetail.resources.restarts")} value={String(pod.restarts)} />
+                    <ResourceFact label={t("issueDetail.resources.node")} value={pod.nodeName || t("issueDetail.resources.notScheduled")} mono />
+                    <ResourceFact label={t("issueDetail.resources.podIp")} value={pod.podIp || t("issueDetail.resources.notAssigned")} mono />
                   </div>
                 </article>
               ))}
             </div>
           </KubernetesResourceSection>
 
-          <KubernetesResourceSection title="Services" count={resources.services.length} empty="No services were found in this issue namespace.">
+          <KubernetesResourceSection title={t("issueDetail.resources.services")} count={resources.services.length} empty={t("issueDetail.resources.noServices")}>
             <div className="grid gap-2">
               {resources.services.map((service) => (
                 <article key={service.name} className="overflow-hidden rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
-                  <ResourceRowHeader title={service.name} status={service.type || "Service"} icon={Globe2} tone="neutral" />
+                  <ResourceRowHeader title={service.name} status={service.type || t("issueDetail.resources.service")} icon={Globe2} tone="neutral" />
                   <div className="grid md:grid-cols-3">
-                    <ResourceFact label="Cluster IP" value={service.clusterIp || "not assigned"} mono />
-                    <ResourceFact label="External IP" value={service.externalIp || "none"} mono />
-                    <ResourceFact label="Created" value={service.createdAt ? formatRelativeTime(service.createdAt) : "unknown"} />
+                    <ResourceFact label={t("issueDetail.resources.clusterIp")} value={service.clusterIp || t("issueDetail.resources.notAssigned")} mono />
+                    <ResourceFact label={t("issueDetail.resources.externalIp")} value={service.externalIp || t("issueDetail.resources.none")} mono />
+                    <ResourceFact label={t("issueDetail.resources.created")} value={service.createdAt ? formatRelativeTime(service.createdAt) : t("issueDetail.resources.unknown")} />
                   </div>
                   <div className="grid divide-y divide-[color:var(--line)] border-t border-[color:var(--line)]">
                     {service.ports.map((port) => (
                       <div key={`${port.name}-${port.port}-${port.nodePort}`} className="flex min-w-0 flex-wrap items-center gap-2 px-3 py-2 text-[12px] leading-5">
-                        <code className="font-mono text-[color:var(--text)]">{port.name || "port"}</code>
+                        <code className="font-mono text-[color:var(--text)]">{port.name || t("issueDetail.resources.port")}</code>
                         <span className="text-[color:var(--muted)]">{port.protocol}</span>
-                        <span className="font-mono text-[color:var(--muted-strong)]">{port.port} -&gt; {port.targetPort || "target"}</span>
+                        <span className="font-mono text-[color:var(--muted-strong)]">{port.port} -&gt; {port.targetPort || t("issueDetail.resources.target")}</span>
                         {port.nodePort > 0 ? <span className="font-mono text-[color:var(--muted-strong)]">node {port.nodePort}</span> : null}
                         {port.url ? (
                           <Button type="button" variant="ghost" size="sm" className="ml-auto h-7" onClick={() => void openRichLink(port.url)}>
                             <ExternalLink data-icon />
-                            Open
+                            {t("issueDetail.resources.open")}
                           </Button>
                         ) : null}
                       </div>
@@ -1958,21 +1976,21 @@ function IssueResourcesTab(props: {
             </div>
           </KubernetesResourceSection>
 
-          <KubernetesResourceSection title="Deployments" count={resources.deployments.length} empty="No deployments were found in this issue namespace.">
+          <KubernetesResourceSection title={t("issueDetail.resources.deployments")} count={resources.deployments.length} empty={t("issueDetail.resources.noDeployments")}>
             <div className="grid gap-2">
               {resources.deployments.map((deployment) => (
                 <article key={deployment.name} className="overflow-hidden rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
                   <ResourceRowHeader
                     title={deployment.name}
-                    status={`${deployment.readyReplicas}/${deployment.replicas || 0} ready`}
+                    status={`${deployment.readyReplicas}/${deployment.replicas || 0} ${t("issueDetail.resources.ready")}`}
                     icon={deployment.readyReplicas >= deployment.replicas && deployment.replicas > 0 ? CheckCircle2 : CircleAlert}
                     tone={deployment.readyReplicas >= deployment.replicas && deployment.replicas > 0 ? "success" : "warning"}
                   />
                   <div className="grid md:grid-cols-4">
-                    <ResourceFact label="Replicas" value={String(deployment.replicas)} />
-                    <ResourceFact label="Ready" value={String(deployment.readyReplicas)} />
-                    <ResourceFact label="Updated" value={String(deployment.updatedReplicas)} />
-                    <ResourceFact label="Available" value={String(deployment.availableReplicas)} />
+                    <ResourceFact label={t("issueDetail.resources.replicas")} value={String(deployment.replicas)} />
+                    <ResourceFact label={t("issueDetail.resources.ready")} value={String(deployment.readyReplicas)} />
+                    <ResourceFact label={t("issueDetail.resources.updated")} value={String(deployment.updatedReplicas)} />
+                    <ResourceFact label={t("issueDetail.resources.available")} value={String(deployment.availableReplicas)} />
                   </div>
                   {deployment.conditions.length > 0 ? (
                     <div className="grid gap-1.5 border-t border-[color:var(--line)] px-3 py-2">
@@ -1991,33 +2009,33 @@ function IssueResourcesTab(props: {
             </div>
           </KubernetesResourceSection>
 
-          <KubernetesResourceSection title="Ingresses" count={resources.ingresses.length} empty="No ingresses were found in this issue namespace.">
+          <KubernetesResourceSection title={t("issueDetail.resources.ingresses")} count={resources.ingresses.length} empty={t("issueDetail.resources.noIngresses")}>
             <div className="grid gap-2">
               {resources.ingresses.map((ingress) => (
                 <article key={ingress.name} className="overflow-hidden rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
                   <ResourceRowHeader title={ingress.name} status={ingress.className || "Ingress"} icon={Globe2} tone="neutral" />
                   <div className="grid md:grid-cols-3">
-                    <ResourceFact label="Class" value={ingress.className || "default"} />
-                    <ResourceFact label="Hosts" value={ingress.hosts.join(", ") || "none"} mono />
-                    <ResourceFact label="Addresses" value={ingress.addresses.join(", ") || "pending"} mono />
+                    <ResourceFact label={t("issueDetail.resources.class")} value={ingress.className || t("issueDetail.resources.default")} />
+                    <ResourceFact label={t("issueDetail.resources.hosts")} value={ingress.hosts.join(", ") || t("issueDetail.resources.none")} mono />
+                    <ResourceFact label={t("issueDetail.resources.addresses")} value={ingress.addresses.join(", ") || t("issueDetail.resources.pending")} mono />
                   </div>
                 </article>
               ))}
             </div>
           </KubernetesResourceSection>
 
-          <KubernetesResourceSection title="Events" count={resources.events.length} empty="No recent namespace events were returned.">
+          <KubernetesResourceSection title={t("issueDetail.resources.events")} count={resources.events.length} empty={t("issueDetail.resources.noEvents")}>
             <div className="grid gap-2">
               {resources.events.map((event, index) => (
                 <article key={`${event.involvedKind}-${event.involvedName}-${event.reason}-${index}`} className="grid gap-1 rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <StatusBadge value={event.type || "Event"} className="h-5 px-2 py-0 text-[11px]" />
-                    <span className="font-medium text-[13px] leading-5 text-[color:var(--text)]">{event.reason || "Event"}</span>
+                    <StatusBadge value={event.type || t("issueDetail.resources.event")} className="h-5 px-2 py-0 text-[11px]" />
+                    <span className="font-medium text-[13px] leading-5 text-[color:var(--text)]">{event.reason || t("issueDetail.resources.event")}</span>
                     <span className="font-mono text-[11px] leading-4 text-[color:var(--faint)]">{event.involvedKind}/{event.involvedName}</span>
                     {event.lastSeen ? <span className="ml-auto text-[11px] leading-4 text-[color:var(--faint)]">{formatRelativeTime(event.lastSeen)}</span> : null}
                   </div>
-                  <div className="text-[12px] leading-5 text-[color:var(--muted-strong)] [overflow-wrap:anywhere]">{event.message || "No event message."}</div>
-                  {event.count > 1 ? <div className="text-[11px] leading-4 text-[color:var(--faint)]">Count {event.count}</div> : null}
+                  <div className="text-[12px] leading-5 text-[color:var(--muted-strong)] [overflow-wrap:anywhere]">{event.message || t("issueDetail.resources.noEventMessage")}</div>
+                  {event.count > 1 ? <div className="text-[11px] leading-4 text-[color:var(--faint)]">{t("issueDetail.resources.count", { count: event.count })}</div> : null}
                 </article>
               ))}
             </div>
@@ -2033,14 +2051,15 @@ function ResourceContextBar(props: {
   cluster?: Cluster;
   resources?: IssueTestEnvironmentResources;
 }) {
+  const { t } = useMspaceTranslation();
   const environment = props.environment;
   const rows = [
-    { label: "Cluster", value: props.resources?.clusterName || props.cluster?.name || environment.clusterId || "not selected" },
-    { label: "Context", value: props.resources?.context || environment.kubeContext || "default context" },
-    { label: "Lifecycle", value: namespaceStatusLabel(props.resources?.namespaceStatus || environment.namespaceStatus) },
-    { label: "Exposure", value: previewStrategy(environment) },
-    { label: "Cleanup", value: cleanupDecisionLabel(environment.cleanupStatus) },
-    { label: "Preview", value: props.resources?.previewUrl || environment.previewUrl || "not available", mono: true },
+    { label: t("issueDetail.resources.cluster"), value: props.resources?.clusterName || props.cluster?.name || environment.clusterId || t("issueDetail.environment.notSelected") },
+    { label: t("issueDetail.resources.context"), value: props.resources?.context || environment.kubeContext || t("issueDetail.environment.defaultContext") },
+    { label: t("issueDetail.resources.lifecycle"), value: namespaceStatusLabel(props.resources?.namespaceStatus || environment.namespaceStatus) },
+    { label: t("issueDetail.resources.exposure"), value: previewStrategy(environment) },
+    { label: t("issueDetail.resources.cleanup"), value: cleanupDecisionLabel(environment.cleanupStatus) },
+    { label: t("issueDetail.resources.preview"), value: props.resources?.previewUrl || environment.previewUrl || t("issueDetail.environment.notAvailable"), mono: true },
   ];
   return (
     <div className="grid min-w-0 overflow-hidden rounded-[10px] bg-[color:var(--block-subtle)] shadow-[inset_0_0_0_1px_var(--line)] md:grid-cols-[1fr_1.15fr_0.85fr_0.85fr_0.85fr_1.4fr]">
@@ -2057,12 +2076,13 @@ function ResourceContextBar(props: {
 }
 
 function ResourceMetricStrip(props: { resources: IssueTestEnvironmentResources }) {
+  const { t } = useMspaceTranslation();
   const counts = [
-    { label: "Pods", value: props.resources.pods.length },
-    { label: "Services", value: props.resources.services.length },
-    { label: "Deployments", value: props.resources.deployments.length },
-    { label: "Ingresses", value: props.resources.ingresses.length },
-    { label: "Events", value: props.resources.events.length },
+    { label: t("issueDetail.resources.pods"), value: props.resources.pods.length },
+    { label: t("issueDetail.resources.services"), value: props.resources.services.length },
+    { label: t("issueDetail.resources.deployments"), value: props.resources.deployments.length },
+    { label: t("issueDetail.resources.ingresses"), value: props.resources.ingresses.length },
+    { label: t("issueDetail.resources.events"), value: props.resources.events.length },
   ];
   return (
     <div className="grid overflow-hidden rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)] sm:grid-cols-2 lg:grid-cols-5">
@@ -2130,6 +2150,7 @@ function ResourceFact(props: { label: string; value: string; mono?: boolean }) {
 
 function ReviewStatusPill(props: { status: string }) {
   const status = props.status || "not_reported";
+  const label = translate(`issueDetail.evidence.status.${status}`, { defaultValue: status.replace(/[_-]+/g, " ") });
   const tone =
     status === "passed" || status === "completed"
       ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
@@ -2142,7 +2163,7 @@ function ReviewStatusPill(props: { status: string }) {
           : "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
   return (
     <span className={cn("inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[12px] font-medium leading-5", tone)}>
-      {status.replace(/[_-]+/g, " ")}
+      {label}
     </span>
   );
 }
@@ -2161,7 +2182,7 @@ function EvidenceSection(props: { title: string; children: React.ReactNode; asid
 
 function ReviewMetaGrid(props: { rows: Array<{ label: string; value: string; mono?: boolean }> }) {
   const rows = props.rows.filter((row) => row.value);
-  if (rows.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">Not reported.</div>;
+  if (rows.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">{translate("issueDetail.sidebar.notReported")}.</div>;
   return (
     <div className="grid min-w-0 gap-2 md:grid-cols-2">
       {rows.map((row) => (
@@ -2183,7 +2204,7 @@ function ReviewResultBlock(props: { result: ReviewEvidenceResult; empty: string 
       <ReviewStatusPill status={status} />
       <div className="min-w-0 text-[13px] leading-6 text-[color:var(--muted-strong)] [overflow-wrap:anywhere]">{summary}</div>
       {result.details ? (
-        <ReviewDetailsDisclosure label="Show raw output">
+        <ReviewDetailsDisclosure label={translate("issueDetail.evidence.showRawOutput")}>
           <pre className="max-h-56 max-w-full overflow-auto rounded-[8px] bg-[color:var(--code-bg)] px-3 py-2 font-mono text-[12px] leading-6 text-[color:var(--code-text)] whitespace-pre-wrap [overflow-wrap:anywhere]">
             {result.details}
           </pre>
@@ -2205,13 +2226,13 @@ function testStatusForChecks(checks: ReviewEvidenceCheck[]) {
 
 function testSummaryForChecks(checks: ReviewEvidenceCheck[]) {
   const items = listOrEmpty(checks);
-  if (items.length === 0) return "No test result was reported.";
-  if (items.length === 1) return items[0].name || items[0].summary || "Test result captured.";
+  if (items.length === 0) return translate("issueDetail.evidence.noTestResult");
+  if (items.length === 1) return items[0].name || items[0].summary || translate("issueDetail.evidence.testResultCaptured");
   const failedCount = items.filter((item) => item.status === "failed").length;
-  if (failedCount > 0) return `${failedCount} of ${items.length} checks failed.`;
+  if (failedCount > 0) return translate("issueDetail.evidence.checksFailed", { failed: failedCount, total: items.length });
   const passedCount = items.filter((item) => item.status === "passed" || item.status === "completed").length;
-  if (passedCount === items.length) return `${items.length} checks passed.`;
-  return `${items.length} checks captured.`;
+  if (passedCount === items.length) return translate("issueDetail.evidence.checksPassed", { count: items.length });
+  return translate("issueDetail.evidence.checksCaptured", { count: items.length });
 }
 
 function reviewResultForDisplay(result: ReviewEvidenceResult, commands: ReviewEvidenceCommand[], category: string) {
@@ -2222,7 +2243,7 @@ function reviewResultForDisplay(result: ReviewEvidenceResult, commands: ReviewEv
     return {
       ...result,
       status: "passed",
-      summary: `Latest ${category} command passed. Earlier failed attempts are kept in the raw command trail.`,
+      summary: translate("issueDetail.evidence.latestCommandPassed", { category }),
       details: latest.summary || result.details,
     };
   }
@@ -2269,13 +2290,13 @@ function ReviewDetailsDisclosure(props: { label: string; children: React.ReactNo
 
 function CommandEvidenceList(props: { commands: ReviewEvidenceCommand[] }) {
   const commands = listOrEmpty(props.commands);
-  if (commands.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">No commands were reported.</div>;
+  if (commands.length === 0) return <div className="text-[13px] leading-6 text-[color:var(--muted)]">{translate("issueDetail.evidence.noCommands")}</div>;
   const keyCommands = commands.filter(commandEvidenceIsKey).slice(-8);
   const hiddenCount = Math.max(0, commands.length - keyCommands.length);
   return (
     <div className="grid min-w-0 gap-3">
       <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-        Captured {commands.length} command{commands.length === 1 ? "" : "s"}. Showing key validation and state-change commands only.
+        {translate("issueDetail.evidence.capturedCommands", { count: commands.length, suffix: commands.length === 1 ? "" : "s" })}
       </div>
       {keyCommands.length > 0 ? (
         <div className="grid min-w-0 gap-1.5">
@@ -2296,7 +2317,7 @@ function CommandEvidenceList(props: { commands: ReviewEvidenceCommand[] }) {
         </div>
       ) : null}
       {hiddenCount > 0 ? (
-        <ReviewDetailsDisclosure label={`Show raw command trail (${commands.length})`}>
+        <ReviewDetailsDisclosure label={translate("issueDetail.evidence.showRawCommandTrail", { count: commands.length })}>
           <div className="grid min-w-0 gap-2">
             {commands.map((command, index) => (
               <div key={`${command.command}-${index}`} className="grid min-w-0 gap-2 overflow-hidden rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
@@ -2307,7 +2328,7 @@ function CommandEvidenceList(props: { commands: ReviewEvidenceCommand[] }) {
                 </div>
                 <code className="block min-w-0 max-w-full font-mono text-[12px] leading-5 text-[color:var(--text)] whitespace-pre-wrap [overflow-wrap:anywhere]">{compactCommandText(command.command)}</code>
                 {command.summary ? (
-                  <ReviewDetailsDisclosure label="Show command output">
+                  <ReviewDetailsDisclosure label={translate("issueDetail.evidence.showCommandOutput")}>
                     <div className="max-h-44 min-w-0 overflow-auto border-t border-[color:var(--line)] pt-2 text-[12px] leading-5 text-[color:var(--muted)] whitespace-pre-wrap [overflow-wrap:anywhere]">
                       {command.summary}
                     </div>
@@ -2395,6 +2416,7 @@ function EvidenceOutcomePacket(props: {
   latestEvidence?: DeploymentEvidence;
   testEnvironment: IssueTestEnvironment | null;
 }) {
+  const { t } = useMspaceTranslation();
   const review = props.review;
   const environment = props.testEnvironment;
   const hasPreview = Boolean(review?.previewUrl || environment?.previewUrl);
@@ -2403,11 +2425,11 @@ function EvidenceOutcomePacket(props: {
   const build = review ? reviewResultForDisplay(review.buildResult, review.commandsRun, "build") : undefined;
   const deployment = review?.deploymentResult;
   const testStatus = review ? testStatusForChecks(review.tests) : "not_reported";
-  const testSummary = review ? testSummaryForChecks(review.tests) : "No tests reported.";
+  const testSummary = review ? testSummaryForChecks(review.tests) : t("issueDetail.evidence.noTestsReported");
   const summary =
     review?.deploymentResult?.summary ||
     props.latestEvidence?.summary ||
-    (environment ? `Namespace ${environment.namespaceStatus || "state"} is the current test environment state.` : "No current validation summary was captured.");
+    (environment ? t("issueDetail.evidence.namespaceStateSummary", { state: environment.namespaceStatus || "state" }) : t("issueDetail.evidence.noCurrentValidationSummary"));
   return (
     <article className="grid min-w-0 gap-4 overflow-hidden rounded-[12px] bg-[color:var(--paper)] px-4 py-4 shadow-[inset_0_0_0_1px_var(--line)]">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
@@ -2423,16 +2445,16 @@ function EvidenceOutcomePacket(props: {
                 packetStatus !== "passed" && packetStatus !== "failed" && packetStatus !== "warning" && "text-[color:var(--muted)]",
               )}
             />
-            <h2 className="text-[15px] font-semibold leading-6 text-[color:var(--text)]">Current review packet</h2>
+            <h2 className="text-[15px] font-semibold leading-6 text-[color:var(--text)]">{t("issueDetail.evidence.currentReviewPacket")}</h2>
           </div>
           <div className="mt-1 max-w-[74ch] text-[14px] leading-6 text-[color:var(--muted-strong)] [overflow-wrap:anywhere]">{summary}</div>
         </div>
       </div>
       <div className="grid min-w-0 md:grid-cols-4">
-        <EvidenceSignal label="Preview" status={packetStatus} summary={hasPreview ? "Preview URL recorded" : "No preview URL"} />
-        <EvidenceSignal label="Deployment" status={deployment?.status || packetStatus} summary={deployment?.summary || summary} />
-        <EvidenceSignal label="Build" status={build?.status || "not_reported"} summary={build?.summary || "No build result reported"} />
-        <EvidenceSignal label="Tests" status={testStatus} summary={testSummary} />
+        <EvidenceSignal label={t("issueDetail.evidence.preview")} status={packetStatus} summary={hasPreview ? t("issueDetail.evidence.previewUrlRecorded") : t("issueDetail.evidence.noPreviewUrl")} />
+        <EvidenceSignal label={t("issueDetail.evidence.deployment")} status={deployment?.status || packetStatus} summary={deployment?.summary || summary} />
+        <EvidenceSignal label={t("issueDetail.evidence.build")} status={build?.status || "not_reported"} summary={build?.summary || t("issueDetail.evidence.noBuildResult")} />
+        <EvidenceSignal label={t("issueDetail.evidence.tests")} status={testStatus} summary={testSummary} />
       </div>
     </article>
   );
@@ -2446,20 +2468,21 @@ function EvidenceFactPanel(props: {
   sourceSession?: AgentSession;
   evidenceCount: number;
 }) {
+  const { t } = useMspaceTranslation();
   const review = props.review;
   const environment = props.testEnvironment;
   const rows = [
-    { label: "Source commit", value: review?.sourceCommitSha || environment?.sourceCommitSha || props.sourceNode?.commitSha || "", mono: true },
-    { label: "Branch", value: review?.branch || props.sourceSession?.branch || "", mono: true },
-    { label: "Source session", value: review?.sourceSessionId || environment?.sourceSessionId || props.sourceSession?.id || "", mono: true },
-    { label: "Captured by", value: review?.sessionId || "", mono: true },
-    { label: "Namespace", value: review?.namespace || environment?.namespace || props.latestEvidence?.namespace || "", mono: true },
-    { label: "Cleanup", value: review?.cleanupStatus || environment?.cleanupStatus || "" },
-    { label: "Snapshots", value: props.evidenceCount > 0 ? String(props.evidenceCount) : "" },
+    { label: t("issueDetail.evidence.sourceCommit"), value: review?.sourceCommitSha || environment?.sourceCommitSha || props.sourceNode?.commitSha || "", mono: true },
+    { label: t("issueDetail.evidence.branch"), value: review?.branch || props.sourceSession?.branch || "", mono: true },
+    { label: t("issueDetail.evidence.sourceSession"), value: review?.sourceSessionId || environment?.sourceSessionId || props.sourceSession?.id || "", mono: true },
+    { label: t("issueDetail.evidence.capturedBy"), value: review?.sessionId || "", mono: true },
+    { label: t("issueDetail.evidence.namespace"), value: review?.namespace || environment?.namespace || props.latestEvidence?.namespace || "", mono: true },
+    { label: t("issueDetail.evidence.cleanup"), value: review?.cleanupStatus || environment?.cleanupStatus || "" },
+    { label: t("issueDetail.evidence.snapshots"), value: props.evidenceCount > 0 ? String(props.evidenceCount) : "" },
   ].filter((row) => row.value);
   if (rows.length === 0) return null;
   return (
-    <EvidenceSection title="Review facts">
+    <EvidenceSection title={t("issueDetail.evidence.reviewFacts")}>
       <div className="overflow-hidden rounded-[10px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
         {rows.map((row, index) => (
           <div key={row.label} className={cn("grid min-w-0 grid-cols-[112px_minmax(0,1fr)] gap-3 px-3 py-2.5", index > 0 && "border-t border-[color:var(--line)]")}>
@@ -2475,23 +2498,25 @@ function EvidenceFactPanel(props: {
 }
 
 function AgentSummaryBlock(props: { summary: string }) {
+  const { t } = useMspaceTranslation();
   return (
-    <EvidenceSection title="Agent summary">
+    <EvidenceSection title={t("issueDetail.evidence.agentSummary")}>
       {props.summary ? (
         <div className="rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
           <RichText className="text-[13px] leading-6">{props.summary}</RichText>
         </div>
       ) : (
-        <div className="text-[13px] leading-6 text-[color:var(--muted)]">No agent summary was captured.</div>
+        <div className="text-[13px] leading-6 text-[color:var(--muted)]">{t("issueDetail.evidence.noAgentSummary")}</div>
       )}
     </EvidenceSection>
   );
 }
 
 function EvidenceCommandsPanel(props: { commands: ReviewEvidenceCommand[] }) {
+  const { t } = useMspaceTranslation();
   return (
-    <EvidenceSection title="Command evidence" aside={<InlineMeta>{props.commands.length} captured</InlineMeta>}>
-      <ReviewDetailsDisclosure label="Show command evidence">
+    <EvidenceSection title={t("issueDetail.evidence.commandEvidence")} aside={<InlineMeta>{t("issueDetail.evidence.captured", { count: props.commands.length })}</InlineMeta>}>
+      <ReviewDetailsDisclosure label={t("issueDetail.evidence.showCommandEvidence")}>
         <CommandEvidenceList commands={props.commands} />
       </ReviewDetailsDisclosure>
     </EvidenceSection>
@@ -2499,20 +2524,21 @@ function EvidenceCommandsPanel(props: { commands: ReviewEvidenceCommand[] }) {
 }
 
 function KubernetesEvidenceDigest(props: { issueId: string; evidence: DeploymentEvidence[] }) {
+  const { t } = useMspaceTranslation();
   const evidence = listOrEmpty(props.evidence);
   if (evidence.length === 0) return null;
   return (
-    <EvidenceSection title="Kubernetes evidence">
+    <EvidenceSection title={t("issueDetail.evidence.kubernetesEvidence")}>
       <div className="rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">Snapshot history</div>
-            <div className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">Open the full history page.</div>
+            <div className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">{t("issueDetail.evidence.snapshotHistory")}</div>
+            <div className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">{t("issueDetail.evidence.openFullHistory")}</div>
           </div>
           <Button type="button" variant="secondary" size="sm" asChild>
             <Link to="/issues/$issueId/evidence/snapshots" params={{ issueId: props.issueId }}>
               <History data-icon />
-              Open
+              {t("issueDetail.evidence.open")}
             </Link>
           </Button>
         </div>
@@ -2526,21 +2552,22 @@ function ReviewHistoryList(props: {
   reviews: SessionReviewEvidence[];
   failures: SessionFailure[];
 }) {
+  const { t } = useMspaceTranslation();
   const reviews = listOrEmpty(props.reviews);
   const failures = listOrEmpty(props.failures);
   if (reviews.length === 0 && failures.length === 0) return null;
   return (
-    <EvidenceSection title="Previous attempts">
+    <EvidenceSection title={t("issueDetail.evidence.previousAttempts")}>
       <div className="rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
         <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">Older reviews and blockers</div>
-            <div className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">Open older reviews and blockers.</div>
+            <div className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">{t("issueDetail.evidence.olderReviewsAndBlockers")}</div>
+            <div className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">{t("issueDetail.evidence.openOlderReviews")}</div>
           </div>
           <Button type="button" variant="secondary" size="sm" asChild>
             <Link to="/issues/$issueId/evidence/history" params={{ issueId: props.issueId }}>
               <History data-icon />
-              Open
+              {t("issueDetail.evidence.open")}
             </Link>
           </Button>
         </div>
@@ -2558,6 +2585,7 @@ function IssueEvidenceTab(props: {
   sessions: AgentSession[];
   changeNodes: IssueChangeNode[];
 }) {
+  const { t } = useMspaceTranslation();
   const reviews = listOrEmpty(props.reviewEvidence);
   const evidence = listOrEmpty(props.evidence);
   const failures = listOrEmpty(props.failures);
@@ -2567,7 +2595,7 @@ function IssueEvidenceTab(props: {
   const sourceNode = reviewSourceNode(currentReview, props.changeNodes);
   const sourceSession = reviewSourceSession(currentReview, props.sessions);
   if (reviews.length === 0 && evidence.length === 0 && failures.length === 0 && !props.testEnvironment) {
-    return <Notice>No review evidence has been captured for this issue yet.</Notice>;
+    return <Notice>{t("issueDetail.evidence.noReviewEvidence")}</Notice>;
   }
   return (
     <section className="grid min-w-0 gap-5 overflow-hidden">
@@ -2583,14 +2611,14 @@ function IssueEvidenceTab(props: {
             <>
               <AgentSummaryBlock summary={currentReview.agentSummary} />
               {[...listOrEmpty(currentReview.risks), ...listOrEmpty(currentReview.followUps)].length > 0 ? (
-                <EvidenceSection title="Risks / follow-ups">
-                  <ReviewStringList items={[...listOrEmpty(currentReview.risks), ...listOrEmpty(currentReview.followUps)]} empty="No risks or follow-ups were reported." />
+                <EvidenceSection title={t("issueDetail.evidence.risksFollowUps")}>
+                  <ReviewStringList items={[...listOrEmpty(currentReview.risks), ...listOrEmpty(currentReview.followUps)]} empty={t("issueDetail.evidence.noRisksFollowUps")} />
                 </EvidenceSection>
               ) : null}
               <EvidenceCommandsPanel commands={currentReview.commandsRun} />
             </>
           ) : (
-            <Notice>No current review snapshot is available. Kubernetes state and run history are still shown for this issue.</Notice>
+            <Notice>{t("issueDetail.evidence.noCurrentReviewSnapshot")}</Notice>
           )}
         </div>
         <aside className="grid min-w-0 content-start gap-5">
@@ -2658,7 +2686,7 @@ function codexActor(name = "Codex"): ActorIdentity {
 }
 
 function evidenceActor(): ActorIdentity {
-  return { kind: "evidence", name: "Evidence" };
+  return { kind: "evidence", name: translate("issueDetail.tabs.evidence") };
 }
 
 function actorForComment(comment: Comment): ActorIdentity {
@@ -2738,6 +2766,7 @@ function CommentReactionBar(props: {
   pendingReaction?: string;
   onToggleReaction?: (reaction: string, reactedByMe: boolean) => void;
 }) {
+  const { t } = useMspaceTranslation();
   const reactions = listOrEmpty(props.reactions);
   if (reactions.length === 0) return null;
 
@@ -2755,7 +2784,7 @@ function CommentReactionBar(props: {
               reaction.reactedByMe && "bg-[color:var(--hover)] text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--accent-blue)]",
             )}
             aria-pressed={reaction.reactedByMe}
-            title={option.label}
+            title={t(option.labelKey)}
             disabled={!props.onToggleReaction || props.pendingReaction === reaction.reaction}
             onClick={() => props.onToggleReaction?.(reaction.reaction, reaction.reactedByMe)}
           >
@@ -2784,6 +2813,7 @@ function CommentReactionPicker(props: {
   triggerClassName?: string;
   menuClassName?: string;
 }) {
+  const { t } = useMspaceTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const reactions = listOrEmpty(props.reactions);
   const reactionsByKey = useMemo(() => {
@@ -2802,7 +2832,7 @@ function CommentReactionPicker(props: {
           "grid place-items-center rounded-full text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)] transition-[background-color,color,opacity,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95",
           props.triggerClassName || "size-7",
         )}
-        aria-label="Add reaction"
+        aria-label={t("issueDetail.reactions.addReaction")}
         aria-expanded={menuOpen}
         onClick={() => setMenuOpen((open) => !open)}
       >
@@ -2820,7 +2850,7 @@ function CommentReactionPicker(props: {
                   "grid size-7 place-items-center rounded-[7px] text-[16px] transition-[background-color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-95",
                   existing?.reactedByMe && "bg-[color:var(--hover)] shadow-[inset_0_0_0_1px_var(--accent-blue)]",
                 )}
-                title={option.label}
+                title={t(option.labelKey)}
                 aria-pressed={Boolean(existing?.reactedByMe)}
                 disabled={props.pendingReaction === option.reaction}
                 onClick={() => {
@@ -2864,6 +2894,7 @@ function CommentTimelineItem(props: {
   pendingReaction?: string;
   onToggleReaction?: (reaction: string, reactedByMe: boolean) => void;
 }) {
+  const { t } = useMspaceTranslation();
   const actor = actorForComment(props.comment);
   const sessionAction = parseSessionActionComment(props.comment.body);
   if (sessionAction) {
@@ -2875,9 +2906,9 @@ function CommentTimelineItem(props: {
         actor={eventActor}
         title={
           <SessionActionTitle
-            actorName={eventActor.name || sessionAction.actorName || "Someone"}
+            actorName={eventActor.name || sessionAction.actorName || t("issueDetail.comments.someone")}
             action={sessionAction}
-            agentName={actionAgent?.name || "agent work"}
+            agentName={actionAgent?.name || t("issueDetail.comments.agentWork")}
           />
         }
         time={props.comment.createdAt}
@@ -2898,8 +2929,8 @@ function CommentTimelineItem(props: {
 
   const title =
     actor.kind === "human" || actor.kind === "codex"
-      ? `${actor.name} commented`
-      : `${actor.name || "mspace"} updated the issue`;
+      ? t("issueDetail.comments.commented", { name: actor.name })
+      : t("issueDetail.comments.updatedIssue", { name: actor.name || "mspace" });
   return (
     <TimelineShell actor={actor} title={title} time={props.comment.createdAt}>
       {props.isEditing ? (
@@ -2908,9 +2939,9 @@ function CommentTimelineItem(props: {
           <div className="relative" data-comment-composer="true">
             <IssueDocumentEditor
               variant="comment"
-              ariaLabel="Edit issue comment"
+              ariaLabel={t("issueDetail.comments.editAria")}
               value={props.editBody || ""}
-              placeholder="Edit comment"
+              placeholder={t("issueDetail.comments.editPlaceholder")}
               autoFocus
               onChange={(value) => props.onEditBodyChange?.(value)}
               onReady={props.onEditReady}
@@ -2927,7 +2958,7 @@ function CommentTimelineItem(props: {
             <div className="flex shrink-0 items-center gap-2">
               <Button type="button" variant="ghost" size="sm" onClick={props.onCancelEdit} disabled={props.isSaving}>
                 <X data-icon />
-                Cancel
+                {t("issueDetail.comments.cancel")}
               </Button>
               <Button
                 type="button"
@@ -2937,7 +2968,7 @@ function CommentTimelineItem(props: {
                 disabled={props.isSaving || !props.editBody?.trim() || props.canSave === false}
               >
                 <Save data-icon />
-                {props.isSaving ? "Saving..." : props.saveLabel || "Save edit"}
+                {props.isSaving ? t("issueDetail.comments.saving") : props.saveLabel || t("issueDetail.comments.saveEdit")}
               </Button>
             </div>
           </div>
@@ -2948,7 +2979,7 @@ function CommentTimelineItem(props: {
             <RichText agents={props.agents}>{props.comment.body}</RichText>
             {props.comment.editedAt ? (
               <div className="mt-2 text-[12px] leading-5 text-[color:var(--muted)]" title={formatAbsoluteTime(props.comment.editedAt)}>
-                Edited {formatRelativeTime(props.comment.editedAt)}
+                {t("issueDetail.comments.edited", { time: formatRelativeTime(props.comment.editedAt) })}
               </div>
             ) : null}
             <CommentReactionBar
@@ -2973,7 +3004,7 @@ function CommentTimelineItem(props: {
                 size="icon"
                 className="h-7 w-7 shrink-0"
                 onClick={props.onStartEdit}
-                aria-label="Edit comment"
+                aria-label={t("issueDetail.comments.editComment")}
               >
                 <Pencil data-icon />
               </Button>
@@ -3057,18 +3088,19 @@ function actorForSessionActionComment(actor: ActorIdentity, action: SessionActio
 }
 
 function StatusTransitionTitle(props: { actorName: string; transition: StatusTransition }) {
+  const { t } = useMspaceTranslation();
   return (
     <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
       <span className="font-semibold text-[color:var(--text)]">{props.actorName}</span>
       <span className="font-normal text-[color:var(--muted)]">
-        changed {props.transition.target === "task" ? "task status" : "status"} from
+        {props.transition.target === "task" ? t("issueDetail.comments.changedTaskStatusFrom") : t("issueDetail.comments.changedStatusFrom")}
       </span>
       <StatusBadge
         value={displayIssueStatus(props.transition.from)}
         valueLabel={issueStatusLabel(props.transition.from)}
         className="h-5 px-2 py-0 text-[11px]"
       />
-      <span className="font-normal text-[color:var(--muted)]">to</span>
+      <span className="font-normal text-[color:var(--muted)]">{t("issueDetail.comments.to")}</span>
       <StatusBadge
         value={displayIssueStatus(props.transition.to)}
         valueLabel={issueStatusLabel(props.transition.to)}
@@ -3079,26 +3111,28 @@ function StatusTransitionTitle(props: { actorName: string; transition: StatusTra
 }
 
 function SessionActionTitle(props: { actorName: string; action: SessionAction; agentName: string }) {
+  const { t } = useMspaceTranslation();
   return (
     <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5" title={`Session ${props.action.sessionID}`}>
       <span className="font-semibold text-[color:var(--text)]">{props.actorName}</span>
-      <span className="font-normal text-[color:var(--muted)]">stopped</span>
+      <span className="font-normal text-[color:var(--muted)]">{t("issueDetail.comments.stopped")}</span>
       <span className="font-semibold text-[color:var(--text)]">{props.agentName}</span>
-      {props.action.beforeStart ? <span className="font-normal text-[color:var(--muted)]">before it started</span> : null}
+      {props.action.beforeStart ? <span className="font-normal text-[color:var(--muted)]">{t("issueDetail.comments.beforeItStarted")}</span> : null}
     </span>
   );
 }
 
 function SessionFailureCallout(props: { logs: LogLine[]; hasAgentMessage: boolean }) {
+  const { t } = useMspaceTranslation();
   const failureMessage = latestSessionFailureMessage(props.logs);
   const isPostProcessingFailure =
     props.hasAgentMessage &&
     /record source commit|constraint failed|review evidence snapshot|kubernetes evidence|collecting kubernetes evidence/i.test(failureMessage);
   const title = isPostProcessingFailure
-    ? "Runner post-processing failed after this agent message"
+    ? t("issueDetail.failures.postProcessingTitle")
     : props.hasAgentMessage
-      ? "Session failed after this agent message"
-      : "Session failed";
+      ? t("issueDetail.failures.afterAgentTitle")
+      : t("issueDetail.failures.sessionFailed");
   return (
     <div className="mt-3 rounded-[8px] bg-[color:var(--danger-soft)] px-3 py-2.5 text-[12px] leading-5 text-[color:var(--danger)] shadow-[inset_0_0_0_1px_var(--line)]">
       <div className="flex min-w-0 items-center gap-2 font-semibold">
@@ -3107,12 +3141,12 @@ function SessionFailureCallout(props: { logs: LogLine[]; hasAgentMessage: boolea
       </div>
       <p className="mt-1 text-[color:var(--danger)]">
         {isPostProcessingFailure
-          ? "The agent produced a final answer, but mspace failed while saving follow-up state. Check the runner error before trusting the issue status."
-          : "mspace did not finish the run successfully. Treat the agent summary as partial until this failure is resolved."}
+          ? t("issueDetail.failures.postProcessingBody")
+          : t("issueDetail.failures.failedBody")}
       </p>
       {failureMessage ? (
         <div className="mt-2 grid gap-1 rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
-          <span className="text-[11px] font-medium text-[color:var(--danger)]">Last runner error</span>
+          <span className="text-[11px] font-medium text-[color:var(--danger)]">{t("issueDetail.failures.lastRunnerError")}</span>
           <span className="break-words font-mono text-[11px] leading-5 text-[color:var(--text)]">{failureMessage}</span>
         </div>
       ) : null}
@@ -3126,6 +3160,7 @@ function DeployAttentionCallout(props: {
   logs: LogLine[];
   hasAgentMessage: boolean;
 }) {
+  const { t } = useMspaceTranslation();
   if (props.session.status === "failed") {
     return <SessionFailureCallout logs={props.logs} hasAgentMessage={props.hasAgentMessage} />;
   }
@@ -3135,16 +3170,16 @@ function DeployAttentionCallout(props: {
   const failureMessage = latestSessionFailureMessage(props.logs);
   const title =
     namespaceStatus === "deploy_interrupted"
-      ? "Deployment interrupted"
+      ? t("issueDetail.failures.deploymentInterrupted")
       : namespaceStatus === "preview_unverified"
-        ? "Preview not verified"
-        : "Deployment failed";
+        ? t("issueDetail.failures.previewNotVerified")
+        : t("issueDetail.failures.deploymentFailed");
   const body =
     namespaceStatus === "deploy_interrupted"
-      ? "The deploy session stopped before mspace could finish verification. mspace will keep checking the preview in the background; retry deploy if the route stays wrong."
+      ? t("issueDetail.failures.deploymentInterruptedBody")
       : namespaceStatus === "preview_unverified"
-        ? "Kubernetes resources look ready, but mspace could not confirm a reachable preview URL yet. Open the preview if it exists; mspace will refresh this status in the background."
-        : "mspace could not verify that the namespace became ready. Check the stage details, then retry deploy after fixing the blocker.";
+        ? t("issueDetail.failures.previewNotVerifiedBody")
+        : t("issueDetail.failures.deploymentFailedBody");
 
   return (
     <div
@@ -3165,7 +3200,7 @@ function DeployAttentionCallout(props: {
       {failureMessage ? (
         <div className="mt-2 grid gap-1 rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
           <span className={cn("text-[11px] font-medium", isFailed ? "text-[color:var(--danger)]" : "text-[color:var(--warning)]")}>
-            Last runner signal
+            {t("issueDetail.failures.lastRunnerSignal")}
           </span>
           <span className="break-words font-mono text-[11px] leading-5 text-[color:var(--text)]">{failureMessage}</span>
         </div>
@@ -3175,51 +3210,19 @@ function DeployAttentionCallout(props: {
 }
 
 function failurePhaseLabel(phase: string) {
-  switch (phase) {
-    case "build":
-      return "Build failed";
-    case "test":
-      return "Tests failed";
-    case "image_push":
-      return "Image push failed";
-    case "pod_startup":
-      return "Pod did not start";
-    case "network_exposure":
-      return "Service route failed";
-    case "preview_probe":
-      return "Preview not verified";
-    case "agent_interrupted":
-      return "Agent interrupted";
-    case "cleanup":
-      return "Cleanup failed";
-    default:
-      return "Failure needs attention";
-  }
+  return translate(`issueDetail.failures.phases.${phase}`, { defaultValue: translate("issueDetail.failures.phases.default") });
 }
 
 function failureStatusLabel(status: string) {
-  switch (status) {
-    case "retrying":
-      return "Retrying";
-    case "continued":
-      return "Continued";
-    case "resolved":
-      return "Resolved";
-    case "stopped":
-      return "Stopped";
-    case "superseded":
-      return "Superseded";
-    default:
-      return "Open";
-  }
+  return translate(`issueDetail.failures.status.${status}`, { defaultValue: translate("issueDetail.failures.status.open") });
 }
 
 function failureMetaRows(failure: SessionFailure) {
   return [
-    { label: "Failed command", value: failure.failedCommand, mono: true },
-    { label: "Cluster", value: failure.cluster },
-    { label: "Namespace", value: failure.namespace, mono: true },
-    { label: "Resource", value: [failure.resourceKind, failure.resourceName].filter(Boolean).join("/") },
+    { label: translate("issueDetail.failures.failedCommand"), value: failure.failedCommand, mono: true },
+    { label: translate("issueDetail.failures.cluster"), value: failure.cluster },
+    { label: translate("issueDetail.failures.namespace"), value: failure.namespace, mono: true },
+    { label: translate("issueDetail.failures.resource"), value: [failure.resourceKind, failure.resourceName].filter(Boolean).join("/") },
   ];
 }
 
@@ -3232,15 +3235,15 @@ function failureCanRetryDeploy(failure: SessionFailure, environment: IssueTestEn
 function failureContinueDraft(failure: SessionFailure, agent: AgentProfile) {
   const mention = mentionKey(agent.mention);
   const lines = [
-    `@${mention} Continue from this failure.`,
+    `@${mention} ${translate("issueDetail.failures.continueDraftTitle")}`,
     "",
-    `Failure phase: ${failurePhaseLabel(failure.phase)}`,
-    failure.failedCommand ? `Failed command: \`${failure.failedCommand}\`` : "",
-    failure.errorSummary ? `Error summary: ${failure.errorSummary}` : "",
-    failure.namespace ? `Namespace: \`${failure.namespace}\`` : "",
-    failure.resourceName ? `Resource: \`${[failure.resourceKind, failure.resourceName].filter(Boolean).join("/")}\`` : "",
+    `${translate("issueDetail.failures.continueDraftPhase")}: ${failurePhaseLabel(failure.phase)}`,
+    failure.failedCommand ? `${translate("issueDetail.failures.failedCommand")}: \`${failure.failedCommand}\`` : "",
+    failure.errorSummary ? `${translate("issueDetail.failures.continueDraftErrorSummary")}: ${failure.errorSummary}` : "",
+    failure.namespace ? `${translate("issueDetail.failures.namespace")}: \`${failure.namespace}\`` : "",
+    failure.resourceName ? `${translate("issueDetail.failures.resource")}: \`${[failure.resourceKind, failure.resourceName].filter(Boolean).join("/")}\`` : "",
     "",
-    "Use the Issue Evidence tab and session logs, fix the blocker, then rerun the relevant validation/deploy step.",
+    translate("issueDetail.failures.continueDraftInstruction"),
   ].filter(Boolean);
   return lines.join("\n");
 }
@@ -3260,6 +3263,7 @@ function SessionFailureCard(props: {
   onRetry?: () => void;
   onStop?: () => void;
 }) {
+  const { t } = useMspaceTranslation();
   const active = props.session ? ["queued", "running"].includes(props.session.status) : false;
   return (
     <div className={cn("grid gap-3 rounded-[10px] bg-[color:var(--danger-soft)] p-3 text-[13px] leading-5 text-[color:var(--danger)] shadow-[inset_0_0_0_1px_var(--line)]", props.compact && "bg-[color:var(--block-subtle)] text-[color:var(--text)]")}>
@@ -3268,10 +3272,10 @@ function SessionFailureCard(props: {
           <div className="flex min-w-0 items-center gap-2 font-semibold">
             <CircleAlert data-icon className="shrink-0" />
             <span className="min-w-0 truncate">{failurePhaseLabel(props.failure.phase)}</span>
-            {active ? <span className="text-[12px] font-normal text-[color:var(--warning)]">active</span> : null}
+            {active ? <span className="text-[12px] font-normal text-[color:var(--warning)]">{t("issueDetail.failures.active")}</span> : null}
           </div>
           <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] text-[color:var(--muted)]">
-            <span>Session {props.failure.sessionId.slice(0, 8)}</span>
+            <span>{t("issueDetail.failures.session")} {props.failure.sessionId.slice(0, 8)}</span>
             <span>{failureStatusLabel(props.failure.status)}</span>
             {props.failure.updatedAt ? <span title={formatAbsoluteTime(props.failure.updatedAt)}>{formatRelativeTime(props.failure.updatedAt)}</span> : null}
           </div>
@@ -3280,19 +3284,19 @@ function SessionFailureCard(props: {
           {props.onContinue ? (
             <Button type="button" variant="secondary" size="sm" disabled={!props.canContinue} onClick={props.onContinue}>
               <Send data-icon />
-              Continue
+              {t("issueDetail.failures.continue")}
             </Button>
           ) : null}
           {props.onRetry ? (
             <Button type="button" variant="secondary" size="sm" disabled={!props.canRetry || props.isRetrying} onClick={props.onRetry}>
               <Rocket data-icon />
-              {props.isRetrying ? "Queueing" : "Retry deploy"}
+              {props.isRetrying ? t("issueDetail.failures.queueing") : t("issueDetail.failures.retryDeploy")}
             </Button>
           ) : null}
           {props.onStop ? (
             <Button type="button" variant="ghost" size="sm" disabled={!props.canStop || props.isStopping} onClick={props.onStop}>
               <CircleStop data-icon />
-              {props.isStopping ? "Stopping" : "Stop"}
+              {props.isStopping ? t("issueDetail.failures.stopping") : t("issueDetail.failures.stop")}
             </Button>
           ) : null}
         </div>
@@ -3304,14 +3308,14 @@ function SessionFailureCard(props: {
       ) : null}
       <ReviewMetaGrid rows={failureMetaRows(props.failure)} />
       {props.failure.errorExcerpt && !props.compact ? (
-        <ReviewDetailsDisclosure label="Show error excerpt">
+        <ReviewDetailsDisclosure label={t("issueDetail.failures.showErrorExcerpt")}>
           <div className="max-h-44 overflow-auto whitespace-pre-wrap text-[12px] leading-5 text-[color:var(--muted)] [overflow-wrap:anywhere]">{props.failure.errorExcerpt}</div>
         </ReviewDetailsDisclosure>
       ) : null}
       {(props.evidence || props.review) && !props.compact ? (
         <div className="flex flex-wrap gap-2">
-          {props.evidence ? <span className="text-[12px] text-[color:var(--muted)]">Kubernetes evidence captured</span> : null}
-          {props.review ? <span className="text-[12px] text-[color:var(--muted)]">Review evidence captured</span> : null}
+          {props.evidence ? <span className="text-[12px] text-[color:var(--muted)]">{t("issueDetail.failures.kubernetesEvidenceCaptured")}</span> : null}
+          {props.review ? <span className="text-[12px] text-[color:var(--muted)]">{t("issueDetail.failures.reviewEvidenceCaptured")}</span> : null}
         </div>
       ) : null}
     </div>
@@ -3332,12 +3336,13 @@ function SessionFailureTimelineItem(props: {
   canStop?: boolean;
   isStopping?: boolean;
 }) {
+  const { t } = useMspaceTranslation();
   return (
     <TimelineShell
       actor={{ kind: "system", name: "mspace" }}
       title={
         <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
-          <span>Failure needs attention</span>
+          <span>{t("issueDetail.failures.needsAttention")}</span>
           <StatusBadge value={props.failure.phase} valueLabel={failurePhaseLabel(props.failure.phase)} className="h-5 px-2 py-0 text-[11px]" />
         </span>
       }
@@ -3357,11 +3362,15 @@ type DeployStage = {
 };
 
 const defaultDeployStages: DeployStage[] = [
-  { id: "capture-evidence", label: "Capture Kubernetes evidence", status: "pending", summary: "", time: "" },
-  { id: "discover-preview", label: "Discover preview URL", status: "pending", summary: "", time: "" },
-  { id: "probe-preview", label: "Check preview", status: "pending", summary: "", time: "" },
-  { id: "reconcile", label: "Finalize deployment state", status: "pending", summary: "", time: "" },
+  { id: "capture-evidence", label: "issueDetail.deployStages.captureEvidence", status: "pending", summary: "", time: "" },
+  { id: "discover-preview", label: "issueDetail.deployStages.discoverPreview", status: "pending", summary: "", time: "" },
+  { id: "probe-preview", label: "issueDetail.deployStages.probePreview", status: "pending", summary: "", time: "" },
+  { id: "reconcile", label: "issueDetail.deployStages.reconcile", status: "pending", summary: "", time: "" },
 ];
+
+function deployStageLabel(stage: DeployStage) {
+  return stage.label.startsWith("issueDetail.") ? translate(stage.label) : stage.label;
+}
 
 function deployStagesFromLogs(logs: LogLine[]) {
   const stagesById = new Map(defaultDeployStages.map((stage) => [stage.id, stage]));
@@ -3414,6 +3423,7 @@ function DeployTimelineItem(props: {
   isRetrying?: boolean;
   canRetry?: boolean;
 }) {
+  const { t } = useMspaceTranslation();
   const agent = sessionAgent(props.session, props.agents);
   const stages = deployStagesFromLogs(props.logs);
   const isActive = ["queued", "running"].includes(props.session.status);
@@ -3427,7 +3437,7 @@ function DeployTimelineItem(props: {
       title={
         <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
           <span>{agent.name}</span>
-          <span className="font-normal text-[color:var(--muted)]">deployment</span>
+          <span className="font-normal text-[color:var(--muted)]">{t("issueDetail.timeline.deployment")}</span>
           <StatusBadge value={props.testEnvironment.namespaceStatus || props.session.status} className="h-5 px-2 py-0 text-[11px]" />
         </span>
       }
@@ -3447,25 +3457,25 @@ function DeployTimelineItem(props: {
               ) : (
                 <CheckCircle2 data-icon className="shrink-0 text-[color:var(--success)]" />
               )}
-              <span className="truncate">{isActive ? "Deploying test environment" : needsAttention ? "Deployment needs attention" : "Deployment ready"}</span>
+              <span className="truncate">{isActive ? t("issueDetail.timeline.deployingTestEnvironment") : needsAttention ? t("issueDetail.timeline.deploymentNeedsAttention") : t("issueDetail.timeline.deploymentReady")}</span>
             </div>
             <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
-              <span className="font-mono">{props.testEnvironment.namespace || "namespace pending"}</span>
-              {props.testEnvironment.sourceCommitSha ? <span>Source {props.testEnvironment.sourceCommitSha.slice(0, 12)}</span> : null}
-              <span>Session {props.session.id.slice(0, 8)}</span>
+              <span className="font-mono">{props.testEnvironment.namespace || t("issueDetail.timeline.namespacePending")}</span>
+              {props.testEnvironment.sourceCommitSha ? <span>{t("issueDetail.timeline.source")} {props.testEnvironment.sourceCommitSha.slice(0, 12)}</span> : null}
+              <span>{t("issueDetail.timeline.session")} {props.session.id.slice(0, 8)}</span>
             </div>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
             {previewUrl ? (
               <Button type="button" variant="ghost" size="sm" onClick={() => void openRichLink(previewUrl)}>
                 <Globe2 data-icon />
-                Preview
+                {t("issueDetail.timeline.preview")}
               </Button>
             ) : null}
             {props.onRetry ? (
               <Button type="button" variant="secondary" size="sm" disabled={!props.canRetry || props.isRetrying} onClick={props.onRetry}>
                 <Rocket data-icon />
-                {props.isRetrying ? "Queueing" : "Retry deploy"}
+                {props.isRetrying ? t("issueDetail.failures.queueing") : t("issueDetail.timeline.retryDeploy")}
               </Button>
             ) : null}
           </div>
@@ -3482,7 +3492,7 @@ function DeployTimelineItem(props: {
                   <Icon data-icon className={cn("mt-0.5 shrink-0", deployStageTone(stage.status))} />
                   <div className="min-w-0">
                     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                      <span className="font-medium text-[color:var(--muted-strong)]">{stage.label}</span>
+                      <span className="font-medium text-[color:var(--muted-strong)]">{deployStageLabel(stage)}</span>
                       {stage.status !== "pending" ? <span className="text-[color:var(--faint)]">{stage.status}</span> : null}
                     </div>
                     {stage.summary ? <div className="mt-0.5 text-[color:var(--muted)] [overflow-wrap:anywhere]">{stage.summary}</div> : null}
@@ -3518,12 +3528,13 @@ function SessionTimelineItem(props: {
   stopError?: Error | null;
   onStop?: () => void;
 }) {
+  const { t } = useMspaceTranslation();
   const { session, logs } = props;
   const agent = sessionAgent(session, props.agents);
   const agentMessage = latestAgentMessage(logs);
   const isActive = ["queued", "running"].includes(session.status);
   const isEmptyCancelledSession = session.status === "cancelled" && !agentMessage && props.changes.length === 0;
-  const title = isActive ? `${agent.name} is working` : agent.name;
+  const title = isActive ? t("issueDetail.timeline.agentIsWorking", { name: agent.name }) : agent.name;
   if (isEmptyCancelledSession && props.hasStopAction) {
     return null;
   }
@@ -3534,7 +3545,7 @@ function SessionTimelineItem(props: {
         title={
           <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
             <span className="font-semibold text-[color:var(--text)]">{agent.name}</span>
-            <span className="font-normal text-[color:var(--muted)]">run was cancelled</span>
+            <span className="font-normal text-[color:var(--muted)]">{t("issueDetail.timeline.runWasCancelled")}</span>
             <StatusBadge value="cancelled" className="h-5 px-2 py-0 text-[11px]" />
           </span>
         }
@@ -3577,7 +3588,7 @@ function SessionTimelineItem(props: {
             <SessionSummarySkeleton />
           ) : (
             <div className={cn("mt-2 text-[14px] leading-6", missingSummaryTone(session.status))}>
-              No final agent summary was captured for this session.
+              {t("issueDetail.timeline.noFinalSummary")}
             </div>
           )}
 
@@ -3591,10 +3602,11 @@ function SessionTimelineItem(props: {
 }
 
 function EvidenceTimelineItem(props: { evidence: DeploymentEvidence }) {
+  const { t } = useMspaceTranslation();
   const parsed = parseEvidenceDetails(props.evidence);
   const SnapshotIcon = parsed.tone === "failed" || parsed.tone === "warning" ? CircleAlert : parsed.tone === "healthy" ? CheckCircle2 : CircleDot;
   return (
-    <TimelineShell actor={evidenceActor()} title="Validation evidence attached" time={props.evidence.createdAt}>
+    <TimelineShell actor={evidenceActor()} title={t("issueDetail.evidence.validationEvidenceAttached")} time={props.evidence.createdAt}>
       <div className="rounded-[10px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -3609,12 +3621,12 @@ function EvidenceTimelineItem(props: { evidence: DeploymentEvidence }) {
                   parsed.tone === "collected" && "text-[color:var(--muted)]",
                 )}
               />
-              <div className="min-w-0 truncate text-[13px] font-semibold leading-5 text-[color:var(--text)]">Kubernetes snapshot</div>
+              <div className="min-w-0 truncate text-[13px] font-semibold leading-5 text-[color:var(--text)]">{t("issueDetail.evidence.kubernetesSnapshot")}</div>
             </div>
             <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-[color:var(--muted)]">
-              <EvidenceMeta label="Namespace" value={props.evidence.namespace} />
-              <EvidenceMeta label="Context" value={props.evidence.cluster} />
-              <EvidenceMeta label="Session" value={props.evidence.sessionId.slice(0, 8)} />
+              <EvidenceMeta label={t("issueDetail.evidence.namespace")} value={props.evidence.namespace} />
+              <EvidenceMeta label={t("issueDetail.resources.context")} value={props.evidence.cluster} />
+              <EvidenceMeta label={t("issueDetail.timeline.session")} value={props.evidence.sessionId.slice(0, 8)} />
             </div>
           </div>
           <EvidenceStatusPill tone={parsed.tone} />
@@ -3630,8 +3642,8 @@ function EvidenceTimelineItem(props: { evidence: DeploymentEvidence }) {
             )}
           >
             {parsed.tone === "failed"
-              ? "Kubernetes evidence collection failed. Check the session logs for the kubectl error."
-              : "No Kubernetes resources were captured for this evidence item."}
+              ? t("issueDetail.evidence.evidenceCollectionFailed")
+              : t("issueDetail.evidence.noResourcesCaptured")}
           </div>
         ) : null}
 
@@ -3642,6 +3654,7 @@ function EvidenceTimelineItem(props: { evidence: DeploymentEvidence }) {
 }
 
 export function IssueEvidenceSnapshotsPage() {
+  const { t } = useMspaceTranslation();
   const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
   const auth = useMspaceAuth();
   const workspaceId = auth.workspace?.id || "";
@@ -3659,32 +3672,32 @@ export function IssueEvidenceSnapshotsPage() {
 
   if (!detail) {
     return (
-      <PageFrame title="Kubernetes snapshots" subtitle="Load historical namespace evidence for this issue.">
-        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? "Loading snapshots..." : "Issue not found."}</div>
+      <PageFrame title={t("issueDetail.evidence.snapshotsTitle")} subtitle={t("issueDetail.evidence.snapshotsSubtitle")}>
+        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? t("issueDetail.evidence.loadingSnapshots") : t("issueDetail.page.notFound")}</div>
       </PageFrame>
     );
   }
 
   return (
     <PageFrame
-      title="Kubernetes snapshots"
-      subtitle={`Historical namespace evidence for ${detail.issue.title}.`}
+      title={t("issueDetail.evidence.snapshotsTitle")}
+      subtitle={t("issueDetail.evidence.historicalNamespaceEvidence", { title: detail.issue.title })}
       breadcrumbs={[
         { label: "mspace", to: "/inbox" },
-        { label: "Issues", to: "/issues" },
+        { label: t("issueDetail.page.issues"), to: "/issues" },
         { label: detail.issue.title, to: "/issues/$issueId", params: { issueId }, search: issueTabSearch("evidence") },
-        { label: "Kubernetes snapshots" },
+        { label: t("issueDetail.evidence.snapshotsTitle") },
       ]}
     >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <Button type="button" variant="ghost" size="sm" asChild>
           <Link to="/issues/$issueId" params={{ issueId }} search={issueTabSearch("evidence")}>
             <ArrowLeft data-icon />
-            Back to evidence
+            {t("issueDetail.page.backToEvidence")}
           </Link>
         </Button>
         {evidence.length > 0 ? (
-          <InlineMeta>{evidence.length} snapshot{evidence.length === 1 ? "" : "s"} across {sessionCount} session{sessionCount === 1 ? "" : "s"}</InlineMeta>
+          <InlineMeta>{t("issueDetail.evidence.snapshotsCount", { snapshots: evidence.length, snapshotSuffix: evidence.length === 1 ? "" : "s", sessions: sessionCount, sessionSuffix: sessionCount === 1 ? "" : "s" })}</InlineMeta>
         ) : null}
       </div>
 
@@ -3698,20 +3711,21 @@ export function IssueEvidenceSnapshotsPage() {
           </div>
         </section>
       ) : (
-        <Notice>No Kubernetes snapshots have been captured for this issue yet.</Notice>
+        <Notice>{t("issueDetail.evidence.noSnapshots")}</Notice>
       )}
     </PageFrame>
   );
 }
 
 function ReviewEvidenceTimelineItem(props: { review: SessionReviewEvidence }) {
+  const { t } = useMspaceTranslation();
   const review = props.review;
   return (
-    <TimelineShell actor={evidenceActor()} title="Review evidence attached" time={review.updatedAt || review.createdAt}>
+    <TimelineShell actor={evidenceActor()} title={t("issueDetail.evidence.reviewEvidenceAttached")} time={review.updatedAt || review.createdAt}>
       <div className="grid gap-3 rounded-[10px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <ReviewStatusPill status={reviewStatusForPacket(review)} />
-          <span className="font-mono text-[12px] leading-5 text-[color:var(--text)]">Session {review.sessionId.slice(0, 8)}</span>
+          <span className="font-mono text-[12px] leading-5 text-[color:var(--text)]">{t("issueDetail.timeline.session")} {review.sessionId.slice(0, 8)}</span>
           {review.sourceCommitSha ? <span className="font-mono text-[12px] leading-5 text-[color:var(--muted)]">{review.sourceCommitSha.slice(0, 12)}</span> : null}
         </div>
         {review.agentSummary ? (
@@ -3721,20 +3735,20 @@ function ReviewEvidenceTimelineItem(props: { review: SessionReviewEvidence }) {
         ) : null}
         <ReviewMetaGrid
           rows={[
-            { label: "Source commit", value: review.sourceCommitSha, mono: true },
-            { label: "Source session", value: review.sourceSessionId, mono: true },
-            { label: "Branch", value: review.branch, mono: true },
-            { label: "Namespace", value: review.namespace, mono: true },
-            { label: "Cleanup", value: review.cleanupStatus },
+            { label: t("issueDetail.evidence.sourceCommit"), value: review.sourceCommitSha, mono: true },
+            { label: t("issueDetail.evidence.sourceSession"), value: review.sourceSessionId, mono: true },
+            { label: t("issueDetail.evidence.branch"), value: review.branch, mono: true },
+            { label: t("issueDetail.evidence.namespace"), value: review.namespace, mono: true },
+            { label: t("issueDetail.evidence.cleanup"), value: review.cleanupStatus },
           ]}
         />
         {[...listOrEmpty(review.risks), ...listOrEmpty(review.followUps)].length > 0 ? (
-          <ReviewDetailsDisclosure label="Show risks and follow-ups">
-            <ReviewStringList items={[...listOrEmpty(review.risks), ...listOrEmpty(review.followUps)]} empty="No risks or follow-ups were reported." />
+          <ReviewDetailsDisclosure label={t("issueDetail.evidence.showRisksFollowUps")}>
+            <ReviewStringList items={[...listOrEmpty(review.risks), ...listOrEmpty(review.followUps)]} empty={t("issueDetail.evidence.noRisksFollowUps")} />
           </ReviewDetailsDisclosure>
         ) : null}
         {review.commandsRun.length > 0 ? (
-          <ReviewDetailsDisclosure label="Show command evidence">
+          <ReviewDetailsDisclosure label={t("issueDetail.evidence.showCommandEvidence")}>
             <CommandEvidenceList commands={review.commandsRun} />
           </ReviewDetailsDisclosure>
         ) : null}
@@ -3744,6 +3758,7 @@ function ReviewEvidenceTimelineItem(props: { review: SessionReviewEvidence }) {
 }
 
 export function IssueEvidenceHistoryPage() {
+  const { t } = useMspaceTranslation();
   const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
   const auth = useMspaceAuth();
   const workspaceId = auth.workspace?.id || "";
@@ -3767,31 +3782,31 @@ export function IssueEvidenceHistoryPage() {
 
   if (!detail) {
     return (
-      <PageFrame title="Previous attempts" subtitle="Load review history for this issue.">
-        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? "Loading history..." : "Issue not found."}</div>
+      <PageFrame title={t("issueDetail.evidence.historyTitle")} subtitle={t("issueDetail.evidence.historySubtitle")}>
+        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? t("issueDetail.evidence.loadingHistory") : t("issueDetail.page.notFound")}</div>
       </PageFrame>
     );
   }
 
   return (
     <PageFrame
-      title="Previous attempts"
-      subtitle={`Older review evidence and blockers for ${detail.issue.title}.`}
+      title={t("issueDetail.evidence.historyTitle")}
+      subtitle={t("issueDetail.evidence.olderReviewEvidenceFor", { title: detail.issue.title })}
       breadcrumbs={[
         { label: "mspace", to: "/inbox" },
-        { label: "Issues", to: "/issues" },
+        { label: t("issueDetail.page.issues"), to: "/issues" },
         { label: detail.issue.title, to: "/issues/$issueId", params: { issueId }, search: issueTabSearch("evidence") },
-        { label: "Previous attempts" },
+        { label: t("issueDetail.evidence.historyTitle") },
       ]}
     >
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <Button type="button" variant="ghost" size="sm" asChild>
           <Link to="/issues/$issueId" params={{ issueId }} search={issueTabSearch("evidence")}>
             <ArrowLeft data-icon />
-            Back to evidence
+            {t("issueDetail.page.backToEvidence")}
           </Link>
         </Button>
-        {entries.length > 0 ? <InlineMeta>{entries.length} item{entries.length === 1 ? "" : "s"}</InlineMeta> : null}
+        {entries.length > 0 ? <InlineMeta>{t("issueDetail.evidence.itemCount", { count: entries.length, suffix: entries.length === 1 ? "" : "s" })}</InlineMeta> : null}
       </div>
 
       {entries.length > 0 ? (
@@ -3818,7 +3833,7 @@ export function IssueEvidenceHistoryPage() {
           </div>
         </section>
       ) : (
-        <Notice>No earlier review attempts or blockers have been captured for this issue yet.</Notice>
+        <Notice>{t("issueDetail.evidence.noEarlierAttempts")}</Notice>
       )}
     </PageFrame>
   );
@@ -3840,12 +3855,14 @@ function IssueTaskList(props: {
   onToggleTask: (task: IssueListItem) => void;
   onDeleteTask: (task: IssueListItem) => void;
 }) {
+  const { t } = useMspaceTranslation();
+
   return (
     <div className="mt-6 border-t border-[color:var(--line)] pt-4">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div className="inline-flex min-w-0 items-center gap-2">
           <ListChecks data-icon className="text-[color:var(--muted)]" />
-          <h2 className="text-[13px] font-semibold leading-5 text-[color:var(--muted-strong)]">Tasks</h2>
+          <h2 className="text-[13px] font-semibold leading-5 text-[color:var(--muted-strong)]">{t("issueDetail.tasks.title")}</h2>
         </div>
         <div className="text-[12px] leading-5 text-[color:var(--muted)]">
           {props.completedCount}/{props.tasks.length}
@@ -3865,8 +3882,8 @@ function IssueTaskList(props: {
               <div key={task.id} className="grid grid-cols-[28px_minmax(0,1fr)_auto_auto] items-center gap-2 py-2">
                 <button
                   type="button"
-                  aria-label={completed ? "Mark task open" : "Mark task complete"}
-                  title={completed ? "Mark open" : "Complete task"}
+                  aria-label={completed ? t("issueDetail.tasks.markOpen") : t("issueDetail.tasks.markComplete")}
+                  title={completed ? t("issueDetail.tasks.markOpenTitle") : t("issueDetail.tasks.completeTitle")}
                   className={cn(
                     "grid size-7 place-items-center rounded-[7px] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-95",
                     completed ? "text-[color:var(--success)]" : "text-[color:var(--muted)]",
@@ -3886,8 +3903,8 @@ function IssueTaskList(props: {
                 <StatusBadge value={displayIssueStatus(task.status)} valueLabel={issueStatusLabel(task.status)} />
                 <button
                   type="button"
-                  aria-label="Delete task"
-                  title={deleting ? "Deleting task" : "Delete task"}
+                  aria-label={t("issueDetail.tasks.deleteTask")}
+                  title={deleting ? t("issueDetail.tasks.deletingTask") : t("issueDetail.tasks.deleteTask")}
                   className={cn(
                     "grid size-7 place-items-center rounded-[7px] text-[color:var(--faint)] transition-[background-color,color,transform,opacity] duration-150 ease-out hover:bg-[color:var(--danger-soft)] hover:text-[color:var(--danger)] active:scale-95",
                     busy && "opacity-60",
@@ -3902,7 +3919,7 @@ function IssueTaskList(props: {
           })}
         </div>
       ) : (
-        <div className="py-2 text-[13px] leading-6 text-[color:var(--muted)]">No tasks yet.</div>
+        <div className="py-2 text-[13px] leading-6 text-[color:var(--muted)]">{t("issueDetail.tasks.noTasks")}</div>
       )}
 
       <form
@@ -3915,11 +3932,11 @@ function IssueTaskList(props: {
         <Input
           value={props.newTaskTitle}
           onChange={(event) => props.onNewTaskTitleChange(event.target.value)}
-          placeholder="Add a task"
+          placeholder={t("issueDetail.tasks.addPlaceholder")}
         />
         <Button type="submit" variant="secondary" size="sm" disabled={!props.canCreate}>
           <Plus data-icon />
-          {props.isCreating ? "Adding..." : "Add"}
+          {props.isCreating ? t("issueDetail.tasks.adding") : t("issueDetail.tasks.add")}
         </Button>
       </form>
       {props.createError ? <div className="mt-2 text-[12px] leading-5 text-[color:var(--danger)]">{props.createError.message}</div> : null}
@@ -3937,12 +3954,14 @@ function MetaLine(props: { label: string; value: string }) {
 }
 
 function MetaIdentityLine(props: { label: string; actor: ActorIdentity }) {
+  const { t } = useMspaceTranslation();
+
   return (
     <div className="grid min-w-0 grid-cols-[86px_minmax(0,1fr)] items-center gap-2">
       <div className="text-[12px] leading-5 text-[color:var(--muted)]">{props.label}</div>
       <div className="flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-[color:var(--muted-strong)]">
         <ActorMark actor={props.actor} size="sm" />
-        <span className="min-w-0 truncate">{props.actor.name || "unassigned"}</span>
+        <span className="min-w-0 truncate">{props.actor.name || t("issueDetail.header.unassigned")}</span>
       </div>
     </div>
   );
@@ -3967,10 +3986,11 @@ function EnvironmentMetaLine(props: { label: string; children: React.ReactNode }
 }
 
 function EnvironmentSessionLink(props: { label: string; sessionId: string; sessions: AgentSession[] }) {
+  const { t } = useMspaceTranslation();
   const sessionId = props.sessionId.trim();
   const session = props.sessions.find((item) => item.id === sessionId);
   if (!sessionId) {
-    return <span className="text-[color:var(--faint)]">not queued</span>;
+    return <span className="text-[color:var(--faint)]">{t("issueDetail.environment.notQueued")}</span>;
   }
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -4002,6 +4022,7 @@ function IssueTestEnvironmentPanel(props: {
   onCleanup: () => void;
   onRetain: () => void;
 }) {
+  const { t } = useMspaceTranslation();
   const environment = props.environment;
   const namespaceStatus = environment?.namespaceStatus || "not_requested";
   const namespaceBadgeValue = namespaceStatus === "active" ? "open" : namespaceStatus;
@@ -4047,38 +4068,38 @@ function IssueTestEnvironmentPanel(props: {
                         : "text-[color:var(--faint)]",
                 )}
               />
-              <span>Issue test namespace</span>
+              <span>{t("issueDetail.environment.issueTestNamespace")}</span>
             </div>
             <div className="mt-1 min-w-0 break-all font-mono text-[13px] leading-5 text-[color:var(--text)]">
-              {environment?.namespace || "not created"}
+              {environment?.namespace || t("issueDetail.environment.notCreated")}
             </div>
           </div>
           <StatusBadge value={namespaceBadgeValue} valueLabel={namespaceStatusLabel(namespaceStatus)} className="h-6 shrink-0 px-2 py-0 text-[11px]" />
         </div>
 
         <div className="mt-3 grid gap-2">
-          <EnvironmentMetaLine label="Cluster">
-            <span className="break-words">{props.cluster?.name || environment?.clusterId || "not selected"}</span>
+          <EnvironmentMetaLine label={t("issueDetail.environment.cluster")}>
+            <span className="break-words">{props.cluster?.name || environment?.clusterId || t("issueDetail.environment.notSelected")}</span>
           </EnvironmentMetaLine>
-          <EnvironmentMetaLine label="Context">
-            <span className="break-words">{environment?.kubeContext || "default context"}</span>
+          <EnvironmentMetaLine label={t("issueDetail.environment.context")}>
+            <span className="break-words">{environment?.kubeContext || t("issueDetail.environment.defaultContext")}</span>
           </EnvironmentMetaLine>
-          <EnvironmentMetaLine label="Exposure">
+          <EnvironmentMetaLine label={t("issueDetail.environment.exposure")}>
             <span>{previewStrategy(environment)}</span>
           </EnvironmentMetaLine>
-          <EnvironmentMetaLine label="Decision">
+          <EnvironmentMetaLine label={t("issueDetail.environment.decision")}>
             <StatusBadge value={cleanupStatus} valueLabel={cleanupDecisionLabel(cleanupStatus)} className="h-5 px-2 py-0 text-[11px]" />
           </EnvironmentMetaLine>
-          <EnvironmentMetaLine label="Deploy">
-            <EnvironmentSessionLink label="Deploy" sessionId={environment?.lastDeploySessionId || ""} sessions={props.sessions} />
+          <EnvironmentMetaLine label={t("issueDetail.environment.deploy")}>
+            <EnvironmentSessionLink label={t("issueDetail.environment.deploy")} sessionId={environment?.lastDeploySessionId || ""} sessions={props.sessions} />
           </EnvironmentMetaLine>
-          <EnvironmentMetaLine label="Cleanup">
-            <EnvironmentSessionLink label="Cleanup" sessionId={environment?.lastCleanupSessionId || ""} sessions={props.sessions} />
+          <EnvironmentMetaLine label={t("issueDetail.environment.cleanup")}>
+            <EnvironmentSessionLink label={t("issueDetail.environment.cleanup")} sessionId={environment?.lastCleanupSessionId || ""} sessions={props.sessions} />
           </EnvironmentMetaLine>
-          <EnvironmentMetaLine label="Source">
-            <span className="font-mono">{environment?.sourceCommitSha ? environment.sourceCommitSha.slice(0, 12) : "not selected"}</span>
+          <EnvironmentMetaLine label={t("issueDetail.environment.source")}>
+            <span className="font-mono">{environment?.sourceCommitSha ? environment.sourceCommitSha.slice(0, 12) : t("issueDetail.environment.notSelected")}</span>
           </EnvironmentMetaLine>
-          <EnvironmentMetaLine label="Preview">
+          <EnvironmentMetaLine label={t("issueDetail.environment.preview")}>
             {environment?.previewUrl ? (
               <button
                 type="button"
@@ -4089,14 +4110,14 @@ function IssueTestEnvironmentPanel(props: {
                 <span className="min-w-0 break-all">{environment.previewUrl}</span>
               </button>
             ) : (
-              <span className="text-[color:var(--faint)]">not available</span>
+              <span className="text-[color:var(--faint)]">{t("issueDetail.environment.notAvailable")}</span>
             )}
           </EnvironmentMetaLine>
-          <EnvironmentMetaLine label="Checked">
+          <EnvironmentMetaLine label={t("issueDetail.environment.checked")}>
             {environment?.updatedAt ? (
               <span title={formatAbsoluteTime(environment.updatedAt)}>{formatRelativeTime(environment.updatedAt)}</span>
             ) : (
-              <span className="text-[color:var(--faint)]">not checked</span>
+              <span className="text-[color:var(--faint)]">{t("issueDetail.environment.notChecked")}</span>
             )}
           </EnvironmentMetaLine>
         </div>
@@ -4105,24 +4126,24 @@ function IssueTestEnvironmentPanel(props: {
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="secondary" size="sm" disabled={props.disabled || props.hasActiveSession || props.isStarting} onClick={props.onStartDeploy}>
           <Rocket data-icon />
-          {environment ? (props.isStarting ? "Queueing" : "Deploy again") : "Deploy test env"}
+          {environment ? (props.isStarting ? t("issueDetail.environment.queueing") : t("issueDetail.environment.deployAgain")) : t("issueDetail.environment.deployTestEnv")}
         </Button>
         {environment ? (
           <>
             <Button type="button" variant="ghost" size="sm" disabled={!canCleanup} onClick={props.onCleanup}>
               <Trash2 data-icon />
-              {props.isCleaning ? "Queueing" : "Cleanup namespace"}
+              {props.isCleaning ? t("issueDetail.environment.queueing") : t("issueDetail.environment.cleanupNamespace")}
             </Button>
             <Button type="button" variant="ghost" size="sm" disabled={!canRetain} onClick={props.onRetain}>
               <Bug data-icon />
-              {props.isRetaining ? "Saving" : "Retain for debug"}
+              {props.isRetaining ? t("issueDetail.environment.saving") : t("issueDetail.environment.retainForDebug")}
             </Button>
           </>
         ) : null}
       </div>
       {props.disabled ? (
         <div className="text-[12px] leading-5 text-[color:var(--muted)]">
-          {props.disabledReason || "Test environments for server-owned issues still run through the local runtime bridge."}
+          {props.disabledReason || t("issueDetail.environment.bridgeDisabled")}
         </div>
       ) : null}
     </div>
@@ -4137,12 +4158,13 @@ function IssueLifecycleActions(props: {
   onCloseNotPlanned: () => void;
   onReopenForChanges: () => void;
 }) {
+  const { t } = useMspaceTranslation();
   const displayStatus = displayIssueStatus(props.status);
   const isClosed = isIssueClosedForLifecycle(displayStatus);
   const pendingStatus = props.isPending ? props.pendingStatus : "";
 
   return (
-    <div className="flex min-w-0 items-center" aria-label="Issue actions">
+    <div className="flex min-w-0 items-center" aria-label={t("issueDetail.lifecycle.issueActions")}>
       {isClosed ? (
         <Button
           type="button"
@@ -4153,7 +4175,7 @@ function IssueLifecycleActions(props: {
           onClick={props.onReopenForChanges}
         >
           <CircleDot data-icon />
-          {pendingStatus === "changes_requested" ? "Reopening..." : "Reopen for changes"}
+          {pendingStatus === "changes_requested" ? t("issueDetail.lifecycle.reopening") : t("issueDetail.lifecycle.reopenForChanges")}
         </Button>
       ) : (
         <div className="inline-flex overflow-hidden rounded-[7px] bg-[color:var(--surface)] shadow-[0_0_0_1px_var(--line)]">
@@ -4164,7 +4186,7 @@ function IssueLifecycleActions(props: {
             onClick={props.onCloseIssue}
           >
             <CheckCircle2 data-icon />
-            {pendingStatus === "closed" ? "Closing..." : "Close"}
+            {pendingStatus === "closed" ? t("issueDetail.lifecycle.closing") : t("issueDetail.lifecycle.close")}
           </button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -4172,21 +4194,21 @@ function IssueLifecycleActions(props: {
                 type="button"
                 className="grid h-8 w-8 place-items-center border-l border-[color:var(--line)] text-[color:var(--muted)] transition-[background-color,color,opacity] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] disabled:pointer-events-none disabled:opacity-50"
                 disabled={props.isPending}
-                aria-label="More issue close actions"
+                aria-label={t("issueDetail.lifecycle.moreCloseActions")}
               >
                 <ChevronDown data-icon />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-64">
-              <DropdownMenuLabel>Close issue as</DropdownMenuLabel>
+              <DropdownMenuLabel>{t("issueDetail.lifecycle.closeIssueAs")}</DropdownMenuLabel>
               <DropdownMenuItem
                 disabled={props.isPending}
                 onSelect={props.onCloseNotPlanned}
               >
                 <X data-icon />
                 <span className="grid gap-0.5">
-                  <span>{pendingStatus === "cancelled" ? "Closing..." : "Close as not planned"}</span>
-                  <span className="text-[12px] leading-4 text-[color:var(--muted)]">Use when this issue should not be worked on.</span>
+                  <span>{pendingStatus === "cancelled" ? t("issueDetail.lifecycle.closing") : t("issueDetail.lifecycle.closeAsNotPlanned")}</span>
+                  <span className="text-[12px] leading-4 text-[color:var(--muted)]">{t("issueDetail.lifecycle.closeAsNotPlannedDescription")}</span>
                 </span>
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -4204,15 +4226,16 @@ function AgentMentionMenu(props: {
   onActiveIndexChange: (index: number) => void;
   onSelect: (agent: AgentProfile) => void;
 }) {
+  const { t } = useMspaceTranslation();
   return (
     <div
       id="issue-agent-mention-menu"
       role="listbox"
-      aria-label="Agent mentions"
+      aria-label={t("issueDetail.mentions.ariaLabel")}
       style={{ top: props.position.top, left: props.position.left, width: props.position.width }}
       className="absolute z-[90] max-h-72 overflow-y-auto overflow-x-hidden rounded-[9px] bg-[color:var(--paper)] p-1 shadow-[0_18px_56px_rgba(0,0,0,0.16),0_0_0_1px_var(--line)]"
     >
-      <div className="px-2 py-1 text-[11px] font-medium leading-4 text-[color:var(--faint)]">Mention agent</div>
+      <div className="px-2 py-1 text-[11px] font-medium leading-4 text-[color:var(--faint)]">{t("issueDetail.mentions.mentionAgent")}</div>
       {props.agents.map((agent, index) => {
         const active = index === props.activeIndex;
         return (
@@ -4252,6 +4275,7 @@ function LabelEditor(props: {
   error?: Error | null;
   onChange: (labelKeys: string[]) => void;
 }) {
+  const { t } = useMspaceTranslation();
   const typeOptions = issueLabelOptionsByDimension(props.options, "type");
   const priorityOptions = issueLabelOptionsByDimension(props.options, "priority");
   const selectedType = selectedIssueLabelKey(props.labels, "type");
@@ -4264,19 +4288,19 @@ function LabelEditor(props: {
   return (
     <div className="grid gap-1.5">
       <LabelDimensionPicker
-        title="Type"
+        title={t("issueDetail.header.type")}
         labels={typeOptions}
         value={selectedType}
-        emptyLabel="No type"
+        emptyLabel={t("issueDetail.header.noType")}
         pending={!selectedType && props.triageStatus === "pending"}
         disabled={props.isPending}
         onChange={(key) => setDimension("type", key)}
       />
       <LabelDimensionPicker
-        title="Priority"
+        title={t("issueDetail.header.priority")}
         labels={priorityOptions}
         value={selectedPriority}
-        emptyLabel="No priority"
+        emptyLabel={t("issueDetail.header.noPriority")}
         disabled={props.isPending}
         onChange={(key) => setDimension("priority", key)}
       />
@@ -4294,6 +4318,7 @@ function LabelDimensionPicker(props: {
   disabled: boolean;
   onChange: (key: string) => void;
 }) {
+  const { t } = useMspaceTranslation();
   const selectValue = props.value || "none";
   const selectedLabel = props.labels.find((label) => label.key === props.value);
 
@@ -4304,7 +4329,7 @@ function LabelDimensionPicker(props: {
         {props.pending ? (
           <span className="inline-flex h-7 max-w-full items-center gap-1.5 rounded-[6px] px-1 text-[12px] leading-4 text-[color:var(--muted)]">
             <span className="size-1.5 shrink-0 rounded-full bg-[color:var(--faint)]" />
-            <span className="truncate">Classifying...</span>
+            <span className="truncate">{t("issues.classifying")}</span>
           </span>
         ) : (
           <Select value={selectValue} onValueChange={(key) => props.onChange(key === "none" ? "" : key)} disabled={props.disabled}>
@@ -4342,26 +4367,28 @@ function IssueHeaderMeta(props: {
   assignee: ActorIdentity;
   onProjectClick?: () => void;
 }) {
+  const { t } = useMspaceTranslation();
+
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <HeaderMetaBadge label="Project" value={props.projectName} onClick={props.onProjectClick} />
+      <HeaderMetaBadge label={t("issueDetail.header.project")} value={props.projectName} onClick={props.onProjectClick} />
       <StatusBadge
         value={displayIssueStatus(props.status)}
         valueLabel={issueStatusLabel(props.status)}
-        label="Status"
+        label={t("issueDetail.header.status")}
         className="h-6 px-2.5 text-[12px]"
       />
       {props.typeLabel ? (
-        <IssueLabelBadge label={props.typeLabel} prefix="Type" className="h-6 px-2.5 text-[12px]" />
+        <IssueLabelBadge label={props.typeLabel} prefix={t("issueDetail.header.type")} className="h-6 px-2.5 text-[12px]" />
       ) : (
-        <HeaderMetaBadge value={props.triageStatus === "pending" ? "Classifying type" : "No type"} muted />
+        <HeaderMetaBadge value={props.triageStatus === "pending" ? t("issueDetail.header.classifyingType") : t("issueDetail.header.noType")} muted />
       )}
       {props.priorityLabel ? (
-        <IssueLabelBadge label={props.priorityLabel} prefix="Priority" className="h-6 px-2.5 text-[12px]" />
+        <IssueLabelBadge label={props.priorityLabel} prefix={t("issueDetail.header.priority")} className="h-6 px-2.5 text-[12px]" />
       ) : (
-        <HeaderMetaBadge value="No priority" muted />
+        <HeaderMetaBadge value={t("issueDetail.header.noPriority")} muted />
       )}
-      <HeaderMetaBadge label="Assignee" value={props.assignee.name || "Unassigned"} />
+      <HeaderMetaBadge label={t("issueDetail.header.assignee")} value={props.assignee.name || t("issueDetail.header.unassigned")} />
     </div>
   );
 }
@@ -4395,17 +4422,17 @@ function HeaderMetaBadge(props: { label?: string; value: string; muted?: boolean
 }
 
 function runbookStatusLabel(status: string) {
-  if (status === "learned") return "learned";
-  if (status === "stale") return "stale";
-  return "not learned";
+  if (status === "learned") return translate("issueDetail.runbook.learned");
+  if (status === "stale") return translate("issueDetail.runbook.stale");
+  return translate("issueDetail.runbook.notLearned");
 }
 
 function runbookUpdatedLabel(value: string) {
-  return value ? formatRelativeTime(value) : "not available";
+  return value ? formatRelativeTime(value) : translate("issueDetail.runbook.notAvailable");
 }
 
 function projectDisplayName(project: Project | null | undefined) {
-  return project?.name || "No project";
+  return project?.name || translate("common.noProject");
 }
 
 function detectGitHubRepoUrl(text: string): string {
@@ -4436,6 +4463,7 @@ function ProjectRunbookModal(props: {
   error?: Error | null;
   onClose: () => void;
 }) {
+  const { t } = useMspaceTranslation();
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") props.onClose();
@@ -4451,7 +4479,7 @@ function ProjectRunbookModal(props: {
 
   return (
     <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
-      <button type="button" aria-label="Close project runbook dialog backdrop" className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <button type="button" aria-label={t("issueDetail.runbook.closeBackdrop")} className="absolute inset-0 cursor-default" onClick={props.onClose} />
       <section
         role="dialog"
         aria-modal="true"
@@ -4460,18 +4488,18 @@ function ProjectRunbookModal(props: {
       >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h2 id="project-runbook-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">Project runbook</h2>
+            <h2 id="project-runbook-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">{t("issueDetail.runbook.title")}</h2>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] leading-5 text-[color:var(--muted)]">
               <span className="font-medium text-[color:var(--muted-strong)]">{props.projectName}</span>
               <span aria-hidden="true">/</span>
               <span>{status}</span>
               <span aria-hidden="true">/</span>
-              <span>{updatedAt ? formatRelativeTime(updatedAt) : "not available"}</span>
+              <span>{updatedAt ? formatRelativeTime(updatedAt) : t("issueDetail.runbook.notAvailable")}</span>
             </div>
           </div>
           <button
             type="button"
-            aria-label="Close modal"
+            aria-label={t("issueDetail.runbook.closeModal")}
             className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
             onClick={props.onClose}
           >
@@ -4482,26 +4510,26 @@ function ProjectRunbookModal(props: {
         {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
         {props.isLoading ? (
           <div className="grid min-h-[220px] place-items-center rounded-[10px] bg-[color:var(--block)] text-[13px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-            Loading runbook...
+            {t("issueDetail.runbook.loading")}
           </div>
         ) : hasContent ? (
           <div className="border-t border-[color:var(--line)] pt-5">
             <IssueDocumentEditor
               variant="runbook-viewer"
-              ariaLabel="Project runbook content"
+              ariaLabel={t("issueDetail.runbook.contentAria")}
               value={content}
               editable={false}
               onChange={() => undefined}
-              placeholder="No runbook yet."
+              placeholder={t("issueDetail.runbook.noRunbookPlaceholder")}
             />
           </div>
         ) : (
           <div className="grid min-h-[220px] place-items-center rounded-[10px] bg-[color:var(--block)] px-6 text-center shadow-[inset_0_0_0_1px_var(--line)]">
             <div>
               <BookOpenText data-icon className="mx-auto mb-3 text-[color:var(--muted)]" />
-              <div className="text-[14px] font-medium leading-6 text-[color:var(--text)]">No runbook yet</div>
+              <div className="text-[14px] font-medium leading-6 text-[color:var(--text)]">{t("issueDetail.runbook.noRunbookTitle")}</div>
               <p className="mt-1 max-w-[44ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
-                A successful agent session can write project learning back into mspace.
+                {t("issueDetail.runbook.noRunbookBody")}
               </p>
             </div>
           </div>
@@ -4524,6 +4552,7 @@ function TestDeployModal(props: {
   onClose: () => void;
   onSubmit: () => void;
 }) {
+  const { t } = useMspaceTranslation();
   const selectedCluster = props.clusters.find((cluster) => cluster.id === props.value.clusterId);
   const effectiveExposure = props.value.exposureMode || selectedCluster?.exposureMode || "nodeport";
   const selectedNode = props.changeNodes.find((node) => node.commitSha === props.value.sourceCommitSha);
@@ -4540,7 +4569,7 @@ function TestDeployModal(props: {
 
   return (
     <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
-      <button type="button" aria-label="Close test deploy dialog backdrop" className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <button type="button" aria-label={t("issueDetail.testDeploy.closeBackdrop")} className="absolute inset-0 cursor-default" onClick={props.onClose} />
       <section
         role="dialog"
         aria-modal="true"
@@ -4549,14 +4578,14 @@ function TestDeployModal(props: {
       >
         <div className="mb-5 flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h2 id="test-deploy-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">Deploy test environment</h2>
+            <h2 id="test-deploy-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">{t("issueDetail.testDeploy.title")}</h2>
             <p className="mt-1 max-w-[58ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
-              The agent will create the issue namespace, build and push images, deploy resources, and return a probed preview URL.
+              {t("issueDetail.testDeploy.description")}
             </p>
           </div>
           <button
             type="button"
-            aria-label="Close modal"
+            aria-label={t("issueDetail.runbook.closeModal")}
             className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
             onClick={props.onClose}
           >
@@ -4572,12 +4601,12 @@ function TestDeployModal(props: {
         >
           {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
           {props.clusters.length === 0 ? (
-            <Notice tone="danger">Create a cluster before queueing a test deployment.</Notice>
+            <Notice tone="danger">{t("issueDetail.testDeploy.createClusterFirst")}</Notice>
           ) : null}
           {props.changeNodes.length === 0 ? (
-            <Notice tone="danger">Run an agent session that changes code before queueing a test deployment.</Notice>
+            <Notice tone="danger">{t("issueDetail.testDeploy.runAgentFirst")}</Notice>
           ) : null}
-          <Field label="Source commit">
+          <Field label={t("issueDetail.testDeploy.sourceCommit")}>
             <Select
               value={props.value.sourceCommitSha || "__none"}
               onValueChange={(commitSha) => {
@@ -4594,7 +4623,7 @@ function TestDeployModal(props: {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none">Select commit</SelectItem>
+                <SelectItem value="__none">{t("issueDetail.testDeploy.selectCommit")}</SelectItem>
                 {props.changeNodes.map((node) => (
                   <SelectItem key={node.id || node.commitSha} value={node.commitSha}>
                     {sourceNodeLabel(node)}
@@ -4609,16 +4638,16 @@ function TestDeployModal(props: {
                 <GitCommit data-icon className="shrink-0 text-[color:var(--accent-blue)]" />
                 <span className="min-w-0 truncate font-mono">{selectedNode.commitSha}</span>
               </div>
-              <div className="line-clamp-2">{selectedNode.subject || "No commit subject"}</div>
+              <div className="line-clamp-2">{selectedNode.subject || t("issueDetail.commits.noSubject")}</div>
               <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
                 <span>{selectedAgent?.name || "Codex"}</span>
-                <span>{selectedNode.filesChanged} files</span>
-                <span>Session {selectedNode.sessionId.slice(0, 8)}</span>
+                <span>{t("issueDetail.commits.files", { count: selectedNode.filesChanged })}</span>
+                <span>{t("issueDetail.timeline.session")} {selectedNode.sessionId.slice(0, 8)}</span>
               </div>
               {selectedNode.error ? <div className="text-[color:var(--danger)]">{selectedNode.error}</div> : null}
             </div>
           ) : null}
-          <Field label="Cluster">
+          <Field label={t("issueDetail.testDeploy.cluster")}>
             <Select
               value={props.value.clusterId || "__none"}
               onValueChange={(clusterId) => {
@@ -4637,7 +4666,7 @@ function TestDeployModal(props: {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none">Select cluster</SelectItem>
+                <SelectItem value="__none">{t("issueDetail.testDeploy.selectCluster")}</SelectItem>
                 {props.clusters.map((cluster) => (
                   <SelectItem key={cluster.id} value={cluster.id}>
                     {cluster.name}
@@ -4651,11 +4680,11 @@ function TestDeployModal(props: {
               <div className="font-medium text-[color:var(--muted-strong)]">{selectedCluster.name}</div>
               <div className="break-all font-mono">{selectedCluster.kubeconfigPath}</div>
               <div className="break-all font-mono">{selectedCluster.imageRegistryPrefix}</div>
-              <div>{selectedCluster.exposureMode === "ingress" ? "Ingress default" : "NodePort default"}</div>
+              <div>{selectedCluster.exposureMode === "ingress" ? t("issueDetail.testDeploy.ingressDefault") : t("issueDetail.testDeploy.nodePortDefault")}</div>
             </div>
           ) : null}
           <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Exposure">
+            <Field label={t("issueDetail.testDeploy.exposure")}>
               <Select
                 value={props.value.exposureMode || "default"}
                 onValueChange={(value) =>
@@ -4669,41 +4698,41 @@ function TestDeployModal(props: {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="default">Use cluster default</SelectItem>
+                  <SelectItem value="default">{t("issueDetail.testDeploy.useClusterDefault")}</SelectItem>
                   <SelectItem value="nodeport">NodePort</SelectItem>
                   <SelectItem value="ingress">Ingress</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
-            <Field label="Node host" hint="Used for NodePort URLs.">
+            <Field label={t("issueDetail.testDeploy.nodeHost")} hint={t("issueDetail.testDeploy.nodeHostHint")}>
               <Input
                 value={props.value.nodeHost || ""}
                 onChange={(event) => props.onChange({ ...props.value, nodeHost: event.target.value })}
-                placeholder="optional"
+                placeholder={t("issueDetail.testDeploy.optional")}
               />
             </Field>
-            <Field label="Preview domain" hint={effectiveExposure === "ingress" ? "Required for ingress exposure." : "Optional. NodePort is used without a domain."}>
+            <Field label={t("issueDetail.testDeploy.previewDomain")} hint={effectiveExposure === "ingress" ? t("issueDetail.testDeploy.previewDomainIngressHint") : t("issueDetail.testDeploy.previewDomainOptionalHint")}>
               <Input
                 value={props.value.previewDomain || ""}
                 onChange={(event) => props.onChange({ ...props.value, previewDomain: event.target.value })}
                 placeholder="preview.example.com"
               />
             </Field>
-            <Field label="Ingress class">
+            <Field label={t("issueDetail.testDeploy.ingressClass")}>
               <Input
                 value={props.value.ingressClass || ""}
                 onChange={(event) => props.onChange({ ...props.value, ingressClass: event.target.value })}
-                placeholder="optional"
+                placeholder={t("issueDetail.testDeploy.optional")}
               />
             </Field>
           </div>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isPending}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={!props.canSubmit}>
               <Rocket data-icon />
-              {props.isPending ? "Queueing..." : "Queue deploy"}
+              {props.isPending ? t("issueDetail.testDeploy.queueing") : t("issueDetail.testDeploy.queueDeploy")}
             </Button>
           </div>
         </form>
@@ -4727,6 +4756,7 @@ function ProjectAttachModal(props: {
   onCreateAndAttach: () => void;
   onClose: () => void;
 }) {
+  const { t } = useMspaceTranslation();
   const canCreate = props.repoUrl.trim().length > 0 && !props.isAttaching;
 
   useEffect(() => {
@@ -4739,7 +4769,7 @@ function ProjectAttachModal(props: {
 
   return (
     <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
-      <button type="button" aria-label="Close project attachment dialog backdrop" className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <button type="button" aria-label={t("issueDetail.projectAttach.closeBackdrop")} className="absolute inset-0 cursor-default" onClick={props.onClose} />
       <section
         role="dialog"
         aria-modal="true"
@@ -4750,16 +4780,16 @@ function ProjectAttachModal(props: {
           <div className="min-w-0">
             <div className="mb-2 flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
               <Boxes data-icon />
-              Project
+              {t("issueDetail.projectAttach.eyebrow")}
             </div>
-            <h2 id="project-attach-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">Attach project</h2>
+            <h2 id="project-attach-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">{t("issueDetail.projectAttach.title")}</h2>
             <p className="mt-1 max-w-[58ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
-              Choose the repository boundary before running agents, PR handoff, or a test environment.
+              {t("issueDetail.projectAttach.description")}
             </p>
           </div>
           <button
             type="button"
-            aria-label="Close modal"
+            aria-label={t("issueDetail.runbook.closeModal")}
             className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
             onClick={props.onClose}
           >
@@ -4772,7 +4802,7 @@ function ProjectAttachModal(props: {
             <Notice tone="danger">{props.attachError?.message || props.createError?.message}</Notice>
           ) : null}
 
-          <Field label="Existing project" hint={props.projects.length > 0 ? "Switching project also updates existing child tasks." : "No existing projects in this workspace."}>
+          <Field label={t("issueDetail.projectAttach.existingProject")} hint={props.projects.length > 0 ? t("issueDetail.projectAttach.existingProjectHint") : t("issueDetail.projectAttach.noProjectsHint")}>
             <Select
               value={props.currentProjectId || "__none"}
               onValueChange={(projectId) => {
@@ -4784,7 +4814,7 @@ function ProjectAttachModal(props: {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none">Select project</SelectItem>
+                <SelectItem value="__none">{t("issueDetail.projectAttach.selectProject")}</SelectItem>
                 {props.projects.map((project) => (
                   <SelectItem key={project.id} value={project.id}>
                     {project.name}
@@ -4796,41 +4826,41 @@ function ProjectAttachModal(props: {
 
           <div className="flex items-center gap-3 text-[12px] text-[color:var(--faint)]">
             <span className="h-px flex-1 bg-[color:var(--line)]" />
-            or create from GitHub
+            {t("issueDetail.projectAttach.orCreateFromGitHub")}
             <span className="h-px flex-1 bg-[color:var(--line)]" />
           </div>
 
           {props.suggestedRepoUrl ? (
             <div className="flex min-w-0 items-center gap-2 rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
               <WandSparkles data-icon className="shrink-0" />
-              <span className="min-w-0 truncate">Detected {props.suggestedRepoUrl}</span>
+              <span className="min-w-0 truncate">{t("issueDetail.projectAttach.detectedRepo", { repoUrl: props.suggestedRepoUrl })}</span>
             </div>
           ) : null}
 
           <div className="grid gap-3">
-            <Field label="GitHub repository URL">
+            <Field label={t("issueDetail.projectAttach.githubRepositoryUrl")}>
               <Input
                 value={props.repoUrl}
                 onChange={(event) => props.onRepoUrlChange(event.target.value)}
                 placeholder="https://github.com/org/repo"
               />
             </Field>
-            <Field label="Project name" hint="Optional. Leave empty to use the repository name.">
+            <Field label={t("issueDetail.projectAttach.projectName")} hint={t("issueDetail.projectAttach.projectNameHint")}>
               <Input
                 value={props.projectName}
                 onChange={(event) => props.onProjectNameChange(event.target.value)}
-                placeholder="optional"
+                placeholder={t("issueDetail.projectAttach.optional")}
               />
             </Field>
           </div>
 
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isAttaching}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="button" onClick={props.onCreateAndAttach} disabled={!canCreate}>
               <Plus data-icon />
-              {props.isAttaching ? "Attaching..." : "Create and attach"}
+              {props.isAttaching ? t("issueDetail.projectAttach.attaching") : t("issueDetail.projectAttach.createAndAttach")}
             </Button>
           </div>
         </div>
@@ -4840,6 +4870,7 @@ function ProjectAttachModal(props: {
 }
 
 export function IssueDetailPage() {
+  const { t } = useMspaceTranslation();
   const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
   const search = useSearch({ strict: false }) as { tab?: string };
   const navigate = useNavigate();
@@ -4932,7 +4963,7 @@ export function IssueDetailPage() {
   const projectRunbookQuery = useQuery({
     queryKey: detail?.project?.id ? projectRunbookKey(detail.project.id) : projectRunbookKey("__none"),
     queryFn: () => {
-      if (!detail?.project?.id) throw new Error("Project is not loaded.");
+      if (!detail?.project?.id) throw new Error(t("issueDetail.page.projectNotLoaded"));
       return controlPlaneApi.getProjectRunbook(auth.token, workspaceId, detail.project.id);
     },
     enabled: serverWorkspaceReady && runbookOpen && Boolean(detail?.project?.id),
@@ -4975,7 +5006,7 @@ export function IssueDetailPage() {
   const selectedEditingMentionIndex = editingAgentSuggestions.length === 0 ? 0 : Math.min(activeEditingMentionIndex, editingAgentSuggestions.length - 1);
   const editingMentionMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingMentionMenuDismissed && editingAgentSuggestions.length > 0;
   const runtimeMode = auth.workspace?.kind === "team" ? "team" : "personal";
-  const runtimeLabel = runtimeMode === "team" ? "Team worker" : "Personal worker";
+  const runtimeLabel = runtimeMode === "team" ? t("issueDetail.composer.teamWorker") : t("issueDetail.composer.personalWorker");
   const canSaveEditingComment =
     Boolean(editingCommentId) &&
     Boolean(editingCommentBody.trim()) &&
@@ -4984,29 +5015,29 @@ export function IssueDetailPage() {
     !(isSupportedEditingAgentMention && hasActiveSession);
   const editHelperText = isSupportedEditingAgentMention
     ? hasActiveSession
-      ? `${editingMentionedAgentConfig?.name} is already working.`
+      ? t("issueDetail.composer.agentAlreadyWorking", { name: editingMentionedAgentConfig?.name })
       : !hasProject
-        ? "Attach a project before sending this issue to an agent."
-        : `${editingMentionedAgentConfig?.name} will run on the ${runtimeLabel} after this edit is saved.`
+        ? t("issueDetail.composer.attachProjectBeforeAgent")
+        : t("issueDetail.composer.willRunAfterSave", { name: editingMentionedAgentConfig?.name, runtime: runtimeLabel })
     : isUnsupportedEditingAgentMention
-      ? `@${editingMentionedAgent} is not available yet.`
-      : "Edit the latest comment before it starts work.";
+      ? t("issueDetail.composer.agentUnavailable", { mention: editingMentionedAgent })
+      : t("issueDetail.composer.editLatest");
   const editSaveLabel = isSupportedEditingAgentMention
     ? hasActiveSession
-      ? "Agent is working"
+      ? t("issueDetail.composer.agentWorking")
       : !hasProject
-        ? "Attach project"
-        : "Save and start"
-    : "Save edit";
+        ? t("issueDetail.composer.attachProject")
+        : t("issueDetail.composer.saveAndStart")
+    : t("issueDetail.composer.saveEdit");
   const composerHelperText = isSupportedAgentMention
     ? hasActiveSession
-      ? `${mentionedAgentConfig?.name} is already working.`
+      ? t("issueDetail.composer.agentAlreadyWorking", { name: mentionedAgentConfig?.name })
       : !hasProject
-        ? "Attach a project before sending this issue to an agent."
-        : `${mentionedAgentConfig?.name} will run on the ${runtimeLabel}.`
+        ? t("issueDetail.composer.attachProjectBeforeAgent")
+        : t("issueDetail.composer.willRunOnRuntime", { name: mentionedAgentConfig?.name, runtime: runtimeLabel })
     : isUnsupportedAgentMention
-      ? `@${mentionedAgent} is not available yet.`
-      : "Comments stay on the issue. Mention an agent when you want a turn.";
+      ? t("issueDetail.composer.agentUnavailable", { mention: mentionedAgent })
+      : t("issueDetail.composer.commentsStay");
   const syncEditingCommentEditorSnapshot = useCallback((editor: Editor) => {
     const match = mentionMatchInEditor(editor);
     setEditingCommentMentionMatch(match);
@@ -5093,18 +5124,18 @@ export function IssueDetailPage() {
       const agent = extractAgentMention(trimmedBody);
       const agentConfig = agent ? findAgent(enabledAgents, agent) : undefined;
       if (agent && !agentConfig) {
-        throw new Error(`@${agent} is not available.`);
+        throw new Error(t("issueDetail.composer.agentUnavailable", { mention: agent }));
       }
       const commentInput = {
         body: trimmedBody,
       };
       if (agentConfig) {
         if (!detail) {
-          throw new Error("Issue is not loaded yet.");
+          throw new Error(t("issueDetail.page.issueNotLoaded"));
         }
         const project = detail.project;
         if (!project?.id) {
-          throw new Error("Attach a project before sending this issue to an agent.");
+          throw new Error(t("issueDetail.composer.attachProjectBeforeAgent"));
         }
         const comment = await controlPlaneApi.addComment(auth.token, workspaceId, issueId, commentInput);
         await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
@@ -5144,11 +5175,11 @@ export function IssueDetailPage() {
       const comment = await controlPlaneApi.updateComment(auth.token, workspaceId, issueId, input.commentId, commentInput);
       if (input.agentConfig) {
         if (!detail) {
-          throw new Error("Issue is not loaded yet.");
+          throw new Error(t("issueDetail.page.issueNotLoaded"));
         }
         const project = detail.project;
         if (!project?.id) {
-          throw new Error("Attach a project before sending this issue to an agent.");
+          throw new Error(t("issueDetail.composer.attachProjectBeforeAgent"));
         }
         await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
           provider: input.agentConfig.provider,
@@ -5437,7 +5468,7 @@ export function IssueDetailPage() {
   });
 
   const stopSession = useMutation({
-    mutationFn: (sessionId: string) => controlPlaneApi.cancelSession(auth.token, workspaceId, sessionId, { reason: "Stopped from Issue Detail." }),
+    mutationFn: (sessionId: string) => controlPlaneApi.cancelSession(auth.token, workspaceId, sessionId, { reason: t("issueDetail.timeline.stoppedFromIssueDetail") }),
     onSuccess: async (_data, sessionId) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
@@ -5495,7 +5526,7 @@ export function IssueDetailPage() {
   const createPullRequest = useMutation({
     mutationFn: (node: IssueChangeNode) => {
       if (!hasProject) {
-        throw new Error("Attach a project before creating a PR.");
+        throw new Error(t("issueDetail.handoff.requiresProject"));
       }
       return api.createPullRequest(issueId, {
         sourceSessionId: node.sessionId,
@@ -5509,7 +5540,7 @@ export function IssueDetailPage() {
   const refreshIssueHandoff = useMutation({
     mutationFn: (handoff: IssueHandoff) => {
       if (!hasProject) {
-        throw new Error("Attach a project before refreshing PR state.");
+        throw new Error(t("issueDetail.handoff.requiresProject"));
       }
       return api.refreshIssueHandoff(issueId, handoff.id);
     },
@@ -5605,8 +5636,8 @@ export function IssueDetailPage() {
 
   if (!detail) {
     return (
-      <PageFrame title="Issue" subtitle="Load the durable issue page, local session history, and Kubernetes evidence.">
-        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? "Loading issue..." : "Issue not found."}</div>
+      <PageFrame title={t("issueDetail.page.title")} subtitle={t("issueDetail.page.subtitle")}>
+        <div className="text-[14px] text-[color:var(--muted)]">{issueQuery.isPending ? t("issueDetail.page.loading") : t("issueDetail.page.notFound")}</div>
       </PageFrame>
     );
   }
@@ -5686,24 +5717,24 @@ export function IssueDetailPage() {
             <div className="flex flex-wrap items-center justify-end gap-2">
               <Button type="button" variant="secondary" onClick={cancelIssueEditing} disabled={updateIssueContent.isPending}>
                 <X data-icon />
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button type="button" onClick={saveIssueContent} disabled={!canSaveIssueContent}>
                 <Save data-icon />
-                {updateIssueContent.isPending ? "Saving..." : "Save issue"}
+                {updateIssueContent.isPending ? t("issueDetail.page.saving") : t("issueDetail.page.saveIssue")}
               </Button>
             </div>
           ) : (
             <Button type="button" variant="secondary" onClick={startIssueEditing}>
               <Pencil data-icon />
-              Edit issue
+              {t("issueDetail.page.editIssue")}
             </Button>
           )
         ) : undefined
       }
       breadcrumbs={[
-        { label: "mspace", to: "/inbox" },
-        { label: "Issues", to: "/issues" },
+        { label: t("common.mspace"), to: "/inbox" },
+        { label: t("navigation.issues"), to: "/issues" },
         { label: detail.issue.title },
       ]}
     >
@@ -5724,25 +5755,25 @@ export function IssueDetailPage() {
                 {editingIssue ? (
                   <div className="grid gap-4">
                     {updateIssueContent.error ? <Notice tone="danger">{updateIssueContent.error.message}</Notice> : null}
-                    <Field label="Title">
+                    <Field label={t("issueDetail.page.titleField")}>
                       <Input
                         value={issueTitleDraft}
                         onChange={(event) => setIssueTitleDraft(event.target.value)}
                         className="text-[16px] font-medium"
                       />
                     </Field>
-                    <Field label="Body">
+                    <Field label={t("issueDetail.page.bodyField")}>
                       <IssueDocumentEditor
                         value={issueBodyDraft}
                         onChange={setIssueBodyDraft}
-                        placeholder="Write the issue..."
+                        placeholder={t("createIssue.placeholder")}
                       />
                     </Field>
                   </div>
                 ) : detail.issue.body ? (
                   <RichText agents={agents} className="text-[15px] leading-8">{detail.issue.body}</RichText>
                 ) : (
-                  <div className="text-[15px] leading-8 text-[color:var(--muted)]">No issue body yet.</div>
+                  <div className="text-[15px] leading-8 text-[color:var(--muted)]">{t("issueDetail.page.noBody")}</div>
                 )}
                 {detail.issue.parentIssueId === "" ? (
                   <IssueTaskList
@@ -5780,9 +5811,9 @@ export function IssueDetailPage() {
                   {timelineItems.map((item) => {
                     if (item.kind === "opened") {
                       return (
-                        <TimelineShell key="opened" actor={creatorActor} title={`${creatorActor.name || "mlhiter"} opened this issue`} time={item.createdAt}>
+                        <TimelineShell key="opened" actor={creatorActor} title={t("issueDetail.timeline.openedIssue", { name: creatorActor.name || "mlhiter" })} time={item.createdAt}>
                           <div className="text-[13px] leading-6 text-[color:var(--muted)]">
-                            {detail.project?.id ? `Created in ${projectName}.` : "Created without a project."}
+                            {detail.project?.id ? t("issueDetail.timeline.createdIn", { project: projectName }) : t("issueDetail.timeline.createdWithoutProject")}
                           </div>
                         </TimelineShell>
                       );
@@ -5942,7 +5973,7 @@ export function IssueDetailPage() {
                   <div className="relative" data-comment-composer="true">
                     <IssueDocumentEditor
                       variant="comment"
-                      ariaLabel="Issue comment"
+                      ariaLabel={t("issueDetail.composer.ariaLabel")}
                       value={composerBody}
                       onChange={(value) => {
                         setComposerBody(value);
@@ -5999,12 +6030,12 @@ export function IssueDetailPage() {
                       >
                         <Send data-icon />
                         {sendComposer.isPending
-                          ? "Sending..."
+                          ? t("issueDetail.composer.sending")
                           : isSupportedAgentMention
                             ? hasActiveSession
-                              ? "Agent is working"
-                              : `Send to ${mentionedAgentConfig?.name}`
-                            : "Comment"}
+                              ? t("issueDetail.composer.agentWorking")
+                              : t("issueDetail.composer.sendTo", { name: mentionedAgentConfig?.name })
+                            : t("issueDetail.composer.comment")}
                       </Button>
                     </div>
                   </div>
@@ -6019,7 +6050,7 @@ export function IssueDetailPage() {
               agents={agents}
               handoffs={handoffs}
               runnerActionsDisabled={serverWorkspaceReady || !hasProject}
-              runnerActionsDisabledReason={!hasProject ? "Attach a project before creating or refreshing a PR." : undefined}
+              runnerActionsDisabledReason={!hasProject ? t("issueDetail.handoff.requiresProject") : undefined}
               isCreatingPr={createPullRequest.isPending}
               refreshingHandoffId={refreshIssueHandoff.isPending ? refreshIssueHandoff.variables?.id || "" : ""}
               createPrError={createPullRequest.error}
@@ -6063,16 +6094,16 @@ export function IssueDetailPage() {
         {showIssueSidebar ? (
         <aside className="xl:sticky xl:top-8">
           <div className="grid gap-6 px-1 text-[13px]">
-            <SidebarSection title="Issue">
+            <SidebarSection title={t("issueDetail.sidebar.issue")}>
               <div className="grid gap-2">
                 <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-2">
-                  <span className="text-[12px] leading-5 text-[color:var(--muted)]">Status</span>
+                  <span className="text-[12px] leading-5 text-[color:var(--muted)]">{t("issueDetail.header.status")}</span>
                   <div className="flex min-w-0 items-center">
                     <StatusBadge value={displayIssueStatus(detail.issue.status)} valueLabel={issueStatusLabel(detail.issue.status)} />
                   </div>
                 </div>
-                <MetaIdentityLine label="Assignee" actor={assigneeActor} />
-                <MetaLine label="Updated" value={formatRelativeTime(detail.issue.updatedAt)} />
+                <MetaIdentityLine label={t("issueDetail.header.assignee")} actor={assigneeActor} />
+                <MetaLine label={t("issueDetail.sidebar.updated")} value={formatRelativeTime(detail.issue.updatedAt)} />
                 <LabelEditor
                   labels={issueLabels}
                   options={labelOptions}
@@ -6084,11 +6115,11 @@ export function IssueDetailPage() {
               </div>
             </SidebarSection>
 
-            <SidebarSection title="Project">
+            <SidebarSection title={t("issueDetail.sidebar.project")}>
               {detail.project?.id ? (
                 <div className="grid gap-2">
                   <div className="grid min-w-0 grid-cols-[86px_minmax(0,1fr)] items-center gap-2">
-                    <span className="text-[12px] leading-5 text-[color:var(--muted)]">Name</span>
+                    <span className="text-[12px] leading-5 text-[color:var(--muted)]">{t("issueDetail.sidebar.name")}</span>
                     <button
                       type="button"
                       className="min-w-0 rounded-[6px] px-1 py-1 text-left text-[12px] font-medium leading-5 text-[color:var(--muted-strong)] transition-colors hover:bg-[color:var(--hover)]"
@@ -6097,30 +6128,30 @@ export function IssueDetailPage() {
                       <span className="block truncate">{detail.project.name}</span>
                     </button>
                   </div>
-                  <MetaLine label="Repo" value={detail.project.repoPath || "not configured"} />
-                  <MetaLine label="Default cluster" value={projectCluster?.name || "not configured"} />
+                  <MetaLine label={t("issueDetail.sidebar.repo")} value={detail.project.repoPath || t("issueDetail.sidebar.notConfigured")} />
+                  <MetaLine label={t("issueDetail.sidebar.defaultCluster")} value={projectCluster?.name || t("issueDetail.sidebar.notConfigured")} />
                 </div>
               ) : (
                 <div className="grid gap-3 rounded-[8px] bg-[color:var(--block-subtle)] px-3 py-2.5 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-                  <span className="font-medium text-[color:var(--muted-strong)]">No project attached</span>
-                  <span>Attach a project before running agents, PR handoff, or test environments.</span>
+                  <span className="font-medium text-[color:var(--muted-strong)]">{t("issueDetail.sidebar.noProjectAttached")}</span>
+                  <span>{t("issueDetail.sidebar.attachProjectDescription")}</span>
                   <Button type="button" variant="secondary" size="sm" onClick={openProjectAttach}>
                     <Plus data-icon />
-                    Attach project
+                    {t("issueDetail.sidebar.attachProject")}
                   </Button>
                   {attachProject.error ? <Notice tone="danger">{attachProject.error.message}</Notice> : null}
                 </div>
               )}
             </SidebarSection>
 
-            <SidebarSection title="Test environment">
+            <SidebarSection title={t("issueDetail.sidebar.testEnvironment")}>
               <IssueTestEnvironmentPanel
                 environment={detail.testEnvironment}
                 cluster={testCluster}
                 sessions={listOrEmpty(detail.sessions)}
                 hasActiveSession={hasActiveSession}
                 disabled={serverWorkspaceReady || !hasProject}
-                disabledReason={!hasProject ? "Attach a project before deploying a test environment." : undefined}
+                disabledReason={!hasProject ? t("issueDetail.environment.requiresProject") : undefined}
                 startError={startTestDeploy.error}
                 cleanupError={cleanupTestEnvironment.error}
                 retainError={retainTestEnvironment.error}
@@ -6134,14 +6165,14 @@ export function IssueDetailPage() {
             </SidebarSection>
 
             {latestSession ? (
-              <SidebarSection title="Branch">
+              <SidebarSection title={t("issueDetail.sidebar.branch")}>
                 <div className="break-words font-mono text-[12px] leading-5 text-[color:var(--muted-strong)]">
-                  {latestSession.branch || "not reported"}
+                  {latestSession.branch || t("issueDetail.sidebar.notReported")}
                 </div>
               </SidebarSection>
             ) : null}
 
-            <SidebarSection title="Handoff">
+            <SidebarSection title={t("issueDetail.sidebar.handoff")}>
               {latestHandoff ? (
                 <div className="grid gap-2">
                   <div className="flex min-w-0 items-center justify-between gap-2">
@@ -6149,14 +6180,14 @@ export function IssueDetailPage() {
                     {latestHandoff.prUrl ? (
                       <Button type="button" variant="ghost" size="sm" onClick={() => void openRichLink(latestHandoff.prUrl)}>
                         <ExternalLink data-icon />
-                        Open
+                        {t("issueDetail.handoff.openPr")}
                       </Button>
                     ) : null}
                   </div>
-                  <MetaLine label="Branch" value={latestHandoff.branch || "not recorded"} />
-                  <MetaLine label="PR" value={latestHandoff.prNumber > 0 ? `#${latestHandoff.prNumber}` : latestHandoff.prUrl ? "synced" : "not detected"} />
-                  <MetaLine label="Head" value={latestHandoff.headCommitSha ? latestHandoff.headCommitSha.slice(0, 12) : "not recorded"} />
-                  <MetaLine label="Checked" value={latestHandoff.lastCheckedAt ? formatRelativeTime(latestHandoff.lastCheckedAt) : "not checked"} />
+                  <MetaLine label={t("issueDetail.sidebar.branch")} value={latestHandoff.branch || t("issueDetail.sidebar.notRecorded")} />
+                  <MetaLine label={t("issueDetail.handoff.pullRequest")} value={latestHandoff.prNumber > 0 ? `#${latestHandoff.prNumber}` : latestHandoff.prUrl ? t("issueDetail.sidebar.synced") : t("issueDetail.sidebar.notDetected")} />
+                  <MetaLine label={t("issueDetail.handoff.headCommit")} value={latestHandoff.headCommitSha ? latestHandoff.headCommitSha.slice(0, 12) : t("issueDetail.sidebar.notRecorded")} />
+                  <MetaLine label={t("issueDetail.handoff.checked")} value={latestHandoff.lastCheckedAt ? formatRelativeTime(latestHandoff.lastCheckedAt) : t("issueDetail.sidebar.notChecked")} />
                   {latestHandoff.prUrl || latestHandoff.branch ? (
                     <Button
                       type="button"
@@ -6169,19 +6200,19 @@ export function IssueDetailPage() {
                       }}
                     >
                       <RefreshCw data-icon />
-                      {refreshIssueHandoff.isPending && refreshIssueHandoff.variables?.id === latestHandoff.id ? "Refreshing" : "Refresh"}
+                      {refreshIssueHandoff.isPending && refreshIssueHandoff.variables?.id === latestHandoff.id ? t("issueDetail.handoff.refreshing") : t("issueDetail.handoff.refresh")}
                     </Button>
                   ) : null}
                   {latestHandoff.error ? <Notice tone="danger">{latestHandoff.error}</Notice> : null}
                   {refreshIssueHandoff.error && refreshIssueHandoff.variables?.id === latestHandoff.id ? <Notice tone="danger">{refreshIssueHandoff.error.message}</Notice> : null}
                 </div>
               ) : (
-                <div className="text-[12px] leading-5 text-[color:var(--muted)]">No issue PR has been detected yet.</div>
+                <div className="text-[12px] leading-5 text-[color:var(--muted)]">{t("issueDetail.sidebar.noPrDetected")}</div>
               )}
             </SidebarSection>
 
             {detail.project?.id ? (
-              <SidebarSection title="Workflow">
+              <SidebarSection title={t("issueDetail.sidebar.workflow")}>
                 <button
                   type="button"
                   className="grid w-full gap-2 rounded-[8px] px-2 py-2 text-left transition-[background-color,box-shadow,transform] duration-150 ease-out hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99]"
@@ -6190,13 +6221,13 @@ export function IssueDetailPage() {
                   <span className="flex items-center justify-between gap-2">
                     <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium leading-5 text-[color:var(--muted-strong)]">
                       <BookOpenText data-icon className="shrink-0" />
-                      <span className="truncate">Project runbook</span>
+                      <span className="truncate">{t("issueDetail.sidebar.projectRunbook")}</span>
                     </span>
-                    <span className="shrink-0 text-[12px] font-medium leading-5 text-[color:var(--muted)]">View</span>
+                    <span className="shrink-0 text-[12px] font-medium leading-5 text-[color:var(--muted)]">{t("issueDetail.sidebar.view")}</span>
                   </span>
                   <div className="grid gap-1.5">
-                    <MetaLine label="Status" value={runbookStatusLabel(detail.project.runbookStatus)} />
-                    <MetaLine label="Updated" value={runbookUpdatedLabel(detail.project.runbookUpdatedAt)} />
+                    <MetaLine label={t("issueDetail.header.status")} value={runbookStatusLabel(detail.project.runbookStatus)} />
+                    <MetaLine label={t("issueDetail.sidebar.updated")} value={runbookUpdatedLabel(detail.project.runbookUpdatedAt)} />
                   </div>
                 </button>
               </SidebarSection>

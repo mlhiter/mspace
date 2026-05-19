@@ -1,6 +1,6 @@
 # mspace Design System
 
-> Status: design system baseline, updated 2026-05-12
+> Status: design system baseline, updated 2026-05-19
 
 ## Visual Thesis
 
@@ -50,6 +50,8 @@ Current installed shadcn/ui primitives:
 - `textarea`
 
 Project-facing wrappers, app shell components, and compatibility exports live in `packages/ui/src/index.tsx` and are consumed through `@mspace/ui`.
+
+Global shell controls should use the existing shadcn primitives instead of custom facades. The current workspace-menu language switcher uses shadcn `DropdownMenu` so the trigger, menu item density, focus behavior, and keyboard interaction match the rest of the app shell.
 
 When adding a shared primitive:
 
@@ -194,7 +196,8 @@ Screen priorities:
 ### Badges And Status
 
 - Use `Badge` for status, branch/runtime labels, and namespace hints.
-- Status values remain English unless the product explicitly changes locale.
+- Status storage values remain English, but visible status labels follow the active product locale.
+- Visible product copy follows the active locale through `@mspace/i18n`; technical identifiers, logs, paths, Kubernetes object names, commit hashes, branch names, and user-authored content stay literal unless the product explicitly decides otherwise.
 - Status badges must use readable labels, not storage values: `Needs review`, `Ready for test`, and `Closed` are acceptable; `needs_review` and `ready_for_test` are not. Runtime badges may still use readable progress labels such as `Running` or `Deploying`.
 - Use GitHub-adjacent status semantics for issues: `Open` is green and `Closed` is purple. Other handoff states should use restrained semantic colors that help scanning without turning the issue header or timeline into a dashboard. The Issue sidebar status is a read-only badge. Human lifecycle actions belong inside the Issue Detail comment composer footer: keep the primary action visible, hide less common close reasons such as `Close as not planned` in a compact dropdown, and do not repeat the current issue status there. Do not use a generic Issue status selector, and do not put transient session or test-deploy progress there.
 - Status-change timeline rows should be one-line actor events with from/to badges. Hide compatibility prose from the stored comment body unless the user is inspecting raw data.

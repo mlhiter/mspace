@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@mspace/core": "workspace:*",
+    "@mspace/i18n": "workspace:*",
     "@mspace/ui": "workspace:*",
     "@mspace/views": "workspace:*",
     "@tanstack/react-query": "^5.96.2",

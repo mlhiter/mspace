@@ -27,7 +27,7 @@ The roadmap intentionally keeps local workflow first. Kubernetes is the manually
 
 The first server control-plane slice now exists for GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, runtime registration, and runtime tasks. Signed-in personal and team workspace product data now uses server Postgres. Team worker agent-session routing is connected for PG-backed team issues through the runner bridge, while runtime execution state, attachments, PR handoff, evidence, clusters, and issue test environments still use local runner storage and APIs. Do not treat the runner's display identity snapshots or SQLite runtime rows as the collaboration architecture.
 
-The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, and continueable failure evidence. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
+The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, and bilingual desktop UI support for English and Simplified Chinese. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 
 ## Approved Execution Plan
 

@@ -69,6 +69,7 @@ Production deployment uses the root `vercel.json`:
 - GitHub-authenticated sidebar account/workspace state, plus local issue creator and comment actor display snapshots with human and Codex avatars.
 - Workspace Settings exposes team-only access controls for members and one-time invites, plus runtime panels for personal and team worker tokens, workers, task events, and worker logs.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, Material Icon Theme file icons, and real shadcn/ui source components in `@mspace/ui`.
+- Bilingual desktop UI support for English and Simplified Chinese through `@mspace/i18n`, with the language switcher in the workspace menu and the active locale persisted in `localStorage["mspace.locale"]`.
 - Sidebar global search with a `Command+K` palette for jumping to issues and projects.
 - Go local runner with HTTP APIs, SQLite storage for local validation state, git-aware project import, attachments, cluster/test-environment bookkeeping, and PR handoff.
 - Project import from a local folder or GitHub repository URL, including GitHub remote metadata detection when available.
@@ -100,7 +101,7 @@ mspace separates collaboration, execution, and validation:
 | Layer | What it owns | Current implementation |
 | --- | --- | --- |
 | Control plane | Users, workspaces, product data, membership, GitHub identity, mspace auth sessions, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, PostgreSQL through `pgx` |
-| Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review | Electron, React, TanStack Router, React Query, shared `@mspace/ui` |
+| Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review, language preference | Electron, React, TanStack Router, React Query, shared `@mspace/ui` and `@mspace/i18n` |
 | Local runner | Local desktop facilities that have not moved server-side yet: attachments, clusters, test environments, PR handoff, legacy/local validation state | Go, chi, SQLite |
 | Runtime worker | Personal or team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
 | Agent runtime | One issue-bound turn in an isolated working directory | Worker-managed git workdir under the selected runtime mode |
@@ -238,6 +239,7 @@ curl http://127.0.0.1:8787/health
 apps/desktop/        Electron desktop shell and renderer entrypoint
 apps/website/        Public Vite/React brand site and changelog for the issue-to-evidence story
 packages/core/       Shared API client and TypeScript types
+packages/i18n/       Shared English and Simplified Chinese desktop localization
 packages/ui/         Shared UI primitives and shadcn/ui source components
 packages/views/      Product routes for Inbox, Issues, Agents, Projects, Sessions
 server/              Go control plane for identity, workspaces, auth sessions

@@ -3,6 +3,7 @@ import type { FormEvent, ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, CheckCircle2, Circle, Clock3, Plus, Save, Settings2, SquareTerminal, X } from "lucide-react";
 import { api, queryKeys, type AgentProfile, type AgentProfileInput } from "@mspace/core";
+import { useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
   CollectionEmptyState,
@@ -54,6 +55,7 @@ function normalizeAgentForm(form: AgentProfileInput): AgentProfileInput {
 }
 
 export function AgentsPage() {
+  const { t } = useMspaceTranslation();
   const queryClient = useQueryClient();
   const agentsQuery = useQuery({
     queryKey: queryKeys.agents,
@@ -111,39 +113,39 @@ export function AgentsPage() {
 
   return (
     <PageFrame
-      title="Agents"
-      subtitle="Manage the mentionable roles that can take a turn from an issue comment."
+      title={t("agents.title")}
+      subtitle={t("agents.subtitle")}
       actions={
         <Button variant="secondary" onClick={openCreateModal}>
           <Plus data-icon />
-          New agent
+          {t("agents.newAgent")}
         </Button>
       }
     >
       {agentsQuery.isPending ? (
         <div className="rounded-[10px] bg-[color:var(--surface)] px-4 py-6 text-[13px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-          Loading agents...
+          {t("agents.loading")}
         </div>
       ) : agents.length === 0 ? (
         <CollectionEmptyState
           icon={Bot}
-          title="No agents yet"
-          body="Create a mentionable role first. Issue comments can route a turn once an agent is enabled."
+          title={t("agents.emptyTitle")}
+          body={t("agents.emptyBody")}
           action={
             <Button variant="secondary" onClick={openCreateModal}>
               <Plus data-icon />
-              New agent
+              {t("agents.newAgent")}
             </Button>
           }
         />
       ) : (
         <div className="rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="grid grid-cols-[minmax(190px,1.05fr)_minmax(260px,1.5fr)_150px_116px_116px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
-            <span>Agent</span>
-            <span>Role</span>
-            <span>Provider</span>
-            <span>Status</span>
-            <span className="text-right">Actions</span>
+            <span>{t("agents.agent")}</span>
+            <span>{t("agents.role")}</span>
+            <span>{t("agents.provider")}</span>
+            <span>{t("agents.status")}</span>
+            <span className="text-right">{t("agents.actions")}</span>
           </div>
           <div className="divide-y divide-[color:var(--line)]">
             {agents.map((agent) => (
@@ -151,20 +153,20 @@ export function AgentsPage() {
             ))}
           </div>
           <div className="border-t border-[color:var(--line)] px-4 py-2.5 text-[12px] leading-5 text-[color:var(--muted)]">
-            {enabledCount} enabled / {agents.length} total
+            {t("agents.enabledSummary", { enabled: enabledCount, total: agents.length })}
           </div>
         </div>
       )}
 
       {createOpen ? (
         <AgentModal
-          title="New agent"
-          description="Create a role that can be mentioned from the issue composer."
+          title={t("agents.newAgent")}
+          description={t("agents.newAgentDescription")}
           isPending={createAgent.isPending}
           error={createAgent.error}
           form={createForm}
-          submitLabel="Create agent"
-          pendingLabel="Creating..."
+          submitLabel={t("agents.createAgent")}
+          pendingLabel={t("agents.creating")}
           onClose={() => setCreateOpen(false)}
           onSubmit={submitCreate}
           onChange={setCreateForm}
@@ -174,14 +176,14 @@ export function AgentsPage() {
       {settingsAgent ? (
         <AgentModal
           compact
-          title="Agent settings"
-          description="Tune mention, role guidance, and whether this agent can start new sessions."
+          title={t("agents.settingsTitle")}
+          description={t("agents.settingsDescription")}
           isPending={updateAgent.isPending}
           error={updateAgent.error}
           form={settingsForm}
           agent={settingsAgent}
-          submitLabel="Save settings"
-          pendingLabel="Saving..."
+          submitLabel={t("agents.saveSettings")}
+          pendingLabel={t("agents.saving")}
           onClose={() => setSettingsAgent(null)}
           onSubmit={submitSettings}
           onChange={setSettingsForm}
@@ -193,6 +195,7 @@ export function AgentsPage() {
 
 function AgentRow(props: { agent: AgentProfile; onSettings: () => void }) {
   const { agent } = props;
+  const { t } = useMspaceTranslation();
   return (
     <article className="grid grid-cols-[minmax(190px,1.05fr)_minmax(260px,1.5fr)_150px_116px_116px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
       <div className="min-w-0">
@@ -205,7 +208,7 @@ function AgentRow(props: { agent: AgentProfile; onSettings: () => void }) {
               <h3 className="truncate text-[15px] font-semibold leading-6 text-[color:var(--text)]">{agent.name}</h3>
               {agent.builtIn ? (
                 <span className="shrink-0 rounded-full bg-[color:var(--block)] px-2 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted-strong)]">
-                  built-in
+                  {t("agents.builtIn")}
                 </span>
               ) : null}
             </div>
@@ -216,10 +219,10 @@ function AgentRow(props: { agent: AgentProfile; onSettings: () => void }) {
 
       <div className="min-w-0">
         <div className="line-clamp-2 text-[13px] leading-5 text-[color:var(--muted)]">
-          {agent.description || "No description yet."}
+          {agent.description || t("agents.noDescription")}
         </div>
         <div className="mt-1">
-          <InlineMeta icon={Clock3}><RelativeTime prefix="Updated" value={agent.updatedAt} /></InlineMeta>
+          <InlineMeta icon={Clock3}><RelativeTime prefix={t("time.updated")} value={agent.updatedAt} /></InlineMeta>
         </div>
       </div>
 
@@ -234,7 +237,7 @@ function AgentRow(props: { agent: AgentProfile; onSettings: () => void }) {
       <div className="flex justify-end">
         <Button variant="secondary" size="sm" onClick={props.onSettings}>
           <Settings2 data-icon />
-          Settings
+          {t("agents.settings")}
         </Button>
       </div>
     </article>
@@ -242,6 +245,7 @@ function AgentRow(props: { agent: AgentProfile; onSettings: () => void }) {
 }
 
 function AgentStatus(props: { enabled: boolean }) {
+  const { t } = useMspaceTranslation();
   return (
     <span
       className={cn(
@@ -252,7 +256,7 @@ function AgentStatus(props: { enabled: boolean }) {
       )}
     >
       {props.enabled ? <CheckCircle2 data-icon /> : <Circle data-icon />}
-      {props.enabled ? "enabled" : "disabled"}
+      {props.enabled ? t("agents.enabled") : t("agents.disabled")}
     </span>
   );
 }
@@ -271,25 +275,26 @@ function AgentModal(props: {
   agent?: AgentProfile;
   compact?: boolean;
 }) {
+  const { t } = useMspaceTranslation();
   return (
     <Modal title={props.title} description={props.description} onClose={props.onClose} compact={props.compact}>
       <form className="flex flex-col gap-4" onSubmit={props.onSubmit}>
         {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
         {props.agent?.builtIn ? (
           <Notice>
-            This is a default agent. You can still tune its mention, enabled state, and role instructions.
+            {t("agents.defaultNotice")}
           </Notice>
         ) : null}
 
         <div className="grid gap-3 md:grid-cols-2">
-          <Field label="Name">
+          <Field label={t("agents.name")}>
             <Input
               value={props.form.name}
               onChange={(event) => props.onChange({ ...props.form, name: event.target.value })}
-              placeholder="Review"
+              placeholder={t("agents.namePlaceholder")}
             />
           </Field>
-          <Field label="Mention">
+          <Field label={t("agents.mention")}>
             <Input
               value={props.form.mention}
               onChange={(event) => props.onChange({ ...props.form, mention: event.target.value })}
@@ -299,14 +304,14 @@ function AgentModal(props: {
         </div>
 
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
-          <Field label="Description">
+          <Field label={t("agents.description")}>
             <Input
               value={props.form.description}
               onChange={(event) => props.onChange({ ...props.form, description: event.target.value })}
-              placeholder="Code review, risk checks, and merge readiness."
+              placeholder={t("agents.descriptionPlaceholder")}
             />
           </Field>
-          <Field label="Provider">
+          <Field label={t("agents.provider")}>
             <Select
               value={props.form.provider}
               onValueChange={(value) => props.onChange({ ...props.form, provider: value })}
@@ -315,18 +320,18 @@ function AgentModal(props: {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="codex">Codex app-server</SelectItem>
+                <SelectItem value="codex">{t("agents.providerCodex")}</SelectItem>
               </SelectContent>
             </Select>
           </Field>
         </div>
 
-        <Field label="Instructions" hint="Keep this as role guidance. Issue, comments, project, and session context are added separately.">
+        <Field label={t("agents.instructions")} hint={t("agents.instructionsHint")}>
           <Textarea
             value={props.form.instructions}
             onChange={(event) => props.onChange({ ...props.form, instructions: event.target.value })}
             className="h-[220px] !min-h-[220px] leading-6"
-            placeholder="Focus on code review. Identify correctness, regression, and test risks first. Keep the response concise and actionable."
+            placeholder={t("agents.instructionsPlaceholder")}
           />
         </Field>
 
@@ -340,17 +345,17 @@ function AgentModal(props: {
           <span className="min-w-0">
             <span className="flex items-center gap-2 font-medium text-[color:var(--text)]">
               <SquareTerminal data-icon />
-              Enabled for issue mentions
+              {t("agents.enabledForMentions")}
             </span>
             <span className="mt-1 block text-[12px] leading-5 text-[color:var(--muted)]">
-              Disabled agents stay in history but will not appear in composer suggestions or start new sessions.
+              {t("agents.disabledDescription")}
             </span>
           </span>
         </label>
 
         <div className="mt-1 flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isPending}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button type="submit" disabled={props.isPending}>
             <Save data-icon />
@@ -363,6 +368,8 @@ function AgentModal(props: {
 }
 
 function Modal(props: { title: string; description: string; onClose: () => void; children: ReactNode; compact?: boolean }) {
+  const { t } = useMspaceTranslation();
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") props.onClose();
@@ -374,7 +381,7 @@ function Modal(props: { title: string; description: string; onClose: () => void;
 
   return (
     <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
-      <button type="button" aria-label="Close modal backdrop" className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <button type="button" aria-label={t("agents.closeBackdrop")} className="absolute inset-0 cursor-default" onClick={props.onClose} />
       <section
         role="dialog"
         aria-modal="true"
@@ -400,7 +407,7 @@ function Modal(props: { title: string; description: string; onClose: () => void;
           </div>
           <button
             type="button"
-            aria-label="Close modal"
+            aria-label={t("agents.closeModal")}
             className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
             onClick={props.onClose}
           >

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowRight, CheckCircle2, Clock3, Inbox, Layers3, MessageSquarePlus, Plus, Search } from "lucide-react";
 import { controlPlaneApi, getStoredAuthIdentity, queryKeys, type IssueListItem } from "@mspace/core";
+import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
   CollectionEmptyState,
@@ -30,10 +31,10 @@ import { displayIssueStatus, issueStatusLabel, issueStatusOptions } from "./issu
 import { RelativeTime } from "./time";
 
 const sortOptions = [
-  { value: "updated", label: "Updated" },
-  { value: "created", label: "Created" },
-  { value: "priority", label: "Priority" },
-  { value: "type", label: "Type" },
+  { value: "updated", labelKey: "issues.sort.updated" },
+  { value: "created", labelKey: "issues.sort.created" },
+  { value: "priority", labelKey: "issues.sort.priority" },
+  { value: "type", labelKey: "issues.sort.type" },
 ] as const;
 const toolbarSelectClass =
   "h-7 min-h-7 w-full rounded-[6px] bg-transparent px-2 py-1 text-[12px] leading-4 text-[color:var(--muted)] shadow-none hover:bg-[color:var(--hover)] focus:bg-[color:var(--hover)] focus:shadow-[inset_0_0_0_1px_var(--line)] data-[state=open]:bg-[color:var(--hover)] data-[state=open]:shadow-[inset_0_0_0_1px_var(--line)] sm:w-auto sm:min-w-[96px] [&_svg]:size-3.5";
@@ -78,6 +79,7 @@ function IssueAssigneeMeta(props: { issue: IssueListItem }) {
 }
 
 export function IssuesPage() {
+  const { t } = useMspaceTranslation();
   const search = useSearch({ strict: false }) as { new?: string };
   const navigate = useNavigate();
   const auth = useMspaceAuth();
@@ -129,14 +131,14 @@ export function IssuesPage() {
         const haystack = [
           issue.title,
           issue.body,
-	          issue.projectName || "No project",
+          issue.projectName || t("common.noProject"),
           issueStatusLabel(issue.status),
           issue.labels.map((label) => label.name).join(" "),
         ].join(" ").toLowerCase();
         return haystack.includes(normalizedQuery);
       })
       .sort((left, right) => compareIssues(left, right, sortBy));
-  }, [issues, priorityFilter, query, sortBy, statusFilter, typeFilter]);
+  }, [issues, priorityFilter, query, sortBy, statusFilter, t, typeFilter]);
 
   function closeCreateModal() {
     setCreateOpen(false);
@@ -144,24 +146,24 @@ export function IssuesPage() {
 
   return (
     <PageFrame
-      title="Issues"
-      subtitle="Manage durable work items, assign agents, and keep session evidence attached to the issue."
+      title={t("issues.title")}
+      subtitle={t("issues.subtitle")}
       actions={
         <Button variant="secondary" onClick={() => setCreateOpen(true)}>
           <Plus data-icon />
-          New issue
+          {t("issues.newIssue")}
         </Button>
       }
     >
       {issues.length === 0 ? (
         <CollectionEmptyState
           icon={Inbox}
-          title="No issues yet"
-          body="Start with a short issue note. Sessions, comments, and evidence will collect here later."
+          title={t("issues.noIssuesTitle")}
+          body={t("issues.noIssuesBody")}
           action={
             <Button variant="secondary" onClick={() => setCreateOpen(true)}>
               <Plus data-icon />
-              New issue
+              {t("issues.newIssue")}
             </Button>
           }
         />
@@ -174,12 +176,12 @@ export function IssuesPage() {
                 <Input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search issues"
+                  placeholder={t("issues.searchPlaceholder")}
                   className="h-7 min-h-7 rounded-[6px] bg-transparent pl-8 pr-2 text-[12px] shadow-none hover:bg-[color:var(--hover)] focus-visible:bg-[color:var(--hover)] focus-visible:shadow-[inset_0_0_0_1px_var(--line)]"
                 />
               </div>
               <span className="hidden shrink-0 text-[12px] leading-4 text-[color:var(--faint)] sm:inline">
-                {grouped.length} of {issues.length}
+                {t("issues.count", { shown: grouped.length, total: issues.length })}
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
@@ -188,7 +190,7 @@ export function IssuesPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All status</SelectItem>
+                  <SelectItem value="all">{t("issues.allStatus")}</SelectItem>
                   {issueStatusOptions.map((status) => (
                     <SelectItem key={status} value={status}>
                       {issueStatusLabel(status)}
@@ -198,10 +200,10 @@ export function IssuesPage() {
               </Select>
               <Select value={typeFilter} onValueChange={setTypeFilter}>
                 <SelectTrigger className={toolbarSelectClass}>
-                  <IssueLabelSelectValue label={selectedTypeFilter} fallback="All type" />
+                  <IssueLabelSelectValue label={selectedTypeFilter} fallback={t("issues.allType")} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All type</SelectItem>
+                  <SelectItem value="all">{t("issues.allType")}</SelectItem>
                   {typeOptions.map((label) => (
                     <SelectItem key={label.key} value={label.key}>
                       <IssueLabelOptionLabel label={label} />
@@ -211,10 +213,10 @@ export function IssuesPage() {
               </Select>
               <Select value={priorityFilter} onValueChange={setPriorityFilter}>
                 <SelectTrigger className={toolbarSelectClass}>
-                  <IssueLabelSelectValue label={selectedPriorityFilter} fallback="All priority" />
+                  <IssueLabelSelectValue label={selectedPriorityFilter} fallback={t("issues.allPriority")} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All priority</SelectItem>
+                  <SelectItem value="all">{t("issues.allPriority")}</SelectItem>
                   {priorityOptions.map((label) => (
                     <SelectItem key={label.key} value={label.key}>
                       <IssueLabelOptionLabel label={label} />
@@ -229,7 +231,7 @@ export function IssuesPage() {
                 <SelectContent>
                   {sortOptions.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
-                      {option.label}
+                      {t(option.labelKey)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -239,10 +241,10 @@ export function IssuesPage() {
 
           <div className="rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
             <div className="grid grid-cols-[minmax(220px,1.6fr)_minmax(150px,0.7fr)_150px_130px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
-              <span>Issue</span>
-              <span>Project</span>
-              <span>Owner</span>
-              <span className="text-right">State</span>
+              <span>{t("issues.issue")}</span>
+              <span>{t("issues.project")}</span>
+              <span>{t("issues.owner")}</span>
+              <span className="text-right">{t("issues.state")}</span>
             </div>
             {grouped.length > 0 ? (
               <div className="divide-y divide-[color:var(--line)]">
@@ -251,7 +253,7 @@ export function IssuesPage() {
                 ))}
               </div>
             ) : (
-              <div className="px-4 py-8 text-center text-[13px] text-[color:var(--muted)]">No issues match the current view.</div>
+              <div className="px-4 py-8 text-center text-[13px] text-[color:var(--muted)]">{t("issues.noMatch")}</div>
             )}
           </div>
         </div>
@@ -276,6 +278,7 @@ export function IssuesPage() {
 
 function IssueRow(props: { issue: IssueListItem }) {
   const { issue } = props;
+  const { t } = useMspaceTranslation();
   return (
     <Link
       to="/issues/$issueId"
@@ -299,18 +302,18 @@ function IssueRow(props: { issue: IssueListItem }) {
           </div>
         ) : null}
         <div className="mt-1 flex flex-wrap items-center gap-3">
-          <InlineMeta icon={Clock3}><RelativeTime prefix="Updated" value={issue.updatedAt} /></InlineMeta>
-          <InlineMeta icon={MessageSquarePlus}>{issue.sessionCount} sessions</InlineMeta>
+          <InlineMeta icon={Clock3}><RelativeTime prefix={t("time.updated")} value={issue.updatedAt} /></InlineMeta>
+          <InlineMeta icon={MessageSquarePlus}>{t("issues.sessions", { count: issue.sessionCount })}</InlineMeta>
           {issue.childIssueCount > 0 ? (
             <InlineMeta icon={CheckCircle2}>
-              {issue.completedChildIssueCount}/{issue.childIssueCount} tasks
+              {t("issues.tasks", { completed: issue.completedChildIssueCount, total: issue.childIssueCount })}
             </InlineMeta>
           ) : null}
         </div>
       </div>
 
       <div className="min-w-0">
-        <InlineMeta icon={Layers3}>{issue.projectName || "No project"}</InlineMeta>
+        <InlineMeta icon={Layers3}>{issue.projectName || t("common.noProject")}</InlineMeta>
       </div>
 
       <div className="min-w-0">
@@ -367,7 +370,7 @@ function IssueLabelPill(props: { label: IssueListItem["labels"][number] }) {
 function PendingTypePill() {
   return (
     <span className="rounded-[6px] bg-[color:var(--block)] px-1.5 py-0.5 text-[11px] leading-4 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-      Classifying...
+      {translate("issues.classifying")}
     </span>
   );
 }

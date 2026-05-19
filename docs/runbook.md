@@ -1,6 +1,6 @@
 # mspace Local Runbook
 
-> Status: local MVP operations guide, updated 2026-05-18
+> Status: local MVP operations guide, updated 2026-05-19
 
 ## Local Data
 
@@ -145,6 +145,21 @@ npx vercel@latest --prod
 ```
 
 The root `vercel.json` uses `pnpm install --frozen-lockfile`, builds with `pnpm --filter @mspace/website build`, and publishes `apps/website/dist`. The local `.vercel/` project link is intentionally ignored by git. Vercel CLI authentication is machine/account-level rather than per shell session; check with `npx vercel@latest whoami` if a fresh terminal cannot deploy.
+
+## Desktop Localization
+
+Desktop localization is centralized in `packages/i18n` and currently supports English (`en`) and Simplified Chinese (`zh-CN`). The renderer initializes it from `apps/desktop/src/renderer/src/main.tsx`; the selected locale is stored in `localStorage["mspace.locale"]` and mirrored to `<html lang="...">`.
+
+The language switcher is in the workspace menu. It should affect the desktop shell and main workflow surfaces such as sidebar navigation, global search, auth/workspace controls, Inbox, Issues, issue creation, Agents, Projects, project settings, Clusters, Workspace Settings, workspace invites, Session Detail, Issue Detail tabs/dialogs, status labels, and time labels. Leave logs, user-authored Markdown, branch names, commit hashes, Kubernetes object names, storage values, and runtime protocol fields literal unless a separate product decision says otherwise.
+
+Quick browser-console checks while the desktop renderer is open:
+
+```js
+localStorage.getItem("mspace.locale")
+document.documentElement.lang
+```
+
+When adding visible product copy in `apps/desktop`, `packages/ui`, or `packages/views`, add or reuse a key in `packages/i18n/src/index.ts` instead of hardcoding English. Keep locale-aware memoized values and hooks dependent on the translation function or current locale so language changes refresh already-rendered labels. After localization changes, run the i18n key-parity and used-key audits before the normal typecheck/build gates.
 
 ## Environment Variables
 

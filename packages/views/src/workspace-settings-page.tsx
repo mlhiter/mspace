@@ -56,6 +56,7 @@ import {
 	Textarea,
 	cn,
 } from "@mspace/ui";
+import { useMspaceTranslation, t as translate } from "@mspace/i18n";
 import { useMspaceAuth } from "./auth-context";
 import { RelativeTime } from "./time";
 
@@ -64,7 +65,7 @@ const defaultSettingsForm: UpdateWorkspaceSettingsInput = {
 };
 
 const defaultTokenForm: CreateRuntimeRegistrationTokenInput = {
-	name: "Workspace runtime worker",
+	name: translate("workspaceSettings.modal.workerNamePlaceholder"),
 	expiresInHours: 24,
 };
 
@@ -97,6 +98,7 @@ const defaultTaskForm: RuntimeTaskForm = {
 };
 
 export function WorkspaceSettingsPage() {
+	const { t } = useMspaceTranslation();
 	const queryClient = useQueryClient();
 	const auth = useMspaceAuth();
 	const workspaceID = auth.workspace?.id || "";
@@ -104,6 +106,7 @@ export function WorkspaceSettingsPage() {
 	const isTeamWorkspace = auth.workspace?.kind === "team";
 	const runtimeEnabled = isSignedIn && workspaceID !== "";
 	const defaultRuntimeMode = isTeamWorkspace ? "team" : "personal";
+	const runtimeModeLabel = isTeamWorkspace ? t("workspaceSettings.summary.team") : t("workspaceSettings.summary.personal");
 
 	const settingsQuery = useQuery({
 		queryKey: queryKeys.workspaceSettings,
@@ -205,7 +208,7 @@ export function WorkspaceSettingsPage() {
 	const startDockerWorker = useMutation({
 		mutationFn: async () => {
 			if (!window.mspaceDesktop?.startDockerWorker) {
-				throw new Error("Desktop worker startup is only available in the mspace desktop app.");
+				throw new Error(t("workspaceSettings.dockerWorkerUnavailable"));
 			}
 			return window.mspaceDesktop.startDockerWorker({
 				authToken: auth.token,
@@ -218,10 +221,10 @@ export function WorkspaceSettingsPage() {
 		},
 		onMutate: () => {
 			setDockerWorkerError("");
-			setDockerWorkerStatus("Starting Docker worker");
+			setDockerWorkerStatus(t("workspaceSettings.startingDockerWorker"));
 		},
 		onSuccess: async (result) => {
-			setDockerWorkerStatus(`${result.containerName} is starting`);
+			setDockerWorkerStatus(t("workspaceSettings.dockerWorkerStarting", { name: result.containerName }));
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: queryKeys.runtimeRegistrationTokens(workspaceID, auth.token) }),
 				queryClient.invalidateQueries({ queryKey: queryKeys.runtimeWorkers(workspaceID, auth.token) }),
@@ -229,7 +232,7 @@ export function WorkspaceSettingsPage() {
 		},
 		onError: (error) => {
 			setDockerWorkerStatus("");
-			setDockerWorkerError(error instanceof Error ? error.message : "Docker worker could not be started.");
+			setDockerWorkerError(error instanceof Error ? error.message : t("workspaceSettings.dockerWorkerCouldNotStart"));
 		},
 	});
 	const revokeToken = useMutation({
@@ -249,7 +252,7 @@ export function WorkspaceSettingsPage() {
 		},
 	});
 	const cancelTask = useMutation({
-		mutationFn: (taskID: string) => controlPlaneApi.cancelRuntimeTask(auth.token, workspaceID, taskID, { reason: "Cancelled from Workspace Settings." }),
+		mutationFn: (taskID: string) => controlPlaneApi.cancelRuntimeTask(auth.token, workspaceID, taskID, { reason: t("workspaceSettings.taskCancelReason") }),
 		onSuccess: async (_task, taskID) => {
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: queryKeys.runtimeTasks(workspaceID, auth.token) }),
@@ -311,7 +314,7 @@ export function WorkspaceSettingsPage() {
 		try {
 			createTask.mutate(normalizeRuntimeTaskForm(taskForm));
 		} catch (error) {
-			setTaskFormError(error instanceof Error ? error.message : "Task form is invalid.");
+			setTaskFormError(error instanceof Error ? error.message : t("workspaceSettings.taskFormInvalid"));
 		}
 	}
 
@@ -319,9 +322,9 @@ export function WorkspaceSettingsPage() {
 		if (!createdToken?.token) return;
 		try {
 			await navigator.clipboard.writeText(createdToken.token);
-			setCopyState("Copied");
+			setCopyState(t("workspaceSettings.copied"));
 		} catch {
-			setCopyState("Copy failed");
+			setCopyState(t("workspaceSettings.copyFailed"));
 		}
 	}
 
@@ -329,9 +332,9 @@ export function WorkspaceSettingsPage() {
 		if (!createdToken?.token) return;
 		try {
 			await navigator.clipboard.writeText(buildDockerWorkerCommand(createdToken.token, defaultRuntimeMode));
-			setCopyState("Command copied");
+			setCopyState(t("workspaceSettings.commandCopied"));
 		} catch {
-			setCopyState("Copy failed");
+			setCopyState(t("workspaceSettings.copyFailed"));
 		}
 	}
 
@@ -339,16 +342,16 @@ export function WorkspaceSettingsPage() {
 		if (!createdInvitation?.token) return;
 		try {
 			await navigator.clipboard.writeText(buildInviteLink(createdInvitation.token));
-			setCopyState("Copied");
+			setCopyState(t("workspaceSettings.copied"));
 		} catch {
-			setCopyState("Copy failed");
+			setCopyState(t("workspaceSettings.copyFailed"));
 		}
 	}
 
 	return (
 		<PageFrame
-			title="Workspace settings"
-			subtitle="Runtime policy, delivery automation, and worker access for this workspace."
+			title={t("workspaceSettings.title")}
+			subtitle={t("workspaceSettings.subtitle")}
 			actions={
 				isDirty || saveSettings.isPending ? (
 					<Button
@@ -357,12 +360,12 @@ export function WorkspaceSettingsPage() {
 						onClick={() => saveSettings.mutate(form)}
 					>
 						<Save data-icon />
-						{saveSettings.isPending ? "Saving" : "Save"}
+						{saveSettings.isPending ? t("workspaceSettings.saving") : t("workspaceSettings.save")}
 					</Button>
 				) : settingsQuery.data ? (
 					<span className="inline-flex h-9 items-center gap-1.5 rounded-[7px] px-2.5 text-[12px] font-medium leading-5 text-[color:var(--muted)]">
 						<CheckCircle2 data-icon className="size-4 text-[color:var(--success)]" />
-						Saved
+						{t("workspaceSettings.saved")}
 					</span>
 				) : null
 			}
@@ -374,28 +377,28 @@ export function WorkspaceSettingsPage() {
 				{createInvitation.error ? <Notice tone="danger">{createInvitation.error.message}</Notice> : null}
 				{revokeInvitation.error ? <Notice tone="danger">{revokeInvitation.error.message}</Notice> : null}
 				{dockerWorkerError ? <Notice tone="danger">{dockerWorkerError}</Notice> : null}
-				{dockerWorkerStatus ? <Notice>{dockerWorkerStatus}. The Workers list will update after the container registers.</Notice> : null}
+				{dockerWorkerStatus ? <Notice>{t("workspaceSettings.workerListUpdateNotice", { status: dockerWorkerStatus })}</Notice> : null}
 
 				<SettingsSection
-					title="Automation"
-					description="These policies run after an agent source session finishes."
-					meta={settingsQuery.isFetching ? "Refreshing" : "Workspace"}
+					title={t("workspaceSettings.section.automation")}
+					description={t("workspaceSettings.section.automationDescription")}
+					meta={settingsQuery.isFetching ? t("workspaceSettings.section.refreshing") : t("workspaceSettings.section.workspace")}
 				>
 					<SettingsRow
 						icon={GitCommit}
-						title="Commit capture"
-						description="Always capture source work as a commit so review, evidence, deploy selection, and PR handoff share one stable SHA."
-						control={<StatusPill>Always on</StatusPill>}
+						title={t("workspaceSettings.section.commitCapture")}
+						description={t("workspaceSettings.section.commitCaptureDescription")}
+						control={<StatusPill>{t("workspaceSettings.section.alwaysOn")}</StatusPill>}
 					/>
 					<SettingsRow
 						icon={GitPullRequest}
-						title="Draft pull requests"
-						description="Create or refresh one issue-level draft PR through local git, gh, and gitleaks after a source commit is captured."
+						title={t("workspaceSettings.section.draftPullRequests")}
+						description={t("workspaceSettings.section.draftPullRequestsDescription")}
 						control={
 							<Switch
 								checked={form.autoCreateDraftPr}
 								disabled={!settingsQuery.data || saveSettings.isPending}
-								aria-label="Auto draft PR"
+								aria-label={t("workspaceSettings.section.autoDraftPr")}
 								onCheckedChange={(checked) => setForm({ autoCreateDraftPr: checked })}
 							/>
 						}
@@ -405,9 +408,9 @@ export function WorkspaceSettingsPage() {
 				{isTeamWorkspace ? (
 					<>
 						<SettingsSection
-							title="Team access"
-							description="Team members share server-owned issues, Inbox receipts, runtime sessions, and worker queues."
-							meta={runtimeEnabled ? `${members.length} members` : "GitHub sign-in required"}
+							title={t("workspaceSettings.section.teamAccess")}
+							description={t("workspaceSettings.section.teamAccessDescription")}
+							meta={runtimeEnabled ? t("workspaceSettings.summary.members") : t("workspaceSettings.section.githubSignInRequired")}
 							actions={
 								<Button
 									type="button"
@@ -417,16 +420,16 @@ export function WorkspaceSettingsPage() {
 									onClick={() => setInvitationModalOpen(true)}
 								>
 									<MailPlus data-icon />
-									Invite member
+									{t("workspaceSettings.section.inviteMember")}
 								</Button>
 							}
 						>
 							{runtimeEnabled ? (
 								<div className="grid gap-0">
 									<div className="grid gap-3 border-b border-[color:var(--line)] p-4 md:grid-cols-3">
-										<RuntimeSummaryCard icon={UsersRound} label="Members" value={`${members.length}`} meta={`${canManageWorkspace ? "Invite link enabled" : "Invite link admin-only"}`} />
-										<RuntimeSummaryCard icon={MailPlus} label="Open invites" value={`${activeInvitationCount(invitations)}`} meta={`${invitations.length} recent invitations`} />
-										<RuntimeSummaryCard icon={ShieldCheck} label="Your role" value={auth.workspace?.role || "member"} meta={auth.workspace?.name || "Selected workspace"} />
+										<RuntimeSummaryCard icon={UsersRound} label={t("workspaceSettings.summary.members")} value={`${members.length}`} meta={canManageWorkspace ? t("workspaceSettings.summary.inviteLinkEnabled") : t("workspaceSettings.summary.inviteLinkAdminOnly")} />
+										<RuntimeSummaryCard icon={MailPlus} label={t("workspaceSettings.summary.openInvites")} value={`${activeInvitationCount(invitations)}`} meta={t("workspaceSettings.summary.recentInvitations", { count: invitations.length })} />
+										<RuntimeSummaryCard icon={ShieldCheck} label={t("workspaceSettings.summary.yourRole")} value={auth.workspace?.role || "member"} meta={auth.workspace?.name || t("workspaceSettings.summary.selectedWorkspace")} />
 									</div>
 									<MemberList members={members} loading={membersQuery.isPending && runtimeEnabled} currentUserID={auth.user?.id || ""} />
 									<InvitationList
@@ -439,40 +442,40 @@ export function WorkspaceSettingsPage() {
 								</div>
 							) : (
 								<div className="p-4">
-									<Notice>Sign in with GitHub before inviting teammates or switching to a shared workspace.</Notice>
+									<Notice>{t("workspaceSettings.notice.signInForTeam")}</Notice>
 								</div>
 							)}
 						</SettingsSection>
 					</>
 				) : null}
 				<SettingsSection
-					title="Runtime"
-					description="Connect local or team-owned workers to the server queue. Bootstrap credentials are generated internally."
-					meta={runtimeEnabled ? auth.workspace?.name : "GitHub sign-in required"}
+					title={t("workspaceSettings.section.runtime")}
+					description={t("workspaceSettings.section.runtimeDescription")}
+					meta={runtimeEnabled ? auth.workspace?.name : t("workspaceSettings.section.githubSignInRequired")}
 					actions={
 						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={refreshRuntime}>
 							<RefreshCw data-icon />
-							Refresh
+							{t("workspaceSettings.section.refresh")}
 						</Button>
 					}
 				>
 					{runtimeEnabled ? (
 						<div className="grid gap-0">
 							<div className="grid gap-3 border-b border-[color:var(--line)] p-4 md:grid-cols-3">
-								<RuntimeSummaryCard icon={SquareTerminal} label="Runtime mode" value={isTeamWorkspace ? "Team" : "Personal"} meta="Server-owned queue" />
-								<RuntimeSummaryCard icon={ServerCog} label="Workers" value={`${onlineWorkerCount} online`} meta={`${workers.length} registered`} />
-								<RuntimeSummaryCard icon={ListChecks} label="Task queue" value={`${queuedTaskCount} queued`} meta={`${tasks.length} recent tasks`} />
+								<RuntimeSummaryCard icon={SquareTerminal} label={t("workspaceSettings.summary.runtimeMode")} value={runtimeModeLabel} meta={t("workspaceSettings.summary.serverOwnedQueue")} />
+								<RuntimeSummaryCard icon={ServerCog} label={t("workspaceSettings.summary.workers")} value={t("workspaceSettings.summary.online", { count: onlineWorkerCount })} meta={t("workspaceSettings.summary.registered", { count: workers.length })} />
+								<RuntimeSummaryCard icon={ListChecks} label={t("workspaceSettings.summary.taskQueue")} value={t("workspaceSettings.summary.queued", { count: queuedTaskCount })} meta={t("workspaceSettings.summary.recentTasks", { count: tasks.length })} />
 							</div>
 							<SettingsRow
 								icon={Settings2}
-								title="Control plane"
-								description="The server owns session records, worker identity, task claims, logs, status, cancellation, and results."
+								title={t("workspaceSettings.section.controlPlane")}
+								description={t("workspaceSettings.section.controlPlaneDescription")}
 								control={<StatusPill>{auth.workspace?.kind || "workspace"}</StatusPill>}
 							/>
 							<SettingsRow
 								icon={ServerCog}
-								title="Local Docker worker"
-								description="Start a Docker-backed Codex worker for local team-mode testing. mspace creates a short-lived bootstrap credential and injects it into the container."
+								title={t("workspaceSettings.section.localDockerWorker")}
+								description={t("workspaceSettings.section.localDockerWorkerDescription")}
 								control={
 									<Button
 										type="button"
@@ -482,36 +485,36 @@ export function WorkspaceSettingsPage() {
 										onClick={startLocalDockerWorker}
 									>
 										<SquareTerminal data-icon />
-										{startDockerWorker.isPending ? "Starting" : "Start worker"}
+										{startDockerWorker.isPending ? t("workspaceSettings.section.starting") : t("workspaceSettings.section.startWorker")}
 									</Button>
 								}
 							/>
 							{!canManageWorkspace ? (
 								<div className="border-t border-[color:var(--line)] px-4 py-3">
-									<Notice>Only workspace owners and admins can connect runtime workers.</Notice>
+									<Notice>{t("workspaceSettings.notice.workerPermission")}</Notice>
 								</div>
 							) : !window.mspaceDesktop?.startDockerWorker ? (
 								<div className="border-t border-[color:var(--line)] px-4 py-3">
-									<Notice>Automatic Docker startup is available from the desktop app. Use the advanced setup command when running in a browser.</Notice>
+									<Notice>{t("workspaceSettings.notice.desktopStartup")}</Notice>
 								</div>
 							) : null}
 						</div>
 					) : (
 						<div className="p-4">
 							<Notice>
-								Sign in with GitHub from the workspace menu before managing worker tokens, registered workers, or queued runtime tasks.
+								{t("workspaceSettings.notice.signInForRuntime")}
 							</Notice>
 						</div>
 					)}
 				</SettingsSection>
 
 				<RuntimePanel
-					title="Advanced worker credentials"
-					description="Manual bootstrap credentials are available for external workers and debugging. Most local testing should use Start worker above."
+					title={t("workspaceSettings.section.advancedCredentials")}
+					description={t("workspaceSettings.section.advancedCredentialsDescription")}
 					actions={
 						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={() => setTokenModalOpen(true)}>
 							<Plus data-icon />
-							Create credential
+							{t("workspaceSettings.section.createCredential")}
 						</Button>
 					}
 				>
@@ -524,19 +527,19 @@ export function WorkspaceSettingsPage() {
 				</RuntimePanel>
 
 				<RuntimePanel
-					title="Workers"
-					description="Workers register from their own environment, then heartbeat with mode, load, capabilities, and labels."
+					title={t("workspaceSettings.section.workers")}
+					description={t("workspaceSettings.section.workersDescription")}
 				>
 					<WorkerList workers={workers} loading={workersQuery.isPending && runtimeEnabled} />
 				</RuntimePanel>
 
 				<RuntimePanel
-					title="Task queue"
-					description="Queued task records are claimed by matching online workers. Payloads should reference context, not carry credentials."
+					title={t("workspaceSettings.section.taskQueue")}
+					description={t("workspaceSettings.section.taskQueueDescription")}
 					actions={
 						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={() => setTaskModalOpen(true)}>
 							<Plus data-icon />
-							Queue task
+							{t("workspaceSettings.section.queueTask")}
 						</Button>
 					}
 				>
@@ -555,23 +558,23 @@ export function WorkspaceSettingsPage() {
 				{cancelTask.error ? <Notice tone="danger">{cancelTask.error.message}</Notice> : null}
 
 				<SettingsSection
-					title="GitHub identity"
-					description="PR automation uses the same local identity as manual handoff actions."
+					title={t("workspaceSettings.section.githubIdentity")}
+					description={t("workspaceSettings.section.githubIdentityDescription")}
 				>
 					<SettingsRow
 						icon={Settings2}
-						title="Local GitHub CLI"
-						description="The MVP uses the signed-in gh identity on this machine. Server-owned GitHub App automation remains a productized-stage boundary."
-						control={<StatusPill>Local</StatusPill>}
+						title={t("workspaceSettings.section.localGithubCli")}
+						description={t("workspaceSettings.section.localGithubCliDescription")}
+						control={<StatusPill>{t("workspaceSettings.section.local")}</StatusPill>}
 					/>
 				</SettingsSection>
 			</div>
 
 			{invitationModalOpen ? (
-				<Modal title="Invite workspace member" description="Create a one-time invite link for this workspace. The invited user must sign in before accepting it." onClose={() => setInvitationModalOpen(false)}>
+				<Modal title={t("workspaceSettings.modal.inviteTitle")} description={t("workspaceSettings.modal.inviteDescription")} onClose={() => setInvitationModalOpen(false)}>
 					<form className="grid gap-4" onSubmit={submitInvitation}>
 						{createInvitation.error ? <Notice tone="danger">{createInvitation.error.message}</Notice> : null}
-						<Field label="Email" hint="Optional for the MVP. It helps you recognize who this link is intended for.">
+						<Field label={t("workspaceSettings.modal.email")} hint={t("workspaceSettings.modal.emailHint")}>
 							<Input
 								type="email"
 								value={invitationForm.email || ""}
@@ -580,44 +583,44 @@ export function WorkspaceSettingsPage() {
 							/>
 						</Field>
 						<div className="grid gap-3 md:grid-cols-2">
-							<Field label="Role">
+							<Field label={t("workspaceSettings.modal.role")}>
 								<Select
 									value={invitationForm.role}
 									onValueChange={(value) => setInvitationForm({ ...invitationForm, role: value === "admin" ? "admin" : "member" })}
 								>
 									<SelectTrigger>
-										<SelectValue placeholder="Workspace role" />
+										<SelectValue placeholder={t("workspaceSettings.modal.workspaceRole")} />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="member">Member</SelectItem>
-										<SelectItem value="admin">Admin</SelectItem>
+										<SelectItem value="member">{t("workspaceSettings.modal.member")}</SelectItem>
+										<SelectItem value="admin">{t("workspaceSettings.modal.admin")}</SelectItem>
 									</SelectContent>
 								</Select>
 							</Field>
-							<Field label="Expires">
+							<Field label={t("workspaceSettings.modal.expires")}>
 								<Select
 									value={String(invitationForm.expiresInHours)}
 									onValueChange={(value) => setInvitationForm({ ...invitationForm, expiresInHours: Number(value) })}
 								>
 									<SelectTrigger>
-										<SelectValue placeholder="Invite expiry" />
+										<SelectValue placeholder={t("workspaceSettings.modal.inviteExpiry")} />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="12">12 hours</SelectItem>
-										<SelectItem value="24">24 hours</SelectItem>
-										<SelectItem value="168">7 days</SelectItem>
-										<SelectItem value="720">30 days</SelectItem>
+										<SelectItem value="12">{t("workspaceSettings.modal.hours", { count: 12, suffix: "s" })}</SelectItem>
+										<SelectItem value="24">{t("workspaceSettings.modal.hours", { count: 24, suffix: "s" })}</SelectItem>
+										<SelectItem value="168">{t("workspaceSettings.modal.days", { count: 7 })}</SelectItem>
+										<SelectItem value="720">{t("workspaceSettings.modal.days", { count: 30 })}</SelectItem>
 									</SelectContent>
 								</Select>
 							</Field>
 						</div>
 						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
 							<Button type="button" variant="secondary" onClick={() => setInvitationModalOpen(false)}>
-								Cancel
+								{t("common.cancel")}
 							</Button>
 							<Button type="submit" disabled={!runtimeEnabled || !isTeamWorkspace || !canManageWorkspace || createInvitation.isPending}>
 								<MailPlus data-icon />
-								{createInvitation.isPending ? "Creating" : "Create invite"}
+								{createInvitation.isPending ? t("common.creating") : t("workspaceSettings.modal.createInvite")}
 							</Button>
 						</div>
 					</form>
@@ -625,7 +628,7 @@ export function WorkspaceSettingsPage() {
 			) : null}
 
 			{createdInvitation ? (
-				<Modal title="Invite link created" description="Copy this link now. The raw invite token is only shown once." onClose={() => {
+				<Modal title={t("workspaceSettings.modal.inviteLinkCreatedTitle")} description={t("workspaceSettings.modal.inviteLinkCreatedDescription")} onClose={() => {
 					setCreatedInvitation(null);
 					setCopyState("");
 				}}>
@@ -634,18 +637,22 @@ export function WorkspaceSettingsPage() {
 							{buildInviteLink(createdInvitation.token)}
 						</div>
 						<div className="text-[12px] leading-5 text-[color:var(--muted)]">
-							{createdInvitation.invitation.role} invite for {createdInvitation.invitation.email || "any signed-in teammate"} expires <RelativeTime value={createdInvitation.invitation.expiresAt} />.
+							{t("workspaceSettings.modal.inviteSummary", {
+								role: createdInvitation.invitation.role,
+								email: createdInvitation.invitation.email || t("workspaceSettings.modal.anySignedInTeammate"),
+							})}{" "}
+							<RelativeTime value={createdInvitation.invitation.expiresAt} />.
 						</div>
 						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
 							<Button type="button" variant="secondary" onClick={copyCreatedInvitationLink}>
 								<Copy data-icon />
-								{copyState || "Copy invite link"}
+								{copyState || t("workspaceSettings.modal.copyInviteLink")}
 							</Button>
 							<Button type="button" onClick={() => {
 								setCreatedInvitation(null);
 								setCopyState("");
 							}}>
-								Done
+								{t("workspaceSettings.modal.done")}
 							</Button>
 						</div>
 					</div>
@@ -653,40 +660,40 @@ export function WorkspaceSettingsPage() {
 			) : null}
 
 			{tokenModalOpen ? (
-				<Modal title="Create manual worker credential" description="Use this only for external workers or debugging. Local Docker workers can be started without handling the credential." onClose={() => setTokenModalOpen(false)}>
+				<Modal title={t("workspaceSettings.modal.tokenTitle")} description={t("workspaceSettings.modal.tokenDescription")} onClose={() => setTokenModalOpen(false)}>
 					<form className="grid gap-4" onSubmit={submitToken}>
 						{createToken.error ? <Notice tone="danger">{createToken.error.message}</Notice> : null}
-						<Field label="Name" hint="Use a name that identifies the machine or team-owned runtime.">
+						<Field label={t("workspaceSettings.modal.name")} hint={t("workspaceSettings.modal.tokenNameHint")}>
 							<Input
 								value={tokenForm.name}
 								onChange={(event) => setTokenForm({ ...tokenForm, name: event.target.value })}
-								placeholder="Workspace runtime worker"
+								placeholder={t("workspaceSettings.modal.workerNamePlaceholder")}
 							/>
 						</Field>
-						<Field label="Expires">
+						<Field label={t("workspaceSettings.modal.expires")}>
 							<Select
 								value={String(tokenForm.expiresInHours)}
 								onValueChange={(value) => setTokenForm({ ...tokenForm, expiresInHours: Number(value) })}
 							>
 								<SelectTrigger>
-									<SelectValue placeholder="Token expiry" />
+									<SelectValue placeholder={t("workspaceSettings.modal.tokenExpiry")} />
 								</SelectTrigger>
 								<SelectContent>
-									<SelectItem value="1">1 hour</SelectItem>
-									<SelectItem value="12">12 hours</SelectItem>
-									<SelectItem value="24">24 hours</SelectItem>
-									<SelectItem value="168">7 days</SelectItem>
-									<SelectItem value="720">30 days</SelectItem>
+									<SelectItem value="1">{t("workspaceSettings.modal.hours", { count: 1, suffix: "" })}</SelectItem>
+									<SelectItem value="12">{t("workspaceSettings.modal.hours", { count: 12, suffix: "s" })}</SelectItem>
+									<SelectItem value="24">{t("workspaceSettings.modal.hours", { count: 24, suffix: "s" })}</SelectItem>
+									<SelectItem value="168">{t("workspaceSettings.modal.days", { count: 7 })}</SelectItem>
+									<SelectItem value="720">{t("workspaceSettings.modal.days", { count: 30 })}</SelectItem>
 								</SelectContent>
 							</Select>
 						</Field>
 						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
 							<Button type="button" variant="secondary" onClick={() => setTokenModalOpen(false)}>
-								Cancel
+								{t("common.cancel")}
 							</Button>
 							<Button type="submit" disabled={!runtimeEnabled || createToken.isPending}>
 								<KeyRound data-icon />
-								{createToken.isPending ? "Creating" : "Create credential"}
+								{createToken.isPending ? t("common.creating") : t("workspaceSettings.section.createCredential")}
 							</Button>
 						</div>
 					</form>
@@ -694,25 +701,26 @@ export function WorkspaceSettingsPage() {
 			) : null}
 
 			{createdToken ? (
-				<Modal title="Manual worker credential created" description="The raw credential is shown once. Prefer the setup command unless you are wiring a custom worker." onClose={() => {
+				<Modal title={t("workspaceSettings.modal.credentialCreatedTitle")} description={t("workspaceSettings.modal.credentialCreatedDescription")} onClose={() => {
 					setCreatedToken(null);
 					setCopyState("");
 				}}>
 					<div className="grid gap-4">
 						<div className="text-[12px] leading-5 text-[color:var(--muted)]">
-							Prefix {createdToken.registrationToken.tokenPrefix} expires <RelativeTime value={createdToken.registrationToken.expiresAt} />.
+							{t("workspaceSettings.modal.prefixExpires", { prefix: createdToken.registrationToken.tokenPrefix })}{" "}
+							<RelativeTime value={createdToken.registrationToken.expiresAt} />.
 						</div>
 						<div className="grid gap-2">
-							<div className="text-[12px] font-medium leading-5 text-[color:var(--muted)]">Setup command</div>
+							<div className="text-[12px] font-medium leading-5 text-[color:var(--muted)]">{t("workspaceSettings.modal.setupCommand")}</div>
 							<div className="overflow-auto rounded-[9px] bg-[color:var(--code-bg)] px-3 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)]">
 								{buildDockerWorkerCommand(createdToken.token, defaultRuntimeMode)}
 							</div>
 							<div className="text-[12px] leading-5 text-[color:var(--muted)]">
-								This dry-run worker can complete workspace sessions from the UI by cloning a worker-accessible repository and returning a committed test diff.
+								{t("workspaceSettings.modal.dryRunWorkerDescription")}
 							</div>
 						</div>
 						<details className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
-							<summary className="cursor-pointer text-[12px] font-medium leading-5 text-[color:var(--muted)]">Show raw credential</summary>
+							<summary className="cursor-pointer text-[12px] font-medium leading-5 text-[color:var(--muted)]">{t("workspaceSettings.modal.showRawCredential")}</summary>
 							<div className="mt-2 rounded-[7px] bg-[color:var(--code-bg)] px-3 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)]">
 								{createdToken.token}
 							</div>
@@ -720,17 +728,17 @@ export function WorkspaceSettingsPage() {
 						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
 							<Button type="button" variant="secondary" onClick={copyCreatedToken}>
 								<Copy data-icon />
-								{copyState || "Copy raw credential"}
+								{copyState || t("workspaceSettings.modal.copyRawCredential")}
 							</Button>
 							<Button type="button" onClick={copyDockerWorkerCommand}>
 								<SquareTerminal data-icon />
-								Copy command
+								{t("workspaceSettings.modal.copyCommand")}
 							</Button>
 							<Button type="button" variant="secondary" onClick={() => {
 								setCreatedToken(null);
 								setCopyState("");
 							}}>
-								Done
+								{t("workspaceSettings.modal.done")}
 							</Button>
 						</div>
 					</div>
@@ -738,15 +746,15 @@ export function WorkspaceSettingsPage() {
 			) : null}
 
 			{taskModalOpen ? (
-				<Modal title="Queue runtime task" description="This creates a control-plane task record for the worker claim protocol." onClose={() => setTaskModalOpen(false)}>
+				<Modal title={t("workspaceSettings.modal.taskTitle")} description={t("workspaceSettings.modal.taskDescription")} onClose={() => setTaskModalOpen(false)}>
 					<form className="grid gap-4" onSubmit={submitTask}>
 						{taskFormError ? <Notice tone="danger">{taskFormError}</Notice> : null}
 						{createTask.error ? <Notice tone="danger">{createTask.error.message}</Notice> : null}
 						<div className="grid gap-3 md:grid-cols-2">
-							<Field label="Kind">
+							<Field label={t("workspaceSettings.modal.kind")}>
 								<Input value={taskForm.kind} onChange={(event) => setTaskForm({ ...taskForm, kind: event.target.value })} />
 							</Field>
-							<Field label="Runtime mode">
+							<Field label={t("workspaceSettings.modal.runtimeMode")}>
 								<Select
 									value={taskForm.runtimeMode}
 									onValueChange={(value) => setTaskForm({ ...taskForm, runtimeMode: value === "personal" ? "personal" : "team" })}
@@ -755,37 +763,37 @@ export function WorkspaceSettingsPage() {
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="team">Team</SelectItem>
-										<SelectItem value="personal">Personal</SelectItem>
+										<SelectItem value="team">{t("workspaceSettings.summary.team")}</SelectItem>
+										<SelectItem value="personal">{t("workspaceSettings.summary.personal")}</SelectItem>
 									</SelectContent>
 								</Select>
 							</Field>
-							<Field label="Priority">
+							<Field label={t("workspaceSettings.modal.priority")}>
 								<Input type="number" min={0} value={taskForm.priority} onChange={(event) => setTaskForm({ ...taskForm, priority: event.target.value })} />
 							</Field>
-							<Field label="Issue ID">
-								<Input value={taskForm.issueId} onChange={(event) => setTaskForm({ ...taskForm, issueId: event.target.value })} placeholder="optional" />
+							<Field label={t("workspaceSettings.modal.issueId")}>
+								<Input value={taskForm.issueId} onChange={(event) => setTaskForm({ ...taskForm, issueId: event.target.value })} placeholder={t("workspaceSettings.modal.optional")} />
 							</Field>
-							<Field label="Project ID">
-								<Input value={taskForm.projectId} onChange={(event) => setTaskForm({ ...taskForm, projectId: event.target.value })} placeholder="optional" />
+							<Field label={t("workspaceSettings.modal.projectId")}>
+								<Input value={taskForm.projectId} onChange={(event) => setTaskForm({ ...taskForm, projectId: event.target.value })} placeholder={t("workspaceSettings.modal.optional")} />
 							</Field>
-							<Field label="Session ID">
-								<Input value={taskForm.sessionId} onChange={(event) => setTaskForm({ ...taskForm, sessionId: event.target.value })} placeholder="optional" />
+							<Field label={t("workspaceSettings.modal.sessionId")}>
+								<Input value={taskForm.sessionId} onChange={(event) => setTaskForm({ ...taskForm, sessionId: event.target.value })} placeholder={t("workspaceSettings.modal.optional")} />
 							</Field>
 						</div>
-						<Field label="Required capabilities" hint='JSON object matched against the worker capability snapshot, for example {"protocolSmoke":true}.'>
+						<Field label={t("workspaceSettings.modal.requiredCapabilities")} hint={t("workspaceSettings.modal.requiredCapabilitiesHint", { example: '{"protocolSmoke":true}' })}>
 							<Textarea value={taskForm.requiredCapabilities} onChange={(event) => setTaskForm({ ...taskForm, requiredCapabilities: event.target.value })} />
 						</Field>
-						<Field label="Payload" hint="Use references to issue/session/project context. Do not put credentials here.">
+						<Field label={t("workspaceSettings.modal.payload")} hint={t("workspaceSettings.modal.payloadHint")}>
 							<Textarea value={taskForm.payload} onChange={(event) => setTaskForm({ ...taskForm, payload: event.target.value })} />
 						</Field>
 						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
 							<Button type="button" variant="secondary" onClick={() => setTaskModalOpen(false)}>
-								Cancel
+								{t("common.cancel")}
 							</Button>
 							<Button type="submit" disabled={!runtimeEnabled || createTask.isPending}>
 								<ListChecks data-icon />
-								{createTask.isPending ? "Queueing" : "Queue task"}
+								{createTask.isPending ? t("workspaceSettings.modal.queueing") : t("workspaceSettings.section.queueTask")}
 							</Button>
 						</div>
 					</form>
@@ -879,17 +887,19 @@ function RuntimeSummaryCard(props: { icon: LucideIcon; label: string; value: str
 }
 
 function MemberList(props: { members: WorkspaceMember[]; loading: boolean; currentUserID: string }) {
-	if (props.loading) return <LoadingBlock>Loading members...</LoadingBlock>;
+	const { t } = useMspaceTranslation();
+
+	if (props.loading) return <LoadingBlock>{t("workspaceSettings.list.loadingMembers")}</LoadingBlock>;
 	if (props.members.length === 0) {
-		return <EmptyRuntimeBlock icon={UsersRound} title="No members loaded" body="Sign in and refresh this workspace to load the team roster." />;
+		return <EmptyRuntimeBlock icon={UsersRound} title={t("workspaceSettings.list.noMembersTitle")} body={t("workspaceSettings.list.noMembersBody")} />;
 	}
 	return (
 		<div>
 			<TableHeader columns="grid-cols-[minmax(190px,1.1fr)_150px_minmax(190px,1fr)_150px]">
-				<span>Member</span>
-				<span>Role</span>
-				<span>GitHub</span>
-				<span>Joined</span>
+				<span>{t("workspaceSettings.list.member")}</span>
+				<span>{t("workspaceSettings.list.role")}</span>
+				<span>{t("workspaceSettings.list.github")}</span>
+				<span>{t("workspaceSettings.list.joined")}</span>
 			</TableHeader>
 			<div className="divide-y divide-[color:var(--line)]">
 				{props.members.map((member) => (
@@ -898,14 +908,14 @@ function MemberList(props: { members: WorkspaceMember[]; loading: boolean; curre
 							<MemberAvatar member={member} />
 							<div className="min-w-0">
 								<div className="truncate text-[13px] font-medium text-[color:var(--text)]">
-									{member.name || member.email || "mspace user"}
-									{member.userId === props.currentUserID ? <span className="ml-1 text-[12px] font-normal text-[color:var(--muted)]">(you)</span> : null}
+									{member.name || member.email || t("workspaceSettings.list.mspaceUser")}
+									{member.userId === props.currentUserID ? <span className="ml-1 text-[12px] font-normal text-[color:var(--muted)]">({t("workspaceSettings.list.you")})</span> : null}
 								</div>
-								<div className="truncate text-[12px] leading-5 text-[color:var(--muted)]">{member.email || "No public email"}</div>
+								<div className="truncate text-[12px] leading-5 text-[color:var(--muted)]">{member.email || t("workspaceSettings.list.noPublicEmail")}</div>
 							</div>
 						</div>
 						<RolePill role={member.role} />
-						<span className="truncate font-mono text-[12px] text-[color:var(--muted)]">{member.identityLogin || "not linked"}</span>
+						<span className="truncate font-mono text-[12px] text-[color:var(--muted)]">{member.identityLogin || t("workspaceSettings.list.notLinked")}</span>
 						<span className="text-[12px] leading-5 text-[color:var(--muted)]"><RelativeTime value={member.createdAt} /></span>
 					</div>
 				))}
@@ -921,25 +931,27 @@ function InvitationList(props: {
 	disabled: boolean;
 	onRevoke: (invitationID: string) => void;
 }) {
+	const { t } = useMspaceTranslation();
+
 	if (!props.canManage) {
 		return (
 			<div className="border-t border-[color:var(--line)] p-4">
-				<Notice>Only workspace owners and admins can view or create invite links.</Notice>
+				<Notice>{t("workspaceSettings.notice.invitePermission")}</Notice>
 			</div>
 		);
 	}
-	if (props.loading) return <LoadingBlock>Loading invitations...</LoadingBlock>;
+	if (props.loading) return <LoadingBlock>{t("workspaceSettings.list.loadingInvitations")}</LoadingBlock>;
 	if (props.invitations.length === 0) {
-		return <EmptyRuntimeBlock icon={MailPlus} title="No invitations" body="Create an invite link when another teammate is ready to join this workspace." />;
+		return <EmptyRuntimeBlock icon={MailPlus} title={t("workspaceSettings.list.noInvitationsTitle")} body={t("workspaceSettings.list.noInvitationsBody")} />;
 	}
 	return (
 		<div className="border-t border-[color:var(--line)]">
 			<TableHeader columns="grid-cols-[minmax(190px,1fr)_120px_150px_130px_96px]">
-				<span>Invitation</span>
-				<span>Role</span>
-				<span>Expires</span>
-				<span>Status</span>
-				<span className="text-right">Actions</span>
+				<span>{t("workspaceSettings.list.invitation")}</span>
+				<span>{t("workspaceSettings.list.role")}</span>
+				<span>{t("workspaceSettings.list.expires")}</span>
+				<span>{t("workspaceSettings.list.status")}</span>
+				<span className="text-right">{t("workspaceSettings.list.actions")}</span>
 			</TableHeader>
 			<div className="divide-y divide-[color:var(--line)]">
 				{props.invitations.map((invitation) => {
@@ -947,8 +959,8 @@ function InvitationList(props: {
 					return (
 						<div key={invitation.id} className="grid grid-cols-[minmax(190px,1fr)_120px_150px_130px_96px] items-center gap-4 px-4 py-3 text-[13px]">
 							<div className="min-w-0">
-								<div className="truncate font-medium text-[color:var(--text)]">{invitation.email || "Open invite link"}</div>
-								<InlineMeta icon={MailPlus}>prefix {invitation.tokenPrefix}</InlineMeta>
+								<div className="truncate font-medium text-[color:var(--text)]">{invitation.email || t("workspaceSettings.list.openInviteLink")}</div>
+								<InlineMeta icon={MailPlus}>{t("workspaceSettings.list.prefix")} {invitation.tokenPrefix}</InlineMeta>
 							</div>
 							<RolePill role={invitation.role} />
 							<span className="text-[12px] text-[color:var(--muted)]"><RelativeTime value={invitation.expiresAt} /></span>
@@ -958,7 +970,7 @@ function InvitationList(props: {
 									type="button"
 									variant="ghost"
 									size="icon"
-									aria-label={`Revoke invite ${invitation.email || invitation.tokenPrefix}`}
+									aria-label={t("workspaceSettings.list.revokeInvite", { name: invitation.email || invitation.tokenPrefix })}
 									disabled={props.disabled || status !== "pending"}
 									onClick={() => props.onRevoke(invitation.id)}
 								>
@@ -979,37 +991,39 @@ function RegistrationTokenList(props: {
 	disabled: boolean;
 	onRevoke: (tokenID: string) => void;
 }) {
-	if (props.loading) return <LoadingBlock>Loading worker credentials...</LoadingBlock>;
+	const { t } = useMspaceTranslation();
+
+	if (props.loading) return <LoadingBlock>{t("workspaceSettings.list.loadingCredentials")}</LoadingBlock>;
 	if (props.tokens.length === 0) {
-		return <EmptyRuntimeBlock icon={KeyRound} title="No manual credentials" body="Start a local worker above, or create a manual credential for an external runtime." />;
+		return <EmptyRuntimeBlock icon={KeyRound} title={t("workspaceSettings.list.noCredentialsTitle")} body={t("workspaceSettings.list.noCredentialsBody")} />;
 	}
 	return (
 		<div>
 			<TableHeader columns="grid-cols-[minmax(160px,1.2fr)_120px_150px_150px_110px_96px]">
-				<span>Name</span>
-				<span>Prefix</span>
-				<span>Expires</span>
-				<span>Last used</span>
-				<span>Status</span>
-				<span className="text-right">Actions</span>
+				<span>{t("workspaceSettings.list.name")}</span>
+				<span>{t("workspaceSettings.list.prefix")}</span>
+				<span>{t("workspaceSettings.list.expires")}</span>
+				<span>{t("workspaceSettings.list.lastUsed")}</span>
+				<span>{t("workspaceSettings.list.status")}</span>
+				<span className="text-right">{t("workspaceSettings.list.actions")}</span>
 			</TableHeader>
 			<div className="divide-y divide-[color:var(--line)]">
 				{props.tokens.map((token) => (
 					<div key={token.id} className="grid grid-cols-[minmax(160px,1.2fr)_120px_150px_150px_110px_96px] items-center gap-4 px-4 py-3 text-[13px]">
 						<div className="min-w-0">
 							<div className="truncate font-medium text-[color:var(--text)]">{token.name}</div>
-							<InlineMeta icon={KeyRound}>created <RelativeTime value={token.createdAt} /></InlineMeta>
+							<InlineMeta icon={KeyRound}>{t("workspaceSettings.list.created")} <RelativeTime value={token.createdAt} /></InlineMeta>
 						</div>
 						<span className="truncate font-mono text-[12px] text-[color:var(--muted)]">{token.tokenPrefix}</span>
 						<span className="text-[12px] text-[color:var(--muted)]"><RelativeTime value={token.expiresAt} /></span>
-						<span className="text-[12px] text-[color:var(--muted)]">{token.lastUsedAt ? <RelativeTime value={token.lastUsedAt} /> : "Never"}</span>
+						<span className="text-[12px] text-[color:var(--muted)]">{token.lastUsedAt ? <RelativeTime value={token.lastUsedAt} /> : t("workspaceSettings.list.never")}</span>
 						<TokenStatus token={token} />
 						<div className="flex justify-end">
 							<Button
 								type="button"
 								variant="ghost"
 								size="icon"
-								aria-label={`Revoke ${token.name}`}
+								aria-label={t("workspaceSettings.list.revokeCredential", { name: token.name })}
 								disabled={props.disabled || token.revoked}
 								onClick={() => props.onRevoke(token.id)}
 							>
@@ -1024,25 +1038,27 @@ function RegistrationTokenList(props: {
 }
 
 function WorkerList(props: { workers: RuntimeWorker[]; loading: boolean }) {
-	if (props.loading) return <LoadingBlock>Loading workers...</LoadingBlock>;
+	const { t } = useMspaceTranslation();
+
+	if (props.loading) return <LoadingBlock>{t("workspaceSettings.list.loadingWorkers")}</LoadingBlock>;
 	if (props.workers.length === 0) {
-		return <EmptyRuntimeBlock icon={ServerCog} title="No workers connected" body="Start the local Docker worker or connect an external runtime to claim workspace tasks." />;
+		return <EmptyRuntimeBlock icon={ServerCog} title={t("workspaceSettings.list.noWorkersTitle")} body={t("workspaceSettings.list.noWorkersBody")} />;
 	}
 	return (
 		<div>
 			<TableHeader columns="grid-cols-[minmax(170px,1.1fr)_150px_120px_minmax(220px,1.2fr)_150px]">
-				<span>Worker</span>
-				<span>Mode</span>
-				<span>Load</span>
-				<span>Capabilities</span>
-				<span>Last seen</span>
+				<span>{t("workspaceSettings.list.worker")}</span>
+				<span>{t("workspaceSettings.list.mode")}</span>
+				<span>{t("workspaceSettings.list.load")}</span>
+				<span>{t("workspaceSettings.list.capabilities")}</span>
+				<span>{t("workspaceSettings.list.lastSeen")}</span>
 			</TableHeader>
 			<div className="divide-y divide-[color:var(--line)]">
 				{props.workers.map((worker) => (
 					<div key={worker.id} className="grid grid-cols-[minmax(170px,1.1fr)_150px_120px_minmax(220px,1.2fr)_150px] items-center gap-4 px-4 py-3">
 						<div className="min-w-0">
 							<div className="truncate text-[13px] font-medium text-[color:var(--text)]">{worker.name}</div>
-							<div className="mt-1 truncate text-[12px] leading-5 text-[color:var(--muted)]">{worker.version || "version not reported"}</div>
+							<div className="mt-1 truncate text-[12px] leading-5 text-[color:var(--muted)]">{worker.version || t("workspaceSettings.list.versionNotReported")}</div>
 						</div>
 						<div className="flex min-w-0 flex-wrap items-center gap-1.5">
 							<RuntimeStatusPill status={worker.status} />
@@ -1069,20 +1085,21 @@ function TaskList(props: {
 	cancellingTaskID?: string;
 	onCancelTask: (taskID: string) => void;
 }) {
+	const { t } = useMspaceTranslation();
 	const workerByID = useMemo(() => new Map(props.workers.map((worker) => [worker.id, worker])), [props.workers]);
-	if (props.loading) return <LoadingBlock>Loading tasks...</LoadingBlock>;
+	if (props.loading) return <LoadingBlock>{t("workspaceSettings.list.loadingTasks")}</LoadingBlock>;
 	if (props.tasks.length === 0) {
-		return <EmptyRuntimeBlock icon={ListChecks} title="No runtime tasks" body="Queue a protocol task or wait for issue/session routing to move behind the control plane." />;
+		return <EmptyRuntimeBlock icon={ListChecks} title={t("workspaceSettings.list.noTasksTitle")} body={t("workspaceSettings.list.noTasksBody")} />;
 	}
 	return (
 		<div>
 			<TableHeader columns="grid-cols-[minmax(180px,1fr)_130px_110px_minmax(180px,1fr)_150px_92px]">
-				<span>Task</span>
-				<span>Status</span>
-				<span>Priority</span>
-				<span>Worker</span>
-				<span>Updated</span>
-				<span>Action</span>
+				<span>{t("workspaceSettings.list.task")}</span>
+				<span>{t("workspaceSettings.list.status")}</span>
+				<span>{t("workspaceSettings.list.priority")}</span>
+				<span>{t("workspaceSettings.list.worker")}</span>
+				<span>{t("workspaceSettings.list.updated")}</span>
+				<span>{t("workspaceSettings.list.action")}</span>
 			</TableHeader>
 			<div className="divide-y divide-[color:var(--line)]">
 				{props.tasks.map((task) => {
@@ -1111,11 +1128,11 @@ function TaskList(props: {
 								</button>
 								<RuntimeStatusPill status={task.status} />
 								<span className="font-mono text-[12px] tabular-nums text-[color:var(--muted)]">{task.priority}</span>
-								<span className="truncate text-[12px] leading-5 text-[color:var(--muted)]">{worker?.name || task.claimedByWorkerId || "Unclaimed"}</span>
+								<span className="truncate text-[12px] leading-5 text-[color:var(--muted)]">{worker?.name || task.claimedByWorkerId || t("workspaceSettings.list.unclaimed")}</span>
 								<span className="text-[12px] leading-5 text-[color:var(--muted)]"><RelativeTime value={task.updatedAt} /></span>
 								<Button type="button" variant="ghost" size="sm" disabled={!cancellable || props.cancellingTaskID === task.id} onClick={() => props.onCancelTask(task.id)}>
 									<X data-icon />
-									{props.cancellingTaskID === task.id ? "Cancelling" : "Cancel"}
+									{props.cancellingTaskID === task.id ? t("workspaceSettings.list.cancelling") : t("workspaceSettings.list.cancel")}
 								</Button>
 							</div>
 							{selected ? <RuntimeTaskEvidence task={task} token={props.token} workspaceID={props.workspaceID} /> : null}
@@ -1128,6 +1145,7 @@ function TaskList(props: {
 }
 
 function RuntimeTaskEvidence(props: { task: RuntimeTask; token: string; workspaceID: string }) {
+	const { t } = useMspaceTranslation();
 	const enabled = Boolean(props.token && props.workspaceID && props.task.id);
 	const eventsQuery = useQuery({
 		queryKey: queryKeys.runtimeTaskEvents(props.workspaceID, props.task.id, props.token),
@@ -1152,12 +1170,12 @@ function RuntimeTaskEvidence(props: { task: RuntimeTask; token: string; workspac
 				<div className="min-w-0">
 					<div className="mb-2 flex items-center gap-2 text-[12px] font-medium leading-5 text-[color:var(--muted)]">
 						<Activity data-icon />
-						Events
+						{t("workspaceSettings.list.events")}
 					</div>
 					{eventsQuery.isPending ? (
-						<div className="text-[12px] leading-5 text-[color:var(--muted)]">Loading events...</div>
+						<div className="text-[12px] leading-5 text-[color:var(--muted)]">{t("workspaceSettings.list.loadingEvents")}</div>
 					) : events.length === 0 ? (
-						<div className="text-[12px] leading-5 text-[color:var(--muted)]">No task events yet.</div>
+						<div className="text-[12px] leading-5 text-[color:var(--muted)]">{t("workspaceSettings.list.noTaskEvents")}</div>
 					) : (
 						<div className="grid gap-2">
 							{events.map((event) => (
@@ -1175,12 +1193,12 @@ function RuntimeTaskEvidence(props: { task: RuntimeTask; token: string; workspac
 				<div className="min-w-0">
 					<div className="mb-2 flex items-center gap-2 text-[12px] font-medium leading-5 text-[color:var(--muted)]">
 						<SquareTerminal data-icon />
-						Logs
+						{t("workspaceSettings.list.logs")}
 					</div>
 					{logsQuery.isPending ? (
-						<div className="text-[12px] leading-5 text-[color:var(--muted)]">Loading logs...</div>
+						<div className="text-[12px] leading-5 text-[color:var(--muted)]">{t("workspaceSettings.list.loadingLogs")}</div>
 					) : logs.length === 0 ? (
-						<div className="text-[12px] leading-5 text-[color:var(--muted)]">No worker logs captured yet.</div>
+						<div className="text-[12px] leading-5 text-[color:var(--muted)]">{t("workspaceSettings.list.noWorkerLogs")}</div>
 					) : (
 						<div className="max-h-[360px] overflow-auto rounded-[8px] bg-[color:var(--code-bg)] px-3 py-2 font-mono text-[12px] leading-5 text-[color:var(--code-text)]">
 							{logs.map((log) => (
@@ -1196,11 +1214,11 @@ function RuntimeTaskEvidence(props: { task: RuntimeTask; token: string; workspac
 			</div>
 			<div className="mt-4 grid gap-2 rounded-[8px] bg-[color:var(--surface)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
 				<div className="grid gap-2 md:grid-cols-2">
-					<RuntimeJSONBlock label="Required capabilities" value={props.task.requiredCapabilities} />
-					<RuntimeJSONBlock label="Payload" value={props.task.payload} />
+					<RuntimeJSONBlock label={t("workspaceSettings.modal.requiredCapabilities")} value={props.task.requiredCapabilities} />
+					<RuntimeJSONBlock label={t("workspaceSettings.modal.payload")} value={props.task.payload} />
 				</div>
-				{props.task.error ? <RuntimeJSONBlock label="Error" value={{ message: props.task.error }} /> : null}
-				{Object.keys(props.task.result || {}).length > 0 ? <RuntimeJSONBlock label="Result" value={props.task.result} /> : null}
+				{props.task.error ? <RuntimeJSONBlock label={t("workspaceSettings.list.error")} value={{ message: props.task.error }} /> : null}
+				{Object.keys(props.task.result || {}).length > 0 ? <RuntimeJSONBlock label={t("workspaceSettings.list.result")} value={props.task.result} /> : null}
 			</div>
 		</div>
 	);
@@ -1333,6 +1351,8 @@ function buildDockerWorkerCommand(token: string, mode: "personal" | "team") {
 }
 
 function Modal(props: { title: string; description: string; onClose: () => void; children: ReactNode }) {
+	const { t } = useMspaceTranslation();
+
 	return (
 		<div className="fixed inset-0 z-50 grid place-items-center bg-black/20 px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="workspace-settings-modal-title">
 			<div className="w-full max-w-[640px] rounded-[12px] bg-[color:var(--paper)] shadow-[0_24px_80px_rgba(0,0,0,0.18),inset_0_0_0_1px_var(--line)]">
@@ -1341,7 +1361,7 @@ function Modal(props: { title: string; description: string; onClose: () => void;
 						<h2 id="workspace-settings-modal-title" className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">{props.title}</h2>
 						<p className="mt-1 text-[13px] leading-5 text-[color:var(--muted)] text-pretty">{props.description}</p>
 					</div>
-					<Button type="button" variant="ghost" size="icon" aria-label="Close" onClick={props.onClose}>
+					<Button type="button" variant="ghost" size="icon" aria-label={t("common.close")} onClick={props.onClose}>
 						<X data-icon />
 					</Button>
 				</div>
@@ -1354,11 +1374,11 @@ function Modal(props: { title: string; description: string; onClose: () => void;
 function normalizeRuntimeTaskForm(form: RuntimeTaskForm): CreateRuntimeTaskInput {
 	const priority = Number(form.priority || 0);
 	if (!Number.isFinite(priority) || priority < 0) {
-		throw new Error("Priority must be greater than or equal to zero.");
+		throw new Error(translate("workspaceSettings.priorityInvalid"));
 	}
 	const kind = form.kind.trim();
 	if (!kind) {
-		throw new Error("Task kind is required.");
+		throw new Error(translate("workspaceSettings.taskKindRequired"));
 	}
 	return {
 		issueId: form.issueId.trim(),
@@ -1367,22 +1387,22 @@ function normalizeRuntimeTaskForm(form: RuntimeTaskForm): CreateRuntimeTaskInput
 		kind,
 		priority,
 		runtimeMode: form.runtimeMode,
-		requiredCapabilities: parseJSONObject(form.requiredCapabilities, "Required capabilities"),
-		payload: parseJSONObject(form.payload, "Payload"),
+		requiredCapabilities: parseJSONObject(form.requiredCapabilities, translate("workspaceSettings.modal.requiredCapabilities")),
+		payload: parseJSONObject(form.payload, translate("workspaceSettings.modal.payload")),
 	};
 }
 
 function parseJSONObject(value: string, label: string): Record<string, unknown> {
 	const parsed = JSON.parse(value || "{}") as unknown;
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error(`${label} must be a JSON object.`);
+		throw new Error(translate("workspaceSettings.jsonObjectRequired", { label }));
 	}
 	return parsed as Record<string, unknown>;
 }
 
 function jsonSummary(value: Record<string, unknown>) {
 	const keys = Object.keys(value || {});
-	if (keys.length === 0) return "none";
+	if (keys.length === 0) return translate("workspaceSettings.list.none");
 	const summary = keys.slice(0, 4).map((key) => `${key}:${String(value[key])}`).join(", ");
 	return keys.length > 4 ? `${summary}, ...` : summary;
 }
@@ -1395,23 +1415,7 @@ function timeLabel(value: string) {
 }
 
 function runtimeStatusLabel(value: string) {
-	const labels: Record<string, string> = {
-		active: "Active",
-		accepted: "Accepted",
-		cancel_requested: "Cancel requested",
-		cancelled: "Cancelled",
-		claimed: "Claimed",
-		completed: "Completed",
-		draining: "Draining",
-		expired: "Expired",
-		failed: "Failed",
-		offline: "Offline",
-		online: "Online",
-		pending: "Pending",
-		queued: "Queued",
-		revoked: "Revoked",
-		running: "Running",
-	};
-	if (labels[value]) return labels[value];
+	const label = translate(`workspaceSettings.status.${value}`, { defaultValue: "" });
+	if (label) return label;
 	return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

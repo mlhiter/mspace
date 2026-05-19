@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@mspace/core": "workspace:*",
+    "@mspace/i18n": "workspace:*",
     "@mspace/ui": "workspace:*",
     "@tanstack/react-query": "^5.96.2",
     "@tanstack/react-router": "^1.169.2",

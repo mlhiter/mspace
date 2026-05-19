@@ -39,13 +39,16 @@ import {
   type CreateWorkspaceInput,
 } from "@mspace/core";
 import { AppShell, Button, Field, Input, Notice, type ShellSearchItem } from "@mspace/ui";
+import { initializeMspaceI18n, t, useMspaceTranslation } from "@mspace/i18n";
 import mspaceLogoUrl from "../../../assets/brand/mspace-logo.svg";
 import "./globals.css";
 
 const queryClient = new QueryClient();
+initializeMspaceI18n();
+
 function defaultTeamWorkspaceName(name: string | undefined) {
   const owner = name?.trim();
-  return owner ? `${owner}'s team` : "Engineering team";
+  return owner ? t("workspace.defaultTeamWorkspaceName", { name: owner }) : t("workspace.defaultTeamWorkspaceFallback");
 }
 
 function joinSearchSubtitle(values: Array<string | number | null | undefined>): string {
@@ -56,6 +59,7 @@ function joinSearchSubtitle(values: Array<string | number | null | undefined>): 
 }
 
 function RootShell() {
+  const { t } = useMspaceTranslation();
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(() => window.localStorage.getItem(SELECTED_WORKSPACE_STORAGE_KEY) || "");
   const [pendingAuthState, setPendingAuthState] = useState("");
@@ -225,10 +229,10 @@ function RootShell() {
       id: `issue:${issue.id}`,
       kind: "Issue",
       title: issue.title,
-      subtitle: joinSearchSubtitle([issue.projectName || "No project", issue.status, issue.labels.map((label) => label.name).join(", ")]),
+      subtitle: joinSearchSubtitle([issue.projectName || t("common.noProject"), issue.status, issue.labels.map((label) => label.name).join(", ")]),
       keywords: [
         issue.body,
-        issue.projectName || "No project",
+        issue.projectName || t("common.noProject"),
         issue.status,
         issue.triageStatus,
         issue.assignee,
@@ -244,7 +248,7 @@ function RootShell() {
       title: project.name,
       subtitle: joinSearchSubtitle([
         project.gitOwner && project.gitRepo ? `${project.gitOwner}/${project.gitRepo}` : project.repoPath,
-        `${project.issueCount} issues`,
+        t("projects.issues", { count: project.issueCount }),
       ]),
       keywords: [
         project.repoPath,
@@ -260,7 +264,7 @@ function RootShell() {
     }));
 
     return [...issueItems, ...projectItems];
-  }, [issuesQuery.data, projectsQuery.data]);
+  }, [issuesQuery.data, projectsQuery.data, t]);
 
   const shell = (
     <MspaceAuthProvider
@@ -291,7 +295,7 @@ function RootShell() {
           workspaceRole: currentWorkspace?.role,
           workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, role: workspace.role, kind: workspace.kind })),
           error: authError instanceof Error ? authError.message : undefined,
-          actionLabel: pendingAuthState ? "Waiting for GitHub" : undefined,
+          actionLabel: pendingAuthState ? t("workspace.waitingForGitHub") : undefined,
         }}
         onSignIn={() => signInMutation.mutate()}
         onSignOut={handleSignOut}
@@ -305,34 +309,34 @@ function RootShell() {
         <AuthRequiredOverlay
           status={accountStatus}
           error={authError instanceof Error ? authError.message : undefined}
-          actionLabel={pendingAuthState ? "Waiting for GitHub" : undefined}
+          actionLabel={pendingAuthState ? t("workspace.waitingForGitHub") : undefined}
           onSignIn={() => signInMutation.mutate()}
           isBusy={pendingAuthState !== "" || signInMutation.isPending}
         />
       ) : null}
       {teamWorkspaceModalOpen ? (
         <Modal
-          title="Create team workspace"
-          description="Team workspaces enable member invitations, shared Inbox receipts, worker registration, and team-mode sessions."
+          title={t("workspace.createTeamWorkspace")}
+          description={t("workspace.createTeamDescription")}
           onClose={() => setTeamWorkspaceModalOpen(false)}
         >
           <form className="grid gap-4" onSubmit={submitTeamWorkspace}>
             {createTeamWorkspace.error ? <Notice tone="danger">{createTeamWorkspace.error.message}</Notice> : null}
-            <Field label="Workspace name">
+            <Field label={t("workspace.workspaceName")}>
               <Input
                 value={teamWorkspaceName}
                 onChange={(event) => setTeamWorkspaceName(event.target.value)}
-                placeholder="Engineering team"
+                placeholder={t("workspace.defaultTeamWorkspaceFallback")}
                 autoFocus
               />
             </Field>
             <div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
               <Button type="button" variant="secondary" onClick={() => setTeamWorkspaceModalOpen(false)}>
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button type="submit" disabled={!authToken || createTeamWorkspace.isPending || teamWorkspaceName.trim() === ""}>
                 <UsersRound data-icon />
-                {createTeamWorkspace.isPending ? "Creating" : "Create workspace"}
+                {createTeamWorkspace.isPending ? t("common.creating") : t("workspace.createTeamWorkspace")}
               </Button>
             </div>
           </form>
@@ -351,6 +355,7 @@ function AuthRequiredOverlay(props: {
   onSignIn: () => void;
 }) {
   const busy = props.status === "loading" || props.isBusy;
+  const { t } = useMspaceTranslation();
   return (
     <div className="fixed inset-0 z-[90] grid place-items-center bg-[color:var(--canvas)] px-6">
       <section className="w-full max-w-[420px] rounded-[12px] bg-[color:var(--paper)] px-6 py-6 shadow-[0_24px_80px_rgba(0,0,0,0.14),inset_0_0_0_1px_var(--line)]">
@@ -359,16 +364,16 @@ function AuthRequiredOverlay(props: {
             {busy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
           </span>
           <div className="min-w-0">
-            <h1 className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">Sign in to mspace</h1>
+            <h1 className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">{t("auth.signInTitle")}</h1>
             <p className="mt-1 text-[13px] leading-5 text-[color:var(--muted)]">
-              Workspace data is stored in the server control plane.
+              {t("auth.signInDescription")}
             </p>
           </div>
         </div>
         {props.error ? <div className="mt-4"><Notice tone="danger">{props.error}</Notice></div> : null}
         <Button type="button" className="mt-5 w-full justify-center" disabled={busy} onClick={props.onSignIn}>
           {busy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
-          {props.actionLabel || (busy ? "Waiting for GitHub" : "Sign in with GitHub")}
+          {props.actionLabel || (busy ? t("workspace.waitingForGitHub") : t("workspace.signInWithGitHub"))}
         </Button>
       </section>
     </div>
@@ -376,6 +381,7 @@ function AuthRequiredOverlay(props: {
 }
 
 function Modal(props: { title: string; description: string; onClose: () => void; children: ReactNode }) {
+  const { t } = useMspaceTranslation();
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/20 px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="workspace-shell-modal-title">
       <div className="w-full max-w-[640px] rounded-[12px] bg-[color:var(--paper)] shadow-[0_24px_80px_rgba(0,0,0,0.18),inset_0_0_0_1px_var(--line)]">
@@ -384,7 +390,7 @@ function Modal(props: { title: string; description: string; onClose: () => void;
             <h2 id="workspace-shell-modal-title" className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">{props.title}</h2>
             <p className="mt-1 text-[13px] leading-5 text-[color:var(--muted)] text-pretty">{props.description}</p>
           </div>
-          <Button type="button" variant="ghost" size="icon" aria-label="Close" onClick={props.onClose}>
+          <Button type="button" variant="ghost" size="icon" aria-label={t("common.close")} onClick={props.onClose}>
             <X data-icon />
           </Button>
         </div>

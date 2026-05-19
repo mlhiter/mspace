@@ -1,3 +1,5 @@
+import { t } from "@mspace/i18n";
+
 export const issueStatusOptions = [
   "open",
   "needs_review",
@@ -7,18 +9,6 @@ export const issueStatusOptions = [
   "cancelled",
   "closed",
 ];
-
-const issueStatusLabels: Record<string, string> = {
-  open: "Open",
-  in_progress: "In progress",
-  needs_review: "Needs review",
-  changes_requested: "Changes requested",
-  ready_for_test: "Ready for test",
-  test_in_progress: "Test in progress",
-  blocked: "Blocked",
-  cancelled: "Closed as not planned",
-  closed: "Closed",
-};
 
 export function displayIssueStatus(status: string) {
   const normalized = status.trim().toLowerCase();
@@ -31,6 +21,8 @@ export function displayIssueStatus(status: string) {
 
 export function issueStatusLabel(status: string) {
   const normalized = displayIssueStatus(status);
-  if (issueStatusLabels[normalized]) return issueStatusLabels[normalized];
+  if (normalized === "cancelled") return t("issueStatus.closed_as_not_planned");
+  const translated = t(`issueStatus.${normalized}`, { defaultValue: "" });
+  if (translated) return translated;
   return normalized.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

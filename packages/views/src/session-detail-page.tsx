@@ -15,12 +15,15 @@ import {
   Textarea,
   cn,
 } from "@mspace/ui";
+import { useMspaceTranslation } from "@mspace/i18n";
 import { FileTypeIcon } from "./file-type-icon";
 import { useMspaceAuth } from "./auth-context";
 import { RelativeTime } from "./time";
 import { visibleWorkspaceFileChanges, workspaceChangeStatusLabel, workspaceChangeStatusTone } from "./workspace-change-status";
 
 function ChangeRow({ change }: { change: WorkspaceChange }) {
+  const { t } = useMspaceTranslation();
+
   return (
     <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
       <div className="flex flex-wrap items-center gap-2">
@@ -33,11 +36,11 @@ function ChangeRow({ change }: { change: WorkspaceChange }) {
           {workspaceChangeStatusLabel(change.statusCode)}
         </span>
         <FileTypeIcon path={change.path} />
-        <span className="break-all text-[13px] font-medium text-[color:var(--text)]">{change.path || "(unknown path)"}</span>
+        <span className="break-all text-[13px] font-medium text-[color:var(--text)]">{change.path || t("sessionDetail.unknownPath")}</span>
       </div>
       {change.previousPath ? (
         <div className="mt-1 break-all text-[12px] text-[color:var(--muted)]">
-          renamed from {change.previousPath}
+          {t("sessionDetail.renamedFrom", { path: change.previousPath })}
         </div>
       ) : null}
     </div>
@@ -62,6 +65,7 @@ function normalizeWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
 }
 
 export function SessionDetailPage() {
+  const { t } = useMspaceTranslation();
   const { sessionId = "" } = useParams({ strict: false }) as { sessionId?: string };
   const queryClient = useQueryClient();
   const auth = useMspaceAuth();
@@ -84,53 +88,53 @@ export function SessionDetailPage() {
     const workspace = normalizeWorkspace(sessionQuery.data.workspace);
     const evidence = listOrEmpty(sessionQuery.data.evidence);
     const lines = [
-      `Session ${session.id.slice(0, 8)} summary`,
+      t("sessionDetail.summaryHeading", { id: session.id.slice(0, 8) }),
       "",
-      `- Status: ${session.status}`,
-      `- Provider: ${session.provider}`,
-      `- Agent profile: ${session.agentProfile || "codex"}`,
-      `- Agent status: ${session.agentStatus || "unknown"}`,
-      `- Cleanup status: ${session.cleanupStatus || "retained"}`,
-      `- Cleaned at: ${session.cleanedAt || "not cleaned"}`,
-      `- Codex thread: ${session.codexThreadId || "not started"}`,
-      `- Codex turn: ${session.codexTurnId || "not started"}`,
-      `- Branch: ${workspace.branch || session.branch || "unknown"}`,
-      `- Workspace: ${session.workdir || "not reported"}`,
-      `- Base ref: ${workspace.comparison.baseRef || "unknown"}`,
-      `- Ahead/behind: ${workspace.comparison.aheadCount}/${workspace.comparison.behindCount}`,
-      `- Working tree changes: ${workspace.changedFiles} tracked, ${workspace.untrackedFiles} untracked`,
+      `- ${t("sessionDetail.summary.status")}: ${session.status}`,
+      `- ${t("sessionDetail.summary.provider")}: ${session.provider}`,
+      `- ${t("sessionDetail.summary.agentProfile")}: ${session.agentProfile || "codex"}`,
+      `- ${t("sessionDetail.summary.agentStatus")}: ${session.agentStatus || t("sessionDetail.unknown")}`,
+      `- ${t("sessionDetail.summary.cleanupStatus")}: ${session.cleanupStatus || t("sessionDetail.retained")}`,
+      `- ${t("sessionDetail.summary.cleanedAt")}: ${session.cleanedAt || t("sessionDetail.notCleaned")}`,
+      `- ${t("sessionDetail.summary.codexThread")}: ${session.codexThreadId || t("sessionDetail.notStarted")}`,
+      `- ${t("sessionDetail.summary.codexTurn")}: ${session.codexTurnId || t("sessionDetail.notStarted")}`,
+      `- ${t("sessionDetail.summary.branch")}: ${workspace.branch || session.branch || t("sessionDetail.unknown")}`,
+      `- ${t("sessionDetail.summary.workspace")}: ${session.workdir || t("sessionDetail.notReported")}`,
+      `- ${t("sessionDetail.summary.baseRef")}: ${workspace.comparison.baseRef || t("sessionDetail.unknown")}`,
+      `- ${t("sessionDetail.summary.aheadBehind")}: ${workspace.comparison.aheadCount}/${workspace.comparison.behindCount}`,
+      `- ${t("sessionDetail.summary.workingTreeChanges")}: ${t("sessionDetail.summary.workingTreeCounts", { tracked: workspace.changedFiles, untracked: workspace.untrackedFiles })}`,
     ];
 
     if (workspace.comparison.commitLines.length > 0) {
-      lines.push("", "Commits on this session branch:");
+      lines.push("", t("sessionDetail.summary.commitsOnBranch"));
       for (const line of workspace.comparison.commitLines.slice(0, 8)) {
         lines.push(`- ${line}`);
       }
     }
 
     if (workspace.comparison.changes.length > 0) {
-      lines.push("", "Files changed since merge base:");
+      lines.push("", t("sessionDetail.summary.filesChangedSinceMergeBase"));
       for (const change of workspace.comparison.changes.slice(0, 12)) {
-        const renameSuffix = change.previousPath ? ` (from ${change.previousPath})` : "";
+        const renameSuffix = change.previousPath ? ` (${t("sessionDetail.summary.fromPrevious", { path: change.previousPath })})` : "";
         lines.push(`- [${workspaceChangeStatusLabel(change.statusCode)}] ${change.path}${renameSuffix}`);
       }
     } else if (workspace.changes.length > 0) {
-      lines.push("", "Uncommitted workspace changes:");
+      lines.push("", t("sessionDetail.summary.uncommittedChanges"));
       for (const change of workspace.changes.slice(0, 12)) {
-        const renameSuffix = change.previousPath ? ` (from ${change.previousPath})` : "";
+        const renameSuffix = change.previousPath ? ` (${t("sessionDetail.summary.fromPrevious", { path: change.previousPath })})` : "";
         lines.push(`- [${workspaceChangeStatusLabel(change.statusCode)}] ${change.path}${renameSuffix}`);
       }
     }
 
     if (evidence.length > 0) {
-      lines.push("", "Validation evidence:");
+      lines.push("", t("sessionDetail.summary.validationEvidence"));
       for (const item of evidence.slice(0, 4)) {
-        lines.push(`- ${item.summary} (${item.cluster || "current context"} / ${item.namespace || "namespace unset"})`);
+        lines.push(`- ${item.summary} (${item.cluster || t("sessionDetail.summary.currentContext")} / ${item.namespace || t("sessionDetail.summary.namespaceUnset")})`);
       }
     }
 
     return lines.join("\n");
-  }, [sessionQuery.data]);
+  }, [sessionQuery.data, t]);
 
   useEffect(() => {
     if (!sessionQuery.data) return;
@@ -139,7 +143,7 @@ export function SessionDetailPage() {
   }, [generatedSummary, sessionQuery.data]);
 
   const cancelMutation = useMutation({
-    mutationFn: () => controlPlaneApi.cancelSession(auth.token, workspaceId, sessionId, { reason: "Stopped from Session Detail." }),
+    mutationFn: () => controlPlaneApi.cancelSession(auth.token, workspaceId, sessionId, { reason: t("sessionDetail.cancelReason") }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.session(sessionId) });
     },
@@ -147,18 +151,18 @@ export function SessionDetailPage() {
 
   if (!sessionQuery.data) {
     return (
-      <PageFrame title="Session" subtitle="Inspect live logs, local runtime state, and validation history.">
-        <Panel>{sessionQuery.isPending ? "Loading session..." : "Session not found."}</Panel>
+      <PageFrame title={t("sessionDetail.title")} subtitle={t("sessionDetail.subtitle")}>
+        <Panel>{sessionQuery.isPending ? t("sessionDetail.loading") : t("sessionDetail.notFound")}</Panel>
       </PageFrame>
     );
   }
 
   const { session, issue, project } = sessionQuery.data;
-  const projectName = project?.name || "No project";
+  const projectName = project?.name || t("sessionDetail.noProject");
   const workspace = normalizeWorkspace(sessionQuery.data.workspace);
   const sessionActive = ["queued", "running"].includes(session.status);
   const cleanupStatus = session.cleanupStatus || "retained";
-  const missingWorkspaceText = workspace.error || "Workspace has not been reported by the runtime worker yet.";
+  const missingWorkspaceText = workspace.error || t("sessionDetail.workspaceMissing");
 
   async function handleCopySummary() {
     try {
@@ -171,55 +175,55 @@ export function SessionDetailPage() {
 
   return (
     <PageFrame
-      title={`Session ${session.id.slice(0, 8)}`}
-      subtitle={`${projectName} · issue ${issue.title}`}
+      title={t("sessionDetail.pageTitle", { id: session.id.slice(0, 8) })}
+      subtitle={t("sessionDetail.issueSubtitle", { project: projectName, issue: issue.title })}
       breadcrumbs={[
-        { label: "mspace", to: "/inbox" },
-        { label: "Issues", to: "/issues" },
+        { label: t("common.mspace"), to: "/inbox" },
+        { label: t("issues.title"), to: "/issues" },
         { label: issue.title, to: "/issues/$issueId", params: { issueId: issue.id } },
-        { label: `Session ${session.id.slice(0, 8)}` },
+        { label: t("sessionDetail.pageTitle", { id: session.id.slice(0, 8) }) },
       ]}
       actions={
         <>
           <Button asChild variant="secondary">
-            <Link to="/issues/$issueId" params={{ issueId: issue.id }}>Back to issue</Link>
+            <Link to="/issues/$issueId" params={{ issueId: issue.id }}>{t("sessionDetail.backToIssue")}</Link>
           </Button>
           <Button
             variant="danger"
             disabled={cancelMutation.isPending || !sessionActive}
             onClick={() => cancelMutation.mutate()}
           >
-            Cancel session
+            {t("sessionDetail.cancelSession")}
           </Button>
         </>
       }
     >
       <div className="grid gap-6 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
         <div className="flex flex-col gap-6">
-          <Panel title="Session metadata" aside={<StatusBadge value={session.status} />}>
+          <Panel title={t("sessionDetail.sessionMetadata")} aside={<StatusBadge value={session.status} />}>
             <div className="grid gap-3">
-              <DataBlock label="Provider" icon={SquareTerminal}>{session.provider}</DataBlock>
-              <DataBlock label="Agent profile" icon={SquareTerminal}>{session.agentProfile || "codex"}</DataBlock>
-              <DataBlock label="Runtime mode" icon={HardDrive}>{session.runtimeMode}</DataBlock>
-              <DataBlock label="Agent status" icon={SquareTerminal}>{session.agentStatus || "not reported yet"}</DataBlock>
-              <DataBlock label="Cleanup status" icon={Files}>
+              <DataBlock label={t("sessionDetail.summary.provider")} icon={SquareTerminal}>{session.provider}</DataBlock>
+              <DataBlock label={t("sessionDetail.summary.agentProfile")} icon={SquareTerminal}>{session.agentProfile || "codex"}</DataBlock>
+              <DataBlock label={t("sessionDetail.runtimeMode")} icon={HardDrive}>{session.runtimeMode}</DataBlock>
+              <DataBlock label={t("sessionDetail.summary.agentStatus")} icon={SquareTerminal}>{session.agentStatus || t("sessionDetail.notReportedYet")}</DataBlock>
+              <DataBlock label={t("sessionDetail.summary.cleanupStatus")} icon={Files}>
                 {cleanupStatus === "cleaned" ? (
-                  session.cleanedAt ? <RelativeTime prefix="cleaned" value={session.cleanedAt} /> : "cleaned"
-                ) : "retained"}
+                  session.cleanedAt ? <RelativeTime prefix={t("sessionDetail.cleaned")} value={session.cleanedAt} /> : t("sessionDetail.cleaned")
+                ) : t("sessionDetail.retained")}
               </DataBlock>
-              <DataBlock label="Session branch" icon={GitBranch}>{session.branch}</DataBlock>
-              <DataBlock label="Agent instructions" icon={SquareTerminal}>{session.command || "issue and project context only"}</DataBlock>
-              <DataBlock label="Codex thread" icon={SquareTerminal}>{session.codexThreadId || "not started yet"}</DataBlock>
-              <DataBlock label="Codex turn" icon={SquareTerminal}>{session.codexTurnId || "not started yet"}</DataBlock>
-              <DataBlock label="Session workspace" icon={Files}>{session.workdir || "not reported yet"}</DataBlock>
-              <DataBlock label="Artifact directory" icon={Files}>{session.artifactDir || "not reported yet"}</DataBlock>
-              <DataBlock label="Source repository" icon={Files}>{project?.repoPath || "not configured"}</DataBlock>
+              <DataBlock label={t("sessionDetail.sessionBranch")} icon={GitBranch}>{session.branch}</DataBlock>
+              <DataBlock label={t("sessionDetail.agentInstructions")} icon={SquareTerminal}>{session.command || t("sessionDetail.defaultAgentInstructions")}</DataBlock>
+              <DataBlock label={t("sessionDetail.codexThread")} icon={SquareTerminal}>{session.codexThreadId || t("sessionDetail.notStartedYet")}</DataBlock>
+              <DataBlock label={t("sessionDetail.codexTurn")} icon={SquareTerminal}>{session.codexTurnId || t("sessionDetail.notStartedYet")}</DataBlock>
+              <DataBlock label={t("sessionDetail.sessionWorkspace")} icon={Files}>{session.workdir || t("sessionDetail.notReportedYet")}</DataBlock>
+              <DataBlock label={t("sessionDetail.artifactDirectory")} icon={Files}>{session.artifactDir || t("sessionDetail.notReportedYet")}</DataBlock>
+              <DataBlock label={t("sessionDetail.sourceRepository")} icon={Files}>{project?.repoPath || t("sessionDetail.notConfigured")}</DataBlock>
             </div>
           </Panel>
 
-          <Panel title="Issue summary draft">
-            {copyState === "copied" ? <Notice>Summary copied to clipboard.</Notice> : null}
-            {copyState === "failed" ? <Notice tone="danger">Clipboard access failed. You can still copy from the draft below.</Notice> : null}
+          <Panel title={t("sessionDetail.issueSummaryDraft")}>
+            {copyState === "copied" ? <Notice>{t("sessionDetail.summaryCopied")}</Notice> : null}
+            {copyState === "failed" ? <Notice tone="danger">{t("sessionDetail.clipboardFailed")}</Notice> : null}
             <div className="mt-3 flex flex-col gap-3">
               <Textarea
                 value={summaryDraft}
@@ -228,37 +232,37 @@ export function SessionDetailPage() {
               />
               <div className="flex flex-wrap gap-2">
                 <Button variant="secondary" onClick={() => setSummaryDraft(generatedSummary)}>
-                  Regenerate draft
+                  {t("sessionDetail.regenerateDraft")}
                 </Button>
                 <Button variant="secondary" onClick={() => void handleCopySummary()}>
                   <Clipboard data-icon />
-                  Copy summary
+                  {t("sessionDetail.copySummary")}
                 </Button>
-                <Button disabled title="Issue comments now write through the server control plane.">
-                  Post to issue
+                <Button disabled title={t("sessionDetail.postDisabledTitle")}>
+                  {t("sessionDetail.postToIssue")}
                 </Button>
               </div>
             </div>
           </Panel>
 
-          <Panel title="Workspace snapshot">
+          <Panel title={t("sessionDetail.workspaceSnapshot")}>
             {workspace.error ? <Notice tone="danger">{workspace.error}</Notice> : null}
             <div className="grid gap-3 md:grid-cols-2">
-              <DataBlock label="Workspace branch" icon={GitBranch}>{workspace.branch || session.branch || "not available yet"}</DataBlock>
-              <DataBlock label="HEAD" icon={GitCommit}>{workspace.shortHead || workspace.head || "not available yet"}</DataBlock>
-              <DataBlock label="Changed tracked files" icon={Files}>{workspace.changedFiles}</DataBlock>
-              <DataBlock label="Untracked files" icon={Files}>{workspace.untrackedFiles}</DataBlock>
+              <DataBlock label={t("sessionDetail.workspaceBranch")} icon={GitBranch}>{workspace.branch || session.branch || t("sessionDetail.notAvailableYet")}</DataBlock>
+              <DataBlock label="HEAD" icon={GitCommit}>{workspace.shortHead || workspace.head || t("sessionDetail.notAvailableYet")}</DataBlock>
+              <DataBlock label={t("sessionDetail.changedTrackedFiles")} icon={Files}>{workspace.changedFiles}</DataBlock>
+              <DataBlock label={t("sessionDetail.untrackedFiles")} icon={Files}>{workspace.untrackedFiles}</DataBlock>
             </div>
 
             <div className="mt-4 flex flex-col gap-2">
-              <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">Git status</div>
+              <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("sessionDetail.gitStatus")}</div>
               <CodeBlock
                 empty={
                   !workspace.exists
                     ? missingWorkspaceText
                     : !workspace.isGitRepository
-                      ? "Workspace exists, but it is not a git worktree."
-                      : "Working tree clean."
+                      ? t("sessionDetail.workspaceNotGit")
+                      : t("sessionDetail.workingTreeClean")
                 }
               >
                 {workspace.exists && workspace.isGitRepository && workspace.statusLines.length > 0
@@ -268,9 +272,9 @@ export function SessionDetailPage() {
             </div>
 
             <div className="mt-4 flex flex-col gap-2">
-              <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">Changed files</div>
+              <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("sessionDetail.changedFiles")}</div>
               {workspace.changes.length === 0 ? (
-                <DataBlock label="No file changes">{workspace.exists ? "No file changes in this workspace." : missingWorkspaceText}</DataBlock>
+                <DataBlock label={t("sessionDetail.noFileChanges")}>{workspace.exists ? t("sessionDetail.noFileChangesBody") : missingWorkspaceText}</DataBlock>
               ) : (
                 <div className="flex flex-col gap-2">
                   {workspace.changes.map((change) => (
@@ -282,16 +286,16 @@ export function SessionDetailPage() {
 
             <div className="mt-4 flex flex-col gap-2">
               <div className="flex items-center justify-between gap-3">
-                <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">Diff preview</div>
-                {workspace.diffTruncated ? <InlineMeta>Preview truncated</InlineMeta> : null}
+                <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("sessionDetail.diffPreview")}</div>
+                {workspace.diffTruncated ? <InlineMeta>{t("sessionDetail.previewTruncated")}</InlineMeta> : null}
               </div>
               <CodeBlock
                 empty={
                   !workspace.exists
                     ? missingWorkspaceText
                     : !workspace.isGitRepository
-                      ? "Workspace exists, but it is not a git worktree."
-                      : "No diff against HEAD."
+                      ? t("sessionDetail.workspaceNotGit")
+                      : t("sessionDetail.noDiffAgainstHead")
                 }
               >
                 {workspace.exists && workspace.isGitRepository && workspace.diffPreview ? (
@@ -303,32 +307,32 @@ export function SessionDetailPage() {
             <div className="mt-4 rounded-[9px] bg-[color:var(--surface)] p-3 shadow-[0_0_0_1px_var(--line)]">
               <div className="mb-3 flex items-center gap-2 text-[13px] font-semibold text-[color:var(--muted-strong)]">
                 <GitCompareArrows data-icon />
-                Relative to base
+                {t("sessionDetail.relativeToBase")}
               </div>
               {workspace.comparison.error ? (
                 <Notice tone="danger">{workspace.comparison.error}</Notice>
               ) : (
                 <div className="flex flex-col gap-4">
                   <div className="grid gap-3 md:grid-cols-2">
-                    <DataBlock label="Base ref">{workspace.comparison.baseRef || "not available yet"}</DataBlock>
-                    <DataBlock label="Merge base">
-                      {workspace.comparison.mergeBaseShort || workspace.comparison.mergeBase || "not available yet"}
+                    <DataBlock label={t("sessionDetail.summary.baseRef")}>{workspace.comparison.baseRef || t("sessionDetail.notAvailableYet")}</DataBlock>
+                    <DataBlock label={t("sessionDetail.mergeBase")}>
+                      {workspace.comparison.mergeBaseShort || workspace.comparison.mergeBase || t("sessionDetail.notAvailableYet")}
                     </DataBlock>
-                    <DataBlock label="Ahead">{workspace.comparison.aheadCount}</DataBlock>
-                    <DataBlock label="Behind">{workspace.comparison.behindCount}</DataBlock>
+                    <DataBlock label={t("sessionDetail.ahead")}>{workspace.comparison.aheadCount}</DataBlock>
+                    <DataBlock label={t("sessionDetail.behind")}>{workspace.comparison.behindCount}</DataBlock>
                   </div>
 
                   <div className="flex flex-col gap-2">
-                    <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">Commits on this session branch</div>
-                    <CodeBlock empty="No commits ahead of the base ref yet.">
+                    <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("sessionDetail.summary.commitsOnBranch")}</div>
+                    <CodeBlock empty={t("sessionDetail.noCommitsAhead")}>
                       {workspace.comparison.commitLines.map((line) => <div key={line}>{line}</div>)}
                     </CodeBlock>
                   </div>
 
                   <div className="flex flex-col gap-2">
-                    <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">Files changed since merge base</div>
+                    <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("sessionDetail.summary.filesChangedSinceMergeBase")}</div>
                     {workspace.comparison.changes.length === 0 ? (
-                      <DataBlock label="No branch-level changes">No branch-level changes relative to the base ref yet.</DataBlock>
+                      <DataBlock label={t("sessionDetail.noBranchLevelChanges")}>{t("sessionDetail.noBranchLevelChangesBody")}</DataBlock>
                     ) : (
                       <div className="flex flex-col gap-2">
                         {workspace.comparison.changes.map((change) => (
@@ -340,10 +344,10 @@ export function SessionDetailPage() {
 
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">Base comparison diff</div>
-                      {workspace.comparison.diffTruncated ? <InlineMeta>Preview truncated</InlineMeta> : null}
+                      <div className="text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("sessionDetail.baseComparisonDiff")}</div>
+                      {workspace.comparison.diffTruncated ? <InlineMeta>{t("sessionDetail.previewTruncated")}</InlineMeta> : null}
                     </div>
-                    <CodeBlock empty="No diff relative to the merge base.">
+                    <CodeBlock empty={t("sessionDetail.noDiffRelativeToMergeBase")}>
                       {workspace.comparison.diffPreview ? (
                         <pre className="whitespace-pre-wrap">{workspace.comparison.diffPreview}</pre>
                       ) : null}
@@ -355,8 +359,8 @@ export function SessionDetailPage() {
           </Panel>
         </div>
 
-        <Panel title="Live log stream">
-          <CodeBlock className="max-h-[70vh]" empty="No logs yet.">
+        <Panel title={t("sessionDetail.liveLogStream")}>
+          <CodeBlock className="max-h-[70vh]" empty={t("sessionDetail.noLogsYet")}>
             {logs.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)}
           </CodeBlock>
         </Panel>

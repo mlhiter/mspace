@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { MessageSquarePlus, X } from "lucide-react";
 import { type CreateIssueInput, type IssueDetail } from "@mspace/core";
+import { useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
   Notice,
@@ -21,6 +22,7 @@ export function CreateIssueModal(props: {
   inboxQueryKey: readonly unknown[];
   projectsQueryKey: readonly unknown[];
 }) {
+  const { t } = useMspaceTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [prompt, setPrompt] = useState("");
@@ -30,7 +32,7 @@ export function CreateIssueModal(props: {
     mutationFn: async (body: string) => {
       const title = draftIssueTitleFromBody(body);
       if (title === "") {
-        throw new Error("Issue cannot be empty.");
+        throw new Error(t("createIssue.emptyError"));
       }
       return props.createIssue({ title, body });
     },
@@ -86,7 +88,7 @@ export function CreateIssueModal(props: {
 
   return (
     <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
-      <button type="button" aria-label="Close modal backdrop" className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <button type="button" aria-label={t("createIssue.closeBackdrop")} className="absolute inset-0 cursor-default" onClick={props.onClose} />
       <section
         role="dialog"
         aria-modal="true"
@@ -97,18 +99,18 @@ export function CreateIssueModal(props: {
           <div className="min-w-0">
             <div className="mb-2 flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
               <MessageSquarePlus data-icon />
-              Issue
+              {t("createIssue.eyebrow")}
             </div>
             <h2 id="create-issue-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">
-              New issue
+              {t("createIssue.title")}
             </h2>
             <p className="mt-1 max-w-[58ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
-              Describe the work in one note. mspace will route it to the best matching project.
+              {t("createIssue.description")}
             </p>
           </div>
           <button
             type="button"
-            aria-label="Close modal"
+            aria-label={t("createIssue.closeModal")}
             className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
             onClick={props.onClose}
           >
@@ -128,16 +130,16 @@ export function CreateIssueModal(props: {
               autoFocus
               value={prompt}
               onChange={setPrompt}
-              placeholder={"Write the issue...\n\n- [ ] Add the first task\n- [ ] Add the next task"}
+              placeholder={t("createIssue.placeholder")}
             />
           </section>
 
           <div className="flex justify-end gap-2 border-t border-[color:var(--line)] bg-[color:var(--surface)] px-8 py-4">
             <Button type="button" variant="secondary" onClick={props.onClose} disabled={submitIssue.isPending}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="submit" disabled={!canCreate || submitIssue.isPending} className={cn(!canCreate && "opacity-60")}>
-              {submitIssue.isPending ? "Creating..." : "Create issue"}
+              {submitIssue.isPending ? t("createIssue.creating") : t("createIssue.submit")}
             </Button>
           </div>
         </form>

@@ -15,6 +15,7 @@ import {
   FolderKanban,
   GitBranch,
   Inbox,
+  Languages,
   Layers3,
   LoaderCircle,
   LogOut,
@@ -45,6 +46,7 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
+import { supportedMspaceLocales, t as translate, useMspaceLanguage, useMspaceTranslation, type MspaceLocale } from "@mspace/i18n";
 import { Alert, AlertDescription } from "./components/ui/alert";
 import { Badge } from "./components/ui/badge";
 import {
@@ -52,6 +54,14 @@ import {
   type buttonVariants as shadcnButtonVariants,
 } from "./components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "./components/ui/dropdown-menu";
 import {
   Field as ShadcnField,
   FieldDescription,
@@ -127,11 +137,11 @@ export { Switch } from "./components/ui/switch";
 export { Textarea as ShadcnTextarea } from "./components/ui/textarea";
 
 const sidebarItems = [
-  { to: "/inbox", label: "Inbox", icon: Inbox },
-  { to: "/issues", label: "Issues", icon: MessageSquareText },
-  { to: "/agents", label: "Agents", icon: Bot },
-  { to: "/clusters", label: "Clusters", icon: Cloud },
-  { to: "/projects", label: "Projects", icon: FolderKanban },
+  { to: "/inbox", labelKey: "navigation.inbox", icon: Inbox },
+  { to: "/issues", labelKey: "navigation.issues", icon: MessageSquareText },
+  { to: "/agents", labelKey: "navigation.agents", icon: Bot },
+  { to: "/clusters", labelKey: "navigation.clusters", icon: Cloud },
+  { to: "/projects", labelKey: "navigation.projects", icon: FolderKanban },
 ];
 
 let maxObservedHistoryIndex = 0;
@@ -199,6 +209,7 @@ export function AppShell(
 ) {
   const activeWorkItems = props.activeWorkItems || [];
   const [searchOpen, setSearchOpen] = useState(false);
+  const { t } = useMspaceTranslation();
 
   useEffect(() => {
     function openFromShortcut(event: globalThis.KeyboardEvent) {
@@ -232,14 +243,14 @@ export function AppShell(
         >
           <span className="flex items-center gap-2 text-[12px] text-[color:var(--muted)]">
             <Search data-icon className="shrink-0" />
-            <span className="min-w-0 flex-1 truncate">Search issues and projects</span>
+            <span className="min-w-0 flex-1 truncate">{t("navigation.searchPlaceholder")}</span>
             <kbd className="shrink-0 rounded-[5px] bg-[color:var(--block)] px-1.5 py-0.5 text-[10px] font-medium leading-4 text-[color:var(--faint)] shadow-[inset_0_0_0_1px_var(--line)]">
               Cmd K
             </kbd>
           </span>
         </button>
         <SidebarActionLink to="/issues" search={{ new: "1" }} icon={MessageSquarePlus}>
-          New issue
+          {t("navigation.newIssue")}
         </SidebarActionLink>
 
         <nav className="flex flex-col gap-1">
@@ -250,13 +261,13 @@ export function AppShell(
               icon={item.icon}
               badgeCount={item.to === "/inbox" ? props.inboxUnreadCount : undefined}
             >
-              {item.label}
+              {t(item.labelKey)}
             </SidebarLink>
           ))}
         </nav>
 
         <div className="mt-5 flex items-center justify-between px-2 text-[12px] font-medium text-[color:var(--faint)]">
-          <span>Active work</span>
+          <span>{t("navigation.activeWork")}</span>
           <Activity data-icon />
         </div>
         <div className="mt-2 flex flex-col gap-1">
@@ -264,7 +275,7 @@ export function AppShell(
             activeWorkItems.slice(0, 5).map((item) => <ActiveWorkLink key={item.issueId} item={item} />)
           ) : (
             <div className="rounded-[8px] px-2 py-2 text-[12px] leading-5 text-[color:var(--muted)]">
-              No active issue work.
+              {t("navigation.noActiveWork")}
             </div>
           )}
         </div>
@@ -273,10 +284,10 @@ export function AppShell(
           <div className="rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
             <div className="flex items-center gap-2 text-[12px] font-medium">
               <SquareTerminal data-icon className="text-[color:var(--muted)]" />
-              Local runner
+              {t("navigation.localRunner")}
             </div>
             <p className="mt-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
-              Edits stay local. Kubernetes evidence stays attached to the issue.
+              {t("navigation.localRunnerDescription")}
             </p>
           </div>
         </div>
@@ -307,6 +318,7 @@ const searchKindIcons: Record<ShellSearchItem["kind"], LucideIcon> = {
 
 function GlobalSearchDialog(props: { items: ShellSearchItem[]; loading?: boolean; onClose: () => void }) {
   const router = useRouter();
+  const { t } = useMspaceTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -384,14 +396,14 @@ function GlobalSearchDialog(props: { items: ShellSearchItem[]; loading?: boolean
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-[rgba(0,0,0,0.18)] px-4 pt-[12vh]">
       <button
         type="button"
-        aria-label="Close global search"
+        aria-label={t("search.close")}
         className="absolute inset-0 cursor-default"
         onClick={props.onClose}
       />
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Global search"
+        aria-label={t("search.dialogLabel")}
         className="relative z-10 w-full max-w-[640px] overflow-hidden rounded-[12px] bg-[color:var(--paper)] text-[color:var(--text)] shadow-[0_24px_80px_rgba(0,0,0,0.18),inset_0_0_0_1px_var(--line)]"
       >
         <div className="flex items-center gap-2 border-b border-[color:var(--line)] px-3 py-2">
@@ -401,7 +413,7 @@ function GlobalSearchDialog(props: { items: ShellSearchItem[]; loading?: boolean
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={handleInputKeyDown}
-            placeholder="Search issues and projects"
+            placeholder={t("search.placeholder")}
             className="h-9 min-h-9 border-0 bg-transparent px-0 text-[14px] shadow-none placeholder:text-[color:var(--faint)] focus-visible:border-transparent focus-visible:ring-0"
           />
           <kbd className="shrink-0 rounded-[5px] bg-[color:var(--block)] px-1.5 py-0.5 text-[10px] font-medium leading-4 text-[color:var(--faint)] shadow-[inset_0_0_0_1px_var(--line)]">
@@ -423,7 +435,7 @@ function GlobalSearchDialog(props: { items: ShellSearchItem[]; loading?: boolean
             </div>
           ) : (
             <div className="px-3 py-8 text-center text-[13px] leading-5 text-[color:var(--muted)]">
-              {props.loading ? "Loading workspace results." : "No matching workspace results."}
+              {props.loading ? t("search.loading") : t("search.noResults")}
             </div>
           )}
         </div>
@@ -439,6 +451,7 @@ function GlobalSearchResult(props: {
   onMouseEnter: () => void;
 }) {
   const Icon = searchKindIcons[props.item.kind];
+  const { t } = useMspaceTranslation();
 
   return (
     <button
@@ -464,7 +477,7 @@ function GlobalSearchResult(props: {
         ) : null}
       </span>
       <span className="shrink-0 rounded-[5px] bg-[color:var(--block)] px-1.5 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-        {props.item.kind}
+        {t(`search.kind.${props.item.kind.toLowerCase()}`)}
       </span>
     </button>
   );
@@ -479,19 +492,22 @@ function WorkspaceMenu(props: {
   onCreateTeamWorkspace?: () => void;
 }) {
   const account = props.account || { status: "signed-out" as const };
+  const { t } = useMspaceTranslation();
   const isBusy = account.status === "loading";
   const isSignedIn = account.status === "signed-in";
-  const actionLabel = account.actionLabel || (isBusy ? "Waiting for GitHub" : "Sign in with GitHub");
+  const actionLabel = account.actionLabel || (isBusy ? t("workspace.waitingForGitHub") : t("workspace.signInWithGitHub"));
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const workspaceLabel = account.workspaceName || (isSignedIn ? "Personal workspace" : "Local workspace");
+  const workspaceLabel = account.workspaceName || (isSignedIn ? t("workspace.personalWorkspace") : t("workspace.localWorkspace"));
   const workspaceKindLabel = workspaceKindLabelFor(account.workspaceKind);
-  const statusLabel = isSignedIn ? account.name || account.email || "Signed in" : isBusy ? "GitHub login pending" : "Not signed in";
+  const statusLabel = isSignedIn ? account.name || account.email || t("workspace.signedIn") : isBusy ? t("workspace.githubLoginPending") : t("workspace.notSignedIn");
   const workspaces = account.workspaces || [];
 
   useEffect(() => {
     if (!open) return;
     function closeOnPointerDown(event: PointerEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("[data-mspace-language-menu]")) return;
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     }
     function closeOnEscape(event: KeyboardEvent) {
@@ -549,14 +565,14 @@ function WorkspaceMenu(props: {
             <div className="min-w-0 flex-1">
               <div className="truncate text-[12px] font-semibold leading-5 text-[color:var(--text)]">{workspaceLabel}</div>
               <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
-                {isSignedIn ? `${workspaceKindLabel || "Workspace"} · ${account.workspaceRole || "member"}` : "Local workspace"}
+                {isSignedIn ? `${workspaceKindLabel || t("workspace.workspace")} · ${workspaceRoleLabelFor(account.workspaceRole)}` : t("workspace.localWorkspace")}
               </div>
             </div>
           </div>
 
           {isSignedIn && workspaces.length > 1 ? (
             <div className="border-t border-[color:var(--line)] px-1 py-1">
-              <div className="px-1.5 pb-1 pt-0.5 text-[11px] font-medium leading-4 text-[color:var(--faint)]">Workspaces</div>
+              <div className="px-1.5 pb-1 pt-0.5 text-[11px] font-medium leading-4 text-[color:var(--faint)]">{t("workspace.workspaces")}</div>
               <div className="grid gap-px">
                 {workspaces.map((workspace) => {
                   const selected = workspace.id === account.workspaceId;
@@ -579,7 +595,7 @@ function WorkspaceMenu(props: {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate">{workspace.name}</span>
                         <span className="block truncate text-[11px] font-normal leading-4 text-[color:var(--muted)]">
-                          {workspaceKindLabelFor(workspace.kind)} · {workspace.role || "member"}
+                          {workspaceKindLabelFor(workspace.kind)} · {workspaceRoleLabelFor(workspace.role)}
                         </span>
                       </span>
                     </button>
@@ -593,7 +609,7 @@ function WorkspaceMenu(props: {
             <div className="grid gap-px border-t border-[color:var(--line)] px-1 py-1">
               <WorkspaceMenuAction
                 icon={Plus}
-                label="Create team workspace"
+                label={t("workspace.createTeamWorkspace")}
                 onClick={() => {
                   setOpen(false);
                   props.onCreateTeamWorkspace?.();
@@ -602,7 +618,7 @@ function WorkspaceMenu(props: {
               <WorkspaceMenuLink
                 to="/settings"
                 icon={Settings}
-                label="Workspace settings"
+                label={t("workspace.workspaceSettings")}
                 trailingIcon={ChevronRight}
                 onClick={() => setOpen(false)}
               />
@@ -611,7 +627,7 @@ function WorkspaceMenu(props: {
             <WorkspaceMenuLink
               to="/settings"
               icon={Settings}
-              label="Workspace settings"
+              label={t("workspace.workspaceSettings")}
               trailingIcon={ChevronRight}
               className="mx-1"
               onClick={() => setOpen(false)}
@@ -623,13 +639,14 @@ function WorkspaceMenu(props: {
               <div className="flex min-w-0 items-center gap-2 rounded-[7px] px-1.5 py-1.5">
                 <UserAvatar name={account.name} avatarUrl={account.avatarUrl} size="sm" />
                 <div className="min-w-0 flex-1 text-left">
-                  <div className="truncate text-[12px] font-medium leading-5 text-[color:var(--text)]">{account.name || "mspace user"}</div>
-                  <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{account.email || "GitHub connected"}</div>
+                  <div className="truncate text-[12px] font-medium leading-5 text-[color:var(--text)]">{account.name || t("workspace.mspaceUser")}</div>
+                  <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{account.email || t("workspace.githubConnected")}</div>
                 </div>
               </div>
+              <LanguageMenuItem />
               <WorkspaceMenuAction
                 icon={LogOut}
-                label="Sign out"
+                label={t("workspace.signOut")}
                 muted
                 onClick={() => {
                   setOpen(false);
@@ -641,7 +658,7 @@ function WorkspaceMenu(props: {
             <div className="mt-1 border-t border-[color:var(--line)] px-1 py-1">
               <div className="mb-1 flex items-center gap-2 px-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
                 {isBusy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
-                <span>{isBusy ? "Waiting for GitHub callback" : "GitHub identity not connected"}</span>
+                <span>{isBusy ? t("workspace.waitingForGitHubCallback") : t("workspace.githubIdentityNotConnected")}</span>
               </div>
               <ShadcnButton
                 type="button"
@@ -734,12 +751,59 @@ function WorkspaceMenuLabel(props: PropsWithChildren) {
   return <span className="min-w-0 truncate text-[12px] font-medium leading-4">{props.children}</span>;
 }
 
+function LanguageMenuItem() {
+  const { t } = useMspaceTranslation();
+  const { language, changeLanguage } = useMspaceLanguage();
+  const activeLocale = supportedMspaceLocales.find((locale) => locale.code === language) || supportedMspaceLocales[0];
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="group grid min-h-8 w-full grid-cols-[24px_minmax(0,1fr)_auto] items-center rounded-[7px] px-1 text-left text-[color:var(--muted-strong)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99]"
+        >
+          <WorkspaceMenuIcon icon={Languages} />
+          <WorkspaceMenuLabel>{t("language.label")}</WorkspaceMenuLabel>
+          <span className="ml-2 inline-flex min-w-0 max-w-[88px] items-center gap-1 justify-self-end rounded-[6px] bg-[color:var(--block)] px-1.5 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+            <span className="truncate">{t(`language.${activeLocale.code}`)}</span>
+            <ChevronRight data-icon className="size-3 shrink-0 text-[color:var(--faint)] transition-transform duration-150 group-data-[state=open]:rotate-90" />
+          </span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent data-mspace-language-menu side="right" align="start" sideOffset={10} className="min-w-[176px]">
+        <DropdownMenuLabel>{t("language.label")}</DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={language} onValueChange={(value: string) => void changeLanguage(value as MspaceLocale)}>
+          {supportedMspaceLocales.map((locale) => (
+            <DropdownMenuRadioItem
+              key={locale.code}
+              value={locale.code}
+              className="data-[state=checked]:bg-[color:var(--selection)] data-[state=checked]:text-[color:var(--text)]"
+            >
+              <span className="min-w-0 flex-1 truncate">{t(`language.${locale.code}`)}</span>
+              <span className="text-[11px] leading-4 text-[color:var(--faint)]">{locale.code}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function workspaceKindLabelFor(kind: string | undefined) {
   const normalized = kind?.trim().toLowerCase();
-  if (normalized === "team") return "Team";
-  if (normalized === "personal") return "Personal";
+  if (normalized === "team") return translate("workspace.kind.team");
+  if (normalized === "personal") return translate("workspace.kind.personal");
   if (normalized) return statusLabel(normalized);
   return "";
+}
+
+function workspaceRoleLabelFor(role: string | undefined) {
+  const normalized = role?.trim().toLowerCase() || "member";
+  if (normalized === "owner" || normalized === "admin" || normalized === "member") {
+    return translate(`workspace.role.${normalized}`);
+  }
+  return normalized;
 }
 
 function UserAvatar(props: { name?: string; avatarUrl?: string; size?: "sm" | "md" }) {
@@ -764,6 +828,7 @@ function UserAvatar(props: { name?: string; avatarUrl?: string; size?: "sm" | "m
 
 export function SidebarLink(props: PropsWithChildren<{ to: string; icon: LucideIcon; badgeCount?: number }>) {
   const Icon = props.icon;
+  const { t } = useMspaceTranslation();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const isActive = pathname === props.to || pathname.startsWith(`${props.to}/`);
   const badgeCount = Math.max(0, Math.trunc(props.badgeCount || 0));
@@ -783,7 +848,7 @@ export function SidebarLink(props: PropsWithChildren<{ to: string; icon: LucideI
       <span className="min-w-0 flex-1 truncate">{props.children}</span>
       {badgeCount > 0 ? (
         <span
-          aria-label={`${badgeCount} unread Inbox update${badgeCount === 1 ? "" : "s"}`}
+          aria-label={`${badgeCount} ${t("navigation.inbox")}`}
           className="absolute right-2 top-1/2 grid h-4 min-w-4 -translate-y-1/2 place-items-center rounded-full bg-[color:var(--inbox-badge)] px-1 text-[10px] font-semibold leading-4 text-[color:var(--inbox-badge-text)] tabular-nums"
         >
           {badgeLabel}
@@ -809,7 +874,8 @@ export function SidebarActionLink(props: PropsWithChildren<{ to: string; search?
 
 function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
   const status = normalizeStatusValue(props.item.sessionStatus || props.item.namespaceStatus || props.item.status);
-  const projectName = props.item.projectName || "No project";
+  const { t } = useMspaceTranslation();
+  const projectName = props.item.projectName || t("common.noProject");
   const secondary = props.item.namespace || projectName;
   return (
     <Link
@@ -846,6 +912,7 @@ function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
 
 function NavigationControls() {
   const router = useRouter();
+  const { t } = useMspaceTranslation();
   const canGoBack = useCanGoBack();
   const historyIndex = useRouterState({ select: (state) => state.location.state.__TSR_index });
   const [maxHistoryIndex, setMaxHistoryIndex] = useState(() => rememberHistoryIndex(historyIndex));
@@ -865,7 +932,7 @@ function NavigationControls() {
     <div className="flex shrink-0 items-center gap-1">
       <button
         type="button"
-        aria-label="Go back"
+        aria-label={t("navigation.goBack")}
         disabled={!canGoBack}
         className="grid size-7 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform,opacity] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95 disabled:pointer-events-none disabled:opacity-35"
         onClick={() => router.history.back()}
@@ -874,7 +941,7 @@ function NavigationControls() {
       </button>
       <button
         type="button"
-        aria-label="Go forward"
+        aria-label={t("navigation.goForward")}
         disabled={!canGoForward}
         className="grid size-7 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform,opacity] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95 disabled:pointer-events-none disabled:opacity-35"
         onClick={() => router.history.forward()}
@@ -886,8 +953,9 @@ function NavigationControls() {
 }
 
 function BreadcrumbTrail(props: { items: BreadcrumbItem[] }) {
+  const { t } = useMspaceTranslation();
   return (
-    <nav aria-label="Breadcrumb" className="min-w-0 flex-1 overflow-hidden">
+    <nav aria-label={t("navigation.breadcrumb")} className="min-w-0 flex-1 overflow-hidden">
       <ol className="flex min-w-0 items-center gap-1.5 text-[12px] text-[color:var(--muted)]">
         {props.items.map((item, index) => {
           const isLast = index === props.items.length - 1;
@@ -924,8 +992,9 @@ function BreadcrumbTrail(props: { items: BreadcrumbItem[] }) {
 }
 
 export function PageFrame(props: PropsWithChildren<{ title: string; subtitle?: ReactNode; actions?: ReactNode; breadcrumbs?: BreadcrumbItem[] }>) {
+  const { t } = useMspaceTranslation();
   const breadcrumbs = props.breadcrumbs || [
-    { label: "mspace", to: "/inbox" },
+    { label: t("common.mspace"), to: "/inbox" },
     { label: props.title },
   ];
 
@@ -1102,34 +1171,8 @@ function normalizeStatusValue(value: string) {
 }
 
 function statusLabel(value: string) {
-  const labels: Record<string, string> = {
-    open: "Open",
-    in_progress: "In progress",
-    running: "Running",
-    needs_review: "Needs review",
-    changes_requested: "Changes requested",
-    ready_for_test: "Ready for test",
-    test_in_progress: "Test in progress",
-    test_passed: "Test passed",
-    test_failed: "Test failed",
-    blocked: "Blocked",
-    failed: "Failed",
-    cancelled: "Cancelled",
-    closed: "Closed",
-    completed: "Completed",
-    deploying: "Deploying",
-    preview_unverified: "Preview unverified",
-    deploy_failed: "Deploy failed",
-    deploy_interrupted: "Deploy interrupted",
-    cleanup_requested: "Cleanup requested",
-    cleanup_failed: "Cleanup failed",
-    cleaned: "Cleaned",
-    retained: "Retained",
-    team_runtime_queued: "Team queued",
-    team_runtime_claimed: "Team claimed",
-    team_runtime_running: "Team running",
-  };
-  if (labels[value]) return labels[value];
+  const translated = translate(`issueStatus.${value}`, { defaultValue: "" });
+  if (translated) return translated;
   return value
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());

@@ -9,6 +9,7 @@ import {
   type KubeconfigDiscoveryResult,
   type KubeconfigImportResult,
 } from "@mspace/core";
+import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
   CollectionEmptyState,
@@ -56,6 +57,7 @@ function clusterToForm(cluster: Cluster): ClusterInput {
 }
 
 export function ClustersPage() {
+  const { t } = useMspaceTranslation();
   const queryClient = useQueryClient();
   const clustersQuery = useQuery({
     queryKey: queryKeys.clusters,
@@ -86,7 +88,7 @@ export function ClustersPage() {
   });
   const updateCluster = useMutation({
     mutationFn: (input: ClusterInput) => {
-      if (!settingsCluster) throw new Error("No cluster selected.");
+      if (!settingsCluster) throw new Error(t("clusters.noClusterSelected"));
       return api.updateCluster(settingsCluster.id, input);
     },
     onSuccess: async () => {
@@ -129,7 +131,7 @@ export function ClustersPage() {
     setImportSummary("");
     importKubeconfigs.reset();
     if (!window.mspaceDesktop?.selectKubeconfigFiles) {
-      setImportSummary("Kubeconfig file picker is only available in the desktop app.");
+      setImportSummary(t("clusters.pickerDesktopOnly"));
       return;
     }
     const paths = await window.mspaceDesktop.selectKubeconfigFiles();
@@ -157,12 +159,12 @@ export function ClustersPage() {
 
   return (
     <PageFrame
-      title="Clusters"
-      subtitle="Reusable test cluster access for issue-scoped deployments. Projects choose a default cluster; issue deploys can override exposure per run."
+      title={t("clusters.title")}
+      subtitle={t("clusters.subtitle")}
       actions={
         <Button variant="secondary" onClick={importFromPicker} disabled={importKubeconfigs.isPending}>
           <FileUp data-icon />
-          {importKubeconfigs.isPending ? "Importing..." : "Import kubeconfig"}
+          {importKubeconfigs.isPending ? t("clusters.importing") : t("clusters.importKubeconfig")}
         </Button>
       }
     >
@@ -172,18 +174,18 @@ export function ClustersPage() {
 
       {clustersQuery.isPending ? (
         <div className="mt-4 rounded-[10px] bg-[color:var(--surface)] px-4 py-6 text-[13px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-          Loading clusters...
+          {t("clusters.loading")}
         </div>
       ) : clusters.length === 0 ? (
         <div className="mt-4">
           <CollectionEmptyState
             icon={Cloud}
-            title="No clusters yet"
-            body="Import a kubeconfig once. mspace will detect contexts and check whether the cluster API is reachable."
+            title={t("clusters.emptyTitle")}
+            body={t("clusters.emptyBody")}
             action={
               <Button variant="secondary" onClick={importFromPicker} disabled={importKubeconfigs.isPending}>
                 <FileUp data-icon />
-                Import kubeconfig
+                {t("clusters.importKubeconfig")}
               </Button>
             }
           />
@@ -191,10 +193,10 @@ export function ClustersPage() {
       ) : (
         <div className="mt-4 rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="grid grid-cols-[minmax(180px,1fr)_minmax(220px,1.4fr)_150px_120px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
-            <span>Cluster</span>
-            <span>Access</span>
-            <span>Usage</span>
-            <span className="text-right">Actions</span>
+            <span>{t("clusters.cluster")}</span>
+            <span>{t("clusters.access")}</span>
+            <span>{t("clusters.usage")}</span>
+            <span className="text-right">{t("clusters.actions")}</span>
           </div>
           <div className="divide-y divide-[color:var(--line)]">
             {clusters.map((cluster) => (
@@ -206,8 +208,8 @@ export function ClustersPage() {
 
       {settingsCluster ? (
         <ClusterModal
-          title="Cluster settings"
-          description="Changes apply to future deploy turns. Existing retained namespaces keep their recorded deployment context."
+          title={t("clusters.settingsTitle")}
+          description={t("clusters.settingsDescription")}
           value={settingsForm}
           error={updateCluster.error || deleteCluster.error}
           isPending={updateCluster.isPending}
@@ -220,11 +222,11 @@ export function ClustersPage() {
               type="button"
               variant="danger"
               disabled={settingsClusterInUse || deleteCluster.isPending || updateCluster.isPending}
-              title={settingsClusterInUse ? "Clusters referenced by projects or test environments cannot be deleted." : undefined}
+              title={settingsClusterInUse ? t("clusters.inUseDeleteTitle") : undefined}
               onClick={() => deleteCluster.mutate(settingsCluster.id)}
             >
               <Trash2 data-icon />
-              {deleteCluster.isPending ? "Deleting..." : "Delete cluster"}
+              {deleteCluster.isPending ? t("clusters.deleting") : t("clusters.deleteCluster")}
             </Button>
           }
         />
@@ -258,6 +260,7 @@ export function ClustersPage() {
 
 function ClusterRow(props: { cluster: Cluster; onSettings: () => void }) {
   const { cluster } = props;
+  const { t } = useMspaceTranslation();
   const exposure = cluster.exposureMode === "ingress" ? "ingress" : "nodeport";
   return (
     <article className="grid grid-cols-[minmax(180px,1fr)_minmax(220px,1.4fr)_150px_120px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
@@ -284,14 +287,14 @@ function ClusterRow(props: { cluster: Cluster; onSettings: () => void }) {
       </div>
 
       <div className="text-[13px] leading-5 text-[color:var(--muted)]">
-        <div>{cluster.projectCount} projects</div>
-        <div>{cluster.environmentCount} envs</div>
+        <div>{t("clusters.projects", { count: cluster.projectCount })}</div>
+        <div>{t("clusters.envs", { count: cluster.environmentCount })}</div>
       </div>
 
       <div className="flex justify-end">
         <Button variant="secondary" size="sm" onClick={props.onSettings}>
           <Settings2 data-icon />
-          Settings
+          {t("clusters.settings")}
         </Button>
       </div>
     </article>
@@ -306,6 +309,7 @@ function DefaultKubeImportPrompt(props: {
   onImport: () => void;
   onSkip: () => void;
 }) {
+  const { t } = useMspaceTranslation();
   const candidates = props.discovery?.candidates || [];
   const skipped = props.discovery?.skipped || [];
   const canImport = props.selectedPaths.length > 0 && !props.isPending;
@@ -321,7 +325,7 @@ function DefaultKubeImportPrompt(props: {
 
   return (
     <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
-      <button type="button" aria-label="Close default kubeconfig prompt backdrop" className="absolute inset-0 cursor-default" onClick={props.onSkip} />
+      <button type="button" aria-label={t("clusters.closeDefaultImportBackdrop")} className="absolute inset-0 cursor-default" onClick={props.onSkip} />
       <section
         role="dialog"
         aria-modal="true"
@@ -331,15 +335,18 @@ function DefaultKubeImportPrompt(props: {
         <div className="mb-5 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h2 id="default-kube-import-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">
-              Import kubeconfigs?
+              {t("clusters.importPromptTitle")}
             </h2>
             <p className="mt-1 max-w-[58ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
-              mspace found kubeconfig files under <code className="rounded-[4px] bg-[color:var(--block)] px-1 py-0.5 font-mono text-[12px] text-[color:var(--muted-strong)]">~/.kube</code>. Select the files to import; each context becomes a cluster after a read-only API check.
+              {t("clusters.importPromptPrefix")}{" "}
+              <code className="rounded-[4px] bg-[color:var(--block)] px-1 py-0.5 font-mono text-[12px] text-[color:var(--muted-strong)]">~/.kube</code>.
+              {" "}
+              {t("clusters.importPromptSuffix")}
             </p>
           </div>
           <button
             type="button"
-            aria-label="Close modal"
+            aria-label={t("clusters.closeModal")}
             className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
             onClick={props.onSkip}
           >
@@ -364,8 +371,12 @@ function DefaultKubeImportPrompt(props: {
                     {candidate.path}
                   </span>
                   <span className="mt-1 block text-[12px] leading-5 text-[color:var(--muted)]">
-                    {candidate.contexts.length} context{candidate.contexts.length === 1 ? "" : "s"}: {candidate.contexts.slice(0, 3).join(", ")}
-                    {candidate.contexts.length > 3 ? ` +${candidate.contexts.length - 3}` : ""}
+                    {t("clusters.contextsSummary", {
+                      count: candidate.contexts.length,
+                      suffix: candidate.contexts.length === 1 ? "" : "s",
+                      contexts: candidate.contexts.slice(0, 3).join(", "),
+                    })}
+                    {candidate.contexts.length > 3 ? ` ${t("clusters.moreContexts", { count: candidate.contexts.length - 3 })}` : ""}
                   </span>
                 </span>
               </label>
@@ -373,21 +384,22 @@ function DefaultKubeImportPrompt(props: {
           </div>
         ) : (
           <div className="mb-4 rounded-[9px] bg-[color:var(--block)] px-3 py-3 text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-            No kubeconfig contexts were found under <code className="rounded-[4px] bg-[color:var(--surface)] px-1 py-0.5 font-mono text-[12px] text-[color:var(--muted-strong)]">~/.kube</code>.
+            {t("clusters.noKubeconfigContextsPrefix")}{" "}
+            <code className="rounded-[4px] bg-[color:var(--surface)] px-1 py-0.5 font-mono text-[12px] text-[color:var(--muted-strong)]">~/.kube</code>.
           </div>
         )}
         {skipped.length > 0 ? (
           <div className="mb-4 rounded-[9px] bg-[color:var(--surface)] px-3 py-2.5 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-            {skipped.length} file{skipped.length === 1 ? "" : "s"} skipped. {skipped[0]?.reason}
+            {t("clusters.skippedFiles", { count: skipped.length, suffix: skipped.length === 1 ? "" : "s", reason: skipped[0]?.reason })}
           </div>
         ) : null}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={props.onSkip} disabled={props.isPending}>
-            Skip
+            {t("clusters.skip")}
           </Button>
           <Button type="button" onClick={props.onImport} disabled={!canImport}>
             <FileUp data-icon />
-            {props.isPending ? "Importing..." : `Import ${props.selectedPaths.length || ""}`}
+            {props.isPending ? t("clusters.importing") : t("clusters.importSelected", { count: props.selectedPaths.length || "" })}
           </Button>
         </div>
       </section>
@@ -407,6 +419,8 @@ function ClusterModal(props: {
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const { t } = useMspaceTranslation();
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") props.onClose();
@@ -418,7 +432,7 @@ function ClusterModal(props: {
 
   return (
     <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
-      <button type="button" aria-label="Close cluster dialog backdrop" className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <button type="button" aria-label={t("clusters.closeClusterDialogBackdrop")} className="absolute inset-0 cursor-default" onClick={props.onClose} />
       <section
         role="dialog"
         aria-modal="true"
@@ -434,7 +448,7 @@ function ClusterModal(props: {
           </div>
           <button
             type="button"
-            aria-label="Close modal"
+            aria-label={t("clusters.closeModal")}
             className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
             onClick={props.onClose}
           >
@@ -444,7 +458,7 @@ function ClusterModal(props: {
 
         <form className="grid gap-4" onSubmit={props.onSubmit}>
           {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
-          <Field label="Cluster name">
+          <Field label={t("clusters.clusterName")}>
             <Input
               value={props.value.name}
               onChange={(event) => props.onChange({ ...props.value, name: event.target.value })}
@@ -452,7 +466,7 @@ function ClusterModal(props: {
             />
           </Field>
           <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Kubeconfig path">
+            <Field label={t("clusters.kubeconfigPath")}>
               <Input
                 readOnly
                 value={props.value.kubeconfigPath}
@@ -460,15 +474,15 @@ function ClusterModal(props: {
                 className="cursor-default text-[color:var(--muted-strong)]"
               />
             </Field>
-            <Field label="Kube context">
+            <Field label={t("clusters.kubeContext")}>
               <Input
                 value={props.value.kubeContext}
                 onChange={(event) => props.onChange({ ...props.value, kubeContext: event.target.value })}
-                placeholder="optional"
+                placeholder={t("clusters.optional")}
               />
             </Field>
           </div>
-          <Field label="Image registry prefix">
+          <Field label={t("clusters.imageRegistryPrefix")}>
             <Input
               value={props.value.imageRegistryPrefix}
               onChange={(event) => props.onChange({ ...props.value, imageRegistryPrefix: event.target.value })}
@@ -476,7 +490,7 @@ function ClusterModal(props: {
             />
           </Field>
           <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Default exposure">
+            <Field label={t("clusters.defaultExposure")}>
               <Select
                 value={props.value.exposureMode}
                 onValueChange={(value) => props.onChange({ ...props.value, exposureMode: value as ClusterInput["exposureMode"] })}
@@ -490,25 +504,25 @@ function ClusterModal(props: {
                 </SelectContent>
               </Select>
             </Field>
-            <Field label="Node host">
+            <Field label={t("clusters.nodeHost")}>
               <Input
                 value={props.value.nodeHost}
                 onChange={(event) => props.onChange({ ...props.value, nodeHost: event.target.value })}
-                placeholder="optional NodePort host"
+                placeholder={t("clusters.optional")}
               />
             </Field>
-            <Field label="Preview domain" hint="Required only when default exposure is ingress.">
+            <Field label={t("clusters.previewDomain")} hint={t("clusters.previewDomainHint")}>
               <Input
                 value={props.value.previewDomain}
                 onChange={(event) => props.onChange({ ...props.value, previewDomain: event.target.value })}
                 placeholder="preview.example.com"
               />
             </Field>
-            <Field label="Ingress class">
+            <Field label={t("clusters.ingressClass")}>
               <Input
                 value={props.value.ingressClass}
                 onChange={(event) => props.onChange({ ...props.value, ingressClass: event.target.value })}
-                placeholder="optional"
+                placeholder={t("clusters.optional")}
               />
             </Field>
           </div>
@@ -516,10 +530,10 @@ function ClusterModal(props: {
             {props.footerStart ? <div>{props.footerStart}</div> : null}
             <div className="flex gap-2">
               <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isPending}>
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button type="submit" disabled={!props.canSubmit || props.isPending}>
-                {props.isPending ? "Saving..." : "Save cluster"}
+                {props.isPending ? t("clusters.saving") : t("clusters.saveCluster")}
               </Button>
             </div>
           </div>
@@ -554,11 +568,16 @@ function formatImportResult(result: KubeconfigImportResult) {
   const imported = result.imported.length;
   const skipped = result.skipped.length;
   if (imported === 0 && skipped === 0) {
-    return "No kubeconfig files were found.";
+    return translate("clusters.noneFound");
   }
   if (skipped === 0) {
-    return `Imported ${imported} cluster${imported === 1 ? "" : "s"}.`;
+    return translate("clusters.importedClusters", { count: imported, suffix: imported === 1 ? "" : "s" });
   }
   const firstReason = result.skipped[0]?.reason;
-  return `Imported ${imported} cluster${imported === 1 ? "" : "s"}; skipped ${skipped}${firstReason ? ` (${firstReason})` : ""}.`;
+  return translate("clusters.importedClustersWithSkipped", {
+    imported,
+    importedSuffix: imported === 1 ? "" : "s",
+    skipped,
+    reason: firstReason ? ` (${firstReason})` : "",
+  });
 }

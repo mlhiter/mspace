@@ -7,16 +7,27 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
-    date: "2026-05-18",
-    title: "Worker preview guardrails and source branches",
+    date: "2026-05-19",
+    title: "Issue Detail localization coverage",
     summary:
-      "mspace tightened Team worker defaults and made PR source branches easier to read from the Commits tab.",
+      "mspace expanded bilingual desktop coverage across the issue work surface while keeping technical evidence literal.",
+    items: [
+      "Localized Issue Detail Overview, Commits, Resources, Evidence, session/failure timeline controls, and the project runbook, test deploy, and project attachment dialogs.",
+      "Kept user-authored issue content, logs, commit hashes, branch names, Kubernetes object names, and runtime protocol values literal so evidence remains inspectable.",
+    ],
+  },
+  {
+    date: "2026-05-18",
+    title: "Worker guardrails, source branches, and localization",
+    summary:
+      "mspace tightened Team worker defaults, made PR source branches easier to read from the Commits tab, and added bilingual desktop UI support.",
     items: [
       "Updated server-issued Codex session instructions to prefer lint, tests, typecheck, builds, and short internal probes over starting long-running dev servers.",
       "Prevented Docker worker fallback instructions from presenting container-local `localhost` or `127.0.0.1` URLs as preview links unless the user explicitly asks for a mapped local preview.",
       "Added regression coverage for the server and worker instruction defaults so future sessions keep preview links tied to mspace test environments or known host mappings.",
       "Moved the PR source selector to branch identity and Source branch copy, so multiple commits on one branch do not look like separate PR sources.",
       "Added a Codex session artifact for semantic branch names such as `fix/pr-source-branch-selection`, with runner and worker normalization before source capture.",
+      "Added shared English and Simplified Chinese localization for the desktop shell and main workflow surfaces, with a language switcher in the workspace menu.",
     ],
   },
   {

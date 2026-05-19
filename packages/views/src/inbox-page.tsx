@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Bot, Clock3, Inbox, Layers3, MessageSquareText } from "lucide-react";
 import { controlPlaneApi, queryKeys, type WorkspaceInboxItem } from "@mspace/core";
+import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import {
   CollectionEmptyState,
   InlineMeta,
@@ -29,6 +30,7 @@ type ReviewItem = {
 };
 
 export function InboxPage() {
+  const { t } = useMspaceTranslation();
   const auth = useMspaceAuth();
   const queryClient = useQueryClient();
   const workspaceId = auth.workspace?.id || "";
@@ -68,17 +70,17 @@ export function InboxPage() {
 
   return (
     <PageFrame
-      title="Inbox"
-      subtitle="Review team issue events that need your attention. Creating and managing issues lives in the Issues tab."
+      title={t("inbox.title")}
+      subtitle={t("inbox.subtitle")}
     >
       {items.length === 0 ? (
         <CollectionEmptyState
           icon={Inbox}
-          title="Inbox is clear"
-          body="Comments, agent results, status changes, and evidence events will appear here when they need review."
+          title={t("inbox.emptyTitle")}
+          body={t("inbox.emptyBody")}
         />
       ) : (
-        <Panel title="Needs review">
+        <Panel title={t("inbox.needsReview")}>
           <div className="flex flex-col gap-1">
             {items.map((item) => (
               <Link
@@ -98,13 +100,13 @@ export function InboxPage() {
                   ) : null}
                   <div className="mt-1 flex flex-wrap items-center gap-3">
                     <InlineMeta icon={MessageSquareText}>
-                      Workspace event
-                      {item.unreadCount > 1 ? ` · ${item.unreadCount} unread` : ""}
+                      {t("inbox.workspaceEvent")}
+                      {item.unreadCount > 1 ? ` · ${t("inbox.unread", { count: item.unreadCount })}` : ""}
                     </InlineMeta>
                     <InlineMeta icon={Clock3}><RelativeTime value={item.updatedAt} /></InlineMeta>
-	                    <InlineMeta icon={Layers3}>{item.projectName || "No project"}</InlineMeta>
+                    <InlineMeta icon={Layers3}>{item.projectName || t("common.noProject")}</InlineMeta>
                     <InlineMeta icon={item.assigneeType === "agent" ? Bot : Layers3}>
-                      {item.assigneeType === "agent" ? "agent" : "human"} · {item.assignee || "unassigned"}
+                      {item.assigneeType === "agent" ? t("inbox.agent") : t("inbox.human")} · {item.assignee || t("inbox.unassigned")}
                     </InlineMeta>
                   </div>
                 </div>
@@ -132,7 +134,7 @@ function workspaceInboxItemToReviewItem(item: WorkspaceInboxItem): ReviewItem {
     title: payloadText(item.payload, ["issueTitle", "title"]) || item.summary || `Issue ${item.issueId.slice(0, 8)}`,
     summary: item.summary || eventKindLabel(item.kind),
     status: payloadText(item.payload, ["issueStatus", "status"]) || eventKindLabel(item.kind),
-    projectName: payloadText(item.payload, ["projectName", "projectId"]) || "No project",
+    projectName: payloadText(item.payload, ["projectName", "projectId"]) || translate("common.noProject"),
     assignee: payloadText(item.payload, ["assignee"]) || "",
     assigneeType: payloadText(item.payload, ["assigneeType"]) || "human",
     updatedAt: item.createdAt,
