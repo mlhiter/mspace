@@ -65,7 +65,7 @@ coding agent
   + runtime evidence
 ```
 
-Multica and OpenAI Symphony are useful references, but mspace should not copy their broad positioning. mspace should start from a workflow that already exists in advanced engineering teams: an agent changes code locally, a developer deploys the result into a real test environment, and the team reviews the behavior with evidence.
+Multica and OpenAI Symphony are useful references, but mspace should not copy their broad positioning. mspace should start from a workflow that already exists in advanced engineering teams: an agent changes code in a real checkout, a developer deploys the result into a real test environment, and the team reviews the behavior with evidence.
 
 ## Target Users
 
@@ -178,9 +178,9 @@ This view is what turns a session from terminal output into review material. It 
 
 The workflow should not end at a preview URL. Engineering teams usually need a branch or PR.
 
-The MVP can keep using the local user's GitHub identity, but the product direction should move toward GitHub App integration:
+The MVP should keep PR delivery state as a server-owned handoff record, while the product direction moves toward GitHub App integration:
 
-- PR handoff is branch-based: the selected source branch is what mspace pushes, detects through `gh`, and turns into one current issue PR; captured commits are supporting review evidence for that branch.
+- PR handoff is branch-based: the selected source branch is the issue delivery identity, while captured commits are supporting review evidence for that branch.
 - workspace installs the GitHub App;
 - the server stores installation state;
 - sessions use scoped installation tokens for push and PR actions;

@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-05-14
+> Status: milestone roadmap, updated 2026-05-19
 
 ## Purpose
 
@@ -15,17 +15,17 @@ Build the first usable product loop:
 ```text
 Issue intake
   -> Optional Project attachment
-  -> Local Agent Session
+  -> Server-owned Agent Session
   -> Inbox review updates
-  -> Worktree and evidence review
-  -> Manual PR, automatic draft PR, or manual issue test deployment
+  -> Worker worktree and evidence review
+  -> Branch / PR handoff record or manual issue test deployment
   -> Issue namespace preview URL and validation evidence
   -> Branch / PR and cleanup
 ```
 
-The roadmap intentionally keeps local workflow first. Kubernetes is the manually triggered test target for the MVP, not the first development runtime.
+The roadmap intentionally keeps fixed worker workflow first. Kubernetes is the manually triggered test target for the MVP, not the first development runtime.
 
-The first server control-plane slice now exists for GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, runtime registration, and runtime tasks. Signed-in personal and team workspace product data now uses server Postgres. Team worker agent-session routing is connected for PG-backed team issues through the runner bridge, while runtime execution state, attachments, PR handoff, evidence, clusters, and issue test environments still use local runner storage and APIs. Do not treat the runner's display identity snapshots or SQLite runtime rows as the collaboration architecture.
+The server control-plane slice now owns GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, workspace settings, agent profiles, clusters, issue test environments, PR handoffs, runtime registration, runtime tasks, worker logs, and runtime results. Signed-in personal and team workspace data uses server Postgres. Runtime execution happens through registered workers that claim server tasks.
 
 The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, and bilingual desktop UI support for English and Simplified Chinese. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 
@@ -33,27 +33,27 @@ The local MVP now has first versions of commit-backed deploy source selection, i
 
 The product should reach the Multica-like workflow in two stages.
 
-### Stage 1: Usable Local Agent Loop
+### Stage 1: Usable Server-Owned Worker Loop
 
 Target: 5-8 focused development days.
 
 Goal:
 
-- Create an issue, attach or import a project when execution is needed, assign it to an agent, watch status updates, then manually trigger PR output, opt into automatic draft PR output, or manually run an issue-scoped Kubernetes test deployment.
+- Create an issue, attach or import a project when execution is needed, assign it to an agent, watch status updates, then record branch / PR handoff state or manually run an issue-scoped Kubernetes test deployment.
 
 Build in order:
 
 - Project import: support existing local folders, auto-detect GitHub remote metadata, and support direct GitHub repository URLs cloned into the mspace data directory.
 - Issue creation: keep creation in the Issues surface, use a document-style note without a project selector, allow workspace-level issues before the repository is known, and attach a project later when agent execution, PR handoff, or test deployment is needed.
 - Issue task lists: treat task rows as child issues, convert creation-time Markdown checklist lines into child rows, and let humans or agents update task status from the parent issue.
-- Agent mention flow: let a user manage agent profiles, write an issue comment with an enabled agent mention, save that comment, and create the local session from the current turn request and selected profile.
+- Agent mention flow: let a user manage agent profiles, write an issue comment with an enabled agent mention, save that comment, and create the server-owned session from the current turn request and selected profile.
 - Inbox realtime updates: move issue/session status changes into the Inbox review feed without relying on slow manual refreshes.
-- Local agent context: send issue body, comments, project metadata, branch, selected cluster, kube context, and namespace into the Codex app-server turn prompt.
+- Worker agent context: send issue body, comments, project metadata, branch, selected cluster, kube context, and namespace into the Codex app-server turn prompt.
 - Progress comments: turn meaningful session lifecycle and status updates into issue activity, not just terminal logs.
 - Issue labels and session stop controls: keep type triage asynchronous, keep priority manual, and allow a human to interrupt queued or running work.
 - Manual test deployment: let the user select a saved cluster and optional exposure overrides before queueing a deploy/test agent turn.
 - Issue namespace lifecycle: each issue can reserve one test namespace; the deploy/test agent creates it, deploys resources, mspace validates the preview URL, and writes the result back.
-- Branch and PR output: expose PR generation as a manual action by default, with a workspace setting for automatic draft PR creation after source commit capture.
+- Branch and PR output: expose issue-level handoff recording from captured source evidence, with GitHub App-backed PR creation left as a server-owned executor step.
 - Cleanup controls: let the user retain or clean session worktrees now, and record retain/cleanup decisions for issue test namespaces.
 
 ### Stage 2: Team Runtime Providers
@@ -66,7 +66,7 @@ Goal:
 
 Build in order:
 
-- Harden Server Worker repo/workspace provisioning so the worker can clone or reuse a repository, prepare its own workdir, run Codex, and return artifacts without relying on the desktop runner's filesystem.
+- Harden Server Worker repo/workspace provisioning so the worker can clone or reuse a repository, prepare its own workdir, run Codex, and return artifacts without desktop filesystem coupling.
 - Harden source-change and artifact adoption from remote workers back into the issue/session model.
 - Runtime provider labels and capabilities for routing tasks to fixed Server Workers or future Kubernetes providers.
 - Kubernetes namespace allocator with labels, TTL, ResourceQuota, LimitRange, and project/session ownership metadata.
@@ -93,7 +93,7 @@ Acceptance:
 - Inbox, Issues, Projects, Issue Detail, and Session Detail routes exist.
 - shadcn/ui primitives are installed under `packages/ui/src/components/ui`.
 - `DESIGN.md` defines the Notion-style black-and-white product surface.
-- Local Go runner, SQLite, session logs, and git worktree execution exist.
+- Server control plane, runtime worker registration, task logs, and worker-managed git worktree execution exist.
 
 ## Milestone 1: Local Issue Workflow
 
@@ -101,7 +101,7 @@ Status: current reliability and usability priority.
 
 Goal:
 
-- Make mspace useful for managing one local project issue from intake to local agent session review.
+- Make mspace useful for managing one project issue from intake to worker-backed agent session review.
 
 Build:
 
@@ -109,7 +109,7 @@ Build:
 - Polish Issue creation, project attachment/inference, and list flow.
 - Polish Project creation and settings flow.
 - Polish Issue Detail as the durable working document.
-- Make starting a local agent session through an agent mention in the issue composer feel obvious.
+- Make starting an agent session through an agent mention in the issue composer feel obvious.
 - Support type and priority labels for issue triage, with agent-based type classification and manual priority selection.
 - Let users stop queued or running sessions without opening a debug surface.
 - Make session logs and status updates easy to follow from Issue Detail.
@@ -120,7 +120,7 @@ Acceptance:
 - A user can create an issue from the Issues surface or sidebar quick action and return to it later, even before the repository is known.
 - A user can create a project from a local folder or GitHub repository URL, attach it to the issue when execution is needed, and adjust runtime settings later.
 - A user can create and check off issue tasks without duplicating state between Markdown checkboxes and child issue rows.
-- A user can manage agent profiles, mention an enabled agent in an issue comment, and start a local session from that current turn request.
+- A user can manage agent profiles, mention an enabled agent in an issue comment, and start a worker-backed session from that current turn request.
 - A user can label an issue and stop an active session from Issue Detail.
 - The session runs in its own worktree.
 - Inbox reflects issue and session updates without a manual refresh loop.
@@ -129,7 +129,7 @@ Acceptance:
 
 ## Milestone 2: Evidence-Centered Session Review
 
-Status: mostly implemented for the local MVP path; remaining work is hardening failed-deploy evidence and expanding Kubernetes resource depth beyond the current namespace Resources tab.
+Status: mostly implemented for the server-owned worker path; remaining work is hardening failed-deploy evidence and expanding Kubernetes resource depth beyond the current namespace Resources tab.
 
 Goal:
 
@@ -154,7 +154,7 @@ Acceptance:
 
 ## Milestone 3: Issue Test Namespace Deployment
 
-Status: mostly implemented for the local MVP path; remaining work is deeper Kubernetes evidence parsing and hardening.
+Status: mostly implemented for the server-owned worker path; remaining work is deeper Kubernetes evidence parsing and hardening.
 
 Goal:
 
@@ -184,7 +184,7 @@ Acceptance:
 
 ## Milestone 4: Branch / PR And Cleanup Loop
 
-Status: partially implemented for the local MVP path; remaining work is dogfood proof and hardening.
+Status: partially implemented for the server-owned worker path; remaining work is dogfood proof and hardening.
 
 Goal:
 
@@ -194,8 +194,8 @@ Current implementation:
 
 - Captures source commits and semantic source branch evidence through `issue_change_nodes`.
 - Captures issue-level branch / PR delivery state through `issue_handoffs`.
-- Creates or refreshes PR handoff state from Issue Detail using the local runtime's `git`, `gitleaks`, and `gh` identity, with workspace-level opt-in for automatic draft PRs.
-- Keeps session retain and cleanup controls for local worktrees.
+- Records branch / PR handoff state from Issue Detail using captured source evidence; GitHub App-backed PR creation/refresh remains a server-owned executor gap.
+- Keeps session retain and cleanup controls for worker-managed worktrees.
 - Records issue namespace retain/cleanup decisions.
 - Records failed sessions and failed environment checks as continueable `session_failures`.
 

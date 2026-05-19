@@ -16,7 +16,7 @@ The user should be able to answer four questions quickly:
 The key balance is:
 
 - the issue page is the primary working surface;
-- the local session is the primary development surface;
+- the registered worker session is the primary development surface;
 - the Kubernetes test environment is manually triggered from the issue after agent work is ready to preview.
 
 ## Primary Navigation
@@ -37,11 +37,11 @@ Navigation rules:
 - Agents is the managed profile surface for Codex-backed collaborators and mentions.
 - Clusters is reusable test cluster access: kubeconfig import, reachability status, registry, and exposure defaults.
 - Projects is configuration and project-level history.
-- Workspace Settings is accessed from the workspace identity menu instead of the main rail, because it controls local automation policy for the current workspace rather than daily issue work.
+- Workspace Settings is accessed from the workspace identity menu instead of the main rail, because it controls automation, membership, and runtime worker policy for the current workspace rather than daily issue work.
 - Language switching also lives in the workspace identity menu, because English/Simplified Chinese is a global desktop preference rather than a route-specific action.
 - Session detail is deep-linked from issues and remains an operational fallback view, not a primary home.
 
-The fact that Inbox is first does not mean Kubernetes is secondary. It means the product starts from work intake, then routes that work into a local development flow plus a Kubernetes-backed validation flow.
+The fact that Inbox is first does not mean Kubernetes is secondary. It means the product starts from work intake, then routes that work into a worker-backed development flow plus a Kubernetes-backed validation flow.
 
 ## Object Hierarchy
 
@@ -87,13 +87,13 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. The workspace menu owns workspace switching, team workspace creation, language switching, and the entry into Workspace Settings. Workspace Settings owns local automation policy such as automatic draft PR creation, team-only access controls, and runtime worker/queue controls for the selected workspace. Session detail remains deep-linked from issue work.
+The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. The workspace menu owns workspace switching, team workspace creation, language switching, and the entry into Workspace Settings. Workspace Settings owns workspace automation, team-only access controls, and runtime worker/queue controls for the selected workspace. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
 Current implementation principles:
 
-- left sidebar contains the workspace identity/account menu, global search / Command+K palette for issues and projects, quick issue creation, primary navigation, active issue work, and local runner state;
+- left sidebar contains the workspace identity/account menu, global search / Command+K palette for issues and projects, quick issue creation, primary navigation, active issue work, and runtime worker state;
 - Inbox and Project lists use row-level cards and compact metadata rather than dashboard tiles;
 - Issue Detail should read as a live document with session and evidence context attached around it;
 - Session Detail can be more operational, but should still preserve the same paper workspace tone;
@@ -217,7 +217,7 @@ The header should show:
 - assignee;
 - latest activity summary.
 
-Primary action should stay in the reply composer, not in a large runner control panel. To ask an agent, the user writes a normal issue comment and mentions an enabled agent from the Agents module.
+Primary action should stay in the reply composer, not in a large runtime control panel. To ask an agent, the user writes a normal issue comment and mentions an enabled agent from the Agents module.
 
 When an issue has no attached project, Issue Detail should stay readable and commentable but block agent execution, PR handoff, test environments, and project runbook access until a project is attached from the Project sidebar section.
 
@@ -312,14 +312,14 @@ Current implementation:
 - keeps the quiet metadata sidebar on Overview only, while Commits, Sessions, and Evidence use the full page width for review-heavy content;
 - exposes a Stop action for queued or running sessions, cancelling only that session and rendering the stop as a compact, non-editable event while leaving the issue status unchanged;
 - streams session logs and status while a session is running, but keeps debug output collapsed by default;
-- renders a compact failure callout with the last meaningful runner error when a session fails;
+- renders a compact failure callout with the last meaningful runtime error when a session fails;
 - renders structured failure records as continueable timeline and Evidence entries, including failed command, error summary, namespace/resource hints, and Continue / Retry deploy / Stop affordances when applicable;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
 - automatically checks preview status in the background when Issue Detail opens or refreshes an existing test environment, updating only the Test environment sidebar state and `Checked` time instead of exposing a separate Probe button or adding timeline evidence;
 - exposes a Resources tab for the issue's current test namespace, refreshed on tab entry or manual refresh, with cluster/context/lifecycle/exposure/cleanup/preview metadata plus Pods, Services, Deployments, Ingresses, and Events;
 - separates source review, live resources, and review evidence: Commits shows code changes and diffs, Resources shows live namespace objects, and Evidence shows the current review packet with command evidence, agent summary, risks/follow-ups, source facts, plus links to full-width previous-attempt and Kubernetes-snapshot history pages;
-- shows issue-level branch / PR handoff state on the Commits tab and sidebar, with actions to create one PR for the issue from the selected source branch, auto-detect an existing PR for that branch through `gh`, refresh PR state, and optionally let Workspace Settings create draft PRs after source commit capture;
+- shows issue-level branch / PR handoff state on the Commits tab and sidebar, with actions to record one handoff for the selected source branch and refresh the server-owned handoff record; GitHub App-backed PR creation/refresh remains a later executor step;
 - keeps raw command trails collapsed in session logs, with exploratory commands excluded from persisted review evidence;
 - shows a compact Project runbook entry in the Workflow sidebar; clicking it opens a read-only TipTap runbook modal;
 - renders the issue creator, human comments, system comments, Codex-backed agent turns, and actor-authored status changes with their current display names and avatar sources;
@@ -397,14 +397,14 @@ Current implementation:
 
 ### Purpose
 
-Workspace Settings owns local runtime automation policy for the current workspace.
+Workspace Settings owns workspace automation, team access, and runtime worker policy for the current workspace.
 
 ### Current implementation
 
 - opens from the workspace identity menu, not from the main navigation rail;
 - keeps source commit capture always on for issue review and deploy continuation;
-- lets the user toggle automatic draft PR creation after source commit capture;
-- explains that MVP PR automation uses the local `gh` identity, while hosted GitHub App automation is future work.
+- exposes handoff automation policy while source commit capture stays always on;
+- explains that GitHub App-backed PR automation is a server-owned executor step that is still future work.
 
 ## Sessions
 
@@ -494,10 +494,10 @@ Must-have for MVP:
 - Agent turns inline on the issue timeline
 - Evidence tab plus Test environment sidebar state, without health-check noise in the issue timeline
 - Project settings, workspace automation policy, and runtime defaults
-- Local session startup with git worktree isolation
-- Manual cleanup for retained local session worktrees
+- Worker session startup with git worktree isolation
+- Manual cleanup for retained worker session workdirs
 - Session detail with logs and workspace evidence
-- local session startup with cluster and namespace visibility
+- worker session startup with cluster and namespace visibility
 - manual issue test deployment with issue namespace lifecycle state
 - narrow Resources tab for the current issue namespace
 
@@ -536,7 +536,7 @@ Implemented as of 2026-05-11:
 4. Managed Agents route plus dynamic mention flow from issue comments.
 5. Inline agent turn summaries and live session state updates.
 6. Session detail with logs, workspace snapshot, branch comparison, and issue summary draft.
-7. Local runner process, SQLite storage, and git worktree isolation.
+7. Server control plane, runtime worker registration, and git worktree isolation.
 8. Tailwind CSS 4 monorepo source detection for desktop UI packages.
 9. Issue labels, stop controls for active sessions, and manual worktree cleanup.
 10. Clusters route with desktop file picker import, first-run `~/.kube` discovery, context listing, reachability status, registry, and preview exposure defaults.

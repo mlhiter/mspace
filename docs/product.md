@@ -4,7 +4,7 @@
 
 ## One-Line Definition
 
-mspace is a review Inbox and Issue workspace for coding agents: a place where teams coordinate work in document-style issues, develop changes in a local-first agent session, and validate those changes in a real, namespace-scoped Kubernetes test environment.
+mspace is a review Inbox and Issue workspace for coding agents: a place where teams coordinate work in document-style issues, run changes through registered runtime workers, and validate those changes in a real, namespace-scoped Kubernetes test environment.
 
 ## Current MVP State
 
@@ -21,27 +21,27 @@ The repository now has a runnable local desktop MVP:
 - manage Codex-backed agents from the Agents route, including mention, description, enabled state, and role instructions;
 - use Inbox as a review feed for unread issue and session updates;
 - open document-style issue detail pages with Markdown-backed rich comments, image attachment thumbnails, lightweight reactions, and linked sessions;
-- mention an enabled agent from issue detail and start local app-server agent sessions with the matching managed profile;
+- mention an enabled agent from issue detail and start server-queued app-server agent sessions with the matching managed profile;
 - edit the latest unconsumed human comment, then stop and retry a session when a bad prompt has already been consumed;
 - stop a queued or running session from Issue Detail or Session Detail without cancelling the whole issue;
-- run sessions in git worktrees under `~/.mspace/workdirs/<project-id>/<session-id>`;
-- clean a completed or cancelled session worktree from Session Detail while preserving the issue timeline, logs, evidence, and session metadata;
-- cache imported GitHub repositories under `~/.mspace/repos/<owner>/<repo>`;
+- run sessions in worker-managed git workdirs under the configured worker root;
+- preserve completed or cancelled worker session metadata, logs, source evidence, and artifacts in server-owned records;
+- cache imported GitHub repositories inside worker-managed repository roots;
 - show a project runbook in Projects, open it from the Issue Detail sidebar as a read-only TipTap modal, and update it either from direct Markdown edits or from successful agent session artifacts;
-- keep SQLite under `~/.mspace/mspace.db` as the local runner runtime store for sessions, logs, evidence, issue image attachment blobs, clusters, issue test environments, handoffs, and execution metadata;
+- keep signed-in workspace product and runtime state in server Postgres, including sessions, logs, evidence, clusters, issue test environments, handoffs, and execution metadata;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
-- manage workspace automation policy, keeping source commit capture always on while optionally creating draft PRs after captured source commits;
+- manage workspace automation policy, keeping source commit capture always on while recording branch / PR handoff state from captured source commits;
 - manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
 - choose a default cluster per project and select a cluster when manually deploying an issue test environment;
 - manually trigger an issue-scoped test deployment where the agent creates the namespace, builds and pushes images, deploys resources, and returns a preview URL;
 - record issue test namespace state, cleanup/retain state, deploy session, cleanup session, and preview URL.
 - inspect the current issue namespace from a Resources tab with Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events.
 - review structured session evidence from Issue Detail, with code changes in Commits, live namespace objects in Resources, and the current review packet plus command evidence in Evidence.
-- record issue-level branch / PR handoff state from the selected source change, including commit list, preview URL, evidence summary, PR URL/title/state, and local preflight errors.
+- record issue-level branch / PR handoff state from the selected source change, including commit list, preview URL, evidence summary, PR URL/title/state, and server-owned executor errors.
 - show failed sessions and failed deploy/preview/cleanup checks as structured failure evidence, with continue, retry deploy, stop, retain, or cleanup choices from Issue Detail.
 - use a Notion-like desktop workspace shell with real shadcn/ui primitives, Radix base components, lucide-react icons, Material Icon Theme file icons, and low-contrast document surfaces.
 
-Kubernetes is the deployment and test environment, not the required development runtime for the first version. The current development runtime is local. Running the agent runtime inside Kubernetes remains a later option once the local workflow is stable.
+Kubernetes is the deployment and test environment, not the required development runtime for the first version. The current development runtime is a registered fixed worker. Running the agent runtime inside Kubernetes remains a later option once the Server Worker loop is stable.
 
 ## Why This Exists
 
@@ -50,12 +50,12 @@ The current high-leverage developer workflow is no longer just "ask Codex to edi
 1. Start from a real project and a real issue.
 2. Keep the problem statement, discussion, and decisions in one durable page.
 3. Attach an agent session to the issue.
-4. Let the agent modify code in a local development runtime.
-5. Create the PR manually by default, or let the workspace auto-create a draft PR, then trigger a test deployment when the local agent result is ready.
+4. Let the agent modify code in a worker-prepared development runtime.
+5. Record the source branch/PR handoff, then trigger a test deployment when the worker result is ready.
 6. For test deployment, let the agent create an issue namespace in the shared test cluster, deploy the app, and return a preview URL that mspace checks and records.
 7. Review the PR or preview URL together with logs, events, resources, and runtime evidence.
 
-This is already how advanced users work manually: Codex or Claude Code edits the code locally, the developer keeps notes in chat or docs, and then gives the agent access to a test cluster through `kubectl`. mspace turns that fragmented workflow into a repeatable team product with the issue as the center of gravity, local development as the first step, and Kubernetes as the validation environment.
+This is already how advanced users work manually: Codex or Claude Code edits the code in a real checkout, the developer keeps notes in chat or docs, and then gives the agent access to a test cluster through `kubectl`. mspace turns that fragmented workflow into a repeatable team product with the issue as the center of gravity, worker execution as the development step, and Kubernetes as the validation environment.
 
 ## Target Users
 
@@ -82,9 +82,9 @@ mspace is not a general agent platform. It is a collaborative issue workspace fo
 Project
   -> Issue
   -> Agent Session
-  -> Local code change
+  -> Worker code change
   -> Inbox review updates
-  -> Manual PR, automatic draft PR, or manual test deploy
+  -> Branch / PR handoff or manual test deploy
   -> Issue test namespace
   -> Preview URL
   -> Comments and progress updates
@@ -118,11 +118,11 @@ The development runtime and the validation environment should be treated as sepa
 
 The intended order is:
 
-- local runtime for day-to-day development in the MVP;
+- fixed Server Worker runtime for day-to-day development in the MVP;
 - Kubernetes environment for deployment and validation;
-- remote or Kubernetes-hosted runtimes later when the local-first flow is solid.
+- Kubernetes-hosted runtimes later when the Server Worker flow is solid.
 
-The product wedge is not "agent runs in Kubernetes" on day one. The wedge is "after local agent work, the user can manually ask the agent to prove the change in a real issue-scoped Kubernetes environment and return a URL the team can open."
+The product wedge is not "agent runs in Kubernetes" on day one. The wedge is "after worker-backed agent work, the user can manually ask the agent to prove the change in a real issue-scoped Kubernetes environment and return a URL the team can open."
 
 ### Inbox and Issue Flow
 
@@ -159,9 +159,9 @@ An Issue should hold:
 
 ### Session Creation
 
-A user creates a session by writing an issue comment that mentions an enabled agent profile. In the MVP path, mspace saves the comment first, starts a local-first session, and then:
+A user creates a session by writing an issue comment that mentions an enabled agent profile. In the MVP path, mspace saves the comment first, queues a server-owned runtime task, and then:
 
-- uses the desktop-managed local runner;
+- uses a registered runtime worker that claims server tasks;
 - prepares a git worktree for the repository;
 - starts `codex app-server --listen stdio://` inside that worktree for Codex-backed sessions;
 - stores the selected profile in `agent_sessions.agent_profile` and injects the profile instructions from `agent_profiles` into the Codex prompt;
@@ -177,7 +177,7 @@ Inside the session, the agent can:
 - read the issue context and comment history;
 - treat the triggering agent mention comment as the highest-priority current turn request;
 - run tests and local commands;
-- modify code in the local runtime;
+- modify code in the worker-prepared runtime;
 - deploy the project into the namespace;
 - use `kubectl` against the scoped namespace;
 - inspect Pod status, Events, Services, Ingress, logs, and rollout state;
@@ -193,13 +193,13 @@ A completed session should leave:
 - compact command evidence for the current review packet plus raw session logs for debugging;
 - test, build, deployment, risk, follow-up, and cleanup evidence;
 - runtime evidence such as pod status and logs;
-- cleanup state: retained or cleaned for local worktrees, with namespace cleanup as a later lifecycle.
+- cleanup state: retained or cleaned for worker-managed workdirs, with namespace cleanup as a later lifecycle.
 
 ## MVP Scope
 
 The first version should prove one thing:
 
-**A team can create an issue, start a local-first agent session, and watch it modify, deploy, inspect, and validate the project in Kubernetes with all evidence preserved on the issue.**
+**A team can create an issue, start a worker-backed agent session, and watch it modify, deploy, inspect, and validate the project in Kubernetes with all evidence preserved on the issue.**
 
 MVP features:
 
@@ -210,7 +210,7 @@ MVP features:
 - manage agent profiles and create a Codex session from an enabled agent mention in an issue comment;
 - edit the latest human comment before it has triggered a session;
 - cancel queued or running sessions while keeping the issue retryable;
-- local development runtime;
+- fixed Server Worker development runtime;
 - git worktree isolation per session;
 - manual session worktree cleanup controls;
 - reusable Clusters route for kubeconfig discovery/import, registry, and exposure defaults;
@@ -230,9 +230,9 @@ Still outside the current implemented MVP:
 - server-owned GitHub App PR automation;
 - automated namespace cleanup policy beyond the current manual cleanup/retain decision.
 
-The product architecture now uses the server control plane as the product truth for every signed-in workspace. The local desktop runner remains the personal runtime path, while users, workspaces, membership, GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, audit, and future GitHub App installation state live in the server rather than in local SQLite.
+The product architecture now uses the server control plane as the product and runtime truth for every signed-in workspace. Users, workspaces, membership, GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, handoffs, audit, runtime tasks, worker logs, and future GitHub App installation state live in the server.
 
-The current runner `creatorName`/`creatorAvatarUrl` and `authorName`/`authorAvatarUrl` fields are local display snapshots for the MVP. They should not become a second account system; shared issue ownership, comments, and permissions belong behind the control plane.
+Display name/avatar fields are snapshots for rendering only. They should not become a second account system; shared issue ownership, comments, and permissions belong behind the control plane.
 
 ## Explicit Non-Goals
 
@@ -258,12 +258,12 @@ The interaction should feel closer to Multica than to a terminal-only tool:
 
 But the runtime should feel closer to Optio:
 
-- work should develop locally first, then validate against Kubernetes by default;
+- work should run through a registered worker first, then validate against Kubernetes by default;
 - isolation is expressed through namespaces, ServiceAccounts, Roles, and quotas;
 - each issue/session can later gain its own long-lived or temporary Kubernetes-hosted runtime when the product grows into that model;
 - self-hosting on a team's own cluster is a first-class deployment model.
 
-The current implementation borrows Optio's git worktree isolation locally and leaves Kubernetes-hosted runtime as future work.
+The current implementation borrows Optio's git worktree isolation through worker-managed workdirs and leaves Kubernetes-hosted runtime as future work.
 
 The 2026-05-07 desktop UI direction borrows Notion's quiet document workspace feel: a left sidebar, paper-like pages, compact rows, inline metadata, and subdued panels. This is a product style reference, not a dependency on Notion behavior or branding.
 
@@ -279,8 +279,8 @@ The test is successful if a developer can:
 
 1. create a project in mspace;
 2. create an issue from the Issues flow or sidebar quick action;
-3. start a local-first session with Codex from that issue;
+3. start a worker-backed session with Codex from that issue;
 4. let Codex operate only the assigned repository and scoped test namespace;
 5. deploy or inspect the project through `kubectl`;
 6. open a PR or leave a branch with runtime evidence attached to the issue;
-7. retain or clean up the local session worktree and choose whether to retain or clean the issue test namespace from mspace.
+7. retain or clean up the worker session workdir and choose whether to retain or clean the issue test namespace from mspace.

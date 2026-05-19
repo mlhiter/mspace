@@ -15,7 +15,7 @@ Scope boundary: these rules govern the desktop product shell and shared app UI. 
 - Document first: Issue Detail is the main working surface, not a dashboard drill-down.
 - Operationally quiet: prioritize legibility, scan speed, and stable layout over decorative expression.
 - Evidence attached: logs, diffs, branch state, and Kubernetes status should support the issue story.
-- Local-first, K8s-aware: UI copy should make local runtime and validation namespace explicit.
+- Worker-backed, K8s-aware: UI copy should make the selected runtime worker and validation namespace explicit.
 - Compact but not cramped: dense rows are good; tiny hit areas and ambiguous icons are not.
 - No marketing shell inside the product: no hero sections, decorative dashboards, abstract AI claims, or generic landing-page composition in desktop routes.
 
@@ -217,7 +217,7 @@ Use `lucide-react` for normal product UI. File-type chips and file-change rows u
 - Prefer concrete icons: Inbox, Folder, Terminal, Git branch, Logs, Check, Alert, Clock.
 - Keep Material Icon Theme scoped to file surfaces through `packages/views/src/file-type-icon.tsx`; do not reintroduce MUI or Emotion just for file icons.
 - Hide directory-only placeholder entries from changed-file lists; show the concrete files inside those directories instead.
-- Avoid abstract sparkle or AI icons except where the local runner or agent identity needs a quiet hint.
+- Avoid abstract sparkle or AI icons except where the runtime worker or agent identity needs a quiet hint.
 
 ## Motion
 

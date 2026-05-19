@@ -8,10 +8,14 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-05-19",
-    title: "Issue Detail localization coverage",
+    title: "Server-owned runtime surfaces",
     summary:
-      "mspace expanded bilingual desktop coverage across the issue work surface while keeping technical evidence literal.",
+      "mspace removed the local execution sidecar split and moved the remaining workspace runtime surfaces behind the server control plane.",
     items: [
+      "Added server-owned workspace settings, agent profiles, clusters, issue test environments, namespace resources, preview probes, and PR handoff records.",
+      "Rerouted desktop Agents, Clusters, test deployment, cleanup, retain, Resources, and PR handoff actions through workspace-scoped server APIs.",
+      "Migrated legacy local sessions, session logs, test environments, PR handoffs, agent profiles, cluster settings, and image attachments into server Postgres.",
+      "Removed the Electron sidecar startup path, old local execution package, file-database migration, and legacy import script so signed-in workspaces no longer have a second local product store.",
       "Localized Issue Detail Overview, Commits, Resources, Evidence, session/failure timeline controls, and the project runbook, test deploy, and project attachment dialogs.",
       "Kept user-authored issue content, logs, commit hashes, branch names, Kubernetes object names, and runtime protocol values literal so evidence remains inspectable.",
     ],
@@ -26,7 +30,7 @@ export const changelog: ChangelogEntry[] = [
       "Prevented Docker worker fallback instructions from presenting container-local `localhost` or `127.0.0.1` URLs as preview links unless the user explicitly asks for a mapped local preview.",
       "Added regression coverage for the server and worker instruction defaults so future sessions keep preview links tied to mspace test environments or known host mappings.",
       "Moved the PR source selector to branch identity and Source branch copy, so multiple commits on one branch do not look like separate PR sources.",
-      "Added a Codex session artifact for semantic branch names such as `fix/pr-source-branch-selection`, with runner and worker normalization before source capture.",
+      "Added a Codex session artifact for semantic branch names such as `fix/pr-source-branch-selection`, with runtime normalization before source capture.",
       "Added shared English and Simplified Chinese localization for the desktop shell and main workflow surfaces, with a language switcher in the workspace menu.",
     ],
   },
@@ -36,9 +40,9 @@ export const changelog: ChangelogEntry[] = [
     summary:
       "mspace simplified runtime architecture so personal and team workspaces use the server as the single session, task, log, and result source of truth.",
     items: [
-      "Moved Issue Detail agent mentions to the server session API for both personal and team workspaces, removing the runner bridge for server-owned worker sessions.",
+      "Moved Issue Detail agent mentions to the server session API for both personal and team workspaces, removing the old local bridge for server-owned worker sessions.",
       "Exposed Runtime registry and queue controls from Workspace Settings for personal and team workspaces, while keeping invitations and shared member controls team-only.",
-      "Kept worker logs and returned source metadata in server runtime task records instead of importing worker logs/results into runner SQLite.",
+      "Kept worker logs and returned source metadata in server runtime task records instead of importing worker logs/results into a local store.",
       "Made the Docker dry-run Server Worker script usable from non-interactive shells while preserving the same queue, claim, log, and source-diff loop.",
       "Added a Workspace Settings action that starts the local Docker worker by generating and injecting a short-lived internal bootstrap credential, so local team-mode testing no longer requires copying raw worker tokens.",
       "Added a Codex-capable Docker worker image and startup script that installs the Linux Codex CLI, mounts a dedicated worker Codex home, and advertises `codex:true,dryRun:false` for real Team worker sessions.",
@@ -51,8 +55,8 @@ export const changelog: ChangelogEntry[] = [
     summary:
       "mspace added a recovery path for existing local test data after personal workspace product state moved to the server control plane.",
     items: [
-      "Added a one-time local SQLite import path so existing personal test issues, comments, labels, reactions, Inbox rows, and project runbooks can be carried into server Postgres.",
-      "Documented the import path for development workspaces that still have legacy runner product rows in `~/.mspace/mspace.db`.",
+      "Added a one-time local data import path so existing personal test issues, comments, labels, reactions, Inbox rows, and project runbooks could be carried into server Postgres.",
+      "Documented the import path for development workspaces that still had legacy local product rows before the server cutover.",
       "Connected PG-backed team workspace issues to Team worker sessions through the first bridge, so a shared issue comment could queue an `agent_session` runtime task instead of stopping at collaboration state.",
       "Let users create workspace-level issues before choosing a project, while keeping project attachment required for agent runs, PR handoff, and test environments.",
       "Made issue creation note-first: mspace creates the issue immediately with a draft title, then refreshes the title in the background while keeping manual edits in Issue Detail.",
@@ -70,7 +74,7 @@ export const changelog: ChangelogEntry[] = [
     items: [
       "Made GitHub sign-in land in a personal workspace by default.",
       "Moved workspace projects, runbooks, issues, child tasks, comments, reactions, labels, and Inbox receipts into the server control plane for both personal and team workspaces.",
-      "Kept runner SQLite focused on local runtime state, attachments, evidence, test environments, PR handoff, and execution metadata.",
+      "Kept the old local store focused on runtime state, attachments, evidence, test environments, PR handoff, and execution metadata while server ownership was still being staged.",
       "Made Issues, Projects, Project runbooks, global search, and Issue Detail use server workspace APIs for signed-in workspaces.",
       "Moved team workspace creation into the left workspace menu beside workspace switching.",
       "Limited Team worker routing, invitations, runtime registration, workers, and task queues to team workspaces before the server-owned runtime queue was generalized.",
@@ -191,9 +195,9 @@ export const changelog: ChangelogEntry[] = [
   },
   {
     date: "2026-05-06",
-    title: "Desktop MVP and local runner bootstrap",
+    title: "Desktop MVP and local execution bootstrap",
     summary:
-      "The first runnable mspace loop landed: desktop shell, local runner, and agent session foundation.",
+      "The first runnable mspace loop landed: desktop shell, local execution, and agent session foundation.",
     items: [
       "Bootstrapped the mspace desktop app and local Go runner.",
       "Added the local MVP session workflow.",

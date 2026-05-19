@@ -57,7 +57,7 @@ Optio proves the technical runtime shape. mspace should borrow the Kubernetes ex
 
 Current implementation note:
 
-The current local MVP has implemented git worktree isolation for sessions. Kubernetes-hosted runtime, Helm install, ServiceAccount lifecycle, and namespace allocation remain product targets rather than current code.
+The current server-owned MVP has implemented worker-managed git workdir isolation for sessions. Kubernetes-hosted runtime, Helm install, ServiceAccount lifecycle, and namespace allocation remain product targets rather than current code.
 
 ## Notion
 

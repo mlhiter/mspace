@@ -1,8 +1,8 @@
 # mspace Server
 
-`server/` is the mspace control plane. It owns identity, workspaces, membership, auth sessions, and future GitHub App installation state.
+`server/` is the mspace control plane. It owns identity, workspaces, membership, auth sessions, workspace product data, runtime-facing product surfaces, and future GitHub App installation state.
 
-The desktop app and local runner should become runtime clients of this service instead of owning collaboration identity themselves.
+The desktop app and runtime workers are clients of this service. They do not own collaboration identity or product truth.
 
 ## Run
 
@@ -45,7 +45,7 @@ When `scripts/run-mspace-codex-dev.sh` needs to auto-start local Docker Postgres
 4. The server validates OAuth state, exchanges the code with GitHub using the server-side client secret, upserts the mspace user, ensures a default personal workspace, issues an mspace session token, and stores a short-lived single-use login result for that OAuth state.
 5. The callback renders a success page. It does not return raw auth JSON.
 6. Desktop polls `GET /api/auth/github/result?state=...` and stores the returned `msp_...` token.
-7. Desktop and runner clients call mspace APIs with `Authorization: Bearer <msp_...>`.
+7. Desktop clients call mspace APIs with `Authorization: Bearer <msp_...>`.
 
 GitHub tokens are not the product session. They are used only to prove GitHub identity. Repository automation should later use GitHub App installation tokens owned by this service.
 
@@ -75,6 +75,17 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 | `DELETE` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Delete a project when no issues reference it. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Read the workspace project runbook. |
 | `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the workspace project runbook and record a revision. |
+| `GET` | `/api/workspaces/{workspaceID}/workspace/settings` | Read workspace automation settings. |
+| `PUT` | `/api/workspaces/{workspaceID}/workspace/settings` | Update workspace automation settings. |
+| `GET` | `/api/workspaces/{workspaceID}/agents` | List workspace agent profiles. |
+| `POST` | `/api/workspaces/{workspaceID}/agents` | Create a workspace agent profile. |
+| `PUT` | `/api/workspaces/{workspaceID}/agents/{agentID}` | Update a workspace agent profile. |
+| `GET` | `/api/workspaces/{workspaceID}/clusters` | List workspace cluster configs. |
+| `POST` | `/api/workspaces/{workspaceID}/clusters` | Create a workspace cluster config. |
+| `PUT` | `/api/workspaces/{workspaceID}/clusters/{clusterID}` | Update a workspace cluster config. |
+| `DELETE` | `/api/workspaces/{workspaceID}/clusters/{clusterID}` | Delete an unused workspace cluster config. |
+| `GET` | `/api/workspaces/{workspaceID}/clusters/discover-defaults` | Discover kubeconfig candidates under `~/.kube`. |
+| `POST` | `/api/workspaces/{workspaceID}/clusters/import` | Import selected kubeconfig files into workspace clusters. |
 | `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List issue type and priority label definitions. |
 | `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level workspace issues. |
 | `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. `projectId` is optional; issues can remain projectless until execution is needed. |
@@ -87,6 +98,13 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}` | Edit the current user's eligible human comment. |
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current user's reaction to a comment. |
 | `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current user's reaction from a comment. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-deploy` | Queue a server-owned test deployment session for an issue. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/cleanup` | Queue test namespace cleanup for an issue. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/retain` | Retain the issue test namespace for debugging. |
+| `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/resources` | List namespace-scoped Kubernetes resources for the issue test environment. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/probe` | Refresh preview reachability state for the issue test environment. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Store or update the issue PR handoff from captured source evidence. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the server-owned issue handoff record. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived worker registration token. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration token metadata without raw token values. Owner/admin only. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. Owner/admin only. |
@@ -107,7 +125,7 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 
 The workspace Inbox is event-based. `issue_events` stores the append-only review fact, `issue_event_receipts` stores each recipient user's unread/read/archive state, and `issue_watchers` stores the issue-level recipient set. Opening or polling an issue must not clear unread state; clients should call the read-through endpoint after the user intentionally reviews an Inbox row.
 
-Personal workspaces are the default result of GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent sessions, runtime tasks, worker logs, and runtime results in Postgres. Runtime worker registration and task APIs are available to both personal and team workspaces; team workspaces additionally unlock invitations and shared membership.
+Personal workspaces are the default result of GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in Postgres. Runtime worker registration and task APIs are available to both personal and team workspaces; team workspaces additionally unlock invitations and shared membership.
 
 Issue `project_id` is optional in the control plane. A user can capture a workspace-level issue before the repository is known, comment on it, and attach a project later through `PUT /api/workspaces/{workspaceID}/issues/{issueID}` with `projectId`. If a create request omits `projectId` and the workspace has exactly one project, the server auto-attaches it; zero or multiple projects leave the issue unassigned. Agent execution, PR handoff, and issue test environments require an attached project.
 
@@ -121,4 +139,4 @@ Runtime registration tokens use the `msw_` prefix and are returned only once. Th
 
 The current queue is intentionally narrow: it records workspace task metadata, required capability JSON, payload/result JSON, claim ownership, timestamps, a compact audit event stream, and worker-appended task logs. Workers can stream Codex app-server status and output back through the log endpoint without the server needing direct network access to the worker environment. Workspace users can request task cancellation; workers poll their claimed task while executing and interrupt Codex app-server when cancellation is requested.
 
-The first worker-side implementation lives in `../worker`. It uses only the server HTTP contract: register with `Authorization: Bearer msw_...`, send heartbeat updates, claim matching tasks, inspect its claimed task for cancellation, append logs, and report status. It completes `protocol_smoke` and `noop` tasks, and it can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers store target project source under `/var/lib/mspace-worker/repos` and `/var/lib/mspace-worker/workdirs` on the configured worker volume, not in the host repository checkout. Issue Detail routes agent turns directly to `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; returned worker source commit metadata, changed files, and diff preview are exposed from the runtime task result rather than mirrored through the runner. Dry-run worker commits are diagnostic records and should not be used as PR source candidates.
+The first worker-side implementation lives in `../worker`. It uses only the server HTTP contract: register with `Authorization: Bearer msw_...`, send heartbeat updates, claim matching tasks, inspect its claimed task for cancellation, append logs, and report status. It completes `protocol_smoke` and `noop` tasks, and it can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers store target project source under `/var/lib/mspace-worker/repos` and `/var/lib/mspace-worker/workdirs` on the configured worker volume, not in the host repository checkout. Issue Detail routes agent turns directly to `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; returned worker source commit metadata, changed files, and diff preview are exposed from the runtime task result. Dry-run worker commits are diagnostic records and should not be used as PR source candidates.
