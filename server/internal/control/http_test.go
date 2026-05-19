@@ -1,8 +1,10 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -297,6 +299,122 @@ func TestGitHubCallbackRejectsReusedState(t *testing.T) {
 	}
 }
 
+func TestIssueAttachmentRequiresWorkspaceAuthorization(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "attachment-owner",
+		Login:          "attachment-owner",
+		Name:           "Attachment Owner",
+		Email:          "attachment-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert owner: %v", err)
+	}
+	token, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	store.attachments["attachment-1"] = IssueAttachment{
+		ID:          "attachment-1",
+		WorkspaceID: workspaceID,
+		Filename:    "diagram.png",
+		ContentType: "image/png",
+		SizeBytes:   4,
+		Content:     []byte{0x89, 0x50, 0x4e, 0x47},
+	}
+
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	unauthorizedRecorder := httptest.NewRecorder()
+	router.ServeHTTP(unauthorizedRecorder, httptest.NewRequest(http.MethodGet, "/api/attachments/attachment-1", nil))
+	if unauthorizedRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized attachment status=%d body=%s", unauthorizedRecorder.Code, unauthorizedRecorder.Body.String())
+	}
+
+	authorizedRecorder := httptest.NewRecorder()
+	authorizedReq := httptest.NewRequest(http.MethodGet, "/api/attachments/attachment-1", nil)
+	authorizedReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(authorizedRecorder, authorizedReq)
+	if authorizedRecorder.Code != http.StatusOK {
+		t.Fatalf("authorized attachment status=%d body=%s", authorizedRecorder.Code, authorizedRecorder.Body.String())
+	}
+	if contentType := authorizedRecorder.Header().Get("Content-Type"); contentType != "image/png" {
+		t.Fatalf("expected image/png content-type, got %q", contentType)
+	}
+	if body := authorizedRecorder.Body.Bytes(); string(body) != string([]byte{0x89, 0x50, 0x4e, 0x47}) {
+		t.Fatalf("unexpected attachment body: %v", body)
+	}
+}
+
+func TestIssueAttachmentUploadStoresServerOwnedBlob(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "attachment-uploader",
+		Login:          "attachment-uploader",
+		Name:           "Attachment Uploader",
+		Email:          "attachment-uploader@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert uploader: %v", err)
+	}
+	token, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{Body: "Attach an image"})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "diagram.png")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	pngBytes := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	if _, err := part.Write(pngBytes); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	uploadRecorder := httptest.NewRecorder()
+	uploadReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/attachments", body)
+	uploadReq.Header.Set("Authorization", "Bearer "+token)
+	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+	router.ServeHTTP(uploadRecorder, uploadReq)
+	if uploadRecorder.Code != http.StatusCreated {
+		t.Fatalf("upload attachment status=%d body=%s", uploadRecorder.Code, uploadRecorder.Body.String())
+	}
+	var attachment IssueAttachment
+	if err := json.Unmarshal(uploadRecorder.Body.Bytes(), &attachment); err != nil {
+		t.Fatalf("parse upload response: %v", err)
+	}
+	if attachment.ID == "" || attachment.WorkspaceID != workspaceID || attachment.IssueID != issueID || attachment.StorageKey != "/api/attachments/"+attachment.ID || attachment.ContentType != "image/png" {
+		t.Fatalf("unexpected upload response: %+v", attachment)
+	}
+
+	getRecorder := httptest.NewRecorder()
+	getReq := httptest.NewRequest(http.MethodGet, "/api/attachments/"+attachment.ID, nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(getRecorder, getReq)
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("get uploaded attachment status=%d body=%s", getRecorder.Code, getRecorder.Body.String())
+	}
+	if string(getRecorder.Body.Bytes()) != string(pngBytes) {
+		t.Fatalf("unexpected uploaded attachment bytes: %v", getRecorder.Body.Bytes())
+	}
+}
+
 func TestWorkspaceInvitationFlow(t *testing.T) {
 	store := NewMemoryStore()
 	owner, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
@@ -440,6 +558,138 @@ func TestWorkspaceInvitationFlow(t *testing.T) {
 	}
 }
 
+func TestWorkspaceMembersCannotMutateRuntimeConfiguration(t *testing.T) {
+	store := NewMemoryStore()
+	owner, _, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "runtime-config-owner",
+		Login:          "runtime-config-owner",
+		Name:           "Runtime Config Owner",
+		Email:          "runtime-config-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert owner: %v", err)
+	}
+	ownerToken, _, err := store.CreateAuthSession(context.Background(), owner.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create owner session: %v", err)
+	}
+	teamWorkspace, _, err := store.CreateWorkspace(context.Background(), owner.ID, CreateWorkspaceInput{Name: "Runtime Config Team", Kind: "team"})
+	if err != nil {
+		t.Fatalf("create team workspace: %v", err)
+	}
+	workspaceID := teamWorkspace.ID
+	member, _, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "runtime-config-member",
+		Login:          "runtime-config-member",
+		Name:           "Runtime Config Member",
+		Email:          "runtime-config-member@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert member: %v", err)
+	}
+	memberToken, _, err := store.CreateAuthSession(context.Background(), member.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create member session: %v", err)
+	}
+
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	inviteRecorder := httptest.NewRecorder()
+	inviteReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/invitations", strings.NewReader(`{"email":"runtime-config-member@example.com","role":"member","expiresInHours":24}`))
+	inviteReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(inviteRecorder, inviteReq)
+	if inviteRecorder.Code != http.StatusCreated {
+		t.Fatalf("create invitation status=%d body=%s", inviteRecorder.Code, inviteRecorder.Body.String())
+	}
+	var invite WorkspaceInvitationResult
+	if err := json.Unmarshal(inviteRecorder.Body.Bytes(), &invite); err != nil {
+		t.Fatalf("parse invitation: %v", err)
+	}
+	acceptRecorder := httptest.NewRecorder()
+	acceptReq := httptest.NewRequest(http.MethodPost, "/api/workspace-invitations/accept", strings.NewReader(`{"token":"`+invite.Token+`"}`))
+	acceptReq.Header.Set("Authorization", "Bearer "+memberToken)
+	router.ServeHTTP(acceptRecorder, acceptReq)
+	if acceptRecorder.Code != http.StatusOK {
+		t.Fatalf("accept invitation status=%d body=%s", acceptRecorder.Code, acceptRecorder.Body.String())
+	}
+
+	clusterRecorder := httptest.NewRecorder()
+	clusterReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/clusters", strings.NewReader(`{"name":"owner cluster","kubeconfigPath":"/tmp/kubeconfig","imageRegistryPrefix":"registry.example.com/team","exposureMode":"nodeport"}`))
+	clusterReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(clusterRecorder, clusterReq)
+	if clusterRecorder.Code != http.StatusCreated {
+		t.Fatalf("owner create cluster status=%d body=%s", clusterRecorder.Code, clusterRecorder.Body.String())
+	}
+	var cluster Cluster
+	if err := json.Unmarshal(clusterRecorder.Body.Bytes(), &cluster); err != nil {
+		t.Fatalf("parse cluster: %v", err)
+	}
+
+	for _, item := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{
+			name:   "workspace settings",
+			method: http.MethodPut,
+			path:   "/api/workspaces/" + workspaceID + "/workspace/settings",
+			body:   `{"autoCreateDraftPr":true}`,
+		},
+		{
+			name:   "create agent profile",
+			method: http.MethodPost,
+			path:   "/api/workspaces/" + workspaceID + "/agents",
+			body:   `{"name":"Ops","mention":"@ops","provider":"codex","instructions":"Handle operational follow-up."}`,
+		},
+		{
+			name:   "update agent profile",
+			method: http.MethodPut,
+			path:   "/api/workspaces/" + workspaceID + "/agents/codex",
+			body:   `{"name":"Codex","mention":"@codex","provider":"codex","instructions":"Changed by member."}`,
+		},
+		{
+			name:   "create cluster",
+			method: http.MethodPost,
+			path:   "/api/workspaces/" + workspaceID + "/clusters",
+			body:   `{"name":"member cluster","kubeconfigPath":"/tmp/member","imageRegistryPrefix":"registry.example.com/member","exposureMode":"nodeport"}`,
+		},
+		{
+			name:   "update cluster",
+			method: http.MethodPut,
+			path:   "/api/workspaces/" + workspaceID + "/clusters/" + cluster.ID,
+			body:   `{"name":"mutated cluster","kubeconfigPath":"/tmp/kubeconfig","imageRegistryPrefix":"registry.example.com/member","exposureMode":"nodeport"}`,
+		},
+		{
+			name:   "delete cluster",
+			method: http.MethodDelete,
+			path:   "/api/workspaces/" + workspaceID + "/clusters/" + cluster.ID,
+		},
+		{
+			name:   "discover default kubeconfigs",
+			method: http.MethodGet,
+			path:   "/api/workspaces/" + workspaceID + "/clusters/discover-defaults",
+		},
+		{
+			name:   "import kubeconfigs",
+			method: http.MethodPost,
+			path:   "/api/workspaces/" + workspaceID + "/clusters/import",
+			body:   `{"paths":["/tmp/kubeconfig"]}`,
+		},
+	} {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(item.method, item.path, strings.NewReader(item.body))
+		req.Header.Set("Authorization", "Bearer "+memberToken)
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("%s should be forbidden for workspace member, status=%d body=%s", item.name, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
 func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
@@ -481,7 +731,7 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 	}
 
 	createIssueRecorder := httptest.NewRecorder()
-	createIssueReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues", strings.NewReader(`{"projectId":"`+personalProject.ID+`","body":"Move issues to server PG\n\n- [ ] Keep runner workdirs local","labelKeys":["type:feat","priority:p1"]}`))
+	createIssueReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues", strings.NewReader(`{"projectId":"`+personalProject.ID+`","body":"Move issues to server PG\n\n- [ ] Keep worker workdirs isolated","labelKeys":["type:feat","priority:p1"]}`))
 	createIssueReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(createIssueRecorder, createIssueReq)
 	if createIssueRecorder.Code != http.StatusCreated {
@@ -566,7 +816,7 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 	if detail.Issue.WorkspaceID != personalWorkspaceID || detail.Issue.Body != "Move issues to server PG" {
 		t.Fatalf("unexpected issue detail: %+v", detail.Issue)
 	}
-	if len(detail.ChildIssues) != 1 || detail.ChildIssues[0].Title != "Keep runner workdirs local" {
+	if len(detail.ChildIssues) != 1 || detail.ChildIssues[0].Title != "Keep worker workdirs isolated" {
 		t.Fatalf("unexpected child issues: %+v", detail.ChildIssues)
 	}
 	if len(detail.Labels) != 2 {
@@ -808,7 +1058,7 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	router := server.Routes()
 
 	personalTokenRecorder := httptest.NewRecorder()
-	personalTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"personal runner","expiresInHours":12}`))
+	personalTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"personal worker","expiresInHours":12}`))
 	personalTokenReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(personalTokenRecorder, personalTokenReq)
 	if personalTokenRecorder.Code != http.StatusCreated {
@@ -838,7 +1088,7 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	}
 
 	createTokenRecorder := httptest.NewRecorder()
-	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"team runner","expiresInHours":12}`))
+	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"team worker","expiresInHours":12}`))
 	createTokenReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(createTokenRecorder, createTokenReq)
 	if createTokenRecorder.Code != http.StatusCreated {

@@ -3,9 +3,12 @@ package control
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +25,7 @@ type Server struct {
 }
 
 const serverProtocolVersion = 1
+const maxIssueAttachmentBytes = 10 << 20
 
 func NewServer(config Config, store Store, github GitHubClient) *Server {
 	config = config.withDefaults()
@@ -59,13 +63,33 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleGetProjectRunbook)
 	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleUpdateProjectRunbook)
 	r.Get("/api/workspaces/{workspaceID}/issue-label-definitions", s.handleListIssueLabelDefinitions)
+	r.Get("/api/workspaces/{workspaceID}/workspace/settings", s.handleGetWorkspaceSettings)
+	r.Put("/api/workspaces/{workspaceID}/workspace/settings", s.handleUpdateWorkspaceSettings)
+	r.Get("/api/workspaces/{workspaceID}/agents", s.handleListAgentProfiles)
+	r.Post("/api/workspaces/{workspaceID}/agents", s.handleCreateAgentProfile)
+	r.Put("/api/workspaces/{workspaceID}/agents/{agentID}", s.handleUpdateAgentProfile)
+	r.Get("/api/workspaces/{workspaceID}/clusters", s.handleListClusters)
+	r.Post("/api/workspaces/{workspaceID}/clusters", s.handleCreateCluster)
+	r.Put("/api/workspaces/{workspaceID}/clusters/{clusterID}", s.handleUpdateCluster)
+	r.Delete("/api/workspaces/{workspaceID}/clusters/{clusterID}", s.handleDeleteCluster)
+	r.Get("/api/workspaces/{workspaceID}/clusters/discover-defaults", s.handleDiscoverDefaultKubeconfigs)
+	r.Post("/api/workspaces/{workspaceID}/clusters/import", s.handleImportKubeconfigs)
 	r.Get("/api/workspaces/{workspaceID}/issues", s.handleListIssues)
 	r.Post("/api/workspaces/{workspaceID}/issues/suggest-title", s.handleSuggestIssueTitle)
 	r.Post("/api/workspaces/{workspaceID}/issues", s.handleCreateIssue)
 	r.Get("/api/workspaces/{workspaceID}/issues/{issueID}", s.handleGetIssue)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/attachments", s.handleCreateIssueAttachment)
+	r.Get("/api/attachments/{attachmentID}", s.handleGetIssueAttachment)
 	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/sessions", s.handleCreateAgentSession)
 	r.Get("/api/workspaces/{workspaceID}/sessions/{sessionID}", s.handleGetSession)
 	r.Post("/api/workspaces/{workspaceID}/sessions/{sessionID}/cancel", s.handleCancelAgentSession)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/test-deploy", s.handleStartIssueTestDeploy)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/cleanup", s.handleRequestIssueTestEnvironmentCleanup)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/retain", s.handleRetainIssueTestEnvironment)
+	r.Get("/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/resources", s.handleListIssueTestEnvironmentResources)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/probe", s.handleProbeIssueTestEnvironment)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr", s.handleCreateIssuePullRequestHandoff)
+	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh", s.handleRefreshIssueHandoff)
 	r.Put("/api/workspaces/{workspaceID}/issues/{issueID}", s.handleUpdateIssue)
 	r.Post("/api/workspaces/{workspaceID}/issues/{issueID}/tasks", s.handleCreateIssueTask)
 	r.Delete("/api/workspaces/{workspaceID}/issues/{issueID}/tasks/{taskID}", s.handleDeleteIssueTask)
@@ -527,6 +551,185 @@ func (s *Server) handleListIssueLabelDefinitions(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, definitions)
 }
 
+func (s *Server) handleGetWorkspaceSettings(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	settings, err := s.store.GetWorkspaceSettings(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (s *Server) handleUpdateWorkspaceSettings(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := WorkspaceSettingsInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	settings, err := s.store.UpdateWorkspaceSettings(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (s *Server) handleListAgentProfiles(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	profiles, err := s.store.ListAgentProfiles(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, profiles)
+}
+
+func (s *Server) handleCreateAgentProfile(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := AgentProfileInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	profile, err := s.store.CreateAgentProfile(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, profile)
+}
+
+func (s *Server) handleUpdateAgentProfile(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := AgentProfileInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	profile, err := s.store.UpdateAgentProfile(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "agentID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, profile)
+}
+
+func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	clusters, err := s.store.ListClusters(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, clusters)
+}
+
+func (s *Server) handleCreateCluster(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ClusterInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	cluster, err := s.store.CreateCluster(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, cluster)
+}
+
+func (s *Server) handleUpdateCluster(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ClusterInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	cluster, err := s.store.UpdateCluster(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "clusterID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cluster)
+}
+
+func (s *Server) handleDeleteCluster(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	err := s.store.DeleteCluster(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "clusterID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleDiscoverDefaultKubeconfigs(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	result, err := s.store.DiscoverDefaultKubeconfigs(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleImportKubeconfigs(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	var input struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(input.Paths) == 0 {
+		writeError(w, http.StatusBadRequest, errors.New("at least one kubeconfig path is required"))
+		return
+	}
+	result, err := s.store.ImportKubeconfigs(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input.Paths)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.authenticate(w, r)
 	if !ok {
@@ -664,6 +867,116 @@ func (s *Server) handleCancelAgentSession(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, task)
 }
 
+func (s *Server) handleStartIssueTestDeploy(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := StartTestDeployInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.store.StartIssueTestDeploy(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (s *Server) handleRequestIssueTestEnvironmentCleanup(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := StartTestDeployInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.store.RequestIssueTestEnvironmentCleanup(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (s *Server) handleRetainIssueTestEnvironment(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	environment, err := s.store.RetainIssueTestEnvironment(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, environment)
+}
+
+func (s *Server) handleListIssueTestEnvironmentResources(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if _, ok := r.URL.Query()["namespace"]; ok {
+		writeError(w, http.StatusBadRequest, errors.New("namespace is fixed by the issue test environment"))
+		return
+	}
+	resources, err := s.store.GetIssueTestEnvironmentResources(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resources)
+}
+
+func (s *Server) handleProbeIssueTestEnvironment(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	environment, err := s.store.ProbeIssueTestEnvironment(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, environment)
+}
+
+func (s *Server) handleCreateIssuePullRequestHandoff(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreatePullRequestInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	handoff, err := s.store.CreateIssuePullRequestHandoff(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, handoff)
+}
+
+func (s *Server) handleRefreshIssueHandoff(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	handoff, err := s.store.RefreshIssueHandoff(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), strings.TrimSpace(chi.URLParam(r, "handoffID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, handoff)
+}
+
 func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.authenticate(w, r)
 	if !ok {
@@ -765,6 +1078,64 @@ func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "comment": comment})
+}
+
+func (s *Server) handleCreateIssueAttachment(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxIssueAttachmentBytes+1024)
+	if err := r.ParseMultipartForm(maxIssueAttachmentBytes); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errors.New("file is required"))
+		return
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, maxIssueAttachmentBytes+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(content) > maxIssueAttachmentBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("attachment exceeds %d bytes", maxIssueAttachmentBytes))
+		return
+	}
+	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = http.DetectContentType(content)
+	}
+	attachment, err := s.store.CreateIssueAttachment(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), CreateIssueAttachmentInput{
+		Filename:    filepath.Base(header.Filename),
+		ContentType: contentType,
+		Content:     content,
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, issueAttachmentResponse(attachment))
+}
+
+func (s *Server) handleGetIssueAttachment(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	attachment, err := s.store.GetIssueAttachment(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "attachmentID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", attachment.ContentType)
+	w.Header().Set("Content-Disposition", contentDispositionInline(attachment.Filename))
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(attachment.Content)
 }
 
 func (s *Server) handleSetCommentReaction(w http.ResponseWriter, r *http.Request) {
@@ -1086,6 +1457,59 @@ func bearerToken(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+}
+
+func contentDispositionInline(filename string) string {
+	filename = strings.TrimSpace(filename)
+	if filename == "" {
+		return "inline"
+	}
+	filename = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '\\' || r == '"' {
+			return '_'
+		}
+		return r
+	}, filename)
+	if strings.TrimSpace(filename) == "" {
+		return "inline"
+	}
+	if value := mime.FormatMediaType("inline", map[string]string{"filename": filename}); value != "" {
+		return value
+	}
+	return "inline"
+}
+
+func allowedIssueAttachmentContentType(contentType string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	switch contentType {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeIssueAttachmentContentType(contentType string, content []byte) string {
+	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if contentType == "image/jpg" {
+		contentType = "image/jpeg"
+	}
+	if contentType == "" || !allowedIssueAttachmentContentType(contentType) {
+		detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(content), ";")[0]))
+		if allowedIssueAttachmentContentType(detected) {
+			return detected
+		}
+	}
+	return contentType
+}
+
+func issueAttachmentResponse(attachment IssueAttachment) IssueAttachment {
+	attachment.Content = nil
+	attachment.StorageKey = ""
+	if attachment.ID != "" {
+		attachment.StorageKey = "/api/attachments/" + attachment.ID
+	}
+	return attachment
 }
 
 func jsonMiddleware(next http.Handler) http.Handler {

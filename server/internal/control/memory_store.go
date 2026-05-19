@@ -28,7 +28,15 @@ type MemoryStore struct {
 	issues               map[string]Issue
 	comments             map[string]Comment
 	commentReactions     map[string]map[string]CommentReactionSummary
+	attachments          map[string]IssueAttachment
 	issueLabels          map[string][]IssueLabel
+	workspaceSettings    map[string]WorkspaceSettings
+	agentProfiles        map[string]AgentProfile
+	clusters             map[string]Cluster
+	testEnvironments     map[string]IssueTestEnvironment
+	reviewEvidence       map[string]SessionReviewEvidence
+	sessionFailures      map[string]SessionFailure
+	handoffs             map[string]IssueHandoff
 	sessionHash          map[string]memorySession
 	runtimeTokens        map[string]memoryRuntimeRegistrationToken
 	runtimeWorkers       map[string]RuntimeWorker
@@ -88,7 +96,15 @@ func NewMemoryStore() *MemoryStore {
 		issues:               map[string]Issue{},
 		comments:             map[string]Comment{},
 		commentReactions:     map[string]map[string]CommentReactionSummary{},
+		attachments:          map[string]IssueAttachment{},
 		issueLabels:          map[string][]IssueLabel{},
+		workspaceSettings:    map[string]WorkspaceSettings{},
+		agentProfiles:        map[string]AgentProfile{},
+		clusters:             map[string]Cluster{},
+		testEnvironments:     map[string]IssueTestEnvironment{},
+		reviewEvidence:       map[string]SessionReviewEvidence{},
+		sessionFailures:      map[string]SessionFailure{},
+		handoffs:             map[string]IssueHandoff{},
 		sessionHash:          map[string]memorySession{},
 		runtimeTokens:        map[string]memoryRuntimeRegistrationToken{},
 		runtimeWorkers:       map[string]RuntimeWorker{},
@@ -917,6 +933,243 @@ func (s *MemoryStore) ListProjects(_ Context, userID, workspaceID string) ([]Pro
 	return projects, nil
 }
 
+func (s *MemoryStore) GetWorkspaceSettings(_ Context, userID, workspaceID string) (WorkspaceSettings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return WorkspaceSettings{}, ErrNotFound
+	}
+	return s.workspaceSettingsLocked(workspaceID), nil
+}
+
+func (s *MemoryStore) UpdateWorkspaceSettings(_ Context, userID, workspaceID string, input WorkspaceSettingsInput) (WorkspaceSettings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return WorkspaceSettings{}, ErrForbidden
+	}
+	settings := s.workspaceSettingsLocked(workspaceID)
+	settings.AutoCreateDraftPR = input.AutoCreateDraftPR
+	settings.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.workspaceSettings[workspaceID] = settings
+	return settings, nil
+}
+
+func (s *MemoryStore) ListAgentProfiles(_ Context, userID, workspaceID string) ([]AgentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	s.seedDefaultAgentProfilesLocked(workspaceID)
+	profiles := []AgentProfile{}
+	for _, profile := range s.agentProfiles {
+		if strings.HasPrefix(profile.ID, workspaceID+":") {
+			item := profile
+			item.ID = strings.TrimPrefix(item.ID, workspaceID+":")
+			profiles = append(profiles, item)
+		}
+	}
+	sort.Slice(profiles, func(i, j int) bool {
+		if profiles[i].SortOrder == profiles[j].SortOrder {
+			return profiles[i].Name < profiles[j].Name
+		}
+		return profiles[i].SortOrder < profiles[j].SortOrder
+	})
+	return profiles, nil
+}
+
+func (s *MemoryStore) CreateAgentProfile(_ Context, userID, workspaceID string, input AgentProfileInput) (AgentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return AgentProfile{}, ErrForbidden
+	}
+	profile, err := normalizeAgentProfileInput(AgentProfile{}, input, false)
+	if err != nil {
+		return AgentProfile{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	profile.CreatedAt = now
+	profile.UpdatedAt = now
+	key := workspaceID + ":" + profile.ID
+	if _, ok := s.agentProfiles[key]; ok {
+		return AgentProfile{}, errors.New("agent profile already exists")
+	}
+	stored := profile
+	stored.ID = key
+	s.agentProfiles[key] = stored
+	return profile, nil
+}
+
+func (s *MemoryStore) UpdateAgentProfile(_ Context, userID, workspaceID, agentID string, input AgentProfileInput) (AgentProfile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return AgentProfile{}, ErrForbidden
+	}
+	s.seedDefaultAgentProfilesLocked(workspaceID)
+	existing, key, ok := s.agentProfileLocked(workspaceID, agentID)
+	if !ok {
+		return AgentProfile{}, ErrNotFound
+	}
+	updated, err := normalizeAgentProfileInput(existing, input, true)
+	if err != nil {
+		return AgentProfile{}, err
+	}
+	updated.CreatedAt = existing.CreatedAt
+	updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	stored := updated
+	stored.ID = key
+	s.agentProfiles[key] = stored
+	return updated, nil
+}
+
+func (s *MemoryStore) ListClusters(_ Context, userID, workspaceID string) ([]Cluster, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	clusters := []Cluster{}
+	for _, cluster := range s.clusters {
+		if cluster.WorkspaceID != workspaceID {
+			continue
+		}
+		item := cluster
+		item.ProjectCount = 0
+		item.EnvironmentCount = 0
+		for _, project := range s.projects {
+			if project.WorkspaceID == workspaceID && project.DefaultClusterID == item.ID {
+				item.ProjectCount++
+			}
+		}
+		for _, environment := range s.testEnvironments {
+			if environment.ClusterID == item.ID {
+				item.EnvironmentCount++
+			}
+		}
+		clusters = append(clusters, item)
+	}
+	sort.Slice(clusters, func(i, j int) bool { return clusters[i].UpdatedAt > clusters[j].UpdatedAt })
+	return clusters, nil
+}
+
+func (s *MemoryStore) CreateCluster(_ Context, userID, workspaceID string, input ClusterInput) (Cluster, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return Cluster{}, ErrForbidden
+	}
+	cluster, err := normalizeClusterInput(Cluster{}, input)
+	if err != nil {
+		return Cluster{}, err
+	}
+	s.nextID++
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	cluster.ID = fmt.Sprintf("cluster-%04d", s.nextID)
+	cluster.WorkspaceID = workspaceID
+	cluster.LastCheckedAt = now
+	cluster.CreatedAt = now
+	cluster.UpdatedAt = now
+	s.clusters[cluster.ID] = cluster
+	return cluster, nil
+}
+
+func (s *MemoryStore) UpdateCluster(_ Context, userID, workspaceID, clusterID string, input ClusterInput) (Cluster, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	clusterID = strings.TrimSpace(clusterID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return Cluster{}, ErrForbidden
+	}
+	existing, ok := s.clusters[clusterID]
+	if !ok || existing.WorkspaceID != workspaceID {
+		return Cluster{}, ErrNotFound
+	}
+	updated, err := normalizeClusterInput(existing, input)
+	if err != nil {
+		return Cluster{}, err
+	}
+	updated.ID = existing.ID
+	updated.WorkspaceID = existing.WorkspaceID
+	updated.CreatedAt = existing.CreatedAt
+	updated.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	updated.UpdatedAt = updated.LastCheckedAt
+	s.clusters[clusterID] = updated
+	return updated, nil
+}
+
+func (s *MemoryStore) DeleteCluster(_ Context, userID, workspaceID, clusterID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	clusterID = strings.TrimSpace(clusterID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return ErrForbidden
+	}
+	cluster, ok := s.clusters[clusterID]
+	if !ok || cluster.WorkspaceID != workspaceID {
+		return ErrNotFound
+	}
+	for _, project := range s.projects {
+		if project.WorkspaceID == workspaceID && project.DefaultClusterID == clusterID {
+			return ErrForbidden
+		}
+	}
+	for _, environment := range s.testEnvironments {
+		if environment.ClusterID == clusterID {
+			return ErrForbidden
+		}
+	}
+	delete(s.clusters, clusterID)
+	return nil
+}
+
+func (s *MemoryStore) DiscoverDefaultKubeconfigs(_ Context, userID, workspaceID string) (KubeconfigDiscoveryResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.hasWorkspaceRole(strings.TrimSpace(workspaceID), userID, "owner", "admin") {
+		return KubeconfigDiscoveryResult{}, ErrForbidden
+	}
+	return KubeconfigDiscoveryResult{Candidates: []KubeconfigCandidate{}, Skipped: []KubeconfigImportSkip{}}, nil
+}
+
+func (s *MemoryStore) ImportKubeconfigs(_ Context, userID, workspaceID string, paths []string) (KubeconfigImportResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return KubeconfigImportResult{}, ErrForbidden
+	}
+	result := KubeconfigImportResult{Imported: []Cluster{}, Skipped: []KubeconfigImportSkip{}}
+	for _, path := range uniqueStrings(paths) {
+		cluster := Cluster{
+			ID:                  fmt.Sprintf("cluster-%04d", s.nextMemoryIDLocked()),
+			WorkspaceID:         workspaceID,
+			Name:                importedClusterName(path, ""),
+			KubeconfigPath:      path,
+			ImageRegistryPrefix: defaultImportedClusterImageRegistryPrefix,
+			ExposureMode:        "nodeport",
+			Status:              "configured",
+			LastCheckedAt:       time.Now().UTC().Format(time.RFC3339Nano),
+			CreatedAt:           time.Now().UTC().Format(time.RFC3339Nano),
+			UpdatedAt:           time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		s.clusters[cluster.ID] = cluster
+		result.Imported = append(result.Imported, cluster)
+	}
+	return result, nil
+}
+
 func (s *MemoryStore) CreateProject(_ Context, userID, workspaceID string, input ProjectInput) (Project, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1181,6 +1434,10 @@ func (s *MemoryStore) GetIssue(_ Context, userID, workspaceID, issueID string) (
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.getIssueLocked(userID, workspaceID, issueID)
+}
+
+func (s *MemoryStore) getIssueLocked(userID, workspaceID, issueID string) (IssueDetail, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	issueID = strings.TrimSpace(issueID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
@@ -1220,16 +1477,16 @@ func (s *MemoryStore) GetIssue(_ Context, userID, workspaceID, issueID string) (
 	return IssueDetail{
 		Issue:           issue,
 		Project:         project,
-		TestEnvironment: nil,
+		TestEnvironment: s.testEnvironmentPointerLocked(issueID),
 		ChildIssues:     children,
 		Labels:          s.issueLabels[issueID],
 		Comments:        comments,
 		Sessions:        s.issueAgentSessionsLocked(workspaceID, issueID),
-		Evidence:        []any{},
-		Failures:        []any{},
+		Evidence:        []DeploymentEvidence{},
+		Failures:        s.issueFailuresLocked(workspaceID, issueID),
 		ChangeNodes:     s.issueChangeNodesLocked(workspaceID, issueID),
-		ReviewEvidence:  []any{},
-		Handoffs:        []any{},
+		ReviewEvidence:  s.issueReviewEvidenceLocked(workspaceID, issueID),
+		Handoffs:        s.issueHandoffsLocked(workspaceID, issueID),
 	}, nil
 }
 
@@ -1237,6 +1494,10 @@ func (s *MemoryStore) CreateAgentSession(_ Context, userID, workspaceID, issueID
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.createAgentSessionLocked(userID, workspaceID, issueID, input)
+}
+
+func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID string, input CreateAgentSessionInput) (AgentSession, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	issueID = strings.TrimSpace(issueID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
@@ -1370,10 +1631,197 @@ func (s *MemoryStore) GetSession(_ Context, userID, workspaceID, sessionID strin
 		Issue:     issue,
 		Project:   project,
 		Logs:      logs,
-		Evidence:  []any{},
-		Failures:  []any{},
+		Evidence:  []DeploymentEvidence{},
+		Failures:  s.sessionFailuresLocked(workspaceID, task.IssueID, session.ID),
 		Workspace: workspaceSnapshotFromRuntimeTask(task),
 	}, nil
+}
+
+func (s *MemoryStore) StartIssueTestDeploy(_ Context, userID, workspaceID, issueID string, input StartTestDeployInput) (TestEnvironmentSessionResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	detail, err := s.getIssueLocked(userID, workspaceID, issueID)
+	if err != nil {
+		return TestEnvironmentSessionResult{}, err
+	}
+	if detail.Project.ID == "" {
+		return TestEnvironmentSessionResult{}, errors.New("attach a project before starting a test deployment")
+	}
+	if hasActiveAgentSession(detail.Sessions) {
+		return TestEnvironmentSessionResult{}, errors.New("issue already has an active session")
+	}
+	environment, err := s.buildIssueTestEnvironmentLocked(detail, input)
+	if err != nil {
+		return TestEnvironmentSessionResult{}, err
+	}
+	sourceNode, err := selectIssueChangeNodeForDeploy(detail.ChangeNodes, input.SourceCommitSHA, input.SourceSessionID)
+	if err != nil {
+		return TestEnvironmentSessionResult{}, err
+	}
+	environment.SourceSessionID = sourceNode.SessionID
+	environment.SourceCommitSHA = sourceNode.CommitSHA
+	session, err := s.createAgentSessionLocked(userID, workspaceID, issueID, CreateAgentSessionInput{
+		Provider:        "codex",
+		AgentProfile:    firstNonEmpty(input.AgentProfile, "codex"),
+		Command:         buildIssueTestDeployPrompt(detail, environment, sourceNode),
+		SourceSessionID: sourceNode.SessionID,
+		SourceCommitSHA: sourceNode.CommitSHA,
+	})
+	if err != nil {
+		return TestEnvironmentSessionResult{}, err
+	}
+	environment.LastDeploySessionID = session.ID
+	environment.NamespaceStatus = "deploying"
+	s.saveTestEnvironmentLocked(environment)
+	return TestEnvironmentSessionResult{SessionID: session.ID, TestEnvironment: environment}, nil
+}
+
+func (s *MemoryStore) RequestIssueTestEnvironmentCleanup(_ Context, userID, workspaceID, issueID string, input StartTestDeployInput) (TestEnvironmentSessionResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	detail, err := s.getIssueLocked(userID, workspaceID, issueID)
+	if err != nil {
+		return TestEnvironmentSessionResult{}, err
+	}
+	if detail.TestEnvironment == nil || strings.TrimSpace(detail.TestEnvironment.Namespace) == "" {
+		return TestEnvironmentSessionResult{}, errors.New("issue has no test namespace to clean up")
+	}
+	if hasActiveAgentSession(detail.Sessions) {
+		return TestEnvironmentSessionResult{}, errors.New("issue already has an active session")
+	}
+	environment := *detail.TestEnvironment
+	environment.NamespaceStatus = "cleanup_requested"
+	environment.CleanupStatus = "cleanup_requested"
+	session, err := s.createAgentSessionLocked(userID, workspaceID, issueID, CreateAgentSessionInput{
+		Provider:     "codex",
+		AgentProfile: firstNonEmpty(input.AgentProfile, "codex"),
+		Command:      buildIssueTestCleanupPrompt(detail, environment),
+	})
+	if err != nil {
+		return TestEnvironmentSessionResult{}, err
+	}
+	environment.LastCleanupSessionID = session.ID
+	s.saveTestEnvironmentLocked(environment)
+	return TestEnvironmentSessionResult{SessionID: session.ID, TestEnvironment: environment}, nil
+}
+
+func (s *MemoryStore) RetainIssueTestEnvironment(_ Context, userID, workspaceID, issueID string) (IssueTestEnvironment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.isWorkspaceMember(strings.TrimSpace(workspaceID), userID) {
+		return IssueTestEnvironment{}, ErrNotFound
+	}
+	environment, ok := s.testEnvironments[strings.TrimSpace(issueID)]
+	if !ok {
+		return IssueTestEnvironment{}, ErrNotFound
+	}
+	environment.CleanupStatus = "retained"
+	s.saveTestEnvironmentLocked(environment)
+	return environment, nil
+}
+
+func (s *MemoryStore) GetIssueTestEnvironmentResources(_ Context, userID, workspaceID, issueID string) (IssueTestEnvironmentResources, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.isWorkspaceMember(strings.TrimSpace(workspaceID), userID) {
+		return IssueTestEnvironmentResources{}, ErrNotFound
+	}
+	environment, ok := s.testEnvironments[strings.TrimSpace(issueID)]
+	if !ok {
+		return IssueTestEnvironmentResources{}, ErrNotFound
+	}
+	clusterName := ""
+	if cluster, ok := s.clusters[environment.ClusterID]; ok {
+		clusterName = cluster.Name
+	}
+	return IssueTestEnvironmentResources{
+		IssueID:         environment.IssueID,
+		ClusterID:       environment.ClusterID,
+		ClusterName:     clusterName,
+		Context:         environment.KubeContext,
+		Namespace:       environment.Namespace,
+		NamespaceStatus: environment.NamespaceStatus,
+		CleanupStatus:   environment.CleanupStatus,
+		ExposureMode:    environment.ExposureMode,
+		PreviewURL:      environment.PreviewURL,
+		NodeHost:        environment.NodeHost,
+		RefreshedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+		Pods:            []KubernetesPodResource{},
+		Services:        []KubernetesServiceResource{},
+		Deployments:     []KubernetesDeploymentResource{},
+		Ingresses:       []KubernetesIngressResource{},
+		Events:          []KubernetesEventResource{},
+		Errors:          []KubernetesResourceFetchError{},
+	}, nil
+}
+
+func (s *MemoryStore) ProbeIssueTestEnvironment(_ Context, userID, workspaceID, issueID string) (IssueTestEnvironment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.isWorkspaceMember(strings.TrimSpace(workspaceID), userID) {
+		return IssueTestEnvironment{}, ErrNotFound
+	}
+	environment, ok := s.testEnvironments[strings.TrimSpace(issueID)]
+	if !ok {
+		return IssueTestEnvironment{}, ErrNotFound
+	}
+	if environment.PreviewURL != "" {
+		environment.NamespaceStatus = "preview_unverified"
+		s.saveTestEnvironmentLocked(environment)
+	}
+	return environment, nil
+}
+
+func (s *MemoryStore) CreateIssuePullRequestHandoff(_ Context, userID, workspaceID, issueID string, input CreatePullRequestInput) (IssueHandoff, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	detail, err := s.getIssueLocked(userID, workspaceID, issueID)
+	if err != nil {
+		return IssueHandoff{}, err
+	}
+	sourceNode, err := selectIssueChangeNodeForDeploy(detail.ChangeNodes, input.SourceCommitSHA, input.SourceSessionID)
+	if err != nil {
+		return IssueHandoff{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	handoff := IssueHandoff{
+		ID:              fmt.Sprintf("handoff-%04d", s.nextMemoryIDLocked()),
+		IssueID:         strings.TrimSpace(issueID),
+		SourceSessionID: sourceNode.SessionID,
+		SourceCommitSHA: sourceNode.CommitSHA,
+		Branch:          sourceNode.Branch,
+		HeadCommitSHA:   sourceNode.CommitSHA,
+		Commits: []IssueHandoffCommit{{
+			SHA:      sourceNode.CommitSHA,
+			ShortSHA: shortCommitSHA(sourceNode.CommitSHA),
+			Subject:  sourceNode.Subject,
+		}},
+		Kind:            "pr",
+		PRTitle:         firstNonEmpty(input.Title, sourceNode.Subject, detail.Issue.Title),
+		EvidenceSummary: issueHandoffEvidenceSummary(detail, sourceNode.SessionID, sourceNode.CommitSHA),
+		CreatedVia:      "server",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	s.handoffs[handoff.ID] = handoff
+	return handoff, nil
+}
+
+func (s *MemoryStore) RefreshIssueHandoff(_ Context, userID, workspaceID, issueID, handoffID string) (IssueHandoff, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.isWorkspaceMember(strings.TrimSpace(workspaceID), userID) {
+		return IssueHandoff{}, ErrNotFound
+	}
+	handoff, ok := s.handoffs[strings.TrimSpace(handoffID)]
+	if !ok || handoff.IssueID != strings.TrimSpace(issueID) {
+		return IssueHandoff{}, ErrNotFound
+	}
+	handoff.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	handoff.Error = "GitHub PR sync is server-owned but no GitHub App PR executor is configured yet."
+	handoff.UpdatedAt = handoff.LastCheckedAt
+	s.handoffs[handoff.ID] = handoff
+	return handoff, nil
 }
 
 func (s *MemoryStore) issueAgentSessionsLocked(workspaceID, issueID string) []AgentSession {
@@ -1416,6 +1864,331 @@ func (s *MemoryStore) issueChangeNodesLocked(workspaceID, issueID string) []Issu
 		return nodes[i].CreatedAt > nodes[j].CreatedAt
 	})
 	return nodes
+}
+
+func (s *MemoryStore) issueReviewEvidenceLocked(workspaceID, issueID string) []SessionReviewEvidence {
+	reviews := []SessionReviewEvidence{}
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	for _, review := range s.reviewEvidence {
+		issue := s.issues[review.IssueID]
+		if issue.WorkspaceID == workspaceID && review.IssueID == issueID {
+			reviews = append(reviews, review)
+		}
+	}
+	sort.Slice(reviews, func(i, j int) bool {
+		if reviews[i].UpdatedAt == reviews[j].UpdatedAt {
+			return reviews[i].CreatedAt > reviews[j].CreatedAt
+		}
+		return reviews[i].UpdatedAt > reviews[j].UpdatedAt
+	})
+	return reviews
+}
+
+func (s *MemoryStore) issueFailuresLocked(workspaceID, issueID string) []SessionFailure {
+	failures := []SessionFailure{}
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	for _, failure := range s.sessionFailures {
+		issue := s.issues[failure.IssueID]
+		if issue.WorkspaceID == workspaceID && failure.IssueID == issueID {
+			failures = append(failures, failure)
+		}
+	}
+	sort.Slice(failures, func(i, j int) bool {
+		if failures[i].UpdatedAt == failures[j].UpdatedAt {
+			return failures[i].CreatedAt > failures[j].CreatedAt
+		}
+		return failures[i].UpdatedAt > failures[j].UpdatedAt
+	})
+	return failures
+}
+
+func (s *MemoryStore) sessionFailuresLocked(workspaceID, issueID, sessionID string) []SessionFailure {
+	failures := []SessionFailure{}
+	for _, failure := range s.issueFailuresLocked(workspaceID, issueID) {
+		if failure.SessionID == sessionID {
+			failures = append(failures, failure)
+		}
+	}
+	return failures
+}
+
+func (s *MemoryStore) workspaceSettingsLocked(workspaceID string) WorkspaceSettings {
+	settings := s.workspaceSettings[workspaceID]
+	if settings.CreatedAt == "" {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		settings = WorkspaceSettings{CreatedAt: now, UpdatedAt: now}
+		s.workspaceSettings[workspaceID] = settings
+	}
+	return settings
+}
+
+func (s *MemoryStore) seedDefaultAgentProfilesLocked(workspaceID string) {
+	for _, profile := range defaultAgentProfiles(time.Now().UTC()) {
+		key := workspaceID + ":" + profile.ID
+		if _, ok := s.agentProfiles[key]; ok {
+			continue
+		}
+		stored := profile
+		stored.ID = key
+		s.agentProfiles[key] = stored
+	}
+}
+
+func (s *MemoryStore) agentProfileLocked(workspaceID, value string) (AgentProfile, string, bool) {
+	keyValue := agentProfileLookupKey(value)
+	mention := "@" + keyValue
+	for key, profile := range s.agentProfiles {
+		if !strings.HasPrefix(key, workspaceID+":") {
+			continue
+		}
+		id := strings.TrimPrefix(key, workspaceID+":")
+		if strings.EqualFold(id, keyValue) || strings.EqualFold(profile.Mention, mention) {
+			item := profile
+			item.ID = id
+			return item, key, true
+		}
+	}
+	return AgentProfile{}, "", false
+}
+
+func (s *MemoryStore) testEnvironmentPointerLocked(issueID string) *IssueTestEnvironment {
+	environment, ok := s.testEnvironments[strings.TrimSpace(issueID)]
+	if !ok {
+		return nil
+	}
+	return &environment
+}
+
+func (s *MemoryStore) issueHandoffsLocked(workspaceID, issueID string) []IssueHandoff {
+	handoffs := []IssueHandoff{}
+	for _, handoff := range s.handoffs {
+		issue := s.issues[handoff.IssueID]
+		if issue.WorkspaceID == strings.TrimSpace(workspaceID) && handoff.IssueID == strings.TrimSpace(issueID) {
+			handoffs = append(handoffs, handoff)
+		}
+	}
+	sort.Slice(handoffs, func(i, j int) bool {
+		if handoffs[i].UpdatedAt == handoffs[j].UpdatedAt {
+			return handoffs[i].CreatedAt > handoffs[j].CreatedAt
+		}
+		return handoffs[i].UpdatedAt > handoffs[j].UpdatedAt
+	})
+	return handoffs
+}
+
+func (s *MemoryStore) buildIssueTestEnvironmentLocked(detail IssueDetail, input StartTestDeployInput) (IssueTestEnvironment, error) {
+	environment := IssueTestEnvironment{}
+	if detail.TestEnvironment != nil {
+		environment = *detail.TestEnvironment
+	}
+	environment.IssueID = detail.Issue.ID
+	if environment.Namespace == "" {
+		environment.Namespace = defaultIssueNamespace(detail)
+	}
+	clusterID := firstNonEmpty(input.ClusterID, environment.ClusterID, detail.Project.DefaultClusterID)
+	if clusterID == "" {
+		return environment, errors.New("cluster is required before starting a test deployment")
+	}
+	cluster, ok := s.clusters[clusterID]
+	if !ok || cluster.WorkspaceID != detail.Issue.WorkspaceID {
+		return environment, ErrNotFound
+	}
+	exposureMode, err := normalizeExposureMode(input.ExposureMode)
+	if err != nil {
+		return environment, err
+	}
+	if exposureMode == "" {
+		exposureMode = firstNonEmpty(cluster.ExposureMode, "nodeport")
+	}
+	environment.NamespaceStatus = "planned"
+	environment.CleanupStatus = "retained"
+	environment.ClusterID = cluster.ID
+	environment.KubeconfigPath = cluster.KubeconfigPath
+	environment.KubeContext = cluster.KubeContext
+	environment.ImageRegistryPrefix = cluster.ImageRegistryPrefix
+	environment.ExposureMode = exposureMode
+	environment.NodeHost = firstNonEmpty(input.NodeHost, cluster.NodeHost)
+	if exposureMode == "ingress" {
+		environment.PreviewDomain = firstNonEmpty(input.PreviewDomain, cluster.PreviewDomain)
+		environment.IngressClass = firstNonEmpty(input.IngressClass, cluster.IngressClass)
+	} else {
+		environment.PreviewDomain = ""
+		environment.IngressClass = ""
+	}
+	return environment, nil
+}
+
+func (s *MemoryStore) saveTestEnvironmentLocked(environment IssueTestEnvironment) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if environment.CreatedAt == "" {
+		environment.CreatedAt = now
+	}
+	environment.UpdatedAt = now
+	s.testEnvironments[environment.IssueID] = environment
+}
+
+func (s *MemoryStore) reconcileAgentSessionRuntimeResultLocked(task RuntimeTask) {
+	var artifacts RuntimeTaskArtifactResult
+	_ = json.Unmarshal(task.Result, &artifacts)
+	session, err := runtimeTaskToAgentSession(task)
+	if err != nil {
+		return
+	}
+	switch task.Status {
+	case "completed":
+		s.reconcileSuccessfulIssueTestEnvironmentLocked(task, session, artifacts)
+	case "failed":
+		s.reconcileFailedIssueTestEnvironmentLocked(task)
+	case "cancelled":
+		s.markIssueTestEnvironmentInterruptedLocked(task)
+	}
+	if artifacts.ReviewEvidence != nil {
+		s.storeRuntimeReviewEvidenceLocked(task, session, *artifacts.ReviewEvidence)
+	}
+	if task.Status == "failed" || task.Status == "cancelled" {
+		s.storeRuntimeSessionFailureLocked(task, session)
+	}
+}
+
+func (s *MemoryStore) reconcileSuccessfulIssueTestEnvironmentLocked(task RuntimeTask, session AgentSession, artifacts RuntimeTaskArtifactResult) {
+	environment, ok := s.testEnvironments[strings.TrimSpace(task.IssueID)]
+	if !ok {
+		return
+	}
+	previewURL := ""
+	if artifacts.TestEnvironment != nil {
+		previewURL = firstNonEmpty(artifacts.TestEnvironment.PreviewURL, artifacts.TestEnvironment.PreviewURLSnake, artifacts.TestEnvironment.URL)
+	}
+	changed := false
+	switch {
+	case environment.LastDeploySessionID == session.ID:
+		environment.NamespaceStatus = "active"
+		environment.CleanupStatus = "retained"
+		if previewURL != "" {
+			environment.PreviewURL = previewURL
+		}
+		if issue, ok := s.issues[task.IssueID]; ok {
+			issue.Status = "ready_for_test"
+			issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			s.issues[issue.ID] = issue
+		}
+		changed = true
+	case environment.LastCleanupSessionID == session.ID:
+		environment.NamespaceStatus = "cleaned"
+		environment.CleanupStatus = "cleaned"
+		changed = true
+	case previewURL != "" && environment.LastCleanupSessionID != session.ID:
+		environment.PreviewURL = previewURL
+		environment.NamespaceStatus = "active"
+		environment.CleanupStatus = "retained"
+		environment.LastDeploySessionID = session.ID
+		environment.SourceSessionID = firstNonEmpty(session.SourceSessionID, environment.SourceSessionID)
+		environment.SourceCommitSHA = firstNonEmpty(session.SourceCommitSHA, environment.SourceCommitSHA)
+		if issue, ok := s.issues[task.IssueID]; ok {
+			issue.Status = "ready_for_test"
+			issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			s.issues[issue.ID] = issue
+		}
+		changed = true
+	}
+	if changed {
+		s.saveTestEnvironmentLocked(environment)
+	}
+}
+
+func (s *MemoryStore) reconcileFailedIssueTestEnvironmentLocked(task RuntimeTask) {
+	environment, ok := s.testEnvironments[strings.TrimSpace(task.IssueID)]
+	if !ok {
+		return
+	}
+	sessionID := firstNonEmpty(task.SessionID, task.ID)
+	changed := false
+	switch {
+	case environment.LastDeploySessionID == sessionID:
+		environment.NamespaceStatus = "deploy_failed"
+		changed = true
+	case environment.LastCleanupSessionID == sessionID:
+		environment.NamespaceStatus = "cleanup_failed"
+		environment.CleanupStatus = "cleanup_failed"
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	s.saveTestEnvironmentLocked(environment)
+	if issue, ok := s.issues[task.IssueID]; ok {
+		issue.Status = "blocked"
+		issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		s.issues[issue.ID] = issue
+	}
+}
+
+func (s *MemoryStore) markIssueTestEnvironmentInterruptedLocked(task RuntimeTask) {
+	environment, ok := s.testEnvironments[strings.TrimSpace(task.IssueID)]
+	if !ok {
+		return
+	}
+	sessionID := firstNonEmpty(task.SessionID, task.ID)
+	changed := false
+	switch {
+	case environment.LastDeploySessionID == sessionID:
+		environment.NamespaceStatus = "deploy_interrupted"
+		changed = true
+	case environment.LastCleanupSessionID == sessionID:
+		environment.NamespaceStatus = "cleanup_failed"
+		environment.CleanupStatus = "cleanup_failed"
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	s.saveTestEnvironmentLocked(environment)
+	if issue, ok := s.issues[task.IssueID]; ok {
+		issue.Status = "blocked"
+		issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		s.issues[issue.ID] = issue
+	}
+}
+
+func (s *MemoryStore) storeRuntimeReviewEvidenceLocked(task RuntimeTask, session AgentSession, artifact SessionReviewEvidenceArtifact) {
+	if strings.TrimSpace(task.IssueID) == "" {
+		return
+	}
+	review := buildRuntimeReviewEvidence(task, session, artifact)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	existing := s.reviewEvidence[session.ID]
+	if existing.ID == "" {
+		existing.ID = fmt.Sprintf("review-evidence-%04d", s.nextMemoryIDLocked())
+		existing.CreatedAt = now
+	}
+	review.ID = existing.ID
+	review.CreatedAt = existing.CreatedAt
+	review.UpdatedAt = now
+	s.reviewEvidence[session.ID] = review
+}
+
+func (s *MemoryStore) storeRuntimeSessionFailureLocked(task RuntimeTask, session AgentSession) {
+	if strings.TrimSpace(task.IssueID) == "" {
+		return
+	}
+	failure := buildRuntimeSessionFailure(task, session)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	existing := s.sessionFailures[session.ID]
+	if existing.ID == "" {
+		existing.ID = fmt.Sprintf("session-failure-%04d", s.nextMemoryIDLocked())
+		existing.CreatedAt = now
+	}
+	failure.ID = existing.ID
+	failure.CreatedAt = existing.CreatedAt
+	failure.UpdatedAt = now
+	s.sessionFailures[session.ID] = failure
+}
+
+func (s *MemoryStore) nextMemoryIDLocked() int {
+	s.nextID++
+	return s.nextID
 }
 
 func (s *MemoryStore) UpdateIssue(_ Context, userID, workspaceID, issueID string, input UpdateIssueInput) (Issue, error) {
@@ -1657,6 +2430,64 @@ func (s *MemoryStore) UpdateComment(_ Context, user User, workspaceID, issueID, 
 	comment.Reactions = s.commentReactionSummariesLocked(comment.ID, user.ID)
 	s.comments[comment.ID] = comment
 	return comment, nil
+}
+
+func (s *MemoryStore) CreateIssueAttachment(_ Context, userID, workspaceID, issueID string, input CreateIssueAttachmentInput) (IssueAttachment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return IssueAttachment{}, ErrNotFound
+	}
+	issue, ok := s.issues[issueID]
+	if !ok || issue.WorkspaceID != workspaceID {
+		return IssueAttachment{}, ErrNotFound
+	}
+	filename := truncateString(strings.TrimSpace(input.Filename), 240)
+	if filename == "" {
+		filename = "image"
+	}
+	contentType := normalizeIssueAttachmentContentType(input.ContentType, input.Content)
+	if !allowedIssueAttachmentContentType(contentType) {
+		return IssueAttachment{}, errors.New("unsupported attachment content type")
+	}
+	if len(input.Content) == 0 {
+		return IssueAttachment{}, errors.New("attachment content is required")
+	}
+	if len(input.Content) > maxIssueAttachmentBytes {
+		return IssueAttachment{}, errors.New("attachment exceeds maximum size")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	attachment := IssueAttachment{
+		ID:             fmt.Sprintf("attachment-%04d", s.nextMemoryIDLocked()),
+		WorkspaceID:    workspaceID,
+		IssueID:        issue.ID,
+		Filename:       filename,
+		ContentType:    contentType,
+		SizeBytes:      int64(len(input.Content)),
+		StorageBackend: "memory_blob",
+		Content:        append([]byte(nil), input.Content...),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	s.attachments[attachment.ID] = attachment
+	return attachment, nil
+}
+
+func (s *MemoryStore) GetIssueAttachment(_ Context, userID, attachmentID string) (IssueAttachment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	attachment, ok := s.attachments[strings.TrimSpace(attachmentID)]
+	if !ok {
+		return IssueAttachment{}, ErrNotFound
+	}
+	if !s.isWorkspaceMember(attachment.WorkspaceID, strings.TrimSpace(userID)) {
+		return IssueAttachment{}, ErrNotFound
+	}
+	return attachment, nil
 }
 
 func (s *MemoryStore) SetCommentReaction(_ Context, user User, workspaceID, issueID, commentID, reaction string) error {
@@ -1951,6 +2782,9 @@ func (s *MemoryStore) UpdateRuntimeTaskStatus(_ Context, registration RuntimeReg
 	task.UpdatedAt = now
 	s.runtimeTasks[task.ID] = task
 	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, worker.ID, "", "status_changed", json.RawMessage(fmt.Sprintf(`{"status":%q,"error":%q}`, task.Status, task.Error)))
+	if isFinalRuntimeTaskStatus(task.Status) && task.Kind == "agent_session" {
+		s.reconcileAgentSessionRuntimeResultLocked(task)
+	}
 	return task, nil
 }
 

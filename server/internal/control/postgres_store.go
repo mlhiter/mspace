@@ -1538,6 +1538,11 @@ func (s *PostgresStore) UpdateRuntimeTaskStatus(ctx Context, registration Runtim
 	}); err != nil {
 		return RuntimeTask{}, err
 	}
+	if isFinalRuntimeTaskStatus(task.Status) && task.Kind == "agent_session" {
+		if err := s.reconcileAgentSessionRuntimeResult(dbctx, tx, task); err != nil {
+			return RuntimeTask{}, err
+		}
+	}
 	if err := tx.Commit(dbctx); err != nil {
 		return RuntimeTask{}, err
 	}

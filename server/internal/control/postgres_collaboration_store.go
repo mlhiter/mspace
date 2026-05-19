@@ -442,11 +442,11 @@ func (s *PostgresStore) GetIssue(ctx Context, userID, workspaceID, issueID strin
 	detail := IssueDetail{
 		TestEnvironment: nil,
 		Sessions:        []AgentSession{},
-		Evidence:        []any{},
-		Failures:        []any{},
+		Evidence:        []DeploymentEvidence{},
+		Failures:        []SessionFailure{},
 		ChangeNodes:     []IssueChangeNode{},
-		ReviewEvidence:  []any{},
-		Handoffs:        []any{},
+		ReviewEvidence:  []SessionReviewEvidence{},
+		Handoffs:        []IssueHandoff{},
 	}
 	row := s.pool.QueryRow(dbctx, `
 			SELECT
@@ -484,6 +484,26 @@ func (s *PostgresStore) GetIssue(ctx Context, userID, workspaceID, issueID strin
 		return IssueDetail{}, err
 	}
 	detail.ChangeNodes, err = s.listIssueChangeNodes(dbctx, workspaceID, issueID)
+	if err != nil {
+		return IssueDetail{}, err
+	}
+	detail.Evidence, err = s.listIssueDeploymentEvidence(dbctx, workspaceID, issueID)
+	if err != nil {
+		return IssueDetail{}, err
+	}
+	detail.ReviewEvidence, err = s.listIssueReviewEvidence(dbctx, workspaceID, issueID)
+	if err != nil {
+		return IssueDetail{}, err
+	}
+	detail.Failures, err = s.listIssueFailures(dbctx, workspaceID, issueID)
+	if err != nil {
+		return IssueDetail{}, err
+	}
+	detail.TestEnvironment, err = s.loadIssueTestEnvironmentOptional(dbctx, workspaceID, issueID)
+	if err != nil {
+		return IssueDetail{}, err
+	}
+	detail.Handoffs, err = s.listIssueHandoffs(dbctx, workspaceID, issueID)
 	if err != nil {
 		return IssueDetail{}, err
 	}
@@ -607,13 +627,33 @@ func (s *PostgresStore) GetSession(ctx Context, userID, workspaceID, sessionID s
 			CreatedAt: log.CreatedAt,
 		})
 	}
+	evidence, err := s.listIssueDeploymentEvidence(dbctx, workspaceID, task.IssueID)
+	if err != nil {
+		return SessionDetail{}, err
+	}
+	failures, err := s.listIssueFailures(dbctx, workspaceID, task.IssueID)
+	if err != nil {
+		return SessionDetail{}, err
+	}
+	sessionEvidence := make([]DeploymentEvidence, 0, len(evidence))
+	for _, item := range evidence {
+		if item.SessionID == session.ID {
+			sessionEvidence = append(sessionEvidence, item)
+		}
+	}
+	sessionFailures := make([]SessionFailure, 0, len(failures))
+	for _, item := range failures {
+		if item.SessionID == session.ID {
+			sessionFailures = append(sessionFailures, item)
+		}
+	}
 	return SessionDetail{
 		Session:   session,
 		Issue:     issue,
 		Project:   project,
 		Logs:      logs,
-		Evidence:  []any{},
-		Failures:  []any{},
+		Evidence:  sessionEvidence,
+		Failures:  sessionFailures,
 		Workspace: workspaceSnapshotFromRuntimeTask(task),
 	}, nil
 }
@@ -974,6 +1014,58 @@ func (s *PostgresStore) UpdateComment(ctx Context, user User, workspaceID, issue
 	return comment, err
 }
 
+func (s *PostgresStore) CreateIssueAttachment(ctx Context, userID, workspaceID, issueID string, input CreateIssueAttachmentInput) (IssueAttachment, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
+		return IssueAttachment{}, err
+	}
+	if _, err := loadIssue(dbctx, s.pool, workspaceID, issueID); err != nil {
+		return IssueAttachment{}, err
+	}
+	filename := truncateString(strings.TrimSpace(input.Filename), 240)
+	if filename == "" {
+		filename = "image"
+	}
+	contentType := normalizeIssueAttachmentContentType(input.ContentType, input.Content)
+	if !allowedIssueAttachmentContentType(contentType) {
+		return IssueAttachment{}, errors.New("unsupported attachment content type")
+	}
+	if len(input.Content) == 0 {
+		return IssueAttachment{}, errors.New("attachment content is required")
+	}
+	if len(input.Content) > maxIssueAttachmentBytes {
+		return IssueAttachment{}, errors.New("attachment exceeds maximum size")
+	}
+	row := s.pool.QueryRow(dbctx, `
+		INSERT INTO issue_attachments (workspace_id, issue_id, filename, content_type, size_bytes, storage_backend, content)
+		VALUES ($1, $2, $3, $4, $5, 'postgres_blob', $6)
+		RETURNING id::text, workspace_id::text, COALESCE(issue_id::text, ''), COALESCE(comment_id::text, ''), filename, content_type, size_bytes, storage_backend, storage_key, content, created_at, updated_at, bound_at
+	`, workspaceID, issueID, filename, contentType, len(input.Content), input.Content)
+	return scanIssueAttachment(row)
+}
+
+func (s *PostgresStore) GetIssueAttachment(ctx Context, userID, attachmentID string) (IssueAttachment, error) {
+	dbctx := asContext(ctx)
+	attachmentID = strings.TrimSpace(attachmentID)
+	userID = strings.TrimSpace(userID)
+	if attachmentID == "" || userID == "" {
+		return IssueAttachment{}, ErrNotFound
+	}
+	row := s.pool.QueryRow(dbctx, `
+		SELECT a.id::text, a.workspace_id::text, COALESCE(a.issue_id::text, ''), COALESCE(a.comment_id::text, ''), a.filename, a.content_type, a.size_bytes, a.storage_backend, a.storage_key, a.content, a.created_at, a.updated_at, a.bound_at
+		FROM issue_attachments a
+		JOIN workspace_members wm ON wm.workspace_id = a.workspace_id AND wm.user_id = $2
+		WHERE a.id = $1
+	`, attachmentID, userID)
+	attachment, err := scanIssueAttachment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return IssueAttachment{}, ErrNotFound
+	}
+	return attachment, err
+}
+
 func (s *PostgresStore) SetCommentReaction(ctx Context, user User, workspaceID, issueID, commentID, reaction string) error {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
@@ -1172,6 +1264,128 @@ func scanComment(row scanner) (Comment, error) {
 	return comment, nil
 }
 
+func scanIssueAttachment(row scanner) (IssueAttachment, error) {
+	var attachment IssueAttachment
+	var boundAt sql.NullTime
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&attachment.ID,
+		&attachment.WorkspaceID,
+		&attachment.IssueID,
+		&attachment.CommentID,
+		&attachment.Filename,
+		&attachment.ContentType,
+		&attachment.SizeBytes,
+		&attachment.StorageBackend,
+		&attachment.StorageKey,
+		&attachment.Content,
+		&createdAt,
+		&updatedAt,
+		&boundAt,
+	); err != nil {
+		return IssueAttachment{}, err
+	}
+	attachment.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	attachment.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	if boundAt.Valid {
+		attachment.BoundAt = boundAt.Time.UTC().Format(time.RFC3339)
+	}
+	return attachment, nil
+}
+
+func scanDeploymentEvidence(row scanner) (DeploymentEvidence, error) {
+	var evidence DeploymentEvidence
+	var createdAt time.Time
+	if err := row.Scan(&evidence.ID, &evidence.IssueID, &evidence.SessionID, &evidence.Cluster, &evidence.Namespace, &evidence.Summary, &evidence.Details, &createdAt); err != nil {
+		return DeploymentEvidence{}, err
+	}
+	evidence.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	return evidence, nil
+}
+
+func scanSessionFailure(row scanner) (SessionFailure, error) {
+	var failure SessionFailure
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&failure.ID,
+		&failure.IssueID,
+		&failure.SessionID,
+		&failure.Phase,
+		&failure.Status,
+		&failure.FailedCommand,
+		&failure.ErrorSummary,
+		&failure.ErrorExcerpt,
+		&failure.Cluster,
+		&failure.Namespace,
+		&failure.ResourceKind,
+		&failure.ResourceName,
+		&failure.EvidenceID,
+		&failure.ReviewEvidenceID,
+		&failure.RetrySessionID,
+		&failure.ContinuedSessionID,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return SessionFailure{}, err
+	}
+	failure.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	failure.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return failure, nil
+}
+
+func scanSessionReviewEvidence(row scanner) (SessionReviewEvidence, error) {
+	var review SessionReviewEvidence
+	var commandsBytes, testsBytes, buildBytes, deploymentBytes, risksBytes, followUpsBytes []byte
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&review.ID,
+		&review.IssueID,
+		&review.SessionID,
+		&review.SourceSessionID,
+		&review.SourceCommitSHA,
+		&review.Branch,
+		&review.AgentSummary,
+		&commandsBytes,
+		&testsBytes,
+		&buildBytes,
+		&deploymentBytes,
+		&risksBytes,
+		&followUpsBytes,
+		&review.PreviewURL,
+		&review.Cluster,
+		&review.Namespace,
+		&review.NamespaceStatus,
+		&review.CleanupStatus,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return SessionReviewEvidence{}, err
+	}
+	review.CommandsRun = decodeJSONSlice[ReviewEvidenceCommand](commandsBytes)
+	review.Tests = decodeJSONSlice[ReviewEvidenceCheck](testsBytes)
+	review.BuildResult = decodeJSONStruct[ReviewEvidenceResult](buildBytes)
+	review.DeploymentResult = decodeJSONStruct[ReviewEvidenceResult](deploymentBytes)
+	review.Risks = decodeJSONSlice[string](risksBytes)
+	review.FollowUps = decodeJSONSlice[string](followUpsBytes)
+	review.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	review.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return review, nil
+}
+
+func decodeJSONSlice[T any](payload []byte) []T {
+	var values []T
+	if err := json.Unmarshal(payload, &values); err != nil || values == nil {
+		return []T{}
+	}
+	return values
+}
+
+func decodeJSONStruct[T any](payload []byte) T {
+	var value T
+	_ = json.Unmarshal(payload, &value)
+	return value
+}
+
 func (s *PostgresStore) listIssueAgentSessions(ctx context.Context, workspaceID, issueID string) ([]AgentSession, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
@@ -1242,6 +1456,75 @@ func (s *PostgresStore) listIssueChangeNodes(ctx context.Context, workspaceID, i
 		nodes = append(nodes, node)
 	}
 	return nodes, rows.Err()
+}
+
+func (s *PostgresStore) listIssueDeploymentEvidence(ctx context.Context, workspaceID, issueID string) ([]DeploymentEvidence, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, issue_id::text, session_id, cluster, namespace, summary, details, created_at
+		FROM deployment_evidence
+		WHERE workspace_id = $1 AND issue_id = $2
+		ORDER BY created_at DESC, id DESC
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(issueID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	evidence := []DeploymentEvidence{}
+	for rows.Next() {
+		item, err := scanDeploymentEvidence(rows)
+		if err != nil {
+			return nil, err
+		}
+		evidence = append(evidence, item)
+	}
+	return evidence, rows.Err()
+}
+
+func (s *PostgresStore) listIssueReviewEvidence(ctx context.Context, workspaceID, issueID string) ([]SessionReviewEvidence, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, issue_id::text, session_id, source_session_id, source_commit_sha, branch, agent_summary, commands_json, tests_json, build_result_json, deployment_result_json, risks_json, follow_ups_json, preview_url, cluster, namespace, namespace_status, cleanup_status, created_at, updated_at
+		FROM session_review_evidence
+		WHERE workspace_id = $1 AND issue_id = $2
+		ORDER BY updated_at DESC, id DESC
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(issueID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	reviews := []SessionReviewEvidence{}
+	for rows.Next() {
+		review, err := scanSessionReviewEvidence(rows)
+		if err != nil {
+			return nil, err
+		}
+		reviews = append(reviews, review)
+	}
+	return reviews, rows.Err()
+}
+
+func (s *PostgresStore) listIssueFailures(ctx context.Context, workspaceID, issueID string) ([]SessionFailure, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, issue_id::text, session_id, phase, status, failed_command, error_summary, error_excerpt, cluster, namespace, resource_kind, resource_name, evidence_id, review_evidence_id, retry_session_id, continued_session_id, created_at, updated_at
+		FROM session_failures
+		WHERE workspace_id = $1 AND issue_id = $2
+		ORDER BY updated_at DESC, id DESC
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(issueID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	failures := []SessionFailure{}
+	for rows.Next() {
+		failure, err := scanSessionFailure(rows)
+		if err != nil {
+			return nil, err
+		}
+		failures = append(failures, failure)
+	}
+	return failures, rows.Err()
 }
 
 func scanRuntimeTaskAgentSession(row scanner) (AgentSession, error) {

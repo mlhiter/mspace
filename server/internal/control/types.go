@@ -297,6 +297,28 @@ type CommentReactionSummary struct {
 	ReactedByMe bool   `json:"reactedByMe"`
 }
 
+type IssueAttachment struct {
+	ID             string `json:"id"`
+	WorkspaceID    string `json:"workspaceId"`
+	IssueID        string `json:"issueId"`
+	CommentID      string `json:"commentId"`
+	Filename       string `json:"filename"`
+	ContentType    string `json:"contentType"`
+	SizeBytes      int64  `json:"sizeBytes"`
+	StorageBackend string `json:"storageBackend"`
+	StorageKey     string `json:"storageKey"`
+	Content        []byte `json:"-"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
+	BoundAt        string `json:"boundAt"`
+}
+
+type CreateIssueAttachmentInput struct {
+	Filename    string
+	ContentType string
+	Content     []byte
+}
+
 type IssueLabel struct {
 	ID        string `json:"id"`
 	IssueID   string `json:"issueId"`
@@ -322,18 +344,18 @@ type IssueLabelDefinition struct {
 }
 
 type IssueDetail struct {
-	Issue           Issue             `json:"issue"`
-	Project         Project           `json:"project"`
-	TestEnvironment any               `json:"testEnvironment"`
-	ChildIssues     []IssueListItem   `json:"childIssues"`
-	Labels          []IssueLabel      `json:"labels"`
-	Comments        []Comment         `json:"comments"`
-	Sessions        []AgentSession    `json:"sessions"`
-	Evidence        []any             `json:"evidence"`
-	Failures        []any             `json:"failures"`
-	ChangeNodes     []IssueChangeNode `json:"changeNodes"`
-	ReviewEvidence  []any             `json:"reviewEvidence"`
-	Handoffs        []any             `json:"handoffs"`
+	Issue           Issue                   `json:"issue"`
+	Project         Project                 `json:"project"`
+	TestEnvironment *IssueTestEnvironment   `json:"testEnvironment"`
+	ChildIssues     []IssueListItem         `json:"childIssues"`
+	Labels          []IssueLabel            `json:"labels"`
+	Comments        []Comment               `json:"comments"`
+	Sessions        []AgentSession          `json:"sessions"`
+	Evidence        []DeploymentEvidence    `json:"evidence"`
+	Failures        []SessionFailure        `json:"failures"`
+	ChangeNodes     []IssueChangeNode       `json:"changeNodes"`
+	ReviewEvidence  []SessionReviewEvidence `json:"reviewEvidence"`
+	Handoffs        []IssueHandoff          `json:"handoffs"`
 }
 
 type AgentSession struct {
@@ -423,14 +445,261 @@ type IssueChangeNode struct {
 	CreatedAt      string            `json:"createdAt"`
 }
 
+type DeploymentEvidence struct {
+	ID        string `json:"id"`
+	IssueID   string `json:"issueId"`
+	SessionID string `json:"sessionId"`
+	Cluster   string `json:"cluster"`
+	Namespace string `json:"namespace"`
+	Summary   string `json:"summary"`
+	Details   string `json:"details"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type SessionFailure struct {
+	ID                 string `json:"id"`
+	IssueID            string `json:"issueId"`
+	SessionID          string `json:"sessionId"`
+	Phase              string `json:"phase"`
+	Status             string `json:"status"`
+	FailedCommand      string `json:"failedCommand"`
+	ErrorSummary       string `json:"errorSummary"`
+	ErrorExcerpt       string `json:"errorExcerpt"`
+	Cluster            string `json:"cluster"`
+	Namespace          string `json:"namespace"`
+	ResourceKind       string `json:"resourceKind"`
+	ResourceName       string `json:"resourceName"`
+	EvidenceID         string `json:"evidenceId"`
+	ReviewEvidenceID   string `json:"reviewEvidenceId"`
+	RetrySessionID     string `json:"retrySessionId"`
+	ContinuedSessionID string `json:"continuedSessionId"`
+	CreatedAt          string `json:"createdAt"`
+	UpdatedAt          string `json:"updatedAt"`
+}
+
+type ReviewEvidenceCommand struct {
+	Command   string `json:"command"`
+	Status    string `json:"status"`
+	Category  string `json:"category"`
+	Summary   string `json:"summary"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type ReviewEvidenceCheck struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
+}
+
+type ReviewEvidenceResult struct {
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
+	Details string `json:"details"`
+}
+
+type SessionReviewEvidence struct {
+	ID               string                  `json:"id"`
+	IssueID          string                  `json:"issueId"`
+	SessionID        string                  `json:"sessionId"`
+	SourceSessionID  string                  `json:"sourceSessionId"`
+	SourceCommitSHA  string                  `json:"sourceCommitSha"`
+	Branch           string                  `json:"branch"`
+	AgentSummary     string                  `json:"agentSummary"`
+	CommandsRun      []ReviewEvidenceCommand `json:"commandsRun"`
+	Tests            []ReviewEvidenceCheck   `json:"tests"`
+	BuildResult      ReviewEvidenceResult    `json:"buildResult"`
+	DeploymentResult ReviewEvidenceResult    `json:"deploymentResult"`
+	Risks            []string                `json:"risks"`
+	FollowUps        []string                `json:"followUps"`
+	PreviewURL       string                  `json:"previewUrl"`
+	Cluster          string                  `json:"cluster"`
+	Namespace        string                  `json:"namespace"`
+	NamespaceStatus  string                  `json:"namespaceStatus"`
+	CleanupStatus    string                  `json:"cleanupStatus"`
+	CreatedAt        string                  `json:"createdAt"`
+	UpdatedAt        string                  `json:"updatedAt"`
+}
+
+type RuntimeTaskArtifactResult struct {
+	TestEnvironment *RuntimeTaskTestEnvironmentArtifact `json:"testEnvironment,omitempty"`
+	ReviewEvidence  *SessionReviewEvidenceArtifact      `json:"reviewEvidence,omitempty"`
+}
+
+type RuntimeTaskTestEnvironmentArtifact struct {
+	PreviewURL      string `json:"previewUrl"`
+	PreviewURLSnake string `json:"preview_url"`
+	URL             string `json:"url"`
+}
+
+type SessionReviewEvidenceArtifact struct {
+	AgentSummary     string                  `json:"agentSummary"`
+	CommandsRun      []ReviewEvidenceCommand `json:"commandsRun"`
+	Tests            []ReviewEvidenceCheck   `json:"tests"`
+	BuildResult      ReviewEvidenceResult    `json:"buildResult"`
+	DeploymentResult ReviewEvidenceResult    `json:"deploymentResult"`
+	Risks            []string                `json:"risks"`
+	FollowUps        []string                `json:"followUps"`
+}
+
+type IssueHandoffCommit struct {
+	SHA      string `json:"sha"`
+	ShortSHA string `json:"shortSha"`
+	Subject  string `json:"subject"`
+}
+
+type IssueHandoff struct {
+	ID              string               `json:"id"`
+	IssueID         string               `json:"issueId"`
+	SourceSessionID string               `json:"sourceSessionId"`
+	SourceCommitSHA string               `json:"sourceCommitSha"`
+	Branch          string               `json:"branch"`
+	HeadCommitSHA   string               `json:"headCommitSha"`
+	Commits         []IssueHandoffCommit `json:"commits"`
+	Kind            string               `json:"kind"`
+	PRURL           string               `json:"prUrl"`
+	PRNumber        int                  `json:"prNumber"`
+	PRState         string               `json:"prState"`
+	PRTitle         string               `json:"prTitle"`
+	PreviewURL      string               `json:"previewUrl"`
+	EvidenceSummary string               `json:"evidenceSummary"`
+	CreatedVia      string               `json:"createdVia"`
+	LastCheckedAt   string               `json:"lastCheckedAt"`
+	Error           string               `json:"error"`
+	CreatedAt       string               `json:"createdAt"`
+	UpdatedAt       string               `json:"updatedAt"`
+}
+
+type IssueTestEnvironment struct {
+	IssueID              string `json:"issueId"`
+	ClusterID            string `json:"clusterId"`
+	Namespace            string `json:"namespace"`
+	NamespaceStatus      string `json:"namespaceStatus"`
+	CleanupStatus        string `json:"cleanupStatus"`
+	PreviewURL           string `json:"previewUrl"`
+	ImageRegistryPrefix  string `json:"imageRegistryPrefix"`
+	KubeconfigPath       string `json:"kubeconfigPath"`
+	KubeContext          string `json:"kubeContext"`
+	ExposureMode         string `json:"exposureMode"`
+	PreviewDomain        string `json:"previewDomain"`
+	IngressClass         string `json:"ingressClass"`
+	NodeHost             string `json:"nodeHost"`
+	LastDeploySessionID  string `json:"lastDeploySessionId"`
+	LastCleanupSessionID string `json:"lastCleanupSessionId"`
+	SourceSessionID      string `json:"sourceSessionId"`
+	SourceCommitSHA      string `json:"sourceCommitSha"`
+	CreatedAt            string `json:"createdAt"`
+	UpdatedAt            string `json:"updatedAt"`
+}
+
+type IssueTestEnvironmentResources struct {
+	IssueID         string                         `json:"issueId"`
+	ClusterID       string                         `json:"clusterId"`
+	ClusterName     string                         `json:"clusterName"`
+	Context         string                         `json:"context"`
+	Namespace       string                         `json:"namespace"`
+	NamespaceStatus string                         `json:"namespaceStatus"`
+	CleanupStatus   string                         `json:"cleanupStatus"`
+	ExposureMode    string                         `json:"exposureMode"`
+	PreviewURL      string                         `json:"previewUrl"`
+	NodeHost        string                         `json:"nodeHost"`
+	RefreshedAt     string                         `json:"refreshedAt"`
+	Pods            []KubernetesPodResource        `json:"pods"`
+	Services        []KubernetesServiceResource    `json:"services"`
+	Deployments     []KubernetesDeploymentResource `json:"deployments"`
+	Ingresses       []KubernetesIngressResource    `json:"ingresses"`
+	Events          []KubernetesEventResource      `json:"events"`
+	Errors          []KubernetesResourceFetchError `json:"errors"`
+}
+
+type KubernetesResourceFetchError struct {
+	Section string `json:"section"`
+	Message string `json:"message"`
+}
+
+type KubernetesPodResource struct {
+	Name            string                   `json:"name"`
+	Phase           string                   `json:"phase"`
+	ReadyContainers int                      `json:"readyContainers"`
+	TotalContainers int                      `json:"totalContainers"`
+	Restarts        int32                    `json:"restarts"`
+	NodeName        string                   `json:"nodeName"`
+	PodIP           string                   `json:"podIp"`
+	HostIP          string                   `json:"hostIp"`
+	CreatedAt       string                   `json:"createdAt"`
+	Containers      []KubernetesPodContainer `json:"containers"`
+}
+
+type KubernetesPodContainer struct {
+	Name         string `json:"name"`
+	Ready        bool   `json:"ready"`
+	RestartCount int32  `json:"restartCount"`
+	State        string `json:"state"`
+	Reason       string `json:"reason"`
+}
+
+type KubernetesServiceResource struct {
+	Name       string                  `json:"name"`
+	Type       string                  `json:"type"`
+	ClusterIP  string                  `json:"clusterIp"`
+	ExternalIP string                  `json:"externalIp"`
+	CreatedAt  string                  `json:"createdAt"`
+	Ports      []KubernetesServicePort `json:"ports"`
+}
+
+type KubernetesServicePort struct {
+	Name       string `json:"name"`
+	Protocol   string `json:"protocol"`
+	Port       int32  `json:"port"`
+	TargetPort string `json:"targetPort"`
+	NodePort   int32  `json:"nodePort"`
+	URL        string `json:"url"`
+}
+
+type KubernetesDeploymentResource struct {
+	Name              string                `json:"name"`
+	Replicas          int32                 `json:"replicas"`
+	ReadyReplicas     int32                 `json:"readyReplicas"`
+	UpdatedReplicas   int32                 `json:"updatedReplicas"`
+	AvailableReplicas int32                 `json:"availableReplicas"`
+	CreatedAt         string                `json:"createdAt"`
+	Conditions        []KubernetesCondition `json:"conditions"`
+}
+
+type KubernetesCondition struct {
+	Type    string `json:"type"`
+	Status  string `json:"status"`
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}
+
+type KubernetesIngressResource struct {
+	Name      string   `json:"name"`
+	ClassName string   `json:"className"`
+	Hosts     []string `json:"hosts"`
+	Addresses []string `json:"addresses"`
+	CreatedAt string   `json:"createdAt"`
+}
+
+type KubernetesEventResource struct {
+	Type         string `json:"type"`
+	Reason       string `json:"reason"`
+	Message      string `json:"message"`
+	InvolvedKind string `json:"involvedKind"`
+	InvolvedName string `json:"involvedName"`
+	Count        int32  `json:"count"`
+	FirstSeen    string `json:"firstSeen"`
+	LastSeen     string `json:"lastSeen"`
+	CreatedAt    string `json:"createdAt"`
+}
+
 type SessionDetail struct {
-	Session   AgentSession      `json:"session"`
-	Issue     Issue             `json:"issue"`
-	Project   Project           `json:"project"`
-	Logs      []SessionLog      `json:"logs"`
-	Evidence  []any             `json:"evidence"`
-	Failures  []any             `json:"failures"`
-	Workspace WorkspaceSnapshot `json:"workspace"`
+	Session   AgentSession         `json:"session"`
+	Issue     Issue                `json:"issue"`
+	Project   Project              `json:"project"`
+	Logs      []SessionLog         `json:"logs"`
+	Evidence  []DeploymentEvidence `json:"evidence"`
+	Failures  []SessionFailure     `json:"failures"`
+	Workspace WorkspaceSnapshot    `json:"workspace"`
 }
 
 type CreateAgentSessionInput struct {
@@ -489,6 +758,114 @@ type CreateCommentInput struct {
 type UpdateCommentInput struct {
 	Body          string   `json:"body"`
 	AttachmentIDs []string `json:"attachmentIds"`
+}
+
+type WorkspaceSettings struct {
+	AutoCreateDraftPR bool   `json:"autoCreateDraftPr"`
+	CreatedAt         string `json:"createdAt"`
+	UpdatedAt         string `json:"updatedAt"`
+}
+
+type WorkspaceSettingsInput struct {
+	AutoCreateDraftPR bool `json:"autoCreateDraftPr"`
+}
+
+type AgentProfile struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Mention      string `json:"mention"`
+	Provider     string `json:"provider"`
+	Description  string `json:"description"`
+	Instructions string `json:"instructions"`
+	Enabled      bool   `json:"enabled"`
+	BuiltIn      bool   `json:"builtIn"`
+	SortOrder    int    `json:"sortOrder"`
+	CreatedAt    string `json:"createdAt"`
+	UpdatedAt    string `json:"updatedAt"`
+}
+
+type AgentProfileInput struct {
+	Name         string `json:"name"`
+	Mention      string `json:"mention"`
+	Provider     string `json:"provider"`
+	Description  string `json:"description"`
+	Instructions string `json:"instructions"`
+	Enabled      *bool  `json:"enabled"`
+}
+
+type Cluster struct {
+	ID                  string `json:"id"`
+	WorkspaceID         string `json:"workspaceId"`
+	Name                string `json:"name"`
+	KubeconfigPath      string `json:"kubeconfigPath"`
+	KubeContext         string `json:"kubeContext"`
+	ImageRegistryPrefix string `json:"imageRegistryPrefix"`
+	ExposureMode        string `json:"exposureMode"`
+	NodeHost            string `json:"nodeHost"`
+	PreviewDomain       string `json:"previewDomain"`
+	IngressClass        string `json:"ingressClass"`
+	Status              string `json:"status"`
+	LastCheckedAt       string `json:"lastCheckedAt"`
+	ProjectCount        int    `json:"projectCount"`
+	EnvironmentCount    int    `json:"environmentCount"`
+	CreatedAt           string `json:"createdAt"`
+	UpdatedAt           string `json:"updatedAt"`
+}
+
+type ClusterInput struct {
+	Name                string `json:"name"`
+	KubeconfigPath      string `json:"kubeconfigPath"`
+	KubeContext         string `json:"kubeContext"`
+	ImageRegistryPrefix string `json:"imageRegistryPrefix"`
+	ExposureMode        string `json:"exposureMode"`
+	NodeHost            string `json:"nodeHost"`
+	PreviewDomain       string `json:"previewDomain"`
+	IngressClass        string `json:"ingressClass"`
+	Status              string `json:"status"`
+}
+
+type KubeconfigImportSkip struct {
+	Path    string `json:"path"`
+	Context string `json:"context"`
+	Reason  string `json:"reason"`
+}
+
+type KubeconfigCandidate struct {
+	Path     string   `json:"path"`
+	Contexts []string `json:"contexts"`
+}
+
+type KubeconfigDiscoveryResult struct {
+	Candidates []KubeconfigCandidate  `json:"candidates"`
+	Skipped    []KubeconfigImportSkip `json:"skipped"`
+}
+
+type KubeconfigImportResult struct {
+	Imported []Cluster              `json:"imported"`
+	Skipped  []KubeconfigImportSkip `json:"skipped"`
+}
+
+type StartTestDeployInput struct {
+	AgentProfile    string `json:"agentProfile"`
+	ClusterID       string `json:"clusterId"`
+	ExposureMode    string `json:"exposureMode"`
+	PreviewDomain   string `json:"previewDomain"`
+	IngressClass    string `json:"ingressClass"`
+	NodeHost        string `json:"nodeHost"`
+	SourceSessionID string `json:"sourceSessionId"`
+	SourceCommitSHA string `json:"sourceCommitSha"`
+}
+
+type TestEnvironmentSessionResult struct {
+	SessionID       string               `json:"sessionId"`
+	TestEnvironment IssueTestEnvironment `json:"testEnvironment"`
+}
+
+type CreatePullRequestInput struct {
+	SourceSessionID string `json:"sourceSessionId"`
+	SourceCommitSHA string `json:"sourceCommitSha"`
+	Title           string `json:"title"`
+	Draft           bool   `json:"draft"`
 }
 
 type RuntimeRegistrationToken struct {
@@ -672,11 +1049,29 @@ type Store interface {
 	GetProjectRunbook(ctx Context, userID, workspaceID, projectID string) (ProjectRunbook, error)
 	UpdateProjectRunbook(ctx Context, userID, workspaceID, projectID string, input ProjectRunbookInput) (ProjectRunbook, error)
 	ListIssueLabelDefinitions(ctx Context, userID, workspaceID string) ([]IssueLabelDefinition, error)
+	GetWorkspaceSettings(ctx Context, userID, workspaceID string) (WorkspaceSettings, error)
+	UpdateWorkspaceSettings(ctx Context, userID, workspaceID string, input WorkspaceSettingsInput) (WorkspaceSettings, error)
+	ListAgentProfiles(ctx Context, userID, workspaceID string) ([]AgentProfile, error)
+	CreateAgentProfile(ctx Context, userID, workspaceID string, input AgentProfileInput) (AgentProfile, error)
+	UpdateAgentProfile(ctx Context, userID, workspaceID, agentID string, input AgentProfileInput) (AgentProfile, error)
+	ListClusters(ctx Context, userID, workspaceID string) ([]Cluster, error)
+	CreateCluster(ctx Context, userID, workspaceID string, input ClusterInput) (Cluster, error)
+	UpdateCluster(ctx Context, userID, workspaceID, clusterID string, input ClusterInput) (Cluster, error)
+	DeleteCluster(ctx Context, userID, workspaceID, clusterID string) error
+	DiscoverDefaultKubeconfigs(ctx Context, userID, workspaceID string) (KubeconfigDiscoveryResult, error)
+	ImportKubeconfigs(ctx Context, userID, workspaceID string, paths []string) (KubeconfigImportResult, error)
 	ListIssues(ctx Context, userID, workspaceID string) ([]IssueListItem, error)
 	CreateIssue(ctx Context, user User, workspaceID string, input CreateIssueInput) (string, error)
 	GetIssue(ctx Context, userID, workspaceID, issueID string) (IssueDetail, error)
 	CreateAgentSession(ctx Context, userID, workspaceID, issueID string, input CreateAgentSessionInput) (AgentSession, error)
 	GetSession(ctx Context, userID, workspaceID, sessionID string) (SessionDetail, error)
+	StartIssueTestDeploy(ctx Context, userID, workspaceID, issueID string, input StartTestDeployInput) (TestEnvironmentSessionResult, error)
+	RequestIssueTestEnvironmentCleanup(ctx Context, userID, workspaceID, issueID string, input StartTestDeployInput) (TestEnvironmentSessionResult, error)
+	RetainIssueTestEnvironment(ctx Context, userID, workspaceID, issueID string) (IssueTestEnvironment, error)
+	GetIssueTestEnvironmentResources(ctx Context, userID, workspaceID, issueID string) (IssueTestEnvironmentResources, error)
+	ProbeIssueTestEnvironment(ctx Context, userID, workspaceID, issueID string) (IssueTestEnvironment, error)
+	CreateIssuePullRequestHandoff(ctx Context, userID, workspaceID, issueID string, input CreatePullRequestInput) (IssueHandoff, error)
+	RefreshIssueHandoff(ctx Context, userID, workspaceID, issueID, handoffID string) (IssueHandoff, error)
 	UpdateIssue(ctx Context, userID, workspaceID, issueID string, input UpdateIssueInput) (Issue, error)
 	CreateIssueTask(ctx Context, userID, workspaceID, issueID string, input IssueTaskInput) (IssueListItem, error)
 	DeleteIssueTask(ctx Context, userID, workspaceID, issueID, taskID string) error
@@ -685,6 +1080,8 @@ type Store interface {
 	MarkIssueTriageFailed(ctx Context, workspaceID, issueID string) error
 	AddComment(ctx Context, user User, workspaceID, issueID string, input CreateCommentInput) (string, error)
 	UpdateComment(ctx Context, user User, workspaceID, issueID, commentID string, input UpdateCommentInput) (Comment, error)
+	CreateIssueAttachment(ctx Context, userID, workspaceID, issueID string, input CreateIssueAttachmentInput) (IssueAttachment, error)
+	GetIssueAttachment(ctx Context, userID, attachmentID string) (IssueAttachment, error)
 	SetCommentReaction(ctx Context, user User, workspaceID, issueID, commentID, reaction string) error
 	DeleteCommentReaction(ctx Context, userID, workspaceID, issueID, commentID, reaction string) error
 	CreateRuntimeRegistrationToken(ctx Context, userID, workspaceID string, input CreateRuntimeRegistrationTokenInput) (RuntimeRegistrationTokenResult, error)
