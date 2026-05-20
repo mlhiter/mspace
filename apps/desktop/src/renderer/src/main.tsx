@@ -11,7 +11,7 @@ import {
   Navigate,
   RouterProvider,
 } from "@tanstack/react-router";
-import { GitBranch, LoaderCircle, UsersRound, X } from "lucide-react";
+import { GitBranch, LoaderCircle, LogIn, UsersRound, X } from "lucide-react";
 import {
   AgentsPage,
   ClustersPage,
@@ -62,6 +62,10 @@ function RootShell() {
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(() => window.localStorage.getItem(SELECTED_WORKSPACE_STORAGE_KEY) || "");
   const [pendingAuthState, setPendingAuthState] = useState("");
+  const [passwordAuthMode, setPasswordAuthMode] = useState<"login" | "register">("login");
+  const [passwordAuthLogin, setPasswordAuthLogin] = useState("");
+  const [passwordAuthPassword, setPasswordAuthPassword] = useState("");
+  const [passwordAuthName, setPasswordAuthName] = useState("");
   const [teamWorkspaceModalOpen, setTeamWorkspaceModalOpen] = useState(false);
   const [teamWorkspaceName, setTeamWorkspaceName] = useState("");
 
@@ -90,17 +94,39 @@ function RootShell() {
     retry: false,
   });
 
-  useEffect(() => {
-    if (!pollQuery.data || pollQuery.data.pending) return;
-    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, pollQuery.data.token);
-    setStoredAuthIdentity(pollQuery.data.user);
-    setAuthToken(pollQuery.data.token);
-    const firstWorkspaceId = pollQuery.data.workspaces[0]?.id || "";
+  function applyAuthResult(result: AuthMeResult & { token: string }) {
+    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, result.token);
+    setStoredAuthIdentity(result.user);
+    setAuthToken(result.token);
+    const firstWorkspaceId = result.workspaces[0]?.id || "";
     if (firstWorkspaceId) {
       window.localStorage.setItem(SELECTED_WORKSPACE_STORAGE_KEY, firstWorkspaceId);
       setSelectedWorkspaceId(firstWorkspaceId);
     }
     setPendingAuthState("");
+  }
+
+  const passwordAuthMutation = useMutation({
+    mutationFn: () => {
+      signInMutation.reset();
+      const input = {
+        login: passwordAuthLogin.trim(),
+        password: passwordAuthPassword,
+        name: passwordAuthName.trim(),
+      };
+      return passwordAuthMode === "register"
+        ? controlPlaneApi.registerWithPassword(input)
+        : controlPlaneApi.loginWithPassword(input);
+    },
+    onSuccess: (result) => {
+      applyAuthResult(result);
+      setPasswordAuthPassword("");
+    },
+  });
+
+  useEffect(() => {
+    if (!pollQuery.data || pollQuery.data.pending) return;
+    applyAuthResult(pollQuery.data);
   }, [pollQuery.data]);
 
   useEffect(() => {
@@ -203,7 +229,7 @@ function RootShell() {
     });
   }
 
-  const authError = signInMutation.error || pollQuery.error || (authToken !== "" ? meQuery.error : null);
+  const authError = passwordAuthMutation.error || signInMutation.error || pollQuery.error || (authToken !== "" ? meQuery.error : null);
   const accountStatus =
     authToken && meQuery.data
       ? "signed-in"
@@ -301,8 +327,27 @@ function RootShell() {
           status={accountStatus}
           error={authError instanceof Error ? authError.message : undefined}
           actionLabel={pendingAuthState ? t("workspace.waitingForGitHub") : undefined}
-          onSignIn={() => signInMutation.mutate()}
-          isBusy={pendingAuthState !== "" || signInMutation.isPending}
+          mode={passwordAuthMode}
+          login={passwordAuthLogin}
+          password={passwordAuthPassword}
+          name={passwordAuthName}
+          onModeChange={(mode) => {
+            setPasswordAuthMode(mode);
+            passwordAuthMutation.reset();
+          }}
+          onLoginChange={setPasswordAuthLogin}
+          onPasswordChange={setPasswordAuthPassword}
+          onNameChange={setPasswordAuthName}
+          onPasswordSubmit={(event) => {
+            event.preventDefault();
+            passwordAuthMutation.mutate();
+          }}
+          onGitHubSignIn={() => {
+            passwordAuthMutation.reset();
+            signInMutation.mutate();
+          }}
+          isBusy={pendingAuthState !== "" || signInMutation.isPending || passwordAuthMutation.isPending}
+          isGitHubBusy={pendingAuthState !== "" || signInMutation.isPending}
         />
       ) : null}
       {teamWorkspaceModalOpen ? (
@@ -342,17 +387,28 @@ function AuthRequiredOverlay(props: {
   status: "signed-in" | "signed-out" | "loading" | "error";
   error?: string;
   actionLabel?: string;
+  mode: "login" | "register";
+  login: string;
+  password: string;
+  name: string;
   isBusy?: boolean;
-  onSignIn: () => void;
+  isGitHubBusy?: boolean;
+  onModeChange: (mode: "login" | "register") => void;
+  onLoginChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onNameChange: (value: string) => void;
+  onPasswordSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onGitHubSignIn: () => void;
 }) {
   const busy = props.status === "loading" || props.isBusy;
   const { t } = useMspaceTranslation();
+  const passwordDisabled = busy || props.login.trim() === "" || props.password === "" || (props.mode === "register" && props.password.length < 8);
   return (
     <div className="fixed inset-0 z-[90] grid place-items-center bg-[color:var(--canvas)] px-6">
-      <section className="w-full max-w-[420px] rounded-[12px] bg-[color:var(--paper)] px-6 py-6 shadow-[0_24px_80px_rgba(0,0,0,0.14),inset_0_0_0_1px_var(--line)]">
+      <section className="w-full max-w-[440px] rounded-[12px] bg-[color:var(--paper)] px-6 py-6 shadow-[0_24px_80px_rgba(0,0,0,0.14),inset_0_0_0_1px_var(--line)]">
         <div className="flex items-center gap-3">
           <span className="grid size-10 place-items-center rounded-[10px] bg-[color:var(--block)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-            {busy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
+            {busy ? <LoaderCircle data-icon className="animate-spin" /> : <LogIn data-icon />}
           </span>
           <div className="min-w-0">
             <h1 className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">{t("auth.signInTitle")}</h1>
@@ -362,9 +418,59 @@ function AuthRequiredOverlay(props: {
           </div>
         </div>
         {props.error ? <div className="mt-4"><Notice tone="danger">{props.error}</Notice></div> : null}
-        <Button type="button" className="mt-5 w-full justify-center" disabled={busy} onClick={props.onSignIn}>
-          {busy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
-          {props.actionLabel || (busy ? t("workspace.waitingForGitHub") : t("workspace.signInWithGitHub"))}
+        <div className="mt-5 grid grid-cols-2 rounded-[8px] bg-[color:var(--block)] p-1 shadow-[inset_0_0_0_1px_var(--line)]">
+          {(["login", "register"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={`h-8 rounded-[6px] text-[12px] font-medium transition-colors ${
+                props.mode === mode ? "bg-[color:var(--paper)] text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--line)]" : "text-[color:var(--muted)]"
+              }`}
+              disabled={busy}
+              onClick={() => props.onModeChange(mode)}
+            >
+              {mode === "login" ? t("auth.passwordLoginTab") : t("auth.passwordRegisterTab")}
+            </button>
+          ))}
+        </div>
+        <form className="mt-4 grid gap-3" onSubmit={props.onPasswordSubmit}>
+          <Field label={t("auth.loginLabel")}>
+            <Input
+              value={props.login}
+              onChange={(event) => props.onLoginChange(event.target.value)}
+              placeholder={t("auth.loginPlaceholder")}
+              autoComplete="username"
+              autoFocus
+            />
+          </Field>
+          {props.mode === "register" ? (
+            <Field label={t("auth.nameLabel")}>
+              <Input
+                value={props.name}
+                onChange={(event) => props.onNameChange(event.target.value)}
+                placeholder={t("auth.namePlaceholder")}
+                autoComplete="name"
+              />
+            </Field>
+          ) : null}
+          <Field label={t("auth.passwordLabel")}>
+            <Input
+              type="password"
+              value={props.password}
+              onChange={(event) => props.onPasswordChange(event.target.value)}
+              placeholder={t("auth.passwordPlaceholder")}
+              autoComplete={props.mode === "register" ? "new-password" : "current-password"}
+            />
+          </Field>
+          <Button type="submit" className="w-full justify-center" disabled={passwordDisabled}>
+            {busy && !props.isGitHubBusy ? <LoaderCircle data-icon className="animate-spin" /> : <LogIn data-icon />}
+            {props.mode === "register" ? t("auth.createAccount") : t("auth.signIn")}
+          </Button>
+        </form>
+        <div className="my-4 h-px bg-[color:var(--line)]" />
+        <Button type="button" variant="secondary" className="w-full justify-center" disabled={busy} onClick={props.onGitHubSignIn}>
+          {props.isGitHubBusy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
+          {props.actionLabel || (props.isGitHubBusy ? t("workspace.waitingForGitHub") : t("workspace.signInWithGitHub"))}
         </Button>
       </section>
     </div>
