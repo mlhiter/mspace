@@ -1543,6 +1543,11 @@ func (s *PostgresStore) UpdateRuntimeTaskStatus(ctx Context, registration Runtim
 			return RuntimeTask{}, err
 		}
 	}
+	if isFinalRuntimeTaskStatus(task.Status) && task.Kind == "issue_type_triage" {
+		if err := s.reconcileIssueTypeTriageRuntimeResult(dbctx, tx, task); err != nil {
+			return RuntimeTask{}, err
+		}
+	}
 	if err := tx.Commit(dbctx); err != nil {
 		return RuntimeTask{}, err
 	}

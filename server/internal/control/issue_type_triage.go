@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 )
 
-const issueTypeTriageTimeout = 2 * time.Minute
+type issueTypeTriageDetail struct {
+	Issue     Issue
+	Project   Project
+	Labels    []IssueLabel
+	Workspace Workspace
+}
 
 type issueTypeTriageResult struct {
 	Type       string  `json:"type"`
@@ -22,10 +25,11 @@ type issueTypeTriageResult struct {
 
 var errIssueTypeTriageNotNeeded = errors.New("issue does not need type triage")
 
-func (s *Server) startIssueTypeTriage(workspaceID, issueID string) {
+func (s *Server) startIssueTypeTriage(userID, workspaceID, issueID string) {
+	userID = strings.TrimSpace(userID)
 	workspaceID = strings.TrimSpace(workspaceID)
 	issueID = strings.TrimSpace(issueID)
-	if workspaceID == "" || issueID == "" {
+	if userID == "" || workspaceID == "" || issueID == "" {
 		return
 	}
 	key := workspaceID + "/" + issueID
@@ -42,160 +46,252 @@ func (s *Server) startIssueTypeTriage(workspaceID, issueID string) {
 			delete(s.triageInFlight, key)
 			s.triageMu.Unlock()
 		}()
-		s.triageIssueType(workspaceID, issueID)
+		if err := s.enqueueIssueTypeTriage(context.Background(), userID, workspaceID, issueID); err != nil {
+			if errors.Is(err, errIssueTypeTriageNotNeeded) {
+				return
+			}
+			slog.Warn("failed to enqueue issue type triage", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
+		}
 	}()
 }
 
-func (s *Server) triageIssueType(workspaceID, issueID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), issueTypeTriageTimeout)
-	defer cancel()
-
-	result, err := s.classifyIssueType(ctx, workspaceID, issueID)
-	if err != nil {
-		if errors.Is(err, errIssueTypeTriageNotNeeded) {
-			return
-		}
-		slog.Warn("issue type triage failed", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
-		if markErr := s.store.MarkIssueTriageFailed(context.Background(), workspaceID, issueID); markErr != nil {
-			slog.Warn("failed to mark issue triage failed", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", markErr.Error()))
-		}
-		return
-	}
-	if err := s.store.ApplyIssueTypeClassification(context.Background(), workspaceID, issueID, "type:"+result.Type); err != nil {
-		slog.Warn("failed to apply issue type triage", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
-		if markErr := s.store.MarkIssueTriageFailed(context.Background(), workspaceID, issueID); markErr != nil {
-			slog.Warn("failed to mark issue triage failed", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", markErr.Error()))
-		}
-	}
-}
-
-func (s *Server) classifyIssueType(ctx context.Context, workspaceID, issueID string) (issueTypeTriageResult, error) {
+func (s *Server) enqueueIssueTypeTriage(ctx context.Context, userID, workspaceID, issueID string) error {
 	detail, err := s.loadIssueForTypeTriage(ctx, workspaceID, issueID)
 	if err != nil {
-		return issueTypeTriageResult{}, err
+		return err
 	}
 	if detail.Issue.TriageStatus != "pending" || hasIssueLabelDimension(detail.Labels, issueLabelDimensionType) {
-		return issueTypeTriageResult{}, errIssueTypeTriageNotNeeded
+		return errIssueTypeTriageNotNeeded
 	}
-	codexPath, err := exec.LookPath("codex")
+	active, err := s.hasActiveIssueTypeTriageTask(ctx, workspaceID, issueID)
 	if err != nil {
-		return issueTypeTriageResult{}, errors.New("codex CLI is not available on PATH")
+		return err
 	}
-	cwd := strings.TrimSpace(detail.Project.RepoPath)
-	if cwd == "" {
-		cwd = os.TempDir()
+	if active {
+		return errIssueTypeTriageNotNeeded
 	}
-	client, err := startIssueTypeTriageCodexAppServer(codexPath, cwd)
+	capabilities, err := json.Marshal(map[string]bool{"codex": true})
 	if err != nil {
-		return issueTypeTriageResult{}, err
+		return err
 	}
-	defer client.close()
-
-	var initResp codexInitializeResponse
-	if err := client.request(ctx, "initialize", map[string]any{
-		"clientInfo": map[string]any{
-			"name":    "mspace-triage",
-			"title":   "mspace triage",
-			"version": "0.1.0",
-		},
-		"capabilities": map[string]any{
-			"experimentalApi": true,
-		},
-	}, &initResp); err != nil {
-		return issueTypeTriageResult{}, fmt.Errorf("initialize codex app-server: %w", err)
-	}
-
-	var threadResp codexThreadStartResponse
-	if err := client.request(ctx, "thread/start", map[string]any{
-		"cwd":                    cwd,
-		"approvalPolicy":         "never",
-		"approvalsReviewer":      "user",
-		"sandbox":                "danger-full-access",
-		"developerInstructions":  buildIssueTypeTriageDeveloperInstructions(),
-		"personality":            "pragmatic",
-		"ephemeral":              true,
-		"sessionStartSource":     "startup",
-		"serviceName":            "mspace-triage",
-		"experimentalRawEvents":  false,
-		"persistExtendedHistory": false,
-	}, &threadResp); err != nil {
-		return issueTypeTriageResult{}, fmt.Errorf("start codex triage thread: %w", err)
-	}
-	if strings.TrimSpace(threadResp.Thread.ID) == "" {
-		return issueTypeTriageResult{}, errors.New("codex app-server returned an empty triage thread id")
-	}
-
-	var turnResp codexTurnStartResponse
-	if err := client.request(ctx, "turn/start", map[string]any{
-		"threadId": threadResp.Thread.ID,
-		"input": []map[string]any{
-			{
-				"type":          "text",
-				"text":          buildIssueTypeTriagePrompt(detail),
-				"text_elements": []map[string]any{},
-			},
-		},
-		"cwd":            cwd,
-		"approvalPolicy": "never",
-		"sandboxPolicy": map[string]any{
-			"type": "dangerFullAccess",
-		},
-		"responsesapiClientMetadata": map[string]string{
-			"mspace.issue_id": issueID,
-			"mspace.task":     "issue_type_triage",
-		},
-	}, &turnResp); err != nil {
-		return issueTypeTriageResult{}, fmt.Errorf("start codex triage turn: %w", err)
-	}
-	if strings.TrimSpace(turnResp.Turn.ID) == "" {
-		return issueTypeTriageResult{}, errors.New("codex app-server returned an empty triage turn id")
-	}
-
-	message, err := waitCodexTitleTurn(ctx, client, threadResp.Thread.ID, turnResp.Turn.ID)
+	payload, err := json.Marshal(buildIssueTypeTriagePayload(detail))
 	if err != nil {
-		return issueTypeTriageResult{}, err
+		return err
 	}
-	return parseIssueTypeTriageResult(message)
+	workspace := workspaceForTriage(detail, workspaceID)
+	_, err = s.store.CreateRuntimeTask(ctx, userID, workspaceID, CreateRuntimeTaskInput{
+		IssueID:              detail.Issue.ID,
+		ProjectID:            detail.Issue.ProjectID,
+		Kind:                 "issue_type_triage",
+		Priority:             0,
+		RuntimeMode:          workspace.Kind,
+		RequiredCapabilities: capabilities,
+		Payload:              payload,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func (s *Server) loadIssueForTypeTriage(ctx context.Context, workspaceID, issueID string) (IssueDetail, error) {
+func (s *Server) hasActiveIssueTypeTriageTask(ctx context.Context, workspaceID, issueID string) (bool, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	switch store := s.store.(type) {
+	case *PostgresStore:
+		var exists bool
+		if err := store.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				FROM runtime_tasks
+				WHERE workspace_id = $1
+					AND issue_id = $2
+					AND kind = 'issue_type_triage'
+					AND status IN ('queued', 'claimed', 'running')
+			)
+		`, workspaceID, issueID).Scan(&exists); err != nil {
+			return false, err
+		}
+		return exists, nil
+	case *MemoryStore:
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		for _, task := range store.runtimeTasks {
+			if task.WorkspaceID == workspaceID &&
+				task.IssueID == issueID &&
+				task.Kind == "issue_type_triage" &&
+				(task.Status == "queued" || task.Status == "claimed" || task.Status == "running") {
+				return true, nil
+			}
+		}
+		return false, nil
+	default:
+		return false, nil
+	}
+}
+
+func buildIssueTypeTriagePayload(detail issueTypeTriageDetail) map[string]any {
+	return map[string]any{
+		"issueId":               detail.Issue.ID,
+		"workspaceId":           detail.Issue.WorkspaceID,
+		"projectId":             detail.Issue.ProjectID,
+		"developerInstructions": buildIssueTypeTriageDeveloperInstructions(),
+		"prompt":                buildIssueTypeTriagePrompt(detail),
+		"issue": map[string]any{
+			"title":  detail.Issue.Title,
+			"body":   detail.Issue.Body,
+			"status": detail.Issue.Status,
+		},
+		"project": map[string]any{
+			"name":          detail.Project.Name,
+			"repoPath":      detail.Project.RepoPath,
+			"remoteUrl":     detail.Project.RemoteURL,
+			"gitOwner":      detail.Project.GitOwner,
+			"gitRepo":       detail.Project.GitRepo,
+			"defaultBranch": detail.Project.DefaultBranch,
+		},
+	}
+}
+
+func (s *Server) loadIssueForTypeTriage(ctx context.Context, workspaceID, issueID string) (issueTypeTriageDetail, error) {
 	switch store := s.store.(type) {
 	case *PostgresStore:
 		issue, err := loadIssue(ctx, store.pool, workspaceID, issueID)
 		if err != nil {
-			return IssueDetail{}, err
+			return issueTypeTriageDetail{}, err
 		}
 		project := Project{}
 		if issue.ProjectID != "" {
 			project, err = resolveIssueProject(ctx, store.pool, workspaceID, issue.ProjectID, "")
 			if err != nil {
-				return IssueDetail{}, err
+				return issueTypeTriageDetail{}, err
 			}
 		}
 		labels, err := listIssueLabels(ctx, store.pool, workspaceID, issueID)
 		if err != nil {
-			return IssueDetail{}, err
+			return issueTypeTriageDetail{}, err
 		}
-		return IssueDetail{Issue: issue, Project: project, Labels: labels}, nil
+		workspace, err := loadWorkspaceForIssueTriage(ctx, store.pool, workspaceID)
+		if err != nil {
+			return issueTypeTriageDetail{}, err
+		}
+		return issueTypeTriageDetail{Issue: issue, Project: project, Labels: labels, Workspace: workspace}, nil
 	case *MemoryStore:
 		store.mu.Lock()
 		defer store.mu.Unlock()
 		issue, ok := store.issues[strings.TrimSpace(issueID)]
 		if !ok || issue.WorkspaceID != strings.TrimSpace(workspaceID) {
-			return IssueDetail{}, ErrNotFound
+			return issueTypeTriageDetail{}, ErrNotFound
 		}
-		return IssueDetail{
-			Issue:   issue,
-			Project: store.projects[issue.ProjectID],
-			Labels:  store.issueLabels[issue.ID],
+		workspace, _ := store.workspaceLocked(workspaceID)
+		return issueTypeTriageDetail{
+			Issue:     issue,
+			Project:   store.projects[issue.ProjectID],
+			Labels:    store.issueLabels[issue.ID],
+			Workspace: workspace,
 		}, nil
 	default:
-		return store.GetIssue(ctx, "", workspaceID, issueID)
+		detail, err := store.GetIssue(ctx, "", workspaceID, issueID)
+		if err != nil {
+			return issueTypeTriageDetail{}, err
+		}
+		return issueTypeTriageDetail{
+			Issue:     detail.Issue,
+			Project:   detail.Project,
+			Labels:    detail.Labels,
+			Workspace: Workspace{ID: strings.TrimSpace(workspaceID), Kind: "team"},
+		}, nil
 	}
 }
 
-func startIssueTypeTriageCodexAppServer(codexPath, cwd string) (*codexAppServerClient, error) {
-	return startCodexAppServer(codexPath, cwd)
+func loadWorkspaceForIssueTriage(ctx context.Context, q queryer, workspaceID string) (Workspace, error) {
+	row := q.QueryRow(ctx, `
+		SELECT id::text, name, slug, kind, '', created_at, updated_at
+		FROM workspaces
+		WHERE id = $1
+	`, strings.TrimSpace(workspaceID))
+	var workspace Workspace
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &createdAt, &updatedAt); err != nil {
+		return Workspace{}, err
+	}
+	workspace.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	workspace.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return workspace, nil
+}
+
+func workspaceForTriage(detail issueTypeTriageDetail, workspaceID string) Workspace {
+	workspace := detail.Workspace
+	if strings.TrimSpace(workspace.ID) == "" {
+		workspace.ID = strings.TrimSpace(workspaceID)
+	}
+	if strings.TrimSpace(workspace.Kind) == "" {
+		workspace.Kind = "team"
+	}
+	return workspace
+}
+
+func (s *PostgresStore) reconcileIssueTypeTriageRuntimeResult(ctx context.Context, q queryer, task RuntimeTask) error {
+	if task.Status != "completed" {
+		return markIssueTriageFailed(ctx, q, task.WorkspaceID, task.IssueID)
+	}
+	result, err := parseIssueTypeTriageResult(string(task.Result))
+	if err != nil {
+		return markIssueTriageFailed(ctx, q, task.WorkspaceID, task.IssueID)
+	}
+	return applyIssueTypeClassification(ctx, q, task.WorkspaceID, task.IssueID, "type:"+result.Type)
+}
+
+func applyIssueTypeClassification(ctx context.Context, q queryer, workspaceID, issueID string, labelKey string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	labels, err := normalizeIssueLabelKeys([]string{labelKey})
+	if err != nil {
+		return err
+	}
+	if !hasIssueLabelDimension(labels, issueLabelDimensionType) {
+		return errors.New("issue type label is required")
+	}
+	issue, err := loadIssue(ctx, q, workspaceID, issueID)
+	if err != nil {
+		return err
+	}
+	if issue.TriageStatus != "pending" {
+		return nil
+	}
+	existingLabels, err := listIssueLabels(ctx, q, workspaceID, issueID)
+	if err != nil {
+		return err
+	}
+	nextLabels := replaceIssueLabelDimension(existingLabels, issueLabelDimensionType, labels[0])
+	if err := replaceIssueLabels(ctx, q, workspaceID, issueID, nextLabels); err != nil {
+		return err
+	}
+	_, err = q.Exec(ctx, `
+		UPDATE issues
+		SET triage_status = 'classified', updated_at = now()
+		WHERE workspace_id = $1 AND id = $2 AND triage_status = 'pending'
+	`, workspaceID, issueID)
+	return err
+}
+
+func markIssueTriageFailed(ctx context.Context, q queryer, workspaceID, issueID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	tag, err := q.Exec(ctx, `
+		UPDATE issues
+		SET triage_status = 'failed', updated_at = now()
+		WHERE workspace_id = $1 AND id = $2 AND triage_status = 'pending'
+	`, workspaceID, issueID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		if _, err := loadIssue(ctx, q, workspaceID, issueID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func buildIssueTypeTriageDeveloperInstructions() string {
@@ -215,7 +311,7 @@ Rules:
 `)
 }
 
-func buildIssueTypeTriagePrompt(detail IssueDetail) string {
+func buildIssueTypeTriagePrompt(detail issueTypeTriageDetail) string {
 	var builder strings.Builder
 	builder.WriteString("# Issue Type Triage\n\n")
 	builder.WriteString("Return exactly this JSON shape:\n")

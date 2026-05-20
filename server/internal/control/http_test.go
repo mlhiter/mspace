@@ -1032,6 +1032,100 @@ func TestIssueTypeTriageStoreTransitions(t *testing.T) {
 	}
 }
 
+func TestIssueTypeTriageRuntimeTaskResultAppliesLabel(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "triage-worker-user",
+		Login:          "triage-worker-user",
+		Name:           "Triage Worker User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{Body: "Fix worker-backed issue type triage"})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createTokenRecorder := httptest.NewRecorder()
+	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"triage worker","expiresInHours":12}`))
+	createTokenReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createTokenRecorder, createTokenReq)
+	if createTokenRecorder.Code != http.StatusCreated {
+		t.Fatalf("create runtime token status=%d body=%s", createTokenRecorder.Code, createTokenRecorder.Body.String())
+	}
+	var tokenResult RuntimeRegistrationTokenResult
+	if err := json.Unmarshal(createTokenRecorder.Body.Bytes(), &tokenResult); err != nil {
+		t.Fatalf("parse runtime token: %v", err)
+	}
+
+	registerRecorder := httptest.NewRecorder()
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"triage-worker","mode":"personal","version":"0.1.0","capabilities":{"codex":true},"labels":{"host":"test"}}`))
+	registerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(registerRecorder, registerReq)
+	if registerRecorder.Code != http.StatusCreated {
+		t.Fatalf("register worker status=%d body=%s", registerRecorder.Code, registerRecorder.Body.String())
+	}
+	var worker RuntimeWorker
+	if err := json.Unmarshal(registerRecorder.Body.Bytes(), &worker); err != nil {
+		t.Fatalf("parse worker: %v", err)
+	}
+
+	if err := server.enqueueIssueTypeTriage(context.Background(), user.ID, workspaceID, issueID); err != nil {
+		t.Fatalf("enqueue issue type triage: %v", err)
+	}
+
+	claimRecorder := httptest.NewRecorder()
+	claimReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	claimReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(claimRecorder, claimReq)
+	if claimRecorder.Code != http.StatusOK {
+		t.Fatalf("claim triage task status=%d body=%s", claimRecorder.Code, claimRecorder.Body.String())
+	}
+	var task RuntimeTask
+	if err := json.Unmarshal(claimRecorder.Body.Bytes(), &task); err != nil {
+		t.Fatalf("parse claimed triage task: %v", err)
+	}
+	if task.Kind != "issue_type_triage" || task.IssueID != issueID || task.RuntimeMode != "personal" || !strings.Contains(string(task.RequiredCapabilities), `"codex":true`) {
+		t.Fatalf("unexpected triage task: %+v", task)
+	}
+
+	runningRecorder := httptest.NewRecorder()
+	runningReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"running"}`))
+	runningReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(runningRecorder, runningReq)
+	if runningRecorder.Code != http.StatusOK {
+		t.Fatalf("running update status=%d body=%s", runningRecorder.Code, runningRecorder.Body.String())
+	}
+
+	completedRecorder := httptest.NewRecorder()
+	completedReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"completed","result":{"type":"fix","confidence":0.91,"reason":"bug fix"}}`))
+	completedReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(completedRecorder, completedReq)
+	if completedRecorder.Code != http.StatusOK {
+		t.Fatalf("completed update status=%d body=%s", completedRecorder.Code, completedRecorder.Body.String())
+	}
+
+	detail, err := store.GetIssue(context.Background(), user.ID, workspaceID, issueID)
+	if err != nil {
+		t.Fatalf("get triaged issue: %v", err)
+	}
+	if detail.Issue.TriageStatus != "classified" {
+		t.Fatalf("expected classified triage, got %q", detail.Issue.TriageStatus)
+	}
+	if len(detail.Labels) != 1 || detail.Labels[0].Key != "type:fix" {
+		t.Fatalf("expected type:fix label, got %+v", detail.Labels)
+	}
+}
+
 func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{

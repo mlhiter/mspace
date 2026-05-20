@@ -743,7 +743,7 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
 	for _, issue := range issues {
 		if issue.ParentIssueID == "" && issue.TriageStatus == "pending" && !hasIssueLabelDimension(issue.Labels, issueLabelDimensionType) {
-			s.startIssueTypeTriage(workspaceID, issue.ID)
+			s.startIssueTypeTriage(user.ID, workspaceID, issue.ID)
 		}
 	}
 	writeJSON(w, http.StatusOK, issues)
@@ -764,7 +764,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.startIssueTypeTriage(strings.TrimSpace(chi.URLParam(r, "workspaceID")), issueID)
+	s.startIssueTypeTriage(user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), issueID)
 	writeJSON(w, http.StatusCreated, map[string]string{"issueId": issueID})
 }
 
@@ -806,7 +806,7 @@ func (s *Server) handleGetIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if detail.Issue.ParentIssueID == "" && detail.Issue.TriageStatus == "pending" && !hasIssueLabelDimension(detail.Labels, issueLabelDimensionType) {
-		s.startIssueTypeTriage(strings.TrimSpace(chi.URLParam(r, "workspaceID")), detail.Issue.ID)
+		s.startIssueTypeTriage(user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), detail.Issue.ID)
 	}
 	writeJSON(w, http.StatusOK, detail)
 }

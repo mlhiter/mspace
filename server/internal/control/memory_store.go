@@ -2372,6 +2372,37 @@ func (s *MemoryStore) MarkIssueTriageFailed(_ Context, workspaceID, issueID stri
 	return nil
 }
 
+func (s *MemoryStore) reconcileIssueTypeTriageRuntimeResultLocked(task RuntimeTask) {
+	issue, ok := s.issues[strings.TrimSpace(task.IssueID)]
+	if !ok || issue.WorkspaceID != strings.TrimSpace(task.WorkspaceID) || issue.TriageStatus != "pending" {
+		return
+	}
+	if task.Status != "completed" {
+		issue.TriageStatus = "failed"
+		issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		s.issues[issue.ID] = issue
+		return
+	}
+	result, err := parseIssueTypeTriageResult(string(task.Result))
+	if err != nil {
+		issue.TriageStatus = "failed"
+		issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		s.issues[issue.ID] = issue
+		return
+	}
+	labels, err := normalizeIssueLabelKeys([]string{"type:" + result.Type})
+	if err != nil || !hasIssueLabelDimension(labels, issueLabelDimensionType) {
+		issue.TriageStatus = "failed"
+		issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		s.issues[issue.ID] = issue
+		return
+	}
+	s.issueLabels[issue.ID] = replaceIssueLabelDimension(s.issueLabels[issue.ID], issueLabelDimensionType, labels[0])
+	issue.TriageStatus = "classified"
+	issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.issues[issue.ID] = issue
+}
+
 func (s *MemoryStore) AddComment(_ Context, user User, workspaceID, issueID string, input CreateCommentInput) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2784,6 +2815,9 @@ func (s *MemoryStore) UpdateRuntimeTaskStatus(_ Context, registration RuntimeReg
 	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, worker.ID, "", "status_changed", json.RawMessage(fmt.Sprintf(`{"status":%q,"error":%q}`, task.Status, task.Error)))
 	if isFinalRuntimeTaskStatus(task.Status) && task.Kind == "agent_session" {
 		s.reconcileAgentSessionRuntimeResultLocked(task)
+	}
+	if isFinalRuntimeTaskStatus(task.Status) && task.Kind == "issue_type_triage" {
+		s.reconcileIssueTypeTriageRuntimeResultLocked(task)
 	}
 	return task, nil
 }

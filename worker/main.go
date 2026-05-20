@@ -137,6 +137,27 @@ type agentSessionPayload struct {
 	Repository            repositorySpec    `json:"repository"`
 }
 
+type issueTypeTriagePayload struct {
+	WorkspaceID           string            `json:"workspaceId"`
+	IssueID               string            `json:"issueId"`
+	ProjectID             string            `json:"projectId"`
+	Prompt                string            `json:"prompt"`
+	DeveloperInstructions string            `json:"developerInstructions"`
+	Env                   map[string]string `json:"env"`
+	Project               struct {
+		Name     string `json:"name"`
+		RepoPath string `json:"repoPath"`
+	} `json:"project"`
+}
+
+type issueTypeTriageResult struct {
+	Type       string  `json:"type"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
+	ThreadID   string  `json:"threadId,omitempty"`
+	TurnID     string  `json:"turnId,omitempty"`
+}
+
 type repositorySpec struct {
 	URL           string `json:"url"`
 	DefaultBranch string `json:"defaultBranch"`
@@ -156,7 +177,7 @@ type agentSessionResult struct {
 	ArtifactDir     string                       `json:"artifactDir"`
 	Source          agentSessionSource           `json:"source"`
 	TestEnvironment *agentSessionTestEnvironment `json:"testEnvironment,omitempty"`
-	ReviewEvidence  *reviewEvidenceArtifact     `json:"reviewEvidence,omitempty"`
+	ReviewEvidence  *reviewEvidenceArtifact      `json:"reviewEvidence,omitempty"`
 }
 
 type agentSessionSource struct {
@@ -567,6 +588,8 @@ func handleTask(ctx context.Context, client *runtimeClient, cfg config, logger *
 	switch strings.ToLower(strings.TrimSpace(task.Kind)) {
 	case "agent_session":
 		result, taskErr = executeAgentSessionTask(ctx, client, cfg, workerID, task)
+	case "issue_type_triage":
+		result, taskErr = executeIssueTypeTriageTask(ctx, client, cfg, workerID, task)
 	default:
 		result, taskErr = executeProtocolTask(cfg, task)
 	}
@@ -624,6 +647,153 @@ func executeProtocolTask(cfg config, task runtimeTask) (json.RawMessage, error) 
 		}
 		return body, fmt.Errorf("task kind %q is not implemented by this worker", task.Kind)
 	}
+}
+
+func executeIssueTypeTriageTask(ctx context.Context, client *runtimeClient, cfg config, workerID string, task runtimeTask) (json.RawMessage, error) {
+	payload, err := parseIssueTypeTriagePayload(task.Payload)
+	if err != nil {
+		return nil, err
+	}
+	runCtx, stopCancelWatcher := client.watchTaskCancellation(ctx, workerID, task.ID, cfg.PollInterval)
+	defer stopCancelWatcher()
+	if err := client.appendTaskLog(ctx, workerID, task.ID, appendTaskLogInput{Stream: "system", Message: "Starting Codex issue type triage."}); err != nil {
+		return nil, err
+	}
+	result, err := runCodexIssueTypeTriage(runCtx, client, cfg, workerID, task.ID, payload)
+	if err != nil {
+		_ = client.appendTaskLog(context.WithoutCancel(ctx), workerID, task.ID, appendTaskLogInput{Stream: "codex-error", Message: err.Error()})
+		return nil, err
+	}
+	body, err := json.Marshal(result)
+	return body, err
+}
+
+func parseIssueTypeTriagePayload(raw json.RawMessage) (issueTypeTriagePayload, error) {
+	var payload issueTypeTriagePayload
+	if len(raw) == 0 {
+		return payload, errors.New("issue type triage payload is required")
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, fmt.Errorf("parse issue type triage payload: %w", err)
+	}
+	payload.WorkspaceID = strings.TrimSpace(payload.WorkspaceID)
+	payload.IssueID = strings.TrimSpace(payload.IssueID)
+	payload.ProjectID = strings.TrimSpace(payload.ProjectID)
+	payload.Prompt = strings.TrimSpace(payload.Prompt)
+	payload.DeveloperInstructions = strings.TrimSpace(payload.DeveloperInstructions)
+	payload.Project.Name = strings.TrimSpace(payload.Project.Name)
+	payload.Project.RepoPath = strings.TrimSpace(payload.Project.RepoPath)
+	if payload.IssueID == "" {
+		return payload, errors.New("issue type triage payload issueId is required")
+	}
+	if payload.Prompt == "" {
+		return payload, errors.New("issue type triage payload prompt is required")
+	}
+	if payload.DeveloperInstructions == "" {
+		payload.DeveloperInstructions = defaultIssueTypeTriageDeveloperInstructions()
+	}
+	return payload, nil
+}
+
+func runCodexIssueTypeTriage(ctx context.Context, runtimeClient *runtimeClient, cfg config, workerID, taskID string, payload issueTypeTriagePayload) (issueTypeTriageResult, error) {
+	codexPath, err := exec.LookPath("codex")
+	if err != nil {
+		return issueTypeTriageResult{}, errors.New("codex CLI is not available on PATH")
+	}
+	workdir := os.TempDir()
+	codexPayload := agentSessionPayload{
+		Workdir:               workdir,
+		Prompt:                payload.Prompt,
+		DeveloperInstructions: payload.DeveloperInstructions,
+		ApprovalPolicy:        "never",
+		Sandbox:               "danger-full-access",
+		Env:                   payload.Env,
+	}
+	appClient, err := startCodexAppServer(codexPath, codexPayload)
+	if err != nil {
+		return issueTypeTriageResult{}, err
+	}
+	defer appClient.close()
+
+	go captureCodexDiagnosticStream(ctx, runtimeClient, workerID, taskID, appClient.stderr)
+
+	var initResp codexInitializeResponse
+	if err := appClient.request(ctx, "initialize", map[string]any{
+		"clientInfo": map[string]any{
+			"name":    "mspace-worker-triage",
+			"title":   "mspace worker triage",
+			"version": cfg.Version,
+		},
+		"capabilities": map[string]any{
+			"experimentalApi": true,
+		},
+	}, &initResp); err != nil {
+		return issueTypeTriageResult{}, fmt.Errorf("initialize codex app-server: %w", err)
+	}
+	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Codex app-server ready: " + initResp.UserAgent})
+
+	var threadResp codexThreadStartResponse
+	if err := appClient.request(ctx, "thread/start", map[string]any{
+		"cwd":                    workdir,
+		"approvalPolicy":         "never",
+		"approvalsReviewer":      "user",
+		"sandbox":                "danger-full-access",
+		"developerInstructions":  payload.DeveloperInstructions,
+		"personality":            "pragmatic",
+		"ephemeral":              true,
+		"sessionStartSource":     "startup",
+		"serviceName":            "mspace-worker-triage",
+		"experimentalRawEvents":  false,
+		"persistExtendedHistory": false,
+	}, &threadResp); err != nil {
+		return issueTypeTriageResult{}, fmt.Errorf("start codex triage thread: %w", err)
+	}
+	if strings.TrimSpace(threadResp.Thread.ID) == "" {
+		return issueTypeTriageResult{}, errors.New("codex app-server returned an empty triage thread id")
+	}
+	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Codex triage thread: " + threadResp.Thread.ID})
+
+	var turnResp codexTurnStartResponse
+	if err := appClient.request(ctx, "turn/start", map[string]any{
+		"threadId": threadResp.Thread.ID,
+		"input": []map[string]any{
+			{
+				"type":          "text",
+				"text":          payload.Prompt,
+				"text_elements": []map[string]any{},
+			},
+		},
+		"cwd":            workdir,
+		"approvalPolicy": "never",
+		"sandboxPolicy": map[string]any{
+			"type": "dangerFullAccess",
+		},
+		"responsesapiClientMetadata": map[string]string{
+			"mspace.runtime_task_id": taskID,
+			"mspace.issue_id":        payload.IssueID,
+			"mspace.task":            "issue_type_triage",
+			"mspace.worker_name":     cfg.Name,
+		},
+	}, &turnResp); err != nil {
+		return issueTypeTriageResult{}, fmt.Errorf("start codex triage turn: %w", err)
+	}
+	if strings.TrimSpace(turnResp.Turn.ID) == "" {
+		return issueTypeTriageResult{}, errors.New("codex app-server returned an empty triage turn id")
+	}
+	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Codex triage turn: " + turnResp.Turn.ID})
+
+	message, err := waitCodexTurnMessage(ctx, runtimeClient, appClient, workerID, taskID, threadResp.Thread.ID, turnResp.Turn.ID)
+	if err != nil {
+		return issueTypeTriageResult{}, err
+	}
+	result, err := parseIssueTypeTriageResult(message)
+	if err != nil {
+		return issueTypeTriageResult{}, err
+	}
+	result.ThreadID = threadResp.Thread.ID
+	result.TurnID = turnResp.Turn.ID
+	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: fmt.Sprintf("Issue type triage classified as %s.", result.Type)})
+	return result, nil
 }
 
 func executeAgentSessionTask(ctx context.Context, client *runtimeClient, cfg config, workerID string, task runtimeTask) (json.RawMessage, error) {
@@ -1101,6 +1271,43 @@ func waitCodexTurn(ctx context.Context, runtimeClient *runtimeClient, appClient 
 			done, err := handleCodexNotification(ctx, runtimeClient, workerID, taskID, threadID, turnID, notification, outputBuffers)
 			if done {
 				return err
+			}
+		}
+	}
+}
+
+func waitCodexTurnMessage(ctx context.Context, runtimeClient *runtimeClient, appClient *codexAppServerClient, workerID, taskID, threadID, turnID string) (string, error) {
+	outputBuffers := map[string]*strings.Builder{}
+	lastAgentMessage := ""
+	for {
+		select {
+		case <-ctx.Done():
+			interruptCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = appClient.request(interruptCtx, "turn/interrupt", map[string]any{
+				"threadId": threadID,
+				"turnId":   turnID,
+			}, nil)
+			cancel()
+			return "", context.Canceled
+		case notification, ok := <-appClient.notifications:
+			if !ok {
+				return "", errors.New("codex app-server exited before the turn completed")
+			}
+			done, err := handleCodexNotification(ctx, runtimeClient, workerID, taskID, threadID, turnID, notification, outputBuffers)
+			if notification.Method == "item/completed" {
+				var payload codexItemNotification
+				if decodeCodexParams(notification.Params, &payload) == nil && sameCodexTurn(threadID, turnID, payload.ThreadID, payload.TurnID) && payload.Item.Type == "agentMessage" && strings.TrimSpace(payload.Item.Text) != "" {
+					lastAgentMessage = strings.TrimSpace(payload.Item.Text)
+				}
+			}
+			if done {
+				if err != nil {
+					return "", err
+				}
+				if lastAgentMessage == "" {
+					return "", errors.New("codex turn completed without an agent message")
+				}
+				return lastAgentMessage, nil
 			}
 		}
 	}
@@ -1941,6 +2148,41 @@ func sandboxPolicyType(sandbox string) string {
 	}
 }
 
+func parseIssueTypeTriageResult(value string) (issueTypeTriageResult, error) {
+	raw := strings.TrimSpace(value)
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start < 0 || end < start {
+		return issueTypeTriageResult{}, errors.New("triage response did not contain a JSON object")
+	}
+	raw = raw[start : end+1]
+	var result issueTypeTriageResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return issueTypeTriageResult{}, fmt.Errorf("parse triage JSON: %w", err)
+	}
+	result.Type = strings.TrimSpace(strings.ToLower(result.Type))
+	result.Reason = strings.Join(strings.Fields(result.Reason), " ")
+	if !isAllowedIssueTypeLabel(result.Type) {
+		return issueTypeTriageResult{}, fmt.Errorf("triage returned unsupported issue type %q", result.Type)
+	}
+	if result.Confidence < 0 {
+		result.Confidence = 0
+	}
+	if result.Confidence > 1 {
+		result.Confidence = 1
+	}
+	return result, nil
+}
+
+func isAllowedIssueTypeLabel(value string) bool {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert":
+		return true
+	default:
+		return false
+	}
+}
+
 func payloadEnv(env map[string]string) []string {
 	if len(env) == 0 {
 		return nil
@@ -1981,7 +2223,7 @@ func capabilityEnabled(capabilities json.RawMessage, name string) bool {
 
 func defaultAgentSessionDeveloperInstructions() string {
 	return strings.TrimSpace(`
-	You are running as a Codex coding agent inside an mspace team runtime worker.
+		You are running as a Codex coding agent inside an mspace team runtime worker.
 
 Follow these mspace rules:
 - Work in the provided workdir for this task.
@@ -1996,7 +2238,24 @@ Follow these mspace rules:
 	- Answer directly. Do not introduce yourself.
 	- If you make source-code changes, write ${MSPACE_SESSION_ARTIFACT_DIR}/branch-name.json before finishing. Use JSON like { "branch": "fix/short-semantic-name" }. The branch must use a Conventional Commit type prefix such as feat/, fix/, chore/, docs/, refactor/, test/, perf/, build/, or ci/, and the slug should summarize the actual diff in lowercase words separated by hyphens.
 	- Finish with a concise summary of changes, validation, and remaining risks.
-	`)
+		`)
+}
+
+func defaultIssueTypeTriageDeveloperInstructions() string {
+	return strings.TrimSpace(`
+You are an mspace issue triage classifier.
+
+Classify the issue into exactly one Conventional Commit type.
+Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert.
+
+Rules:
+- Return only one compact JSON object.
+- Do not wrap the JSON in Markdown.
+- Do not assign priority.
+- Do not change issue status.
+- Do not edit files or run commands.
+- If the issue is ambiguous, choose chore with lower confidence.
+`)
 }
 
 func repositoryCacheKey(repository repositorySpec) string {
