@@ -4,6 +4,8 @@
 
 The desktop app and runtime workers are clients of this service. They do not own collaboration identity or product truth.
 
+The server is intentionally Codex-free. It does not install the Codex CLI, mount `CODEX_HOME`, read Codex credentials, or start `codex app-server`. LLM-backed work is expressed as runtime tasks and executed by workers.
+
 ## Run
 
 Create a local env file in the project root:
@@ -109,7 +111,7 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration token metadata without raw token values. Owner/admin only. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and their latest heartbeat state. |
-| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a runtime task for the workspace. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a runtime task for the workspace. Current product task kinds include `protocol_smoke`, `noop`, `issue_type_triage`, and `agent_session`. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks` | List recent runtime tasks for the workspace. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/logs` | List worker-appended logs for one runtime task. |
@@ -137,6 +139,6 @@ Workspace Settings exposes the first UI-testable collaboration loop. Owners and 
 
 Runtime registration tokens use the `msw_` prefix and are returned only once. The server stores a hash and prefix, then workers use the token to register, heartbeat, claim eligible tasks, and report task status.
 
-The current queue is intentionally narrow: it records workspace task metadata, required capability JSON, payload/result JSON, claim ownership, timestamps, a compact audit event stream, and worker-appended task logs. Workers can stream Codex app-server status and output back through the log endpoint without the server needing direct network access to the worker environment. Workspace users can request task cancellation; workers poll their claimed task while executing and interrupt Codex app-server when cancellation is requested.
+The current queue is intentionally narrow: it records workspace task metadata, required capability JSON, payload/result JSON, claim ownership, timestamps, a compact audit event stream, and worker-appended task logs. Workers can stream Codex app-server status and output back through the log endpoint without the server needing direct network access to the worker environment or any Codex runtime dependency. Workspace users can request task cancellation; workers poll their claimed task while executing and interrupt Codex app-server when cancellation is requested.
 
-The first worker-side implementation lives in `../worker`. It uses only the server HTTP contract: register with `Authorization: Bearer msw_...`, send heartbeat updates, claim matching tasks, inspect its claimed task for cancellation, append logs, and report status. It completes `protocol_smoke` and `noop` tasks, and it can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers store target project source under `/var/lib/mspace-worker/repos` and `/var/lib/mspace-worker/workdirs` on the configured worker volume, not in the host repository checkout. Issue Detail routes agent turns directly to `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; returned worker source commit metadata, changed files, and diff preview are exposed from the runtime task result. Dry-run worker commits are diagnostic records and should not be used as PR source candidates.
+The first worker-side implementation lives in `../worker`. It uses only the server HTTP contract: register with `Authorization: Bearer msw_...`, send heartbeat updates, claim matching tasks, inspect its claimed task for cancellation, append logs, and report status. It completes `protocol_smoke` and `noop` tasks, runs `issue_type_triage` tasks for issue type classification, and it can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers store target project source under `/var/lib/mspace-worker/repos` and `/var/lib/mspace-worker/workdirs` on the configured worker volume, not in the host repository checkout. Issue Detail routes agent turns directly to `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; returned worker source commit metadata, changed files, and diff preview are exposed from the runtime task result. Dry-run worker commits are diagnostic records and should not be used as PR source candidates.

@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-14
+> Status: local MVP implementation snapshot, updated 2026-05-20
 
 ## One-Line Definition
 
@@ -16,12 +16,12 @@ The repository now has a runnable local desktop MVP:
 - sign in with GitHub through the local server control plane and show the current user/workspace state in the sidebar;
 - store signed-in workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts in server Postgres for both personal and team workspaces;
 - write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page, where they can be toggled or deleted;
-- classify new issues asynchronously with a background triage agent that assigns one Conventional Commit type label;
+- classify new issues asynchronously by queueing `issue_type_triage` runtime tasks that are claimed by Codex-capable workers and reconciled into one Conventional Commit type label by the server;
 - label priority manually from Issue Detail, and scan/filter labels from the Issues list;
 - manage Codex-backed agents from the Agents route, including mention, description, enabled state, and role instructions;
 - use Inbox as a review feed for unread issue and session updates;
 - open document-style issue detail pages with Markdown-backed rich comments, image attachment thumbnails, lightweight reactions, and linked sessions;
-- mention an enabled agent from issue detail and start server-queued app-server agent sessions with the matching managed profile;
+- mention an enabled agent from issue detail and queue server-owned runtime tasks that a worker runs through Codex app-server with the matching managed profile;
 - edit the latest unconsumed human comment, then stop and retry a session when a bad prompt has already been consumed;
 - stop a queued or running session from Issue Detail or Session Detail without cancelling the whole issue;
 - run sessions in worker-managed git workdirs under the configured worker root;
@@ -29,6 +29,7 @@ The repository now has a runnable local desktop MVP:
 - cache imported GitHub repositories inside worker-managed repository roots;
 - show a project runbook in Projects, open it from the Issue Detail sidebar as a read-only TipTap modal, and update it either from direct Markdown edits or from successful agent session artifacts;
 - keep signed-in workspace product and runtime state in server Postgres, including sessions, logs, evidence, clusters, issue test environments, handoffs, and execution metadata;
+- keep the server control plane free of Codex runtime dependencies: no Codex CLI in the server image, no Codex home mount in the server Deployment, and no in-process Codex app-server client;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage workspace automation policy, keeping source commit capture always on while recording branch / PR handoff state from captured source commits;
 - manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
@@ -163,7 +164,7 @@ A user creates a session by writing an issue comment that mentions an enabled ag
 
 - uses a registered runtime worker that claims server tasks;
 - prepares a git worktree for the repository;
-- starts `codex app-server --listen stdio://` inside that worktree for Codex-backed sessions;
+- starts `codex app-server --listen stdio://` inside that worker-prepared worktree for Codex-backed sessions;
 - stores the selected profile in `agent_sessions.agent_profile` and injects the profile instructions from `agent_profiles` into the Codex prompt;
 - streams agent messages, command execution items, status changes, and diagnostics;
 - passes the selected cluster, Kubernetes context, issue namespace, image registry, and exposure settings into the app-server process and turn prompt.
@@ -206,7 +207,7 @@ MVP features:
 - Inbox review list, Issues list, and issue detail;
 - project list with create, settings, and guarded delete;
 - issue comments and assignee field;
-- type and priority labels, with asynchronous type triage and manual priority selection from Issue Detail;
+- type and priority labels, with worker-backed asynchronous type triage and manual priority selection from Issue Detail;
 - manage agent profiles and create a Codex session from an enabled agent mention in an issue comment;
 - edit the latest human comment before it has triggered a session;
 - cancel queued or running sessions while keeping the issue retryable;

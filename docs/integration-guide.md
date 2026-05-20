@@ -1,6 +1,6 @@
 # mspace API Integration Guide
 
-> Status: server-owned local MVP API guide, updated 2026-05-19
+> Status: server-owned local MVP API guide, updated 2026-05-20
 
 This guide covers the current server control-plane API used by the desktop and workers. The control plane normally runs on `http://127.0.0.1:8787`.
 
@@ -37,7 +37,7 @@ The server control plane owns:
 - workspace settings, agent profiles, clusters, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
 - runtime worker registration, worker heartbeat/capability state, runtime task queue state, task events, task logs, cancellation, and task results.
 
-The desktop owns native shell behavior, local UI state, file pickers, and opening browser auth flows. Workers own execution: repository cache, per-session workdir, Codex app-server lifecycle, command execution, source capture, artifacts, and logs while running.
+The desktop owns native shell behavior, local UI state, file pickers, and opening browser auth flows. Workers own execution: repository cache, per-session workdir, Codex app-server lifecycle, command execution, source capture, artifacts, and logs while running. The server never starts Codex and never requires Codex credentials; it only queues Codex-capable runtime tasks and reconciles worker results.
 
 ## Auth And Workspace APIs
 
@@ -73,7 +73,7 @@ The desktop owns native shell behavior, local UI state, file pickers, and openin
 | `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List Type and Priority label options. |
 | `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level issues. |
 | `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. |
-| `POST` | `/api/workspaces/{workspaceID}/issues/suggest-title` | Suggest a title from issue body text. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/suggest-title` | Suggest a title from issue body text using deterministic server fallback only. |
 | `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Load issue detail. |
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update issue project attachment, title, body, or workflow status. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks` | Create a child issue task. |
@@ -94,6 +94,8 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues" \
 ```
 
 When `projectId` is omitted, the server leaves the issue unassigned if the workspace has zero projects or more than one possible project. If the workspace has exactly one project, the server auto-attaches that project. The issue can be reviewed and commented on without a project, but agent execution, PR handoff, project runbook access, and issue test environments require attaching a project first.
+
+When a new issue has no explicit type label, the server marks type triage as pending and queues a worker-backed `issue_type_triage` runtime task. That task requires a worker with `{"codex":true}` capabilities in the workspace runtime mode. The worker returns a JSON result such as `{"type":"fix","confidence":0.86,"reason":"..."}`; the server validates the type against the fixed Conventional Commit set before applying the `type:*` label. Priority remains manual and is not classified by the worker.
 
 Attach an existing project later:
 
@@ -204,6 +206,15 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/runtime-tasks" \
   -H 'Content-Type: application/json' \
   -d '{"kind":"protocol_smoke","runtimeMode":"team","requiredCapabilities":{"protocolSmoke":true},"payload":{"source":"curl"}}'
 ```
+
+Runtime task kinds used by the current product path:
+
+| Kind | Producer | Claimed by | Result owner |
+| --- | --- | --- | --- |
+| `protocol_smoke` | User/API smoke | Any worker with `protocolSmoke:true` | Task result only |
+| `noop` | User/API smoke | Any matching worker | Task result only |
+| `issue_type_triage` | Server issue creation/update path | Worker with `codex:true` | Server reconciles issue type label |
+| `agent_session` | Issue agent mention or test-deploy path | Worker with required runtime capabilities | Server derives session detail, source changes, evidence, and environment state |
 
 ## Artifact Contract
 

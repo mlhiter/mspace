@@ -1,6 +1,6 @@
 # Reference Notes
 
-> Status: public reference scan and implementation notes, updated 2026-05-07
+> Status: public reference scan and implementation notes, updated 2026-05-20
 
 ## Multica
 
@@ -53,11 +53,11 @@ What not to copy directly:
 
 mspace interpretation:
 
-Optio proves the technical runtime shape. mspace should borrow the Kubernetes execution model, but focus first on project namespaces and realistic test-cluster operation.
+Optio proves the technical runtime shape. mspace should borrow the Kubernetes execution model, but focus first on project namespaces, fixed worker deployment, and realistic test-cluster operation.
 
 Current implementation note:
 
-The current server-owned MVP has implemented worker-managed git workdir isolation for sessions. Kubernetes-hosted runtime, Helm install, ServiceAccount lifecycle, and namespace allocation remain product targets rather than current code.
+The current server-owned MVP has implemented worker-managed git workdir isolation for sessions and a Helm-based customer deployment package for a Kubernetes-hosted fixed Server Worker. Per-session Kubernetes Runtime Provider pods/jobs, generated ServiceAccounts, and namespace allocation for runtime execution remain product targets rather than current code.
 
 ## Notion
 

@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: server-owned runtime surfaces, updated 2026-05-19
+> Status: server-owned runtime surfaces, updated 2026-05-20
 
 ## Current Implementation Snapshot
 
@@ -32,6 +32,8 @@ Workers own:
 - session artifacts while running;
 - streaming logs and final results back to the server.
 
+The server does not own any Codex process or credential lifecycle. It queues tasks that require `{"codex":true}`, records task events/logs/results, and reconciles final output back into product state. The Codex CLI, `CODEX_HOME`, `auth.json`, and `config.toml` belong to worker runtimes only.
+
 ## Runtime Flow
 
 ```text
@@ -58,6 +60,23 @@ Desktop
 
 Personal and team workspaces use the same server API and runtime task protocol. `runtimeMode` controls which workers can claim the task, not which product model is used.
 
+Issue type triage follows the same boundary:
+
+```text
+Issue create/update
+  -> server sets triage_status=pending when no type label exists
+  -> server enqueues runtime_tasks(kind=issue_type_triage, requiredCapabilities={"codex":true})
+Worker
+  -> claims the task in the workspace runtime mode
+  -> runs Codex app-server from a temporary worker directory
+  -> returns {"type":"fix","confidence":...,"reason":...}
+Server
+  -> validates the type against the fixed Conventional Commit set
+  -> replaces the issue's type label and marks triage_status=classified
+```
+
+Failed, cancelled, or invalid triage task results mark the issue triage as failed rather than falling back to keyword classification.
+
 ## Data Model Summary
 
 Main server-owned table groups:
@@ -68,6 +87,7 @@ Main server-owned table groups:
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
 - Runtime surfaces: `workspace_settings`, `agent_profiles`, `clusters`, `issue_test_environments`, `issue_handoffs`.
 - Runtime queue: `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, `runtime_task_logs`.
+- Issue type triage is represented as `runtime_tasks.kind="issue_type_triage"` and reconciled when the task reaches a final state.
 
 Issue Detail should treat this server state as authoritative. Do not create a second local issue/session/environment store.
 

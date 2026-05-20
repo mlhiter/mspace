@@ -8,6 +8,20 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-05-19",
+    title: "Kubernetes customer deployment package",
+    summary:
+      "mspace added the first customer-facing Kubernetes deployment path for the server control plane and fixed Server Worker runtime.",
+    items: [
+      "Added production server and Codex worker container images for linux/amd64 deployment.",
+      "Added a Helm chart for server, Postgres, BuildKit, and the Kubernetes-hosted fixed worker.",
+      "Documented the two-stage install flow: deploy server first, then enable the worker after creating a workspace-scoped runtime token.",
+      "Kept Codex configuration and authentication mounted only into the worker runtime, while the server stays a Codex-free control plane.",
+      "Required worker Codex home Secrets to include both `auth.json` and `config.toml`, with Helm rendering failing fast when worker auth/config keys are missing.",
+      "Kept per-session Kubernetes Runtime Provider work deferred while preserving the current server/worker runtime task protocol.",
+    ],
+  },
+  {
+    date: "2026-05-19",
     title: "Server-owned runtime surfaces",
     summary:
       "mspace removed the local execution sidecar split and moved the remaining workspace runtime surfaces behind the server control plane.",

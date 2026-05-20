@@ -58,6 +58,7 @@ Production deployment uses the root `vercel.json`:
 - Electron desktop app with Inbox, Issues, Agents, Clusters, Projects, Workspace Settings, Issue Detail, and Session Detail screens.
 - Go server control plane with GitHub OAuth, mspace session tokens, personal/team workspaces, workspace membership, invitations, Inbox receipts, projects, runbooks, issues, comments, reactions, labels, runtime worker registration, agent profiles, clusters, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
 - Runtime worker daemon in `worker/` that registers with `msw_...`, heartbeats, claims matching server tasks, prepares its own repo cache/workdir, runs `codex app-server --listen stdio://`, streams logs, captures source metadata, and reports task results.
+- Codex execution belongs to runtime workers. The server image does not install Codex or mount Codex credentials.
 - Workspace Settings for team access, worker tokens, worker liveness, task events, task logs, and workspace automation.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, Material Icon Theme file icons, and shadcn/ui source components in `@mspace/ui`.
 - Bilingual desktop UI support for English and Simplified Chinese through `@mspace/i18n`.
@@ -129,6 +130,8 @@ For Docker-backed worker testing:
 scripts/run-server-worker-dev.sh
 scripts/run-server-worker-codex-dev.sh
 ```
+
+For customer Kubernetes deployment, use the Helm chart and runbook under `deploy/helm/mspace` and `docs/kubernetes-deployment.md`.
 
 ### First workflow
 
@@ -221,6 +224,7 @@ docs/                Product, value thesis, architecture, IA, references, runboo
 - [Control Plane Direction](./docs/control-plane.md)
 - [Architecture Notes](./docs/architecture.md)
 - [API Integration Guide](./docs/integration-guide.md)
+- [Kubernetes Deployment Runbook](./docs/kubernetes-deployment.md)
 - [MVP Information Architecture](./docs/ia.md)
 - [Runbook](./docs/runbook.md)
 - [Reference Notes](./docs/references.md)

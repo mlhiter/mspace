@@ -1,6 +1,6 @@
 # mspace Runbook
 
-> Status: server-owned local MVP operations guide, updated 2026-05-19
+> Status: server-owned local MVP operations guide, updated 2026-05-20
 
 ## Local Data
 
@@ -60,7 +60,7 @@ For local worker testing, start a Docker-backed worker from Workspace Settings:
 2. Open Workspace Settings.
 3. In Runtime, click `Start worker`.
 
-mspace creates a short-lived internal worker bootstrap credential, injects it into the Docker worker process, and refreshes the Workers list after registration. The desktop button starts the Codex-capable Docker worker, so local `CODEX_HOME` must contain a valid `auth.json`.
+mspace creates a short-lived internal worker bootstrap credential, injects it into the Docker worker process, and refreshes the Workers list after registration. The desktop button starts the Codex-capable Docker worker, so local `CODEX_HOME` must contain valid `auth.json` and `config.toml` files.
 
 Run a worker manually only when debugging an external worker or terminal-only setup:
 
@@ -69,7 +69,11 @@ export MSPACE_RUNTIME_TOKEN="msw_..."
 pnpm worker
 ```
 
-The worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, and can execute `agent_session` tasks by preparing its own repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, then starting `codex app-server --listen stdio://` there.
+The worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks from server payloads, and can execute `agent_session` tasks by preparing its own repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, then starting `codex app-server --listen stdio://` there.
+
+Codex configuration and authentication belong to worker runtimes. The server control plane queues work and applies runtime results, but it does not install Codex or mount Codex credentials.
+
+Issue title suggestion is deterministic server fallback only. Issue type triage is LLM-backed, but it still runs through the worker queue as `runtime_tasks.kind="issue_type_triage"` with `requiredCapabilities={"codex":true}`. The server validates the worker result before writing the type label.
 
 Dry-run Docker worker:
 
@@ -88,6 +92,17 @@ scripts/run-server-worker-codex-dev.sh
 Worker-issued Codex sessions should not start or keep development servers running by default. Prefer non-interactive validation such as lint, tests, typecheck, build, or short internal probes. If a temporary server is needed, stop it before the session finishes and do not present container-local `localhost` or `127.0.0.1` as a user-facing preview.
 
 Cancellation is cooperative. Stopping a worker-backed session requests cancellation on the server task; the worker polls its claimed task and interrupts Codex app-server when it sees `cancelled`.
+
+## Kubernetes Customer Deployment
+
+The first customer deployment path is a Kubernetes-hosted fixed Server Worker, not a per-session Kubernetes Runtime Provider. Use:
+
+```bash
+deploy/scripts/build-images.sh
+helm upgrade --install mspace deploy/helm/mspace -n mspace-system -f /tmp/mspace-values.yaml
+```
+
+See `docs/kubernetes-deployment.md` for the two-stage install: server first, then create a workspace-scoped `msw_...` runtime token and enable the worker.
 
 ## Website
 
@@ -295,10 +310,12 @@ The task's `runtimeMode` and `requiredCapabilities` must match the worker heartb
 
 ### Codex worker fails authentication
 
-For Docker Codex workers, make sure the mounted worker Codex home contains auth:
+For Docker Codex workers, make sure the mounted worker Codex home contains both auth and config:
 
 ```bash
 ls -la ~/.mspace/codex-worker-home
+test -s ~/.mspace/codex-worker-home/auth.json
+test -s ~/.mspace/codex-worker-home/config.toml
 ```
 
 Re-run `scripts/run-server-worker-codex-dev.sh` after refreshing `${CODEX_HOME:-~/.codex}`.

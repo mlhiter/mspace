@@ -1,6 +1,6 @@
 # mspace Control Plane
 
-> Status: server-owned runtime surfaces, updated 2026-05-19
+> Status: server-owned runtime surfaces, updated 2026-05-20
 
 ## Decision
 
@@ -39,6 +39,8 @@ Runtime workers own:
 - command execution and source capture;
 - session artifacts while running;
 - streaming logs and final task results back to the server.
+
+The control plane intentionally has no Codex runtime dependency. It does not install the Codex CLI, mount `CODEX_HOME`, read Codex credentials, or start `codex app-server`. It queues work, records logs/results, and applies validated results. Codex auth/config is injected only into worker runtimes.
 
 ## Auth Shape
 
@@ -83,12 +85,15 @@ The server module provides:
 - issue PR handoff create/refresh records;
 - session creation/cancellation/detail derived from server runtime tasks;
 - runtime registration tokens, workers, tasks, events, logs, cancellation, worker register/heartbeat/claim/status/log endpoints;
+- deterministic fallback issue-title suggestion and worker-backed `issue_type_triage` classification;
 - Postgres migrations for the above tables;
 - memory-backed store used only by tests.
 
 Workspaces have an explicit `kind`: `personal` or `team`. The first GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in server Postgres. Team collaboration is opt-in: `POST /api/workspaces` creates team workspaces, and invitation/member APIs reject personal workspaces.
 
 The desktop requires GitHub sign-in before product data is available. Issue Detail writes the server comment, then calls `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; the server queues an `agent_session` runtime task and later exposes worker logs/results directly from `runtime_task_logs` and `runtime_tasks.result`.
+
+New issue type classification is also a runtime task. When an issue has `triage_status=pending` and no explicit type label, the server queues `runtime_tasks.kind="issue_type_triage"` with `required_capabilities={"codex":true}` and a classification-only prompt. A matching worker runs Codex, returns a compact JSON result, and the server validates the type before writing the `type:*` label. The server never falls back to keyword matching or an in-process Codex client.
 
 ## Runtime Registry
 
@@ -110,7 +115,7 @@ Server
 
 Registration tokens are workspace-scoped bootstrap secrets for worker daemons. The raw token is returned only once when created; the server stores only its hash and prefix.
 
-The first worker daemon exists as `worker/`. It registers, heartbeats, claims matching tasks, completes `protocol_smoke` / `noop` tasks, and can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers keep repository caches and worktrees under `/var/lib/mspace-worker`, backed by a Docker volume, so target project source is isolated from the host checkout.
+The first worker daemon exists as `worker/`. It registers, heartbeats, claims matching tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks from server payloads, and can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers keep repository caches and worktrees under `/var/lib/mspace-worker`, backed by a Docker volume, so target project source is isolated from the host checkout.
 
 Workers forward system, status, agent, command, file, and tool logs to `runtime_task_logs`, poll claimed tasks for cancellation, interrupt Codex when requested, capture a source commit when code changed, and return worker workdir, artifact dir, source commit, changed files, and diff preview in the task result.
 
