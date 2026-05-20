@@ -1,0 +1,51 @@
+namespace:
+  create: true
+  name: mspace-system
+
+secrets:
+  create: true
+  githubClientId: "replace-me"
+  githubClientSecret: "replace-me"
+  githubRedirectUri: "https://mspace.example.com/api/auth/github/callback"
+  # kubectl -n mspace-system create secret generic mspace-runtime-token --from-literal=MSPACE_RUNTIME_TOKEN=msw_...
+  runtimeTokenExistingSecret: mspace-runtime-token
+
+server:
+  image:
+    repository: crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-server
+    tag: replace-me
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - host: mspace.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+worker:
+  enabled: false
+  image:
+    repository: crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-worker-codex
+    tag: replace-me
+
+codexHome:
+  # kubectl -n mspace-system create secret generic mspace-codex-home \
+  #   --from-file=auth.json=$CODEX_HOME/auth.json \
+  #   --from-file=config.toml=$CODEX_HOME/config.toml
+  existingSecret: mspace-codex-home
+  configKey: config.toml
+
+kubeconfig:
+  # kubectl -n mspace-system create secret generic mspace-customer-kubeconfig --from-file=config=/path/to/customer.kubeconfig
+  existingSecret: mspace-customer-kubeconfig
+  mountPath: /etc/mspace/kubeconfigs/customer.kubeconfig
+
+postgresql:
+  enabled: true
+  persistence:
+    size: 20Gi
+
+buildkit:
+  enabled: false

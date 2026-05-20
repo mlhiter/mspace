@@ -1,0 +1,15 @@
+mspace has been installed.
+
+Server health:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "mspace.fullname" . }} 8787:{{ .Values.server.service.port }}
+  curl http://127.0.0.1:8787/health
+
+Worker registration:
+  The worker requires a runtime token with the msw_ prefix in secret {{ include "mspace.runtimeTokenSecretName" . }} key {{ include "mspace.runtimeTokenSecretKey" . }}.
+
+Kubeconfig path for cluster records:
+{{- if .Values.kubeconfig.existingSecret }}
+  {{ .Values.kubeconfig.mountPath }}
+{{- else }}
+  No kubeconfig secret is mounted. Set kubeconfig.existingSecret before running issue test deployments.
+{{- end }}

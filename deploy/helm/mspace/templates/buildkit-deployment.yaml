@@ -1,0 +1,58 @@
+{{- if .Values.buildkit.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "mspace.fullname" . }}-buildkit
+  labels:
+    {{- include "mspace.labels" . | nindent 4 }}
+    app.kubernetes.io/component: buildkit
+spec:
+  serviceName: {{ include "mspace.fullname" . }}-buildkit
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "mspace.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: buildkit
+  template:
+    metadata:
+      labels:
+        {{- include "mspace.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: buildkit
+    spec:
+      serviceAccountName: {{ include "mspace.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: buildkit
+          image: "{{ .Values.buildkit.image.repository }}:{{ .Values.buildkit.image.tag }}"
+          imagePullPolicy: {{ .Values.buildkit.image.pullPolicy }}
+          args:
+            - --addr
+            - tcp://0.0.0.0:{{ .Values.buildkit.service.port }}
+            - --oci-worker-no-process-sandbox
+          ports:
+            - name: buildkit
+              containerPort: {{ .Values.buildkit.service.port }}
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: Unconfined
+          volumeMounts:
+            - name: buildkit
+              mountPath: /home/user/.local/share/buildkit
+          resources:
+            {{- toYaml .Values.buildkit.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: buildkit
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.buildkit.persistence.storageClassName }}
+        storageClassName: {{ .Values.buildkit.persistence.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.buildkit.persistence.size | quote }}
+{{- end }}

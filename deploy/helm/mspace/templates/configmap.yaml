@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mspace.fullname" . }}-config
+  labels:
+    {{- include "mspace.labels" . | nindent 4 }}
+data:
+  MSPACE_SERVER_ADDR: "0.0.0.0:8787"
+  MSPACE_SERVER_URL: "http://{{ include "mspace.fullname" . }}:{{ .Values.server.service.port }}"
+  MSPACE_WORKER_MODE: {{ .Values.worker.mode | quote }}
+  MSPACE_WORKER_NAME: {{ .Values.worker.name | quote }}
+  MSPACE_WORKER_CAPABILITIES: {{ include "mspace.workerCapabilities" . | quote }}
+  MSPACE_WORKER_LABELS: {{ .Values.worker.labels | quote }}
+  MSPACE_WORKER_POLL_INTERVAL: {{ .Values.worker.pollInterval | quote }}
+  MSPACE_WORKER_HEARTBEAT_INTERVAL: {{ .Values.worker.heartbeatInterval | quote }}
+  MSPACE_WORKER_WORK_ROOT: {{ .Values.worker.workRoot | quote }}
+  {{- if .Values.buildkit.enabled }}
+  BUILDKIT_HOST: "tcp://{{ include "mspace.fullname" . }}-buildkit:{{ .Values.buildkit.service.port }}"
+  {{- end }}

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mspace.fullname" . }}
+  labels:
+    {{- include "mspace.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: {{ .Values.server.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.server.service.port }}
+      targetPort: http
+  selector:
+    {{- include "mspace.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server

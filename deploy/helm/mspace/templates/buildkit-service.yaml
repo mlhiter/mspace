@@ -1,0 +1,18 @@
+{{- if .Values.buildkit.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mspace.fullname" . }}-buildkit
+  labels:
+    {{- include "mspace.labels" . | nindent 4 }}
+    app.kubernetes.io/component: buildkit
+spec:
+  type: ClusterIP
+  ports:
+    - name: buildkit
+      port: {{ .Values.buildkit.service.port }}
+      targetPort: buildkit
+  selector:
+    {{- include "mspace.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: buildkit
+{{- end }}

@@ -1,0 +1,139 @@
+nameOverride: ""
+fullnameOverride: ""
+
+namespace:
+  create: false
+  name: ""
+  podSecurity:
+    enabled: true
+    enforce: baseline
+    audit: restricted
+    warn: restricted
+
+imagePullSecrets: []
+
+secrets:
+  create: true
+  existingSecret: ""
+  databaseUrl: ""
+  githubClientId: ""
+  githubClientSecret: ""
+  githubRedirectUri: ""
+  runtimeToken: ""
+  runtimeTokenExistingSecret: ""
+  runtimeTokenExistingSecretKey: MSPACE_RUNTIME_TOKEN
+
+codexHome:
+  existingSecret: ""
+  authKey: auth.json
+  configKey: config.toml
+
+kubeconfig:
+  existingSecret: ""
+  key: config
+  mountPath: /etc/mspace/kubeconfigs/customer.kubeconfig
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16"
+    pullPolicy: IfNotPresent
+  auth:
+    database: mspace
+    username: mspace
+    password: mspace
+  persistence:
+    enabled: true
+    storageClassName: ""
+    size: 20Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+server:
+  replicaCount: 1
+  image:
+    repository: crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-server
+    tag: dev
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8787
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: mspace.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+  env: {}
+  podAnnotations: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+worker:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-worker-codex
+    tag: dev
+    pullPolicy: IfNotPresent
+  mode: team
+  name: k8s-fixed-worker
+  capabilities: ""
+  labels: '{"provider":"server-worker","environment":"kubernetes"}'
+  pollInterval: 5s
+  heartbeatInterval: 10s
+  workRoot: /var/lib/mspace-worker
+  persistence:
+    enabled: true
+    storageClassName: ""
+    size: 50Gi
+  env: {}
+  podAnnotations: {}
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+
+buildkit:
+  enabled: false
+  image:
+    repository: moby/buildkit
+    tag: v0.24.0-rootless
+    pullPolicy: IfNotPresent
+  service:
+    port: 1234
+  persistence:
+    enabled: true
+    storageClassName: ""
+    size: 50Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+
+serviceAccount:
+  create: true
+  name: ""
+  automountServiceAccountToken: false
+
+networkPolicy:
+  enabled: false

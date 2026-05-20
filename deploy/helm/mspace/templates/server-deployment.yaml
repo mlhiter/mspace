@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mspace.fullname" . }}-server
+  labels:
+    {{- include "mspace.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: {{ .Values.server.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mspace.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      annotations:
+        {{- toYaml .Values.server.podAnnotations | nindent 8 }}
+      labels:
+        {{- include "mspace.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      serviceAccountName: {{ include "mspace.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: server
+          image: {{ include "mspace.serverImage" . | quote }}
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "mspace.fullname" . }}-config
+            - secretRef:
+                name: {{ include "mspace.secretName" . }}
+          {{- with .Values.server.env }}
+          env:
+            {{- range $key, $value := . }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8787
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          {{- if .Values.kubeconfig.existingSecret }}
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: {{ .Values.kubeconfig.mountPath }}
+              subPath: {{ .Values.kubeconfig.key }}
+              readOnly: true
+          {{- end }}
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+      {{- if .Values.kubeconfig.existingSecret }}
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: {{ .Values.kubeconfig.existingSecret }}
+      {{- end }}

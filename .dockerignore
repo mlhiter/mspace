@@ -1,0 +1,16 @@
+.git
+.github
+.codex
+.tmp
+.turbo
+.vercel
+node_modules
+dist
+out
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+server/.env
+server/.env.*
+worker/worker

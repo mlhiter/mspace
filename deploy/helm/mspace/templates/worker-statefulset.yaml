@@ -1,0 +1,125 @@
+{{- if .Values.worker.enabled }}
+{{- include "mspace.validateWorkerCodexHome" . }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "mspace.fullname" . }}-worker
+  labels:
+    {{- include "mspace.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  serviceName: {{ include "mspace.fullname" . }}-worker
+  replicas: {{ .Values.worker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mspace.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      annotations:
+        {{- toYaml .Values.worker.podAnnotations | nindent 8 }}
+      labels:
+        {{- include "mspace.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: {{ include "mspace.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if include "mspace.codexHomeSecretName" . }}
+      initContainers:
+        - name: prepare-codex-home
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              cp /codex-home-source/{{ include "mspace.codexHomeAuthKey" . }} /codex-home/auth.json
+              {{- if include "mspace.codexHomeConfigKey" . }}
+              cp /codex-home-source/{{ include "mspace.codexHomeConfigKey" . }} /codex-home/config.toml
+              {{- end }}
+              chmod 600 /codex-home/*
+          volumeMounts:
+            - name: codex-home-source
+              mountPath: /codex-home-source
+              readOnly: true
+            - name: codex-home
+              mountPath: /codex-home
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: worker
+          image: {{ include "mspace.workerImage" . | quote }}
+          imagePullPolicy: {{ .Values.worker.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "mspace.fullname" . }}-config
+            - secretRef:
+                name: {{ include "mspace.secretName" . }}
+          {{- if or .Values.secrets.runtimeTokenExistingSecret .Values.worker.env }}
+          env:
+            {{- if .Values.secrets.runtimeTokenExistingSecret }}
+            - name: MSPACE_RUNTIME_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mspace.runtimeTokenSecretName" . }}
+                  key: {{ include "mspace.runtimeTokenSecretKey" . }}
+            {{- end }}
+            {{- range $key, $value := .Values.worker.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- end }}
+          volumeMounts:
+            - name: work
+              mountPath: {{ .Values.worker.workRoot }}
+            {{- if include "mspace.codexHomeSecretName" . }}
+            - name: codex-home
+              mountPath: /var/lib/mspace-codex
+            {{- end }}
+            {{- if .Values.kubeconfig.existingSecret }}
+            - name: kubeconfig
+              mountPath: {{ .Values.kubeconfig.mountPath }}
+              subPath: {{ .Values.kubeconfig.key }}
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+      volumes:
+        {{- if not .Values.worker.persistence.enabled }}
+        - name: work
+          emptyDir: {}
+        {{- end }}
+        {{- if include "mspace.codexHomeSecretName" . }}
+        - name: codex-home-source
+          secret:
+            secretName: {{ include "mspace.codexHomeSecretName" . }}
+        - name: codex-home
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.kubeconfig.existingSecret }}
+        - name: kubeconfig
+          secret:
+            secretName: {{ .Values.kubeconfig.existingSecret }}
+        {{- end }}
+  {{- if .Values.worker.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: work
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.worker.persistence.storageClassName }}
+        storageClassName: {{ .Values.worker.persistence.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.worker.persistence.size | quote }}
+  {{- end }}
+{{- end }}
