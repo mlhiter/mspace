@@ -25,7 +25,7 @@ mspace is a review Inbox and Issue workspace for software teams that want coding
 The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, child tasks, comments, agent sessions, source branch state, runtime logs, deployment evidence, preview URL, and cleanup decision in one place.
 
 > [!NOTE]
-> mspace is a runnable local desktop MVP with a server-owned control plane. GitHub sign-in creates a personal workspace by default. Signed-in personal and team workspaces store product data, runtime task state, test environment records, cluster configs, agent profiles, PR handoffs, worker logs, and results in server Postgres. Runtime workers claim tasks from the server queue and prepare their own repo cache/workdir.
+> mspace is a runnable local desktop MVP with a server-owned control plane. Local username/password auth works in restricted or offline environments, and GitHub OAuth remains an optional external identity provider. Signed-in personal and team workspaces store product data, runtime task state, test environment records, cluster configs, agent profiles, PR handoffs, worker logs, and results in server Postgres. Runtime workers claim tasks from the server queue and prepare their own repo cache/workdir.
 
 ## Screenshots
 
@@ -56,7 +56,7 @@ Production deployment uses the root `vercel.json`:
 ## Features
 
 - Electron desktop app with Inbox, Issues, Agents, Clusters, Projects, Workspace Settings, Issue Detail, and Session Detail screens.
-- Go server control plane with GitHub OAuth, mspace session tokens, personal/team workspaces, workspace membership, invitations, Inbox receipts, projects, runbooks, issues, comments, reactions, labels, runtime worker registration, agent profiles, clusters, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
+- Go server control plane with local password auth, optional GitHub OAuth, mspace session tokens, personal/team workspaces, workspace membership, invitations, Inbox receipts, projects, runbooks, issues, comments, reactions, labels, runtime worker registration, agent profiles, clusters, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
 - Runtime worker daemon in `worker/` that registers with `msw_...`, heartbeats, claims matching server tasks, prepares its own repo cache/workdir, runs `codex app-server --listen stdio://`, streams logs, captures source metadata, and reports task results.
 - Codex execution belongs to runtime workers. The server image does not install Codex or mount Codex credentials.
 - Workspace Settings for team access, worker tokens, worker liveness, task events, task logs, and workspace automation.
@@ -83,7 +83,7 @@ mspace separates collaboration, execution, and validation:
 
 | Layer | What it owns | Current implementation |
 | --- | --- | --- |
-| Control plane | Users, workspaces, product data, membership, GitHub identity, mspace auth sessions, agents, clusters, test environments, PR handoffs, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, PostgreSQL through `pgx` |
+| Control plane | Users, workspaces, product data, membership, local password credentials, GitHub identity, mspace auth sessions, agents, clusters, test environments, PR handoffs, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, PostgreSQL through `pgx` |
 | Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review, language preference | Electron, React, TanStack Router, React Query, shared `@mspace/ui` and `@mspace/i18n` |
 | Runtime worker | Personal or team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
 | Agent runtime | One issue-bound turn in an isolated working directory | Worker-managed git workdir under the selected runtime mode |
@@ -113,7 +113,7 @@ Run the server separately only when debugging server behavior:
 
 ```bash
 cp .env.example .env.local
-# edit .env.local with DATABASE_URL and GitHub OAuth App values
+# edit .env.local with DATABASE_URL; GitHub OAuth values are optional
 pnpm run server
 ```
 
@@ -135,7 +135,7 @@ For customer Kubernetes deployment, use the Helm chart and runbook under `deploy
 
 ### First workflow
 
-1. Sign in with GitHub and select the personal or team workspace.
+1. Sign in with a local account, or use GitHub OAuth when it is configured, then select the personal or team workspace.
 2. Create an issue in the Issues tab with a document-style note.
 3. Attach or create a project before agent execution, PR handoff, project runbook access, or test environments.
 4. Create/import a cluster config in Clusters if the issue needs a Kubernetes test environment.
@@ -159,9 +159,9 @@ Runtime variables:
 | `MSPACE_DEV_POSTGRES_CONTAINER` | `mspace-postgres-dev` | Local Codex dev helper container name for auto-started Docker Postgres. |
 | `MSPACE_DEV_POSTGRES_VOLUME` | `mspace-postgres-data` | Durable named Docker volume for local control-plane Postgres data. |
 | `MSPACE_DEV_POSTGRES_IMAGE` | `postgres:16` | Docker image used when the local Codex dev helper creates Postgres. |
-| `MSPACE_GITHUB_CLIENT_ID` | none | GitHub OAuth client ID used by the server. |
-| `MSPACE_GITHUB_CLIENT_SECRET` | none | GitHub OAuth client secret; belongs on the server only. |
-| `MSPACE_GITHUB_REDIRECT_URI` | none | GitHub OAuth callback URL for the server. |
+| `MSPACE_GITHUB_CLIENT_ID` | none | Optional GitHub OAuth client ID used by the server. |
+| `MSPACE_GITHUB_CLIENT_SECRET` | none | Optional GitHub OAuth client secret; belongs on the server only. |
+| `MSPACE_GITHUB_REDIRECT_URI` | none | Optional GitHub OAuth callback URL for the server. |
 | `MSPACE_RUNTIME_TOKEN` | none | `msw_...` runtime worker registration token used by `pnpm worker`. |
 | `MSPACE_WORKER_CAPABILITIES` | `{"protocolSmoke":true,"codex":false,"dryRun":true}` | Worker capability JSON used by server-side task matching. |
 | `MSPACE_WORKER_VOLUME` | script-specific | Docker volume mounted at `/var/lib/mspace-worker` for worker-managed repo caches, session worktrees, and artifacts. |

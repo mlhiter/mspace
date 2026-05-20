@@ -31,7 +31,7 @@ Authorization: Bearer <msw-token>
 
 The server control plane owns:
 
-- GitHub auth and mspace `msp_...` sessions;
+- local password auth, optional GitHub auth, and mspace `msp_...` sessions;
 - users, workspaces, members, invitations, and identity;
 - projects, project runbooks, issues, child tasks, comments, reactions, labels, Inbox events, and per-user receipts;
 - workspace settings, agent profiles, clusters, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
@@ -44,6 +44,8 @@ The desktop owns native shell behavior, local UI state, file pickers, and openin
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Server health and protocol capabilities. |
+| `POST` | `/api/auth/password/register` | Create a local username/password identity, default personal workspace, and mspace session. |
+| `POST` | `/api/auth/password/login` | Authenticate a local account and issue a mspace session. |
 | `GET` | `/api/auth/github/start` | Create OAuth state and return the GitHub authorization URL plus polling path. |
 | `GET` | `/api/auth/github/callback` | Complete GitHub OAuth and render a browser success page. |
 | `GET` | `/api/auth/github/result` | Poll the single-use state-bound desktop login result. |
@@ -55,6 +57,37 @@ The desktop owns native shell behavior, local UI state, file pickers, and openin
 | `GET` | `/api/workspaces/{workspaceID}/invitations` | List invitations without raw tokens. |
 | `DELETE` | `/api/workspaces/{workspaceID}/invitations/{invitationID}` | Revoke an invitation. |
 | `POST` | `/api/workspace-invitations/accept` | Accept an invitation. |
+
+Local password auth is the default path for restricted or offline environments. GitHub OAuth values are optional and only needed when the deployment can reach GitHub.
+
+Create a local account:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/auth/password/register" \
+  -H 'Content-Type: application/json' \
+  -d '{"login":"local-admin","name":"Local Admin","password":"correct-password"}'
+```
+
+Sign in with that account:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/auth/password/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"login":"local-admin","password":"correct-password"}'
+```
+
+Both endpoints return the normal auth shape:
+
+```json
+{
+  "token": "msp_...",
+  "expiresAt": "2026-05-20T12:00:00Z",
+  "user": { "id": "...", "name": "Local Admin" },
+  "workspaces": [{ "id": "...", "kind": "personal", "role": "owner" }]
+}
+```
+
+Usernames are normalized to lowercase and must use letters, numbers, dots, underscores, or hyphens. Passwords must be 8 to 1024 characters. Duplicate registration returns `409`, and invalid login/password returns `401` without distinguishing missing, wrong, or disabled accounts.
 
 ## Product APIs
 

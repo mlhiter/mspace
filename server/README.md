@@ -18,6 +18,7 @@ Then edit `.env.local`:
 
 ```dotenv
 DATABASE_URL=postgres://mspace:mspace@127.0.0.1:5432/mspace?sslmode=disable
+# Optional. Only needed for GitHub OAuth sign-in.
 MSPACE_GITHUB_CLIENT_ID=...
 MSPACE_GITHUB_CLIENT_SECRET=...
 MSPACE_GITHUB_REDIRECT_URI=http://127.0.0.1:8787/api/auth/github/callback
@@ -41,6 +42,17 @@ When `scripts/run-mspace-codex-dev.sh` needs to auto-start local Docker Postgres
 
 ## Auth Shape
 
+Local password auth and GitHub OAuth are both identity providers. The product session is always a server-issued `msp_...` token.
+
+Password auth is the default path for restricted or offline environments:
+
+1. Desktop posts `POST /api/auth/password/register` or `POST /api/auth/password/login`.
+2. The server validates the username/password payload, stores only a bcrypt password hash for registrations, ensures a default personal workspace, and issues an mspace session token.
+3. Desktop stores the returned `msp_...` token.
+4. Desktop clients call mspace APIs with `Authorization: Bearer <msp_...>`.
+
+GitHub OAuth is optional:
+
 1. Desktop starts GitHub login through `GET /api/auth/github/start`.
 2. Desktop opens the returned `authorizeUrl` in the browser.
 3. GitHub redirects to `GET /api/auth/github/callback`.
@@ -49,13 +61,15 @@ When `scripts/run-mspace-codex-dev.sh` needs to auto-start local Docker Postgres
 6. Desktop polls `GET /api/auth/github/result?state=...` and stores the returned `msp_...` token.
 7. Desktop clients call mspace APIs with `Authorization: Bearer <msp_...>`.
 
-GitHub tokens are not the product session. They are used only to prove GitHub identity. Repository automation should later use GitHub App installation tokens owned by this service.
+GitHub tokens are not the product session. They are used only to prove GitHub identity. Local password registration does not verify email ownership, so it must not merge identities by email. Repository automation should later use GitHub App installation tokens owned by this service.
 
 ## API Slice
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Server health. |
+| `POST` | `/api/auth/password/register` | Create a local username/password identity, default personal workspace, and mspace session. |
+| `POST` | `/api/auth/password/login` | Authenticate a local account and issue a mspace session. |
 | `GET` | `/api/auth/github/start` | Create OAuth state and return the GitHub authorization URL plus polling path. |
 | `GET` | `/api/auth/github/callback` | Complete GitHub OAuth, link identity, create an mspace session, and render the browser success page. |
 | `GET` | `/api/auth/github/result` | Poll the state-bound login result from the desktop app. Returns `202` while pending and consumes the result once ready. |
@@ -127,7 +141,7 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 
 The workspace Inbox is event-based. `issue_events` stores the append-only review fact, `issue_event_receipts` stores each recipient user's unread/read/archive state, and `issue_watchers` stores the issue-level recipient set. Opening or polling an issue must not clear unread state; clients should call the read-through endpoint after the user intentionally reviews an Inbox row.
 
-Personal workspaces are the default result of GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in Postgres. Runtime worker registration and task APIs are available to both personal and team workspaces; team workspaces additionally unlock invitations and shared membership.
+Personal workspaces are the default result of password registration or GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in Postgres. Runtime worker registration and task APIs are available to both personal and team workspaces; team workspaces additionally unlock invitations and shared membership.
 
 Issue `project_id` is optional in the control plane. A user can capture a workspace-level issue before the repository is known, comment on it, and attach a project later through `PUT /api/workspaces/{workspaceID}/issues/{issueID}` with `projectId`. If a create request omits `projectId` and the workspace has exactly one project, the server auto-attaches it; zero or multiple projects leave the issue unassigned. Agent execution, PR handoff, and issue test environments require an attached project.
 

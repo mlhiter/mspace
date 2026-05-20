@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-05-20",
+    title: "Local account login for restricted environments",
+    summary:
+      "mspace added username/password authentication so customer and offline deployments no longer depend on GitHub OAuth for first sign-in.",
+    items: [
+      "Added password-backed local identities that still issue normal `msp_...` mspace session tokens.",
+      "Kept GitHub OAuth as an optional identity provider instead of making it the only sign-in path.",
+      "Updated the desktop sign-in surface with local account login and account creation while preserving the GitHub sign-in fallback.",
+      "Documented Kubernetes deployments so teams can create a workspace and runtime token without GitHub access.",
+    ],
+  },
+  {
     date: "2026-05-19",
     title: "Kubernetes customer deployment package",
     summary:

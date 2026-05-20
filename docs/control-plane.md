@@ -11,6 +11,7 @@ mspace uses the server control plane as the single product and runtime state own
 The control plane owns:
 
 - users;
+- local password credentials;
 - workspaces;
 - workspace members and roles;
 - mspace auth sessions;
@@ -44,7 +45,23 @@ The control plane intentionally has no Codex runtime dependency. It does not ins
 
 ## Auth Shape
 
-GitHub is an identity provider, not the product session authority.
+Local password auth and GitHub OAuth are identity providers, not the product session authority. Both routes end by issuing an `msp_...` mspace auth session.
+
+Password auth is the default path for restricted or offline environments:
+
+```text
+Desktop
+  -> POST /api/auth/password/register or /api/auth/password/login
+mspace server
+  -> user_password_credentials(login, password_hash)
+  -> user_identities(provider=password)
+  -> mspace auth session token
+Desktop
+  -> store msp_... session token
+  -> call mspace APIs with Authorization: Bearer msp_...
+```
+
+GitHub remains optional when the environment can reach GitHub:
 
 ```text
 Desktop
@@ -64,7 +81,7 @@ Desktop
   -> call mspace APIs with Authorization: Bearer msp_...
 ```
 
-The server may use a GitHub OAuth client secret because it is a trusted backend environment. The desktop app must not embed GitHub client secrets.
+The server may use a GitHub OAuth client secret because it is a trusted backend environment. The desktop app must not embed GitHub client secrets. Password hashes are server-side only and stored separately from `user_identities`. Local password registration does not verify email ownership, so the user row keeps its canonical email blank and stores any provided email only on the password identity record; password auth must not merge into an OAuth identity by matching email.
 
 Future GitHub repository automation should use GitHub App installation tokens stored and rotated by the control plane. Do not build long-lived repository automation on personal GitHub OAuth tokens stored by desktop or workers.
 
@@ -72,7 +89,7 @@ Future GitHub repository automation should use GitHub App installation tokens st
 
 The server module provides:
 
-- GitHub auth and mspace session endpoints: `/api/auth/github/start`, `/api/auth/github/callback`, `/api/auth/github/result`, `/api/auth/me`;
+- local password auth, GitHub auth, and mspace session endpoints: `/api/auth/password/register`, `/api/auth/password/login`, `/api/auth/github/start`, `/api/auth/github/callback`, `/api/auth/github/result`, `/api/auth/me`;
 - workspace listing and creation: `/api/workspaces`;
 - team access: members, invitations, and invite acceptance;
 - Inbox events and per-user receipts;
@@ -89,9 +106,9 @@ The server module provides:
 - Postgres migrations for the above tables;
 - memory-backed store used only by tests.
 
-Workspaces have an explicit `kind`: `personal` or `team`. The first GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in server Postgres. Team collaboration is opt-in: `POST /api/workspaces` creates team workspaces, and invitation/member APIs reject personal workspaces.
+Workspaces have an explicit `kind`: `personal` or `team`. The first password registration or GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in server Postgres. Team collaboration is opt-in: `POST /api/workspaces` creates team workspaces, and invitation/member APIs reject personal workspaces.
 
-The desktop requires GitHub sign-in before product data is available. Issue Detail writes the server comment, then calls `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; the server queues an `agent_session` runtime task and later exposes worker logs/results directly from `runtime_task_logs` and `runtime_tasks.result`.
+The desktop requires an mspace session before product data is available. Issue Detail writes the server comment, then calls `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; the server queues an `agent_session` runtime task and later exposes worker logs/results directly from `runtime_task_logs` and `runtime_tasks.result`.
 
 New issue type classification is also a runtime task. When an issue has `triage_status=pending` and no explicit type label, the server queues `runtime_tasks.kind="issue_type_triage"` with `required_capabilities={"codex":true}` and a classification-only prompt. A matching worker runs Codex, returns a compact JSON result, and the server validates the type before writing the `type:*` label. The server never falls back to keyword matching or an in-process Codex client.
 

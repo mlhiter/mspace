@@ -12,13 +12,13 @@ The repository contains a runnable desktop MVP with server-owned product and run
 - Shared desktop localization lives in `packages/i18n` for `en` and `zh-CN`.
 - Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`.
 - Go runtime worker in `worker/`, registered to workspaces with `msw_...` tokens.
-- GitHub sign-in creates a personal workspace by default. Personal and team workspaces both store product data plus runtime state in server Postgres.
+- Local username/password auth creates a personal workspace by default and works without GitHub access. GitHub sign-in remains an optional external identity provider. Personal and team workspaces both store product data plus runtime state in server Postgres.
 - Team collaboration features require an explicit team workspace created from the workspace menu.
 - The desktop starts the server control plane when needed and renders server state. It does not own product truth or runtime persistence.
 
 The control plane owns:
 
-- users, workspaces, membership, GitHub identity, and mspace auth sessions;
+- users, local password credentials, workspaces, membership, GitHub identity, and mspace auth sessions;
 - projects, project runbooks, issues, child issue tasks, comments, reactions, labels, Inbox events, and per-user receipts;
 - workspace settings, agent profiles, clusters, issue test environments, issue handoffs, review evidence, failures, and source change records;
 - runtime worker registration, task queue state, task logs, task events, cancellation, and task results;
@@ -81,7 +81,7 @@ Failed, cancelled, or invalid triage task results mark the issue triage as faile
 
 Main server-owned table groups:
 
-- Identity: `users`, `user_identities`, `auth_sessions`, `oauth_states`, `oauth_results`.
+- Identity: `users`, `user_password_credentials`, `user_identities`, `auth_sessions`, `oauth_states`, `oauth_results`.
 - Workspaces: `workspaces`, `workspace_members`, `workspace_invitations`.
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.

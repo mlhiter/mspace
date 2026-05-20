@@ -13,7 +13,7 @@ The repository now has a runnable local desktop MVP:
 - create projects from a local folder picker or GitHub repository URL and manage settings later;
 - create and manage issues in the Issues tab;
 - jump to issues and projects from the sidebar global search or `Command+K` palette;
-- sign in with GitHub through the local server control plane and show the current user/workspace state in the sidebar;
+- sign in with a local username/password account, or optional GitHub OAuth when available, through the server control plane and show the current user/workspace state in the sidebar;
 - store signed-in workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts in server Postgres for both personal and team workspaces;
 - write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page, where they can be toggled or deleted;
 - classify new issues asynchronously by queueing `issue_type_triage` runtime tasks that are claimed by Codex-capable workers and reconciled into one Conventional Commit type label by the server;
@@ -231,7 +231,7 @@ Still outside the current implemented MVP:
 - server-owned GitHub App PR automation;
 - automated namespace cleanup policy beyond the current manual cleanup/retain decision.
 
-The product architecture now uses the server control plane as the product and runtime truth for every signed-in workspace. Users, workspaces, membership, GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, handoffs, audit, runtime tasks, worker logs, and future GitHub App installation state live in the server.
+The product architecture now uses the server control plane as the product and runtime truth for every signed-in workspace. Users, local password credentials, workspaces, membership, optional GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, handoffs, audit, runtime tasks, worker logs, and future GitHub App installation state live in the server.
 
 Display name/avatar fields are snapshots for rendering only. They should not become a second account system; shared issue ownership, comments, and permissions belong behind the control plane.
 

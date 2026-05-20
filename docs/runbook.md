@@ -17,7 +17,7 @@ The product and runtime state for signed-in workspaces lives in server Postgres 
 | `<artifact-dir>/branch-name.json` | Optional agent-proposed source branch name. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-learned project runbook artifact. |
 
-Server Postgres stores users, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, issue handoffs, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs.
+Server Postgres stores users, local password credentials, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, issue handoffs, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs.
 
 Docker-backed workers store target project source under the worker root volume, not in the host checkout. The dry-run worker defaults to the `mspace-worker-dev-root` Docker volume, and the Codex-capable worker defaults to `mspace-worker-codex-dev-root`; both mount that volume at `/var/lib/mspace-worker`.
 
@@ -50,13 +50,13 @@ Run the server separately for auth or control-plane debugging:
 
 ```bash
 cp .env.example .env.local
-# edit .env.local with DATABASE_URL and GitHub OAuth values
+# edit .env.local with DATABASE_URL; GitHub OAuth values are optional
 pnpm run server
 ```
 
 For local worker testing, start a Docker-backed worker from Workspace Settings:
 
-1. Sign in and select the target workspace.
+1. Sign in with a local account or configured GitHub OAuth, then select the target workspace.
 2. Open Workspace Settings.
 3. In Runtime, click `Start worker`.
 
@@ -134,9 +134,9 @@ Visible product copy in `apps/desktop`, `packages/ui`, or `packages/views` shoul
 | `MSPACE_SERVER_URL` | Electron preload/renderer | `http://127.0.0.1:8787` | Server control-plane base URL exposed to the renderer. |
 | `MSPACE_SERVER_START_TIMEOUT_MS` | Electron main process | `30000` | How long the desktop waits for the server health check before startup fails. |
 | `DATABASE_URL` | Server | none | Postgres connection string for control-plane storage. |
-| `MSPACE_GITHUB_CLIENT_ID` | Server | none | GitHub OAuth App client id. |
-| `MSPACE_GITHUB_CLIENT_SECRET` | Server | none | GitHub OAuth App client secret; keep it server-side only. |
-| `MSPACE_GITHUB_REDIRECT_URI` | Server | none | OAuth callback URL, usually `http://127.0.0.1:8787/api/auth/github/callback` locally. |
+| `MSPACE_GITHUB_CLIENT_ID` | Server | none | Optional GitHub OAuth App client id. |
+| `MSPACE_GITHUB_CLIENT_SECRET` | Server | none | Optional GitHub OAuth App client secret; keep it server-side only. |
+| `MSPACE_GITHUB_REDIRECT_URI` | Server | none | Optional OAuth callback URL, usually `http://127.0.0.1:8787/api/auth/github/callback` locally. |
 | `MSPACE_RUNTIME_TOKEN` | Worker | none | Internal runtime bootstrap credential with `msw_` prefix. |
 | `MSPACE_WORKER_NAME` | Worker | host-derived | Stable worker name shown in Workspace Settings. |
 | `MSPACE_WORKER_MODE` | Worker | `team` | Runtime mode reported to the server; `team` or `personal`. |
@@ -276,13 +276,15 @@ pnpm test:server
 
 ### GitHub sign-in does not complete
 
+Local password sign-in does not require GitHub. Use GitHub only when the server has OAuth values and the environment can reach GitHub.
+
 Check server env first:
 
 ```bash
 curl -i http://127.0.0.1:8787/api/auth/github/start
 ```
 
-Required variables: `DATABASE_URL`, `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI`.
+Required variables for this GitHub OAuth path: `DATABASE_URL`, `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI`.
 
 ### Workspace looks empty
 

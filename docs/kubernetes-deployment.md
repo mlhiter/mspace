@@ -27,7 +27,7 @@ BuildKit StatefulSet
 - Kubernetes cluster with a default StorageClass or explicit storage classes in values.
 - Ingress controller if exposing the server through Ingress.
 - Registry push access for mspace images and project test images.
-- GitHub OAuth App with callback URL `https://<host>/api/auth/github/callback`.
+- Optional GitHub OAuth App with callback URL `https://<host>/api/auth/github/callback`. Restricted or offline deployments can use local username/password auth without GitHub.
 - Codex auth JSON and config TOML for the worker. The server control plane does not run Codex.
 - A kubeconfig whose permissions are limited to the customer test cluster scope.
 - Helm 3.
@@ -94,9 +94,9 @@ cp deploy/helm/mspace/examples/customer-values.yaml /tmp/mspace-values.yaml
 
 Set:
 
-- `secrets.githubClientId`
-- `secrets.githubClientSecret`
-- `secrets.githubRedirectUri`
+- optional `secrets.githubClientId`
+- optional `secrets.githubClientSecret`
+- optional `secrets.githubRedirectUri`
 - `server.image.tag`
 - `server.ingress.hosts[0].host`
 - optional storage classes
@@ -125,7 +125,7 @@ Open the desktop app with:
 MSPACE_SERVER_URL=https://mspace.example.com pnpm dev:desktop
 ```
 
-Sign in, create or select the customer workspace, then create a runtime registration token from Workspace Settings. Copy the raw `msw_...` token once.
+Sign in with a local account, or GitHub OAuth if configured, then create or select the customer workspace. Create a runtime registration token from Workspace Settings and copy the raw `msw_...` token once.
 
 Create a Secret for that token. Do not put the token directly in Helm values:
 
