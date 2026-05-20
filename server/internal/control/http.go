@@ -26,6 +26,7 @@ type Server struct {
 
 const serverProtocolVersion = 1
 const maxIssueAttachmentBytes = 10 << 20
+const maxPasswordAuthBodyBytes = 4 << 10
 
 func NewServer(config Config, store Store, github GitHubClient) *Server {
 	config = config.withDefaults()
@@ -44,6 +45,8 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/auth/github/start", s.handleGitHubStart)
 	r.Get("/api/auth/github/callback", s.handleGitHubCallback)
 	r.Get("/api/auth/github/result", s.handleGitHubResult)
+	r.Post("/api/auth/password/register", s.handlePasswordRegister)
+	r.Post("/api/auth/password/login", s.handlePasswordLogin)
 	r.Get("/api/auth/me", s.handleMe)
 	r.Get("/api/workspaces", s.handleWorkspaces)
 	r.Post("/api/workspaces", s.handleCreateWorkspace)
@@ -127,6 +130,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"teamWorkspaceCreation":       true,
 			"workspaceInvitations":        true,
 			"workspaceKinds":              true,
+			"passwordAuth":                true,
 			"runtimeWorkerRegistration":   true,
 			"runtimeTaskQueue":            true,
 			"workspaceCollaboration":      true,
@@ -208,17 +212,10 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	token, expiresAt, err := s.store.CreateAuthSession(r.Context(), user.ID, s.config.SessionTTL)
+	result, err := s.authResultForUser(r, user, workspaces)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
-	}
-
-	result := AuthResult{
-		Token:      token,
-		ExpiresAt:  expiresAt.UTC().Format(time.RFC3339),
-		User:       user,
-		Workspaces: workspaces,
 	}
 	if err := s.store.SaveOAuthResult(r.Context(), "github", state, result, time.Now().UTC().Add(s.config.OAuthStateTTL)); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -253,6 +250,54 @@ func (s *Server) handleGitHubResult(w http.ResponseWriter, r *http.Request) {
 		Pending:    false,
 		AuthResult: result,
 	})
+}
+
+func (s *Server) handlePasswordRegister(w http.ResponseWriter, r *http.Request) {
+	input := PasswordAuthInput{}
+	r.Body = http.MaxBytesReader(w, r.Body, maxPasswordAuthBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	user, workspaces, err := s.store.CreatePasswordIdentity(r.Context(), input)
+	if err != nil {
+		if errors.Is(err, ErrConflict) {
+			writeError(w, http.StatusConflict, errors.New("login already exists"))
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	result, err := s.authResultForUser(r, user, workspaces)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (s *Server) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {
+	input := PasswordAuthInput{}
+	r.Body = http.MaxBytesReader(w, r.Body, maxPasswordAuthBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	user, workspaces, err := s.store.AuthenticatePassword(r.Context(), input)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrForbidden) {
+			writeError(w, http.StatusUnauthorized, errors.New("invalid login or password"))
+			return
+		}
+		writeStoreError(w, err)
+		return
+	}
+	result, err := s.authResultForUser(r, user, workspaces)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -1433,6 +1478,19 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (User, []W
 	return user, workspaces, true
 }
 
+func (s *Server) authResultForUser(r *http.Request, user User, workspaces []Workspace) (AuthResult, error) {
+	token, expiresAt, err := s.store.CreateAuthSession(r.Context(), user.ID, s.config.SessionTTL)
+	if err != nil {
+		return AuthResult{}, err
+	}
+	return AuthResult{
+		Token:      token,
+		ExpiresAt:  expiresAt.UTC().Format(time.RFC3339),
+		User:       user,
+		Workspaces: workspaces,
+	}, nil
+}
+
 func (s *Server) authenticateRuntimeRegistration(w http.ResponseWriter, r *http.Request) (RuntimeRegistration, bool) {
 	token := bearerToken(r)
 	if token == "" {
@@ -1543,6 +1601,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		status = http.StatusUnauthorized
 	} else if errors.Is(err, ErrForbidden) {
 		status = http.StatusForbidden
+	} else if errors.Is(err, ErrConflict) {
+		status = http.StatusConflict
 	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") {
 		status = http.StatusBadRequest
 	}

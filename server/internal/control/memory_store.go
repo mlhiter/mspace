@@ -17,6 +17,7 @@ type MemoryStore struct {
 	results              map[string]memoryOAuthResult
 	users                map[string]User
 	identities           map[string]string
+	passwordCredentials  map[string]memoryPasswordCredential
 	workspaces           map[string][]Workspace
 	workspaceMembers     map[string]map[string]string
 	workspaceInvitations map[string]memoryWorkspaceInvitation
@@ -57,6 +58,12 @@ type memoryOAuthResult struct {
 	ExpiresAt time.Time
 }
 
+type memoryPasswordCredential struct {
+	UserID       string
+	PasswordHash string
+	Disabled     bool
+}
+
 type memoryReceipt struct {
 	EventID     string
 	WorkspaceID string
@@ -85,6 +92,7 @@ func NewMemoryStore() *MemoryStore {
 		results:              map[string]memoryOAuthResult{},
 		users:                map[string]User{},
 		identities:           map[string]string{},
+		passwordCredentials:  map[string]memoryPasswordCredential{},
 		workspaces:           map[string][]Workspace{},
 		workspaceMembers:     map[string]map[string]string{},
 		workspaceInvitations: map[string]memoryWorkspaceInvitation{},
@@ -211,6 +219,88 @@ func (s *MemoryStore) UpsertIdentity(_ Context, profile IdentityProfile) (User, 
 	}
 	s.workspaceMembers[workspace.ID][userID] = "owner"
 	return user, s.workspaces[userID], nil
+}
+
+func (s *MemoryStore) CreatePasswordIdentity(_ Context, input PasswordAuthInput) (User, []Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalized, err := normalizePasswordAuthInput(input, true)
+	if err != nil {
+		return User{}, nil, err
+	}
+	if _, exists := s.passwordCredentials[normalized.Login]; exists {
+		return User{}, nil, ErrConflict
+	}
+	key := "password:" + normalized.Login
+	if s.identities[key] != "" {
+		return User{}, nil, ErrConflict
+	}
+	passwordHash, err := hashPassword(normalized.Password)
+	if err != nil {
+		return User{}, nil, err
+	}
+
+	s.nextID++
+	userID := fmt.Sprintf("user-%04d", s.nextID)
+	now := time.Now().UTC().Format(time.RFC3339)
+	name := strings.TrimSpace(normalized.Name)
+	if name == "" {
+		name = normalized.Login
+	}
+	user := User{
+		ID:        userID,
+		Name:      name,
+		Email:     "",
+		AvatarURL: "",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	workspace := Workspace{
+		ID:        "workspace-" + userID,
+		Name:      name + "'s workspace",
+		Slug:      defaultWorkspaceSlug(normalized.Login, userID),
+		Kind:      "personal",
+		Role:      "owner",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	s.users[userID] = user
+	s.identities[key] = userID
+	s.passwordCredentials[normalized.Login] = memoryPasswordCredential{UserID: userID, PasswordHash: passwordHash}
+	s.workspaces[userID] = []Workspace{workspace}
+	if s.workspaceMembers[workspace.ID] == nil {
+		s.workspaceMembers[workspace.ID] = map[string]string{}
+	}
+	s.workspaceMembers[workspace.ID][userID] = "owner"
+	return user, s.workspaces[userID], nil
+}
+
+func (s *MemoryStore) AuthenticatePassword(_ Context, input PasswordAuthInput) (User, []Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalized, err := normalizePasswordAuthInput(input, false)
+	if err != nil {
+		return User{}, nil, err
+	}
+	credential, ok := s.passwordCredentials[normalized.Login]
+	if !ok {
+		verifyPasswordHash(dummyPasswordHash, normalized.Password)
+		return User{}, nil, ErrNotFound
+	}
+	if credential.Disabled {
+		verifyPasswordHash(credential.PasswordHash, normalized.Password)
+		return User{}, nil, ErrForbidden
+	}
+	if !verifyPasswordHash(credential.PasswordHash, normalized.Password) {
+		return User{}, nil, ErrNotFound
+	}
+	user, ok := s.users[credential.UserID]
+	if !ok {
+		return User{}, nil, ErrNotFound
+	}
+	return user, s.workspaces[credential.UserID], nil
 }
 
 func (s *MemoryStore) CreateAuthSession(_ Context, userID string, ttl time.Duration) (string, time.Time, error) {

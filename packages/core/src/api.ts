@@ -33,6 +33,7 @@ import type {
   KubeconfigDiscoveryResult,
   KubeconfigImportResult,
   MspaceUser,
+  PasswordAuthInput,
   Project,
   ProjectRunbook,
   RuntimeRegistrationToken,
@@ -217,6 +218,16 @@ export const controlPlaneApi = {
     requestControlPlane<AuthStartResult>("/api/auth/github/start"),
   pollGitHubLogin: (state: string) =>
     requestControlPlane<AuthPollResult>(`/api/auth/github/result?state=${encodeURIComponent(state)}`),
+  registerWithPassword: (input: PasswordAuthInput) =>
+    requestControlPlane<AuthMeResult & { token: string; expiresAt: string }>("/api/auth/password/register", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  loginWithPassword: (input: PasswordAuthInput) =>
+    requestControlPlane<AuthMeResult & { token: string; expiresAt: string }>("/api/auth/password/login", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   me: (token: string) =>
     requestControlPlane<AuthMeResult>("/api/auth/me", {
       headers: authHeaders(token),

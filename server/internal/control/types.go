@@ -11,6 +11,7 @@ var (
 	ErrNotFound  = errors.New("not found")
 	ErrExpired   = errors.New("expired")
 	ErrForbidden = errors.New("forbidden")
+	ErrConflict  = errors.New("conflict")
 )
 
 type Config struct {
@@ -1024,12 +1025,21 @@ type AuthPollResult struct {
 	AuthResult
 }
 
+type PasswordAuthInput struct {
+	Login    string `json:"login"`
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
 type Store interface {
 	SaveOAuthState(ctx Context, state OAuthState) error
 	ConsumeOAuthState(ctx Context, provider, state string) (OAuthState, error)
 	SaveOAuthResult(ctx Context, provider, state string, result AuthResult, expiresAt time.Time) error
 	ConsumeOAuthResult(ctx Context, provider, state string) (AuthResult, bool, error)
 	UpsertIdentity(ctx Context, profile IdentityProfile) (User, []Workspace, error)
+	CreatePasswordIdentity(ctx Context, input PasswordAuthInput) (User, []Workspace, error)
+	AuthenticatePassword(ctx Context, input PasswordAuthInput) (User, []Workspace, error)
 	CreateAuthSession(ctx Context, userID string, ttl time.Duration) (token string, expiresAt time.Time, err error)
 	GetUserBySessionToken(ctx Context, token string) (User, []Workspace, error)
 	CreateWorkspace(ctx Context, userID string, input CreateWorkspaceInput) (Workspace, []Workspace, error)

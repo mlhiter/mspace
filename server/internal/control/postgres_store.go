@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type PostgresStore struct {
@@ -163,6 +164,104 @@ func (s *PostgresStore) UpsertIdentity(ctx Context, profile IdentityProfile) (Us
 		return User{}, nil, err
 	}
 	if err := tx.Commit(dbctx); err != nil {
+		return User{}, nil, err
+	}
+	return user, workspaces, nil
+}
+
+func (s *PostgresStore) CreatePasswordIdentity(ctx Context, input PasswordAuthInput) (User, []Workspace, error) {
+	normalized, err := normalizePasswordAuthInput(input, true)
+	if err != nil {
+		return User{}, nil, err
+	}
+	passwordHash, err := hashPassword(normalized.Password)
+	if err != nil {
+		return User{}, nil, err
+	}
+
+	dbctx := asContext(ctx)
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return User{}, nil, err
+	}
+	defer tx.Rollback(dbctx)
+
+	profile := IdentityProfile{
+		Provider:       "password",
+		ProviderUserID: normalized.Login,
+		Login:          normalized.Login,
+		Name:           normalized.Name,
+		Email:          normalized.Email,
+		RawProfile:     json.RawMessage(`{"provider":"password"}`),
+	}
+	// Password emails are unverified. Keep the canonical user email blank so
+	// local accounts cannot preclaim an OAuth identity by email.
+	var user User
+	var createdAt, updatedAt time.Time
+	err = tx.QueryRow(dbctx, `
+		INSERT INTO users (name, email, avatar_url)
+		VALUES ($1, '', '')
+		RETURNING id::text, name, email, avatar_url, created_at, updated_at
+	`, profile.Name).Scan(&user.ID, &user.Name, &user.Email, &user.AvatarURL, &createdAt, &updatedAt)
+	if err != nil {
+		return User{}, nil, err
+	}
+	user.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	user.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	if err := insertIdentity(dbctx, tx, user.ID, profile); err != nil {
+		if isUniqueViolation(err) {
+			return User{}, nil, ErrConflict
+		}
+		return User{}, nil, err
+	}
+	if _, err := tx.Exec(dbctx, `
+		INSERT INTO user_password_credentials (user_id, login, password_hash)
+		VALUES ($1, $2, $3)
+	`, user.ID, normalized.Login, passwordHash); err != nil {
+		if isUniqueViolation(err) {
+			return User{}, nil, ErrConflict
+		}
+		return User{}, nil, err
+	}
+	workspaces, err := ensureDefaultWorkspace(dbctx, tx, user, normalized.Login)
+	if err != nil {
+		return User{}, nil, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return User{}, nil, err
+	}
+	return user, workspaces, nil
+}
+
+func (s *PostgresStore) AuthenticatePassword(ctx Context, input PasswordAuthInput) (User, []Workspace, error) {
+	normalized, err := normalizePasswordAuthInput(input, false)
+	if err != nil {
+		return User{}, nil, err
+	}
+	dbctx := asContext(ctx)
+	var userID, passwordHash string
+	var disabled bool
+	err = s.pool.QueryRow(dbctx, `
+		SELECT user_id::text, password_hash, disabled
+		FROM user_password_credentials
+		WHERE lower(login) = lower($1)
+	`, normalized.Login).Scan(&userID, &passwordHash, &disabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		verifyPasswordHash(dummyPasswordHash, normalized.Password)
+		return User{}, nil, ErrNotFound
+	}
+	if err != nil {
+		return User{}, nil, err
+	}
+	if disabled {
+		verifyPasswordHash(passwordHash, normalized.Password)
+		return User{}, nil, ErrForbidden
+	}
+	if !verifyPasswordHash(passwordHash, normalized.Password) {
+		return User{}, nil, ErrNotFound
+	}
+	user, workspaces, err := findUserByID(dbctx, s.pool, userID)
+	if err != nil {
 		return User{}, nil, err
 	}
 	return user, workspaces, nil
@@ -1635,6 +1734,26 @@ func findUserByEmail(ctx context.Context, q queryer, email string) (User, error)
 	return user, nil
 }
 
+func findUserByID(ctx context.Context, q queryer, userID string) (User, []Workspace, error) {
+	var user User
+	var createdAt, updatedAt time.Time
+	err := q.QueryRow(ctx, `
+		SELECT id::text, name, email, avatar_url, created_at, updated_at
+		FROM users
+		WHERE id = $1
+	`, userID).Scan(&user.ID, &user.Name, &user.Email, &user.AvatarURL, &createdAt, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, nil, ErrNotFound
+	}
+	if err != nil {
+		return User{}, nil, err
+	}
+	user.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	user.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	workspaces, err := listWorkspaces(ctx, q, user.ID)
+	return user, workspaces, err
+}
+
 func insertIdentity(ctx context.Context, q queryer, userID string, profile IdentityProfile) error {
 	raw := profile.RawProfile
 	if len(raw) == 0 {
@@ -2165,6 +2284,78 @@ func normalizeCreateWorkspaceInput(input CreateWorkspaceInput) (CreateWorkspaceI
 		return CreateWorkspaceInput{}, errors.New("only team workspaces can be created explicitly")
 	}
 	return input, nil
+}
+
+func normalizePasswordAuthInput(input PasswordAuthInput, requireProfile bool) (PasswordAuthInput, error) {
+	input.Login = strings.ToLower(strings.TrimSpace(input.Login))
+	input.Name = strings.TrimSpace(input.Name)
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+	input.Password = strings.TrimSpace(input.Password)
+	if input.Login == "" {
+		return PasswordAuthInput{}, errors.New("login is required")
+	}
+	if len(input.Login) > 80 {
+		return PasswordAuthInput{}, errors.New("login must be 80 characters or less")
+	}
+	if !isValidPasswordLogin(input.Login) {
+		return PasswordAuthInput{}, errors.New("login must use letters, numbers, dot, underscore, or hyphen")
+	}
+	if requireProfile {
+		if input.Name == "" {
+			input.Name = input.Login
+		}
+		if len(input.Name) > 120 {
+			return PasswordAuthInput{}, errors.New("name must be 120 characters or less")
+		}
+		if len(input.Email) > 320 {
+			return PasswordAuthInput{}, errors.New("email must be 320 characters or less")
+		}
+	}
+	if input.Password == "" {
+		return PasswordAuthInput{}, errors.New("password is required")
+	}
+	if len(input.Password) < 8 {
+		return PasswordAuthInput{}, errors.New("password must be at least 8 characters")
+	}
+	if len(input.Password) > 1024 {
+		return PasswordAuthInput{}, errors.New("password must be 1024 characters or less")
+	}
+	return input, nil
+}
+
+func isValidPasswordLogin(login string) bool {
+	for _, r := range login {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '.' || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func hashPassword(password string) (string, error) {
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashed), nil
+}
+
+const dummyPasswordHash = "$2a$10$J0rIOkjlAMQbqSIyl5bq2euC3gRCpeAewfGG1MleQZ9ZPj4vhvXgK"
+
+func verifyPasswordHash(passwordHash, password string) bool {
+	return bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)) == nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 func normalizeRuntimeTaskCancelReason(reason string) string {

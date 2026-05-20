@@ -70,6 +70,9 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	if payload.Capabilities["workspaceKinds"] != true {
 		t.Fatalf("expected workspace kinds capability, got %+v", payload.Capabilities)
 	}
+	if payload.Capabilities["passwordAuth"] != true {
+		t.Fatalf("expected password auth capability, got %+v", payload.Capabilities)
+	}
 	if payload.Capabilities["runtimeWorkerRegistration"] != true {
 		t.Fatalf("expected runtime worker registration capability, got %+v", payload.Capabilities)
 	}
@@ -266,6 +269,71 @@ func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 	router.ServeHTTP(reusedResultRecorder, httptest.NewRequest(http.MethodGet, "/api/auth/github/result?state="+start.State, nil))
 	if reusedResultRecorder.Code != http.StatusBadRequest {
 		t.Fatalf("reused result should be consumed, status=%d body=%s", reusedResultRecorder.Code, reusedResultRecorder.Body.String())
+	}
+}
+
+func TestPasswordAuthIssuesMspaceSession(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	registerBody := `{"login":"local-admin","name":"Local Admin","email":"admin@example.test","password":"correct-password"}`
+	registerRecorder := httptest.NewRecorder()
+	router.ServeHTTP(registerRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/register", strings.NewReader(registerBody)))
+	if registerRecorder.Code != http.StatusCreated {
+		t.Fatalf("register status=%d body=%s", registerRecorder.Code, registerRecorder.Body.String())
+	}
+	var register AuthResult
+	if err := json.Unmarshal(registerRecorder.Body.Bytes(), &register); err != nil {
+		t.Fatalf("parse register response: %v", err)
+	}
+	if !strings.HasPrefix(register.Token, "msp_") {
+		t.Fatalf("expected mspace token, got %q", register.Token)
+	}
+	if register.User.Name != "Local Admin" || register.User.Email != "" {
+		t.Fatalf("unexpected registered user: %+v", register.User)
+	}
+	if len(register.Workspaces) != 1 || register.Workspaces[0].Kind != "personal" || register.Workspaces[0].Role != "owner" {
+		t.Fatalf("unexpected default workspace: %+v", register.Workspaces)
+	}
+
+	meRecorder := httptest.NewRecorder()
+	meReq := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	meReq.Header.Set("Authorization", "Bearer "+register.Token)
+	router.ServeHTTP(meRecorder, meReq)
+	if meRecorder.Code != http.StatusOK {
+		t.Fatalf("me status=%d body=%s", meRecorder.Code, meRecorder.Body.String())
+	}
+
+	loginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(loginRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/login", strings.NewReader(`{"login":"local-admin","password":"correct-password"}`)))
+	if loginRecorder.Code != http.StatusOK {
+		t.Fatalf("login status=%d body=%s", loginRecorder.Code, loginRecorder.Body.String())
+	}
+	var login AuthResult
+	if err := json.Unmarshal(loginRecorder.Body.Bytes(), &login); err != nil {
+		t.Fatalf("parse login response: %v", err)
+	}
+	if login.User.ID != register.User.ID || login.Workspaces[0].ID != register.Workspaces[0].ID {
+		t.Fatalf("login should return existing user/workspace, got user=%+v workspaces=%+v", login.User, login.Workspaces)
+	}
+
+	duplicateRecorder := httptest.NewRecorder()
+	router.ServeHTTP(duplicateRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/register", strings.NewReader(registerBody)))
+	if duplicateRecorder.Code != http.StatusConflict {
+		t.Fatalf("duplicate register status=%d body=%s", duplicateRecorder.Code, duplicateRecorder.Body.String())
+	}
+
+	badLoginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(badLoginRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/login", strings.NewReader(`{"login":"local-admin","password":"wrong-password"}`)))
+	if badLoginRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("bad password status=%d body=%s", badLoginRecorder.Code, badLoginRecorder.Body.String())
+	}
+
+	missingLoginRecorder := httptest.NewRecorder()
+	router.ServeHTTP(missingLoginRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/login", strings.NewReader(`{"login":"missing-admin","password":"correct-password"}`)))
+	if missingLoginRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("missing login status=%d body=%s", missingLoginRecorder.Code, missingLoginRecorder.Body.String())
 	}
 }
 

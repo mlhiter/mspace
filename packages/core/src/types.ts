@@ -846,6 +846,13 @@ export interface CreateWorkspaceResult {
   workspaces: MspaceWorkspace[];
 }
 
+export interface PasswordAuthInput {
+  login: string;
+  password: string;
+  name?: string;
+  email?: string;
+}
+
 export interface WorkspaceMember {
   id: string;
   workspaceId: string;
