@@ -222,7 +222,7 @@ function RootShell() {
 
   function submitTeamWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!authToken) return;
+    if (!authToken || !meQuery.data?.isServerAdmin) return;
     createTeamWorkspace.mutate({
       name: teamWorkspaceName.trim(),
       kind: "team",
@@ -306,6 +306,7 @@ function RootShell() {
           name: meQuery.data?.user.name,
           email: meQuery.data?.user.email,
           avatarUrl: meQuery.data?.user.avatarUrl,
+          isServerAdmin: meQuery.data?.isServerAdmin,
           workspaceId: currentWorkspace?.id,
           workspaceName: currentWorkspace?.name,
           workspaceKind: currentWorkspace?.kind,
@@ -318,6 +319,7 @@ function RootShell() {
         onSignOut={handleSignOut}
         onSelectWorkspace={handleSelectWorkspace}
         onCreateTeamWorkspace={() => {
+          if (!meQuery.data?.isServerAdmin) return;
           setTeamWorkspaceName((value) => value.trim() || defaultTeamWorkspaceName(meQuery.data?.user.name));
           setTeamWorkspaceModalOpen(true);
         }}
@@ -370,7 +372,7 @@ function RootShell() {
               <Button type="button" variant="secondary" onClick={() => setTeamWorkspaceModalOpen(false)}>
                 {t("common.cancel")}
               </Button>
-              <Button type="submit" disabled={!authToken || createTeamWorkspace.isPending || teamWorkspaceName.trim() === ""}>
+              <Button type="submit" disabled={!authToken || !meQuery.data?.isServerAdmin || createTeamWorkspace.isPending || teamWorkspaceName.trim() === ""}>
                 <UsersRound data-icon />
                 {createTeamWorkspace.isPending ? t("common.creating") : t("workspace.createTeamWorkspace")}
               </Button>

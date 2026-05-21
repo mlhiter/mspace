@@ -910,6 +910,7 @@ export interface AuthResult {
   expiresAt: string;
   user: MspaceUser;
   workspaces: MspaceWorkspace[];
+  isServerAdmin: boolean;
 }
 
 export type AuthPollResult =
@@ -919,6 +920,7 @@ export type AuthPollResult =
 export interface AuthMeResult {
   user: MspaceUser;
   workspaces: MspaceWorkspace[];
+  isServerAdmin: boolean;
 }
 
 export interface MspaceDesktopAPI {

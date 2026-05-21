@@ -173,6 +173,7 @@ export type ShellAccount = {
   name?: string;
   email?: string;
   avatarUrl?: string;
+  isServerAdmin?: boolean;
   workspaceName?: string;
   workspaceId?: string;
   workspaceKind?: string;
@@ -607,14 +608,16 @@ function WorkspaceMenu(props: {
 
           {isSignedIn ? (
             <div className="grid gap-px border-t border-[color:var(--line)] px-1 py-1">
-              <WorkspaceMenuAction
-                icon={Plus}
-                label={t("workspace.createTeamWorkspace")}
-                onClick={() => {
-                  setOpen(false);
-                  props.onCreateTeamWorkspace?.();
-                }}
-              />
+              {account.isServerAdmin ? (
+                <WorkspaceMenuAction
+                  icon={Plus}
+                  label={t("workspace.createTeamWorkspace")}
+                  onClick={() => {
+                    setOpen(false);
+                    props.onCreateTeamWorkspace?.();
+                  }}
+                />
+              ) : null}
               <WorkspaceMenuLink
                 to="/settings"
                 icon={Settings}

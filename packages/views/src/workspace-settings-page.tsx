@@ -271,6 +271,7 @@ export function WorkspaceSettingsPage() {
 	const invitations = invitationsQuery.data || [];
 	const canManageWorkspace = auth.workspace?.role === "owner" || auth.workspace?.role === "admin";
 	const canStartLocalWorker = runtimeEnabled && canManageWorkspace && Boolean(window.mspaceDesktop?.startDockerWorker);
+	const canManageRuntimeCredentials = runtimeEnabled && canManageWorkspace;
 	const onlineWorkerCount = workers.filter((worker) => worker.status === "online").length;
 	const queuedTaskCount = tasks.filter((task) => task.status === "queued").length;
 	const runtimeError = isTeamWorkspace
@@ -302,7 +303,7 @@ export function WorkspaceSettingsPage() {
 
 	function submitToken(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!runtimeEnabled) return;
+		if (!canManageRuntimeCredentials) return;
 		createToken.mutate({
 			name: tokenForm.name.trim() || defaultTokenForm.name,
 			expiresInHours: tokenForm.expiresInHours,
@@ -314,7 +315,7 @@ export function WorkspaceSettingsPage() {
 		if (!runtimeEnabled) return;
 		setTaskFormError("");
 		try {
-			createTask.mutate(normalizeRuntimeTaskForm(taskForm));
+			createTask.mutate(normalizeRuntimeTaskForm(taskForm, defaultRuntimeMode));
 		} catch (error) {
 			setTaskFormError(error instanceof Error ? error.message : t("workspaceSettings.taskFormInvalid"));
 		}
@@ -514,7 +515,7 @@ export function WorkspaceSettingsPage() {
 					title={t("workspaceSettings.section.advancedCredentials")}
 					description={t("workspaceSettings.section.advancedCredentialsDescription")}
 					actions={
-						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={() => setTokenModalOpen(true)}>
+						<Button type="button" variant="secondary" size="sm" disabled={!canManageRuntimeCredentials} onClick={() => setTokenModalOpen(true)}>
 							<Plus data-icon />
 							{t("workspaceSettings.section.createCredential")}
 						</Button>
@@ -693,7 +694,7 @@ export function WorkspaceSettingsPage() {
 							<Button type="button" variant="secondary" onClick={() => setTokenModalOpen(false)}>
 								{t("common.cancel")}
 							</Button>
-							<Button type="submit" disabled={!runtimeEnabled || createToken.isPending}>
+							<Button type="submit" disabled={!canManageRuntimeCredentials || createToken.isPending}>
 								<KeyRound data-icon />
 								{createToken.isPending ? t("common.creating") : t("workspaceSettings.section.createCredential")}
 							</Button>
@@ -758,15 +759,14 @@ export function WorkspaceSettingsPage() {
 							</Field>
 							<Field label={t("workspaceSettings.modal.runtimeMode")}>
 								<Select
-									value={taskForm.runtimeMode}
-									onValueChange={(value) => setTaskForm({ ...taskForm, runtimeMode: value === "personal" ? "personal" : "team" })}
+									value={defaultRuntimeMode}
+									onValueChange={() => setTaskForm({ ...taskForm, runtimeMode: defaultRuntimeMode })}
 								>
 									<SelectTrigger>
 										<SelectValue />
 									</SelectTrigger>
 									<SelectContent>
-										<SelectItem value="team">{t("workspaceSettings.summary.team")}</SelectItem>
-										<SelectItem value="personal">{t("workspaceSettings.summary.personal")}</SelectItem>
+										<SelectItem value={defaultRuntimeMode}>{runtimeModeLabel}</SelectItem>
 									</SelectContent>
 								</Select>
 							</Field>
@@ -1373,7 +1373,7 @@ function Modal(props: { title: string; description: string; onClose: () => void;
 	);
 }
 
-function normalizeRuntimeTaskForm(form: RuntimeTaskForm): CreateRuntimeTaskInput {
+function normalizeRuntimeTaskForm(form: RuntimeTaskForm, runtimeMode: "personal" | "team"): CreateRuntimeTaskInput {
 	const priority = Number(form.priority || 0);
 	if (!Number.isFinite(priority) || priority < 0) {
 		throw new Error(translate("workspaceSettings.priorityInvalid"));
@@ -1388,7 +1388,7 @@ function normalizeRuntimeTaskForm(form: RuntimeTaskForm): CreateRuntimeTaskInput
 		projectId: form.projectId.trim(),
 		kind,
 		priority,
-		runtimeMode: form.runtimeMode,
+		runtimeMode,
 		requiredCapabilities: parseJSONObject(form.requiredCapabilities, translate("workspaceSettings.modal.requiredCapabilities")),
 		payload: parseJSONObject(form.payload, translate("workspaceSettings.modal.payload")),
 	};
