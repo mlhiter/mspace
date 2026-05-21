@@ -139,7 +139,7 @@ For customer Kubernetes deployment, use the Helm chart and runbook under `deploy
 2. Create an issue in the Issues tab with a document-style note.
 3. Attach or create a project before agent execution, PR handoff, project runbook access, or test environments.
 4. Create/import a cluster config in Clusters if the issue needs a Kubernetes test environment.
-5. Create a worker token from Workspace Settings and start a matching personal or team worker.
+5. Create a worker token from Workspace Settings and start a matching personal or team worker. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
 6. Mention an enabled agent profile, such as `@codex`, in an issue comment.
 7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
 8. Use Commits for source review and PR handoff.
@@ -162,6 +162,11 @@ Runtime variables:
 | `MSPACE_GITHUB_CLIENT_ID` | none | Optional GitHub OAuth client ID used by the server. |
 | `MSPACE_GITHUB_CLIENT_SECRET` | none | Optional GitHub OAuth client secret; belongs on the server only. |
 | `MSPACE_GITHUB_REDIRECT_URI` | none | Optional GitHub OAuth callback URL for the server. |
+| `MSPACE_SERVER_ADMIN_LOGINS` | none | Comma-separated local password logins or GitHub logins allowed to create team workspaces. |
+| `MSPACE_BOOTSTRAP_ADMIN_LOGIN` | none | Optional local password login created on server startup and treated as a server admin. |
+| `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` | none | Required with `MSPACE_BOOTSTRAP_ADMIN_LOGIN`; the server does not reset an existing account password. |
+| `MSPACE_BOOTSTRAP_ADMIN_NAME` | login | Optional display name for the bootstrap admin account. |
+| `MSPACE_BOOTSTRAP_ADMIN_EMAIL` | none | Optional bootstrap identity email; not used for admin matching. |
 | `MSPACE_RUNTIME_TOKEN` | none | `msw_...` runtime worker registration token used by `pnpm worker`. |
 | `MSPACE_WORKER_CAPABILITIES` | `{"protocolSmoke":true,"codex":false,"dryRun":true}` | Worker capability JSON used by server-side task matching. |
 | `MSPACE_WORKER_VOLUME` | script-specific | Docker volume mounted at `/var/lib/mspace-worker` for worker-managed repo caches, session worktrees, and artifacts. |

@@ -176,9 +176,11 @@ Workspace Settings is accessed from the workspace identity menu. It owns:
 
 - workspace automation;
 - team-only members and invitations;
-- worker registration tokens;
+- worker registration tokens for owner/admin users;
 - worker liveness/capabilities;
 - runtime tasks, task events, and worker logs.
+
+Open account registration creates a personal workspace and a personal runtime boundary. Only server-admin logins configured by `MSPACE_SERVER_ADMIN_LOGINS` or `MSPACE_BOOTSTRAP_ADMIN_LOGIN` can create team workspaces. Team server runners are reachable only through membership in a team workspace, and runtime worker/task mode must match the workspace kind.
 
 Agents stays focused on mentionable Codex-backed role behavior. Clusters stays focused on reusable validation access. Projects stays focused on repository metadata and project runbooks.
 

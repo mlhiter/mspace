@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-05-19
+> Status: milestone roadmap, updated 2026-05-21
 
 ## Purpose
 
@@ -25,7 +25,7 @@ Issue intake
 
 The roadmap intentionally keeps fixed worker workflow first. Kubernetes is the manually triggered test target for the MVP, not the first development runtime.
 
-The server control-plane slice now owns local password auth, optional GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, workspace settings, agent profiles, clusters, issue test environments, PR handoffs, runtime registration, runtime tasks, worker logs, and runtime results. Signed-in personal and team workspace data uses server Postgres. Runtime execution happens through registered workers that claim server tasks.
+The server control-plane slice now owns local password auth, optional GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, workspace settings, agent profiles, clusters, issue test environments, PR handoffs, runtime registration, runtime tasks, worker logs, and runtime results. Signed-in personal and team workspace data uses server Postgres. Runtime execution happens through registered workers that claim server tasks. Open registration stays enabled for personal workspaces, while team workspace creation and shared server runner access are gated by server admin creation plus owner/admin invitations.
 
 The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, and bilingual desktop UI support for English and Simplified Chinese. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 

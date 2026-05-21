@@ -22,6 +22,10 @@ DATABASE_URL=postgres://mspace:mspace@127.0.0.1:5432/mspace?sslmode=disable
 MSPACE_GITHUB_CLIENT_ID=...
 MSPACE_GITHUB_CLIENT_SECRET=...
 MSPACE_GITHUB_REDIRECT_URI=http://127.0.0.1:8787/api/auth/github/callback
+MSPACE_SERVER_ADMIN_LOGINS=admin,mlhiter
+MSPACE_BOOTSTRAP_ADMIN_LOGIN=admin
+MSPACE_BOOTSTRAP_ADMIN_PASSWORD=change-me-long-random-password
+MSPACE_BOOTSTRAP_ADMIN_NAME=Admin
 MSPACE_SERVER_ADDR=127.0.0.1:8787
 MSPACE_DEV_POSTGRES_CONTAINER=mspace-postgres-dev
 MSPACE_DEV_POSTGRES_VOLUME=mspace-postgres-data
@@ -62,6 +66,8 @@ GitHub OAuth is optional:
 7. Desktop clients call mspace APIs with `Authorization: Bearer <msp_...>`.
 
 GitHub tokens are not the product session. They are used only to prove GitHub identity. Local password registration does not verify email ownership, so it must not merge identities by email. Repository automation should later use GitHub App installation tokens owned by this service.
+
+Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` lists local password logins or GitHub logins with that right. Emails are not used for admin matching because local password registration does not verify email ownership. `MSPACE_BOOTSTRAP_ADMIN_LOGIN` plus `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` creates the first local admin account on startup if it does not already exist; the server does not reset the password for an existing account. Other registered users still get a personal workspace and can join a team workspace through an owner/admin invitation.
 
 ## API Slice
 
@@ -141,7 +147,7 @@ GitHub tokens are not the product session. They are used only to prove GitHub id
 
 The workspace Inbox is event-based. `issue_events` stores the append-only review fact, `issue_event_receipts` stores each recipient user's unread/read/archive state, and `issue_watchers` stores the issue-level recipient set. Opening or polling an issue must not clear unread state; clients should call the read-through endpoint after the user intentionally reviews an Inbox row.
 
-Personal workspaces are the default result of password registration or GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in Postgres. Runtime worker registration and task APIs are available to both personal and team workspaces; team workspaces additionally unlock invitations and shared membership.
+Personal workspaces are the default result of password registration or GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in Postgres. Runtime worker registration and task APIs are available to both personal and team workspaces, but the runtime mode must match the workspace kind: personal workspaces use personal workers, while team workspaces use team workers. Team workspaces additionally unlock invitations and shared membership.
 
 Issue `project_id` is optional in the control plane. A user can capture a workspace-level issue before the repository is known, comment on it, and attach a project later through `PUT /api/workspaces/{workspaceID}/issues/{issueID}` with `projectId`. If a create request omits `projectId` and the workspace has exactly one project, the server auto-attaches it; zero or multiple projects leave the issue unassigned. Agent execution, PR handoff, and issue test environments require an attached project.
 

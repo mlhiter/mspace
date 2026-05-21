@@ -137,6 +137,11 @@ Visible product copy in `apps/desktop`, `packages/ui`, or `packages/views` shoul
 | `MSPACE_GITHUB_CLIENT_ID` | Server | none | Optional GitHub OAuth App client id. |
 | `MSPACE_GITHUB_CLIENT_SECRET` | Server | none | Optional GitHub OAuth App client secret; keep it server-side only. |
 | `MSPACE_GITHUB_REDIRECT_URI` | Server | none | Optional OAuth callback URL, usually `http://127.0.0.1:8787/api/auth/github/callback` locally. |
+| `MSPACE_SERVER_ADMIN_LOGINS` | Server | empty | Comma-separated local password logins or GitHub logins allowed to create team workspaces. If empty, no signed-in user can create a team workspace unless listed through bootstrap admin settings. |
+| `MSPACE_BOOTSTRAP_ADMIN_LOGIN` | Server | empty | Optional local password login to create on server startup and treat as a server admin. |
+| `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` | Server | empty | Required with `MSPACE_BOOTSTRAP_ADMIN_LOGIN`; used only when the bootstrap account does not already exist. |
+| `MSPACE_BOOTSTRAP_ADMIN_NAME` | Server | login | Optional display name for the bootstrap admin account. |
+| `MSPACE_BOOTSTRAP_ADMIN_EMAIL` | Server | empty | Optional display email stored on the bootstrap identity. It is not used for admin matching. |
 | `MSPACE_RUNTIME_TOKEN` | Worker | none | Internal runtime bootstrap credential with `msw_` prefix. |
 | `MSPACE_WORKER_NAME` | Worker | host-derived | Stable worker name shown in Workspace Settings. |
 | `MSPACE_WORKER_MODE` | Worker | `team` | Runtime mode reported to the server; `team` or `personal`. |

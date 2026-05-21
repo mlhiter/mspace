@@ -28,6 +28,7 @@ BuildKit StatefulSet
 - Ingress controller if exposing the server through Ingress.
 - Registry push access for mspace images and project test images.
 - Optional GitHub OAuth App with callback URL `https://<host>/api/auth/github/callback`. Restricted or offline deployments can use local username/password auth without GitHub.
+- At least one server admin login for creating team workspaces. Ordinary registered users only receive a personal workspace until an admin invites them to a team workspace.
 - Codex auth JSON and config TOML for the worker. The server control plane does not run Codex.
 - A kubeconfig whose permissions are limited to the customer test cluster scope.
 - Helm 3.
@@ -97,6 +98,8 @@ Set:
 - optional `secrets.githubClientId`
 - optional `secrets.githubClientSecret`
 - optional `secrets.githubRedirectUri`
+- `secrets.serverAdminLogins` as a comma-separated list of local password logins or GitHub logins that may create team workspaces
+- `secrets.bootstrapAdminLogin` and `secrets.bootstrapAdminPassword` for the default local admin account
 - `server.image.tag`
 - `server.ingress.hosts[0].host`
 - optional storage classes
@@ -125,7 +128,7 @@ Open the desktop app with:
 MSPACE_SERVER_URL=https://mspace.example.com pnpm dev:desktop
 ```
 
-Sign in with a local account, or GitHub OAuth if configured, then create or select the customer workspace. Create a runtime registration token from Workspace Settings and copy the raw `msw_...` token once.
+Sign in with the bootstrap local admin account, or with a GitHub identity listed in `secrets.serverAdminLogins`, then create or select the customer team workspace. Ordinary self-registered accounts can use only their personal workspace and local personal runner until invited into this team workspace. Create a runtime registration token from Workspace Settings in the team workspace and copy the raw `msw_...` token once.
 
 Create a Secret for that token. Do not put the token directly in Helm values:
 

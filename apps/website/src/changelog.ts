@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-05-21",
+    title: "Personal registration with team runtime gates",
+    summary:
+      "mspace kept open account registration while tightening team workspace and server runner access around explicit admin invitations.",
+    items: [
+      "Added a server-admin login allowlist for creating team workspaces in deployed environments.",
+      "Kept self-registered users in personal workspaces until a team owner/admin invites them.",
+      "Enforced runtime mode boundaries so personal workspaces use personal workers and team workspaces use team workers.",
+      "Updated Workspace Settings and deployment docs so worker credentials and team runtime setup stay owner/admin scoped.",
+    ],
+  },
+  {
     date: "2026-05-20",
     title: "Local account login for restricted environments",
     summary:

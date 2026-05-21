@@ -1,6 +1,6 @@
 # mspace API Integration Guide
 
-> Status: server-owned local MVP API guide, updated 2026-05-20
+> Status: server-owned local MVP API guide, updated 2026-05-21
 
 This guide covers the current server control-plane API used by the desktop and workers. The control plane normally runs on `http://127.0.0.1:8787`.
 
@@ -49,9 +49,9 @@ The desktop owns native shell behavior, local UI state, file pickers, and openin
 | `GET` | `/api/auth/github/start` | Create OAuth state and return the GitHub authorization URL plus polling path. |
 | `GET` | `/api/auth/github/callback` | Complete GitHub OAuth and render a browser success page. |
 | `GET` | `/api/auth/github/result` | Poll the single-use state-bound desktop login result. |
-| `GET` | `/api/auth/me` | Return the current user and workspaces for a bearer token. |
+| `GET` | `/api/auth/me` | Return the current user, workspaces, and `isServerAdmin` for a bearer token. |
 | `GET` | `/api/workspaces` | List the authenticated user's workspaces. |
-| `POST` | `/api/workspaces` | Create a team workspace. |
+| `POST` | `/api/workspaces` | Create a team workspace. Server admins only. |
 | `GET` | `/api/workspaces/{workspaceID}/members` | List workspace members. |
 | `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time `msi_...` invitation link. |
 | `GET` | `/api/workspaces/{workspaceID}/invitations` | List invitations without raw tokens. |
@@ -83,11 +83,16 @@ Both endpoints return the normal auth shape:
   "token": "msp_...",
   "expiresAt": "2026-05-20T12:00:00Z",
   "user": { "id": "...", "name": "Local Admin" },
-  "workspaces": [{ "id": "...", "kind": "personal", "role": "owner" }]
+  "workspaces": [{ "id": "...", "kind": "personal", "role": "owner" }],
+  "isServerAdmin": true
 }
 ```
 
 Usernames are normalized to lowercase and must use letters, numbers, dots, underscores, or hyphens. Passwords must be 8 to 1024 characters. Duplicate registration returns `409`, and invalid login/password returns `401` without distinguishing missing, wrong, or disabled accounts.
+
+Open registration intentionally creates only a personal workspace. Server admin status is matched by configured auth login, not display name or email, because local password email is not verified. Configure `MSPACE_SERVER_ADMIN_LOGINS` with local password logins or GitHub logins allowed to create team workspaces. For deployed environments, `MSPACE_BOOTSTRAP_ADMIN_LOGIN` and `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` can create the first local admin account during server startup; the server leaves an existing account password unchanged.
+
+Only server admins can call `POST /api/workspaces` to create a team workspace. Other registered users can use their personal workspace and personal runner, then join a team workspace only after a team owner/admin creates an `msi_...` invitation.
 
 ## Product APIs
 
@@ -239,6 +244,8 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/runtime-tasks" \
   -H 'Content-Type: application/json' \
   -d '{"kind":"protocol_smoke","runtimeMode":"team","requiredCapabilities":{"protocolSmoke":true},"payload":{"source":"curl"}}'
 ```
+
+The server rejects runtime worker registration and runtime task creation when the submitted mode does not match the workspace kind. A token minted in a personal workspace can only register a personal worker, and a token minted in a team workspace can only register a team worker. Manual runtime task requests follow the same rule: `runtimeMode:"personal"` for personal workspaces and `runtimeMode:"team"` for team workspaces.
 
 Runtime task kinds used by the current product path:
 

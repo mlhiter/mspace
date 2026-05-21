@@ -1,6 +1,6 @@
 # mspace Control Plane
 
-> Status: server-owned runtime surfaces, updated 2026-05-20
+> Status: server-owned runtime surfaces, updated 2026-05-21
 
 ## Decision
 
@@ -85,6 +85,8 @@ The server may use a GitHub OAuth client secret because it is a trusted backend 
 
 Future GitHub repository automation should use GitHub App installation tokens stored and rotated by the control plane. Do not build long-lived repository automation on personal GitHub OAuth tokens stored by desktop or workers.
 
+Open registration creates a personal workspace only. Server admin status is a control-plane flag derived from configured auth logins: `MSPACE_SERVER_ADMIN_LOGINS` plus `MSPACE_BOOTSTRAP_ADMIN_LOGIN`. Matching uses the local password login or GitHub login, not email, because password auth does not verify email ownership. Only server admins can create team workspaces; ordinary registered users can join a team workspace only through an owner/admin invitation.
+
 ## Implemented API Slice
 
 The server module provides:
@@ -106,7 +108,7 @@ The server module provides:
 - Postgres migrations for the above tables;
 - memory-backed store used only by tests.
 
-Workspaces have an explicit `kind`: `personal` or `team`. The first password registration or GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in server Postgres. Team collaboration is opt-in: `POST /api/workspaces` creates team workspaces, and invitation/member APIs reject personal workspaces.
+Workspaces have an explicit `kind`: `personal` or `team`. The first password registration or GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in server Postgres. Team collaboration is opt-in: server admins create team workspaces through `POST /api/workspaces`, and invitation/member APIs reject personal workspaces.
 
 The desktop requires an mspace session before product data is available. Issue Detail writes the server comment, then calls `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; the server queues an `agent_session` runtime task and later exposes worker logs/results directly from `runtime_task_logs` and `runtime_tasks.result`.
 
@@ -131,6 +133,8 @@ Server
 ```
 
 Registration tokens are workspace-scoped bootstrap secrets for worker daemons. The raw token is returned only once when created; the server stores only its hash and prefix.
+
+Worker mode is part of the workspace trust boundary. Personal workspace tokens can register only personal workers and can queue only personal runtime tasks. Team workspace tokens can register only team workers and can queue only team runtime tasks. This keeps open self-registration useful for local personal runners without granting access to shared server runners until the user has been invited into the team workspace.
 
 The first worker daemon exists as `worker/`. It registers, heartbeats, claims matching tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks from server payloads, and can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers keep repository caches and worktrees under `/var/lib/mspace-worker`, backed by a Docker volume, so target project source is isolated from the host checkout.
 

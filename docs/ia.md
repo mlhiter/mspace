@@ -403,6 +403,8 @@ Workspace Settings owns workspace automation, team access, and runtime worker po
 
 - opens from the workspace identity menu, not from the main navigation rail;
 - keeps source commit capture always on for issue review and deploy continuation;
+- shows team workspace creation only to server admins, while ordinary registered users stay in personal workspaces until invited;
+- limits runtime credential creation to workspace owner/admin users and keeps runtime mode fixed to the current workspace kind;
 - exposes handoff automation policy while source commit capture stays always on;
 - explains that GitHub App-backed PR automation is a server-owned executor step that is still future work.
 
