@@ -43,6 +43,12 @@ func main() {
 	}
 
 	store := control.NewPostgresStore(pool)
+	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer bootstrapCancel()
+	if err := ensureBootstrapAdmin(bootstrapCtx, store, cfg); err != nil {
+		slog.Error("ensure bootstrap admin", "error", err)
+		os.Exit(1)
+	}
 	github := control.GitHubHTTPClient{
 		ClientID:     cfg.GitHubClientID,
 		ClientSecret: cfg.GitHubClientSecret,
@@ -58,12 +64,47 @@ func main() {
 
 func loadConfig() control.Config {
 	return control.Config{
-		Addr:               envDefault("MSPACE_SERVER_ADDR", "127.0.0.1:8787"),
-		DatabaseURL:        strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		GitHubClientID:     strings.TrimSpace(os.Getenv("MSPACE_GITHUB_CLIENT_ID")),
-		GitHubClientSecret: strings.TrimSpace(os.Getenv("MSPACE_GITHUB_CLIENT_SECRET")),
-		GitHubRedirectURI:  strings.TrimSpace(os.Getenv("MSPACE_GITHUB_REDIRECT_URI")),
+		Addr:                   envDefault("MSPACE_SERVER_ADDR", "127.0.0.1:8787"),
+		DatabaseURL:            strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		GitHubClientID:         strings.TrimSpace(os.Getenv("MSPACE_GITHUB_CLIENT_ID")),
+		GitHubClientSecret:     strings.TrimSpace(os.Getenv("MSPACE_GITHUB_CLIENT_SECRET")),
+		GitHubRedirectURI:      strings.TrimSpace(os.Getenv("MSPACE_GITHUB_REDIRECT_URI")),
+		ServerAdminLogins:      envList("MSPACE_SERVER_ADMIN_LOGINS"),
+		BootstrapAdminLogin:    strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_LOGIN")),
+		BootstrapAdminPassword: strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_PASSWORD")),
+		BootstrapAdminName:     strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_NAME")),
+		BootstrapAdminEmail:    strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_EMAIL")),
 	}
+}
+
+func ensureBootstrapAdmin(ctx context.Context, store *control.PostgresStore, cfg control.Config) error {
+	login := strings.TrimSpace(cfg.BootstrapAdminLogin)
+	password := strings.TrimSpace(cfg.BootstrapAdminPassword)
+	if login == "" && password == "" {
+		return nil
+	}
+	if login == "" || password == "" {
+		return fmt.Errorf("MSPACE_BOOTSTRAP_ADMIN_LOGIN and MSPACE_BOOTSTRAP_ADMIN_PASSWORD must be set together")
+	}
+	name := strings.TrimSpace(cfg.BootstrapAdminName)
+	if name == "" {
+		name = login
+	}
+	user, _, created, err := store.EnsureBootstrapAdmin(ctx, control.PasswordAuthInput{
+		Login:    login,
+		Name:     name,
+		Email:    cfg.BootstrapAdminEmail,
+		Password: password,
+	})
+	if err != nil {
+		return err
+	}
+	if created {
+		slog.Info("created bootstrap admin", "login", login, "userID", user.ID)
+	} else {
+		slog.Info("bootstrap admin already exists", "login", login, "userID", user.ID)
+	}
+	return nil
 }
 
 func envDefault(key, fallback string) string {
@@ -72,6 +113,21 @@ func envDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func envList(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	items := []string{}
+	for _, item := range strings.Split(raw, ",") {
+		value := strings.TrimSpace(item)
+		if value != "" {
+			items = append(items, value)
+		}
+	}
+	return items
 }
 
 func loadLocalEnv() {

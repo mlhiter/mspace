@@ -19,6 +19,11 @@ secrets:
   githubClientId: ""
   githubClientSecret: ""
   githubRedirectUri: ""
+  serverAdminLogins: ""
+  bootstrapAdminLogin: ""
+  bootstrapAdminPassword: ""
+  bootstrapAdminName: ""
+  bootstrapAdminEmail: ""
   runtimeToken: ""
   runtimeTokenExistingSecret: ""
   runtimeTokenExistingSecretKey: MSPACE_RUNTIME_TOKEN

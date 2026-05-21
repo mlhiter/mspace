@@ -15,14 +15,19 @@ var (
 )
 
 type Config struct {
-	Addr               string
-	DatabaseURL        string
-	GitHubClientID     string
-	GitHubClientSecret string
-	GitHubRedirectURI  string
-	SessionTTL         time.Duration
-	OAuthStateTTL      time.Duration
-	AllowMemoryStore   bool
+	Addr                   string
+	DatabaseURL            string
+	GitHubClientID         string
+	GitHubClientSecret     string
+	GitHubRedirectURI      string
+	ServerAdminLogins      []string
+	BootstrapAdminLogin    string
+	BootstrapAdminPassword string
+	BootstrapAdminName     string
+	BootstrapAdminEmail    string
+	SessionTTL             time.Duration
+	OAuthStateTTL          time.Duration
+	AllowMemoryStore       bool
 }
 
 func (c Config) withDefaults() Config {
@@ -1014,10 +1019,15 @@ type IdentityProfile struct {
 }
 
 type AuthResult struct {
-	Token      string      `json:"token"`
-	ExpiresAt  string      `json:"expiresAt"`
-	User       User        `json:"user"`
-	Workspaces []Workspace `json:"workspaces"`
+	Token         string      `json:"token"`
+	ExpiresAt     string      `json:"expiresAt"`
+	User          User        `json:"user"`
+	Workspaces    []Workspace `json:"workspaces"`
+	IsServerAdmin bool        `json:"isServerAdmin"`
+}
+
+type AuthIdentityInfo struct {
+	Login string
 }
 
 type AuthPollResult struct {
@@ -1040,6 +1050,7 @@ type Store interface {
 	UpsertIdentity(ctx Context, profile IdentityProfile) (User, []Workspace, error)
 	CreatePasswordIdentity(ctx Context, input PasswordAuthInput) (User, []Workspace, error)
 	AuthenticatePassword(ctx Context, input PasswordAuthInput) (User, []Workspace, error)
+	GetUserAuthIdentity(ctx Context, userID string) (AuthIdentityInfo, error)
 	CreateAuthSession(ctx Context, userID string, ttl time.Duration) (token string, expiresAt time.Time, err error)
 	GetUserBySessionToken(ctx Context, token string) (User, []Workspace, error)
 	CreateWorkspace(ctx Context, userID string, input CreateWorkspaceInput) (Workspace, []Workspace, error)

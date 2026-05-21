@@ -7,6 +7,12 @@ secrets:
   githubClientId: "replace-me"
   githubClientSecret: "replace-me"
   githubRedirectUri: "https://mspace.example.com/api/auth/github/callback"
+  # Comma-separated local password logins or GitHub logins allowed to create team workspaces.
+  serverAdminLogins: "admin"
+  bootstrapAdminLogin: "admin"
+  bootstrapAdminPassword: "replace-with-a-long-random-password"
+  bootstrapAdminName: "Admin"
+  bootstrapAdminEmail: "admin@example.com"
   # kubectl -n mspace-system create secret generic mspace-runtime-token --from-literal=MSPACE_RUNTIME_TOKEN=msw_...
   runtimeTokenExistingSecret: mspace-runtime-token
 

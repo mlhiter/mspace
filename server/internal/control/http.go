@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ type Server struct {
 	github         GitHubClient
 	triageMu       sync.Mutex
 	triageInFlight map[string]struct{}
+	adminLogins    map[string]struct{}
 }
 
 const serverProtocolVersion = 1
@@ -35,7 +37,30 @@ func NewServer(config Config, store Store, github GitHubClient) *Server {
 		store:          store,
 		github:         github,
 		triageInFlight: map[string]struct{}{},
+		adminLogins:    normalizeAdminLogins(config),
 	}
+}
+
+func normalizeAdminLogins(config Config) map[string]struct{} {
+	admins := map[string]struct{}{}
+	values := append([]string{}, config.ServerAdminLogins...)
+	values = append(values, config.BootstrapAdminLogin)
+	for _, value := range values {
+		login := strings.ToLower(strings.TrimSpace(value))
+		if login != "" {
+			admins[login] = struct{}{}
+		}
+	}
+	return admins
+}
+
+func (s *Server) isServerAdmin(user User) bool {
+	identity, err := s.store.GetUserAuthIdentity(context.Background(), user.ID)
+	if err != nil {
+		return false
+	}
+	_, ok := s.adminLogins[strings.ToLower(strings.TrimSpace(identity.Login))]
+	return ok
 }
 
 func (s *Server) Routes() http.Handler {
@@ -306,8 +331,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user":       user,
-		"workspaces": workspaces,
+		"user":          user,
+		"workspaces":    workspaces,
+		"isServerAdmin": s.isServerAdmin(user),
 	})
 }
 
@@ -322,6 +348,10 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.authenticate(w, r)
 	if !ok {
+		return
+	}
+	if !s.isServerAdmin(user) {
+		writeError(w, http.StatusForbidden, errors.New("only server admins can create team workspaces"))
 		return
 	}
 	input := CreateWorkspaceInput{}
@@ -1484,10 +1514,11 @@ func (s *Server) authResultForUser(r *http.Request, user User, workspaces []Work
 		return AuthResult{}, err
 	}
 	return AuthResult{
-		Token:      token,
-		ExpiresAt:  expiresAt.UTC().Format(time.RFC3339),
-		User:       user,
-		Workspaces: workspaces,
+		Token:         token,
+		ExpiresAt:     expiresAt.UTC().Format(time.RFC3339),
+		User:          user,
+		Workspaces:    workspaces,
+		IsServerAdmin: s.isServerAdmin(user),
 	}, nil
 }
 

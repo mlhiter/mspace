@@ -24,6 +24,83 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	return &PostgresStore{pool: pool}
 }
 
+func (s *PostgresStore) EnsureBootstrapAdmin(ctx Context, input PasswordAuthInput) (User, []Workspace, bool, error) {
+	normalized, err := normalizePasswordAuthInput(input, true)
+	if err != nil {
+		return User{}, nil, false, err
+	}
+
+	dbctx := asContext(ctx)
+	var existingUserID string
+	err = s.pool.QueryRow(dbctx, `
+		SELECT user_id::text
+		FROM user_password_credentials
+		WHERE lower(login) = lower($1)
+	`, normalized.Login).Scan(&existingUserID)
+	if err == nil {
+		user, workspaces, err := findUserByID(dbctx, s.pool, existingUserID)
+		return user, workspaces, false, err
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return User{}, nil, false, err
+	}
+
+	passwordHash, err := hashPassword(normalized.Password)
+	if err != nil {
+		return User{}, nil, false, err
+	}
+
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return User{}, nil, false, err
+	}
+	defer tx.Rollback(dbctx)
+
+	profile := IdentityProfile{
+		Provider:       "password",
+		ProviderUserID: normalized.Login,
+		Login:          normalized.Login,
+		Name:           normalized.Name,
+		Email:          normalized.Email,
+		RawProfile:     json.RawMessage(`{"provider":"password","bootstrapAdmin":true}`),
+	}
+	var user User
+	var createdAt, updatedAt time.Time
+	err = tx.QueryRow(dbctx, `
+		INSERT INTO users (name, email, avatar_url)
+		VALUES ($1, '', '')
+		RETURNING id::text, name, email, avatar_url, created_at, updated_at
+	`, profile.Name).Scan(&user.ID, &user.Name, &user.Email, &user.AvatarURL, &createdAt, &updatedAt)
+	if err != nil {
+		return User{}, nil, false, err
+	}
+	user.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	user.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	if err := insertIdentity(dbctx, tx, user.ID, profile); err != nil {
+		if isUniqueViolation(err) {
+			return User{}, nil, false, ErrConflict
+		}
+		return User{}, nil, false, err
+	}
+	if _, err := tx.Exec(dbctx, `
+		INSERT INTO user_password_credentials (user_id, login, password_hash)
+		VALUES ($1, $2, $3)
+	`, user.ID, normalized.Login, passwordHash); err != nil {
+		if isUniqueViolation(err) {
+			return User{}, nil, false, ErrConflict
+		}
+		return User{}, nil, false, err
+	}
+	workspaces, err := ensureDefaultWorkspace(dbctx, tx, user, normalized.Login)
+	if err != nil {
+		return User{}, nil, false, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return User{}, nil, false, err
+	}
+	return user, workspaces, true, nil
+}
+
 func (s *PostgresStore) SaveOAuthState(ctx Context, state OAuthState) error {
 	_, err := s.pool.Exec(asContext(ctx), `
 		INSERT INTO oauth_states (state, provider, redirect_uri, expires_at)
@@ -265,6 +342,30 @@ func (s *PostgresStore) AuthenticatePassword(ctx Context, input PasswordAuthInpu
 		return User{}, nil, err
 	}
 	return user, workspaces, nil
+}
+
+func (s *PostgresStore) GetUserAuthIdentity(ctx Context, userID string) (AuthIdentityInfo, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return AuthIdentityInfo{}, ErrNotFound
+	}
+	var login string
+	err := s.pool.QueryRow(asContext(ctx), `
+		SELECT COALESCE(login, '')
+		FROM user_identities
+		WHERE user_id = $1
+		ORDER BY
+			CASE provider WHEN 'password' THEN 0 WHEN 'github' THEN 1 ELSE 2 END,
+			created_at ASC
+		LIMIT 1
+	`, userID).Scan(&login)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return AuthIdentityInfo{}, ErrNotFound
+	}
+	if err != nil {
+		return AuthIdentityInfo{}, err
+	}
+	return AuthIdentityInfo{Login: login}, nil
 }
 
 func (s *PostgresStore) CreateAuthSession(ctx Context, userID string, ttl time.Duration) (string, time.Time, error) {
@@ -975,6 +1076,9 @@ func (s *PostgresStore) RegisterRuntimeWorker(ctx Context, registration RuntimeR
 	if registration.TokenID == "" || registration.WorkspaceID == "" {
 		return RuntimeWorker{}, ErrNotFound
 	}
+	if err := ensureRuntimeModeAllowedForWorkspace(dbctx, s.pool, registration.WorkspaceID, normalized.Mode); err != nil {
+		return RuntimeWorker{}, err
+	}
 
 	tx, err := s.pool.Begin(dbctx)
 	if err != nil {
@@ -1110,6 +1214,9 @@ func (s *PostgresStore) CreateRuntimeTask(ctx Context, userID, workspaceID strin
 	defer tx.Rollback(dbctx)
 
 	if err := ensureWorkspaceMember(dbctx, tx, workspaceID, userID); err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := ensureRuntimeModeAllowedForWorkspace(dbctx, tx, workspaceID, normalized.RuntimeMode); err != nil {
 		return RuntimeTask{}, err
 	}
 	row := tx.QueryRow(dbctx, `
@@ -1842,6 +1949,30 @@ func listWorkspaces(ctx context.Context, q queryer, userID string) ([]Workspace,
 		return nil, err
 	}
 	return workspaces, nil
+}
+
+func ensureRuntimeModeAllowedForWorkspace(ctx context.Context, q queryer, workspaceID, runtimeMode string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	runtimeMode = strings.TrimSpace(runtimeMode)
+	if workspaceID == "" || runtimeMode == "" {
+		return ErrNotFound
+	}
+	var kind string
+	err := q.QueryRow(ctx, `
+		SELECT kind
+		FROM workspaces
+		WHERE id = $1
+	`, workspaceID).Scan(&kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if kind != runtimeMode {
+		return ErrForbidden
+	}
+	return nil
 }
 
 func ensureTeamWorkspace(ctx context.Context, q queryer, workspaceID string) error {

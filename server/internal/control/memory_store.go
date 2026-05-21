@@ -17,6 +17,7 @@ type MemoryStore struct {
 	results              map[string]memoryOAuthResult
 	users                map[string]User
 	identities           map[string]string
+	identityLogins       map[string]string
 	passwordCredentials  map[string]memoryPasswordCredential
 	workspaces           map[string][]Workspace
 	workspaceMembers     map[string]map[string]string
@@ -92,6 +93,7 @@ func NewMemoryStore() *MemoryStore {
 		results:              map[string]memoryOAuthResult{},
 		users:                map[string]User{},
 		identities:           map[string]string{},
+		identityLogins:       map[string]string{},
 		passwordCredentials:  map[string]memoryPasswordCredential{},
 		workspaces:           map[string][]Workspace{},
 		workspaceMembers:     map[string]map[string]string{},
@@ -120,6 +122,66 @@ func NewMemoryStore() *MemoryStore {
 		runtimeTaskEvents:    map[string]RuntimeTaskEvent{},
 		runtimeTaskLogs:      map[string]RuntimeTaskLog{},
 	}
+}
+
+func (s *MemoryStore) EnsureBootstrapAdmin(_ Context, input PasswordAuthInput) (User, []Workspace, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	normalized, err := normalizePasswordAuthInput(input, true)
+	if err != nil {
+		return User{}, nil, false, err
+	}
+	if credential, ok := s.passwordCredentials[normalized.Login]; ok {
+		user, ok := s.users[credential.UserID]
+		if !ok {
+			return User{}, nil, false, ErrNotFound
+		}
+		return user, s.workspaces[credential.UserID], false, nil
+	}
+	if s.identities["password:"+normalized.Login] != "" {
+		return User{}, nil, false, ErrConflict
+	}
+	passwordHash, err := hashPassword(normalized.Password)
+	if err != nil {
+		return User{}, nil, false, err
+	}
+
+	s.nextID++
+	userID := fmt.Sprintf("user-%04d", s.nextID)
+	now := time.Now().UTC().Format(time.RFC3339)
+	name := strings.TrimSpace(normalized.Name)
+	if name == "" {
+		name = normalized.Login
+	}
+	user := User{
+		ID:        userID,
+		Name:      name,
+		Email:     "",
+		AvatarURL: "",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	workspace := Workspace{
+		ID:        "workspace-" + userID,
+		Name:      name + "'s workspace",
+		Slug:      defaultWorkspaceSlug(normalized.Login, userID),
+		Kind:      "personal",
+		Role:      "owner",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	s.users[userID] = user
+	identityKey := "password:" + normalized.Login
+	s.identities[identityKey] = userID
+	s.identityLogins[identityKey] = normalized.Login
+	s.passwordCredentials[normalized.Login] = memoryPasswordCredential{UserID: userID, PasswordHash: passwordHash}
+	s.workspaces[userID] = []Workspace{workspace}
+	if s.workspaceMembers[workspace.ID] == nil {
+		s.workspaceMembers[workspace.ID] = map[string]string{}
+	}
+	s.workspaceMembers[workspace.ID][userID] = "owner"
+	return user, s.workspaces[userID], true, nil
 }
 
 func (s *MemoryStore) SaveOAuthState(_ Context, state OAuthState) error {
@@ -213,6 +275,7 @@ func (s *MemoryStore) UpsertIdentity(_ Context, profile IdentityProfile) (User, 
 	}
 	s.users[userID] = user
 	s.identities[key] = userID
+	s.identityLogins[key] = profile.Login
 	s.workspaces[userID] = []Workspace{workspace}
 	if s.workspaceMembers[workspace.ID] == nil {
 		s.workspaceMembers[workspace.ID] = map[string]string{}
@@ -267,6 +330,7 @@ func (s *MemoryStore) CreatePasswordIdentity(_ Context, input PasswordAuthInput)
 	}
 	s.users[userID] = user
 	s.identities[key] = userID
+	s.identityLogins[key] = normalized.Login
 	s.passwordCredentials[normalized.Login] = memoryPasswordCredential{UserID: userID, PasswordHash: passwordHash}
 	s.workspaces[userID] = []Workspace{workspace}
 	if s.workspaceMembers[workspace.ID] == nil {
@@ -301,6 +365,18 @@ func (s *MemoryStore) AuthenticatePassword(_ Context, input PasswordAuthInput) (
 		return User{}, nil, ErrNotFound
 	}
 	return user, s.workspaces[credential.UserID], nil
+}
+
+func (s *MemoryStore) GetUserAuthIdentity(_ Context, userID string) (AuthIdentityInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	userID = strings.TrimSpace(userID)
+	if _, ok := s.users[userID]; !ok {
+		return AuthIdentityInfo{}, ErrNotFound
+	}
+	login := s.identityLoginForUser(userID)
+	return AuthIdentityInfo{Login: login}, nil
 }
 
 func (s *MemoryStore) CreateAuthSession(_ Context, userID string, ttl time.Duration) (string, time.Time, error) {
@@ -861,6 +937,9 @@ func (s *MemoryStore) RegisterRuntimeWorker(_ Context, registration RuntimeRegis
 	if registration.TokenID == "" || registration.WorkspaceID == "" {
 		return RuntimeWorker{}, ErrNotFound
 	}
+	if err := s.ensureRuntimeModeAllowedForWorkspaceLocked(registration.WorkspaceID, normalized.Mode); err != nil {
+		return RuntimeWorker{}, err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for key, token := range s.runtimeTokens {
 		if token.Record.ID == registration.TokenID && token.Record.WorkspaceID == registration.WorkspaceID {
@@ -967,6 +1046,9 @@ func (s *MemoryStore) CreateRuntimeTask(_ Context, userID, workspaceID string, i
 	}
 	normalized, err := normalizeCreateRuntimeTaskInput(input)
 	if err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := s.ensureRuntimeModeAllowedForWorkspaceLocked(workspaceID, normalized.RuntimeMode); err != nil {
 		return RuntimeTask{}, err
 	}
 	s.nextID++
@@ -1620,6 +1702,9 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 	}
 	if normalized.RuntimeMode != "personal" && normalized.RuntimeMode != "team" {
 		return AgentSession{}, errors.New("runtimeMode must be personal or team")
+	}
+	if normalized.RuntimeMode != workspace.Kind {
+		return AgentSession{}, ErrForbidden
 	}
 	sessionID, err := newAgentSessionID()
 	if err != nil {
@@ -3066,10 +3151,24 @@ func (s *MemoryStore) hasWorkspaceRole(workspaceID, userID string, roles ...stri
 	return false
 }
 
+func (s *MemoryStore) ensureRuntimeModeAllowedForWorkspaceLocked(workspaceID, runtimeMode string) error {
+	workspace, ok := s.workspaceLocked(workspaceID)
+	if !ok {
+		return ErrNotFound
+	}
+	if workspace.Kind != strings.TrimSpace(runtimeMode) {
+		return ErrForbidden
+	}
+	return nil
+}
+
 func (s *MemoryStore) identityLoginForUser(userID string) string {
 	for key, identityUserID := range s.identities {
 		if identityUserID != userID {
 			continue
+		}
+		if login := strings.TrimSpace(s.identityLogins[key]); login != "" {
+			return login
 		}
 		parts := strings.SplitN(key, ":", 2)
 		if len(parts) == 2 {

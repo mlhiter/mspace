@@ -532,6 +532,9 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 	if normalized.RuntimeMode != "personal" && normalized.RuntimeMode != "team" {
 		return AgentSession{}, errors.New("runtimeMode must be personal or team")
 	}
+	if normalized.RuntimeMode != workspace.Kind {
+		return AgentSession{}, ErrForbidden
+	}
 	issue, err := loadIssue(dbctx, s.pool, workspaceID, issueID)
 	if err != nil {
 		return AgentSession{}, err

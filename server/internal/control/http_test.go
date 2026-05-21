@@ -100,6 +100,7 @@ func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 		GitHubClientID:     "client-id",
 		GitHubClientSecret: "client-secret",
 		GitHubRedirectURI:  "http://127.0.0.1:8787/api/auth/github/callback",
+		ServerAdminLogins:  []string{"mlhiter"},
 	}, store, fakeGitHubClient{})
 	router := server.Routes()
 
@@ -274,7 +275,7 @@ func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 
 func TestPasswordAuthIssuesMspaceSession(t *testing.T) {
 	store := NewMemoryStore()
-	server := NewServer(Config{}, store, fakeGitHubClient{})
+	server := NewServer(Config{ServerAdminLogins: []string{"local-admin"}}, store, fakeGitHubClient{})
 	router := server.Routes()
 
 	registerBody := `{"login":"local-admin","name":"Local Admin","email":"admin@example.test","password":"correct-password"}`
@@ -295,6 +296,9 @@ func TestPasswordAuthIssuesMspaceSession(t *testing.T) {
 	}
 	if len(register.Workspaces) != 1 || register.Workspaces[0].Kind != "personal" || register.Workspaces[0].Role != "owner" {
 		t.Fatalf("unexpected default workspace: %+v", register.Workspaces)
+	}
+	if !register.IsServerAdmin {
+		t.Fatalf("expected bootstrap login to be server admin")
 	}
 
 	meRecorder := httptest.NewRecorder()
@@ -334,6 +338,107 @@ func TestPasswordAuthIssuesMspaceSession(t *testing.T) {
 	router.ServeHTTP(missingLoginRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/login", strings.NewReader(`{"login":"missing-admin","password":"correct-password"}`)))
 	if missingLoginRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("missing login status=%d body=%s", missingLoginRecorder.Code, missingLoginRecorder.Body.String())
+	}
+}
+
+func TestBootstrapAdminCreatesDefaultAdminAccount(t *testing.T) {
+	store := NewMemoryStore()
+	bootstrapUser, workspaces, created, err := store.EnsureBootstrapAdmin(context.Background(), PasswordAuthInput{
+		Login:    "platform-admin",
+		Name:     "Platform Admin",
+		Password: "correct-password",
+	})
+	if err != nil {
+		t.Fatalf("ensure bootstrap admin: %v", err)
+	}
+	if !created {
+		t.Fatalf("expected bootstrap admin to be created")
+	}
+	if bootstrapUser.ID == "" || len(workspaces) != 1 || workspaces[0].Kind != "personal" {
+		t.Fatalf("unexpected bootstrap admin result: user=%+v workspaces=%+v", bootstrapUser, workspaces)
+	}
+	if _, _, createdAgain, err := store.EnsureBootstrapAdmin(context.Background(), PasswordAuthInput{
+		Login:    "platform-admin",
+		Name:     "Platform Admin",
+		Password: "different-password",
+	}); err != nil {
+		t.Fatalf("ensure existing bootstrap admin: %v", err)
+	} else if createdAgain {
+		t.Fatalf("existing bootstrap admin should not be recreated")
+	}
+
+	server := NewServer(Config{BootstrapAdminLogin: "platform-admin"}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	adminRecorder := httptest.NewRecorder()
+	router.ServeHTTP(adminRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/login", strings.NewReader(`{"login":"platform-admin","password":"correct-password"}`)))
+	if adminRecorder.Code != http.StatusOK {
+		t.Fatalf("admin login status=%d body=%s", adminRecorder.Code, adminRecorder.Body.String())
+	}
+	var admin AuthResult
+	if err := json.Unmarshal(adminRecorder.Body.Bytes(), &admin); err != nil {
+		t.Fatalf("parse admin response: %v", err)
+	}
+	adminTeamRecorder := httptest.NewRecorder()
+	adminTeamReq := httptest.NewRequest(http.MethodPost, "/api/workspaces", strings.NewReader(`{"name":"Admin Team","kind":"team"}`))
+	adminTeamReq.Header.Set("Authorization", "Bearer "+admin.Token)
+	router.ServeHTTP(adminTeamRecorder, adminTeamReq)
+	if adminTeamRecorder.Code != http.StatusCreated {
+		t.Fatalf("admin create team status=%d body=%s", adminTeamRecorder.Code, adminTeamRecorder.Body.String())
+	}
+}
+
+func TestOpenRegistrationDoesNotGrantTeamWorkspaceCreation(t *testing.T) {
+	store := NewMemoryStore()
+	server := NewServer(Config{ServerAdminLogins: []string{"platform-admin"}}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	adminRecorder := httptest.NewRecorder()
+	router.ServeHTTP(adminRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/register", strings.NewReader(`{"login":"platform-admin","name":"Platform Admin","password":"correct-password"}`)))
+	if adminRecorder.Code != http.StatusCreated {
+		t.Fatalf("admin register status=%d body=%s", adminRecorder.Code, adminRecorder.Body.String())
+	}
+	var admin AuthResult
+	if err := json.Unmarshal(adminRecorder.Body.Bytes(), &admin); err != nil {
+		t.Fatalf("parse admin response: %v", err)
+	}
+	if !admin.IsServerAdmin {
+		t.Fatalf("expected configured admin login to be server admin")
+	}
+	emailSpoofRecorder := httptest.NewRecorder()
+	router.ServeHTTP(emailSpoofRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/register", strings.NewReader(`{"login":"email-spoofer","name":"Email Spoofer","email":"platform-admin@example.com","password":"correct-password"}`)))
+	if emailSpoofRecorder.Code != http.StatusCreated {
+		t.Fatalf("email spoof register status=%d body=%s", emailSpoofRecorder.Code, emailSpoofRecorder.Body.String())
+	}
+	var emailSpoof AuthResult
+	if err := json.Unmarshal(emailSpoofRecorder.Body.Bytes(), &emailSpoof); err != nil {
+		t.Fatalf("parse email spoof response: %v", err)
+	}
+	if emailSpoof.IsServerAdmin {
+		t.Fatalf("unverified email must not grant server admin")
+	}
+
+	userRecorder := httptest.NewRecorder()
+	router.ServeHTTP(userRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/register", strings.NewReader(`{"login":"tester","name":"platform-admin","password":"correct-password"}`)))
+	if userRecorder.Code != http.StatusCreated {
+		t.Fatalf("user register status=%d body=%s", userRecorder.Code, userRecorder.Body.String())
+	}
+	var user AuthResult
+	if err := json.Unmarshal(userRecorder.Body.Bytes(), &user); err != nil {
+		t.Fatalf("parse user response: %v", err)
+	}
+	if user.IsServerAdmin {
+		t.Fatalf("ordinary registered user should not be server admin")
+	}
+	if len(user.Workspaces) != 1 || user.Workspaces[0].Kind != "personal" {
+		t.Fatalf("ordinary user should only get a personal workspace, got %+v", user.Workspaces)
+	}
+	userTeamRecorder := httptest.NewRecorder()
+	userTeamReq := httptest.NewRequest(http.MethodPost, "/api/workspaces", strings.NewReader(`{"name":"Tester Team","kind":"team"}`))
+	userTeamReq.Header.Set("Authorization", "Bearer "+user.Token)
+	router.ServeHTTP(userTeamRecorder, userTeamReq)
+	if userTeamRecorder.Code != http.StatusForbidden {
+		t.Fatalf("ordinary user team creation should be forbidden, status=%d body=%s", userTeamRecorder.Code, userTeamRecorder.Body.String())
 	}
 }
 
@@ -1234,6 +1339,14 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 		t.Fatalf("unexpected personal runtime token result: %+v", personalTokenResult)
 	}
 
+	personalTeamRegisterRecorder := httptest.NewRecorder()
+	personalTeamRegisterReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"wrong-personal-worker","mode":"team","version":"0.1.0","capabilities":{"codex":true},"labels":{"host":"local"}}`))
+	personalTeamRegisterReq.Header.Set("Authorization", "Bearer "+personalTokenResult.Token)
+	router.ServeHTTP(personalTeamRegisterRecorder, personalTeamRegisterReq)
+	if personalTeamRegisterRecorder.Code != http.StatusForbidden {
+		t.Fatalf("personal workspace team worker should be forbidden, status=%d body=%s", personalTeamRegisterRecorder.Code, personalTeamRegisterRecorder.Body.String())
+	}
+
 	personalRegisterRecorder := httptest.NewRecorder()
 	personalRegisterReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"personal-worker-1","mode":"personal","version":"0.1.0","capabilities":{"codex":true},"labels":{"host":"local"}}`))
 	personalRegisterReq.Header.Set("Authorization", "Bearer "+personalTokenResult.Token)
@@ -1372,15 +1485,16 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	personalTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"agent_session","runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
 	personalTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(personalTaskRecorder, personalTaskReq)
-	if personalTaskRecorder.Code != http.StatusCreated {
-		t.Fatalf("create personal runtime task status=%d body=%s", personalTaskRecorder.Code, personalTaskRecorder.Body.String())
+	if personalTaskRecorder.Code != http.StatusForbidden {
+		t.Fatalf("personal workspace team task should be forbidden, status=%d body=%s", personalTaskRecorder.Code, personalTaskRecorder.Body.String())
 	}
-	var personalTask RuntimeTask
-	if err := json.Unmarshal(personalTaskRecorder.Body.Bytes(), &personalTask); err != nil {
-		t.Fatalf("parse personal runtime task: %v", err)
-	}
-	if personalTask.WorkspaceID != personalWorkspaceID || personalTask.Status != "queued" {
-		t.Fatalf("unexpected personal runtime task: %+v", personalTask)
+
+	personalModeTaskRecorder := httptest.NewRecorder()
+	personalModeTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"agent_session","runtimeMode":"personal","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
+	personalModeTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(personalModeTaskRecorder, personalModeTaskReq)
+	if personalModeTaskRecorder.Code != http.StatusCreated {
+		t.Fatalf("create personal runtime task status=%d body=%s", personalModeTaskRecorder.Code, personalModeTaskRecorder.Body.String())
 	}
 
 	createTokenRecorder := httptest.NewRecorder()
@@ -1405,6 +1519,22 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	var worker RuntimeWorker
 	if err := json.Unmarshal(registerRecorder.Body.Bytes(), &worker); err != nil {
 		t.Fatalf("parse worker: %v", err)
+	}
+
+	rejectPersonalWorkerRecorder := httptest.NewRecorder()
+	rejectPersonalWorkerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"wrong-mode-worker","mode":"personal","version":"0.1.0","capabilities":{"codex":true},"labels":{"host":"local"}}`))
+	rejectPersonalWorkerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(rejectPersonalWorkerRecorder, rejectPersonalWorkerReq)
+	if rejectPersonalWorkerRecorder.Code != http.StatusForbidden {
+		t.Fatalf("team workspace personal worker should be forbidden, status=%d body=%s", rejectPersonalWorkerRecorder.Code, rejectPersonalWorkerRecorder.Body.String())
+	}
+
+	rejectPersonalTaskRecorder := httptest.NewRecorder()
+	rejectPersonalTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"agent_session","runtimeMode":"personal","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
+	rejectPersonalTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(rejectPersonalTaskRecorder, rejectPersonalTaskReq)
+	if rejectPersonalTaskRecorder.Code != http.StatusForbidden {
+		t.Fatalf("team workspace personal task should be forbidden, status=%d body=%s", rejectPersonalTaskRecorder.Code, rejectPersonalTaskRecorder.Body.String())
 	}
 
 	createTaskRecorder := httptest.NewRecorder()
