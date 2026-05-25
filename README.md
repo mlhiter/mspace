@@ -162,6 +162,7 @@ Desktop team server selection:
 - The sign-in screen keeps remote control-plane setup behind a collapsed Team server entry for deployed customer or team environments.
 - Saved server URLs are stored in the Electron user-data profile for this device and reused on the next launch.
 - `MSPACE_SERVER_URL` still works as a launch-time override and takes precedence over the saved UI value. When it is set, the Team server entry opens in a locked state for that launch.
+- GitHub sign-in appears only when the active server reports `capabilities.githubAuth: true` from `/health`, which requires all three `MSPACE_GITHUB_*` OAuth variables to be configured. Default local SQLite personal mode shows only local account sign-in.
 
 Runtime variables:
 

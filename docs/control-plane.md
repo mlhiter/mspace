@@ -62,7 +62,7 @@ Desktop
   -> call mspace APIs with Authorization: Bearer msp_...
 ```
 
-GitHub remains optional when the environment can reach GitHub:
+GitHub remains optional when the environment can reach GitHub. The server reports this as `capabilities.githubAuth` from `/health`; the desktop shows GitHub sign-in only when that value is `true`, which requires `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` to all be configured.
 
 ```text
 Desktop
