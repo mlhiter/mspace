@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-05-25",
+    title: "Desktop team server selection",
+    summary:
+      "mspace made customer and team deployments easier to reach from the desktop app without relying only on launch-time environment variables.",
+    items: [
+      "Added a collapsed Team server entry on the sign-in screen for testing and saving a remote control-plane URL before authentication.",
+      "Persisted the selected server in the Electron user-data profile while keeping `MSPACE_SERVER_URL` as the highest-priority launch override.",
+      "Updated local Docker worker startup so workers follow the active desktop server instead of assuming the local control plane.",
+      "Documented that personal desktop mode stays local by default while team deployments can opt into a saved server URL.",
+    ],
+  },
+  {
     date: "2026-05-21",
     title: "Personal registration with team runtime gates",
     summary:

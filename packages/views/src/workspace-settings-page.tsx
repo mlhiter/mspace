@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import {
 	controlPlaneApi,
+	getControlPlaneBaseUrl,
 	queryKeys,
 	type CreateRuntimeRegistrationTokenInput,
 	type CreateRuntimeTaskInput,
@@ -101,6 +102,7 @@ export function WorkspaceSettingsPage() {
 	const queryClient = useQueryClient();
 	const auth = useMspaceAuth();
 	const workspaceID = auth.workspace?.id || "";
+	const desktopServerBaseUrl = getControlPlaneBaseUrl();
 	const isSignedIn = auth.status === "signed-in" && auth.token !== "";
 	const isTeamWorkspace = auth.workspace?.kind === "team";
 	const runtimeEnabled = isSignedIn && workspaceID !== "";
@@ -216,7 +218,7 @@ export function WorkspaceSettingsPage() {
 				authToken: auth.token,
 				workspaceId: workspaceID,
 				mode: defaultRuntimeMode,
-				serverUrl: "http://host.docker.internal:8787",
+				serverUrl: desktopServerBaseUrl === "http://127.0.0.1:8787" ? "http://host.docker.internal:8787" : desktopServerBaseUrl,
 				codex: true,
 				workerName: `local-docker-${defaultRuntimeMode}-worker`,
 			});

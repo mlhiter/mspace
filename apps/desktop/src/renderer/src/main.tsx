@@ -11,7 +11,7 @@ import {
   Navigate,
   RouterProvider,
 } from "@tanstack/react-router";
-import { GitBranch, LoaderCircle, LogIn, UsersRound, X } from "lucide-react";
+import { GitBranch, LoaderCircle, LogIn, Server, UsersRound, X } from "lucide-react";
 import {
   AgentsPage,
   ClustersPage,
@@ -33,6 +33,7 @@ import {
   getControlPlaneBaseUrl,
   queryKeys,
   SELECTED_WORKSPACE_STORAGE_KEY,
+  setControlPlaneBaseUrl,
   setStoredAuthIdentity,
   type AuthMeResult,
   type CreateWorkspaceInput,
@@ -57,10 +58,36 @@ function joinSearchSubtitle(values: Array<string | number | null | undefined>): 
     .join(" - ");
 }
 
+function normalizeServerInput(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error(t("auth.serverUrlRequired"));
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(t("auth.serverUrlInvalid"));
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(t("auth.serverUrlInvalid"));
+  }
+  return parsed.origin.replace(/\/+$/, "");
+}
+
 function RootShell() {
   const { t } = useMspaceTranslation();
+  const initialServerBaseUrl = getControlPlaneBaseUrl();
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(() => window.localStorage.getItem(SELECTED_WORKSPACE_STORAGE_KEY) || "");
+  const [serverBaseUrl, setServerBaseUrlState] = useState(initialServerBaseUrl);
+  const [serverBaseUrlSource, setServerBaseUrlSource] = useState<"environment" | "user" | "default">(
+    window.mspaceDesktop?.serverBaseUrlSource || "default",
+  );
+  const [serverBaseUrlLocked, setServerBaseUrlLocked] = useState(Boolean(window.mspaceDesktop?.serverBaseUrlLocked));
+  const [serverUrlDraft, setServerUrlDraft] = useState(initialServerBaseUrl);
+  const [serverUrlSaved, setServerUrlSaved] = useState(false);
+  const [serverUrlError, setServerUrlError] = useState("");
+  const [serverUrlChecking, setServerUrlChecking] = useState(false);
+  const [serverUrlSaving, setServerUrlSaving] = useState(false);
   const [pendingAuthState, setPendingAuthState] = useState("");
   const [passwordAuthMode, setPasswordAuthMode] = useState<"login" | "register">("login");
   const [passwordAuthLogin, setPasswordAuthLogin] = useState("");
@@ -69,8 +96,28 @@ function RootShell() {
   const [teamWorkspaceModalOpen, setTeamWorkspaceModalOpen] = useState(false);
   const [teamWorkspaceName, setTeamWorkspaceName] = useState("");
 
+  function clearAuthState() {
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    window.localStorage.removeItem(SELECTED_WORKSPACE_STORAGE_KEY);
+    setStoredAuthIdentity(null);
+    setAuthToken("");
+    setSelectedWorkspaceId("");
+    setPendingAuthState("");
+    void queryClient.clear();
+  }
+
+  function applyServerConfig(config: { baseUrl: string; source: "environment" | "user" | "default"; locked: boolean }) {
+    setControlPlaneBaseUrl(config.baseUrl);
+    setServerBaseUrlState(config.baseUrl);
+    setServerBaseUrlSource(config.source);
+    setServerBaseUrlLocked(config.locked);
+    setServerUrlDraft(config.baseUrl);
+    setServerUrlError("");
+    clearAuthState();
+  }
+
   const meQuery = useQuery({
-    queryKey: queryKeys.authMe(authToken),
+    queryKey: [...queryKeys.authMe(authToken), serverBaseUrl],
     queryFn: () => controlPlaneApi.me(authToken),
     enabled: authToken !== "",
     retry: false,
@@ -87,7 +134,7 @@ function RootShell() {
     },
   });
   const pollQuery = useQuery({
-    queryKey: queryKeys.authPoll(pendingAuthState),
+    queryKey: [...queryKeys.authPoll(pendingAuthState), serverBaseUrl],
     queryFn: () => controlPlaneApi.pollGitHubLogin(pendingAuthState),
     enabled: pendingAuthState !== "",
     refetchInterval: (query) => (query.state.data?.pending === false ? false : 1_500),
@@ -135,18 +182,72 @@ function RootShell() {
     }
   }, [meQuery.data?.user]);
 
+  async function checkServerUrlCandidate(url: string) {
+    const baseUrl = normalizeServerInput(url);
+    const response = await fetch(`${baseUrl}/health`);
+    if (!response.ok) throw new Error(t("auth.serverHealthFailed"));
+    const payload = (await response.json()) as {
+      ok?: unknown;
+      serverProtocol?: unknown;
+      capabilities?: Record<string, unknown>;
+    };
+    if (payload.ok !== true || payload.serverProtocol !== 1 || payload.capabilities?.runtimeTaskQueue !== true) {
+      throw new Error(t("auth.serverHealthInvalid"));
+    }
+    return baseUrl;
+  }
+
+  async function handleTestServerUrl() {
+    setServerUrlChecking(true);
+    setServerUrlSaved(false);
+    setServerUrlError("");
+    try {
+      await checkServerUrlCandidate(serverUrlDraft);
+      setServerUrlSaved(true);
+    } catch (error) {
+      setServerUrlError(error instanceof Error ? error.message : t("auth.serverCheckFailed"));
+    } finally {
+      setServerUrlChecking(false);
+    }
+  }
+
+  async function handleSaveServerUrl() {
+    setServerUrlSaving(true);
+    setServerUrlSaved(false);
+    setServerUrlError("");
+    try {
+      const baseUrl = await checkServerUrlCandidate(serverUrlDraft);
+      const result = await window.mspaceDesktop?.setServerBaseUrl?.(baseUrl);
+      applyServerConfig(result || { baseUrl, source: "user", locked: false });
+      setServerUrlSaved(true);
+    } catch (error) {
+      setServerUrlError(error instanceof Error ? error.message : t("auth.serverSaveFailed"));
+    } finally {
+      setServerUrlSaving(false);
+    }
+  }
+
+  async function handleResetServerUrl() {
+    setServerUrlSaving(true);
+    setServerUrlSaved(false);
+    setServerUrlError("");
+    try {
+      const result = await window.mspaceDesktop?.resetServerBaseUrl?.();
+      applyServerConfig(result || { baseUrl: "http://127.0.0.1:8787", source: "default", locked: false });
+      setServerUrlSaved(true);
+    } catch (error) {
+      setServerUrlError(error instanceof Error ? error.message : t("auth.serverResetFailed"));
+    } finally {
+      setServerUrlSaving(false);
+    }
+  }
+
   useEffect(() => {
     if (!authToken || !meQuery.error) return;
     const message = meQuery.error instanceof Error ? meQuery.error.message.toLowerCase() : "";
     if (!message.includes("invalid authorization") && !message.includes("missing authorization")) return;
 
-    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-    window.localStorage.removeItem(SELECTED_WORKSPACE_STORAGE_KEY);
-    setStoredAuthIdentity(null);
-    setAuthToken("");
-    setSelectedWorkspaceId("");
-    setPendingAuthState("");
-    void queryClient.clear();
+    clearAuthState();
   }, [authToken, meQuery.error]);
 
   useEffect(() => {
@@ -193,13 +294,7 @@ function RootShell() {
   }, [serverWorkspaceReady]);
 
   const handleSignOut = () => {
-    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-    window.localStorage.removeItem(SELECTED_WORKSPACE_STORAGE_KEY);
-    setStoredAuthIdentity(null);
-    setAuthToken("");
-    setSelectedWorkspaceId("");
-    setPendingAuthState("");
-    void queryClient.clear();
+    clearAuthState();
   };
 
   const handleSelectWorkspace = (workspaceId: string) => {
@@ -350,6 +445,22 @@ function RootShell() {
           }}
           isBusy={pendingAuthState !== "" || signInMutation.isPending || passwordAuthMutation.isPending}
           isGitHubBusy={pendingAuthState !== "" || signInMutation.isPending}
+          serverBaseUrl={serverBaseUrl}
+          serverBaseUrlSource={serverBaseUrlSource}
+          serverBaseUrlLocked={serverBaseUrlLocked}
+          serverUrlDraft={serverUrlDraft}
+          serverUrlError={serverUrlError}
+          serverUrlSaved={serverUrlSaved}
+          serverUrlChecking={serverUrlChecking}
+          serverUrlSaving={serverUrlSaving}
+          onServerUrlDraftChange={(value) => {
+            setServerUrlDraft(value);
+            setServerUrlSaved(false);
+            setServerUrlError("");
+          }}
+          onTestServerUrl={() => void handleTestServerUrl()}
+          onSaveServerUrl={() => void handleSaveServerUrl()}
+          onResetServerUrl={() => void handleResetServerUrl()}
         />
       ) : null}
       {teamWorkspaceModalOpen ? (
@@ -401,13 +512,43 @@ function AuthRequiredOverlay(props: {
   onNameChange: (value: string) => void;
   onPasswordSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onGitHubSignIn: () => void;
+  serverBaseUrl: string;
+  serverBaseUrlSource: "environment" | "user" | "default";
+  serverBaseUrlLocked: boolean;
+  serverUrlDraft: string;
+  serverUrlError: string;
+  serverUrlSaved: boolean;
+  serverUrlChecking: boolean;
+  serverUrlSaving: boolean;
+  onServerUrlDraftChange: (value: string) => void;
+  onTestServerUrl: () => void;
+  onSaveServerUrl: () => void;
+  onResetServerUrl: () => void;
 }) {
   const busy = props.status === "loading" || props.isBusy;
   const { t } = useMspaceTranslation();
+  const [teamServerSettingsOpen, setTeamServerSettingsOpen] = useState(props.serverBaseUrlLocked);
   const passwordDisabled = busy || props.login.trim() === "" || props.password === "" || (props.mode === "register" && props.password.length < 8);
+  const serverUrlDirty = props.serverUrlDraft.trim().replace(/\/+$/, "") !== props.serverBaseUrl;
+  const serverUrlControlsDisabled = props.serverBaseUrlLocked || props.serverUrlChecking || props.serverUrlSaving;
+  const hasConfiguredTeamServer = props.serverBaseUrlSource !== "default";
+
+  useEffect(() => {
+    if (props.serverBaseUrlLocked || props.serverUrlError) {
+      setTeamServerSettingsOpen(true);
+    }
+  }, [props.serverBaseUrlLocked, props.serverUrlError]);
+
+  const serverSourceLabel =
+    props.serverBaseUrlSource === "environment"
+      ? t("auth.serverSource.environment")
+      : props.serverBaseUrlSource === "user"
+        ? t("auth.serverSource.user")
+        : t("auth.serverSource.default");
+
   return (
     <div className="fixed inset-0 z-[90] grid place-items-center bg-[color:var(--canvas)] px-6">
-      <section className="w-full max-w-[440px] rounded-[12px] bg-[color:var(--paper)] px-6 py-6 shadow-[0_24px_80px_rgba(0,0,0,0.14),inset_0_0_0_1px_var(--line)]">
+      <section className="w-full max-w-[480px] rounded-[12px] bg-[color:var(--paper)] px-6 py-6 shadow-[0_24px_80px_rgba(0,0,0,0.14),inset_0_0_0_1px_var(--line)]">
         <div className="flex items-center gap-3">
           <span className="grid size-10 place-items-center rounded-[10px] bg-[color:var(--block)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
             {busy ? <LoaderCircle data-icon className="animate-spin" /> : <LogIn data-icon />}
@@ -474,6 +615,91 @@ function AuthRequiredOverlay(props: {
           {props.isGitHubBusy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
           {props.actionLabel || (props.isGitHubBusy ? t("workspace.waitingForGitHub") : t("workspace.signInWithGitHub"))}
         </Button>
+        <div className="mt-4 border-t border-[color:var(--line)] pt-3">
+          {teamServerSettingsOpen ? (
+            <div className="rounded-[10px] bg-[color:var(--block)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold leading-5 text-[color:var(--muted-strong)]">{t("auth.serverSettingsTitle")}</div>
+                  <p className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)] text-pretty">
+                    {t("auth.serverSettingsDescription")}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="rounded-[6px] bg-[color:var(--paper)] px-1.5 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                    {serverSourceLabel}
+                  </span>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setTeamServerSettingsOpen(false)}>
+                    {t("auth.hideServerSettings")}
+                  </Button>
+                </div>
+              </div>
+              <div className="mt-3">
+                <Field label={t("auth.serverUrlLabel")} hint={props.serverBaseUrlLocked ? t("auth.serverUrlLockedHint") : t("auth.serverUrlHint")}>
+                  <Input
+                    value={props.serverUrlDraft}
+                    onChange={(event) => props.onServerUrlDraftChange(event.target.value)}
+                    placeholder="https://mspace.example.com"
+                    disabled={props.serverBaseUrlLocked}
+                    aria-invalid={Boolean(props.serverUrlError)}
+                  />
+                </Field>
+              </div>
+              {props.serverUrlError ? <div className="mt-3"><Notice tone="danger">{props.serverUrlError}</Notice></div> : null}
+              {props.serverUrlSaved ? <p className="mt-2 text-[12px] leading-5 text-[color:var(--success)]">{t("auth.serverSaved")}</p> : null}
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={serverUrlControlsDisabled || props.serverBaseUrlSource === "default"}
+                  onClick={props.onResetServerUrl}
+                >
+                  {props.serverUrlSaving && !serverUrlDirty ? <LoaderCircle data-icon className="animate-spin" /> : null}
+                  {t("auth.useLocalServer")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={serverUrlControlsDisabled || props.serverUrlDraft.trim() === ""}
+                  onClick={props.onTestServerUrl}
+                >
+                  {props.serverUrlChecking ? <LoaderCircle data-icon className="animate-spin" /> : null}
+                  {t("auth.testServer")}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={serverUrlControlsDisabled || !serverUrlDirty || props.serverUrlDraft.trim() === ""}
+                  onClick={props.onSaveServerUrl}
+                >
+                  {props.serverUrlSaving && serverUrlDirty ? <LoaderCircle data-icon className="animate-spin" /> : null}
+                  {t("auth.saveServer")}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                className="inline-flex min-h-8 max-w-full items-center gap-2 rounded-[7px] px-2 py-1 text-[12px] leading-5 text-[color:var(--muted)] transition-colors hover:bg-[color:var(--block)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)]"
+                aria-expanded={teamServerSettingsOpen}
+                onClick={() => setTeamServerSettingsOpen(true)}
+              >
+                <Server data-icon className="shrink-0" />
+                <span className="truncate">
+                  {hasConfiguredTeamServer ? t("auth.teamServerActive", { url: props.serverBaseUrl }) : t("auth.teamServerLink")}
+                </span>
+                {hasConfiguredTeamServer ? (
+                  <span className="shrink-0 rounded-[6px] bg-[color:var(--block)] px-1.5 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                    {serverSourceLabel}
+                  </span>
+                ) : null}
+              </button>
+            </div>
+          )}
+        </div>
       </section>
     </div>
   );

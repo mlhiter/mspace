@@ -261,8 +261,11 @@ done
 
 sleep 1
 
-desktop_server_url="${MSPACE_DESKTOP_SERVER_URL:-http://127.0.0.1:8787}"
-MSPACE_SERVER_URL="$desktop_server_url" pnpm dev:desktop
+if [ -n "${MSPACE_DESKTOP_SERVER_URL:-}" ]; then
+  MSPACE_SERVER_URL="$MSPACE_DESKTOP_SERVER_URL" pnpm dev:desktop
+else
+  pnpm dev:desktop
+fi
 ) 2>&1 | tee -a "$log_file"
 
 run_status="$(cat "$status_file" 2>/dev/null || printf '1\n')"

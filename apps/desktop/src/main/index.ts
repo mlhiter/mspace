@@ -11,13 +11,21 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { ensureServerStarted, getServerBaseUrl, stopServer } from "./server-manager";
+import {
+  ensureServerStarted,
+  getServerBaseUrl,
+  getServerConfig,
+  resetConfiguredServerBaseUrl,
+  setConfiguredServerBaseUrl,
+  stopServer,
+} from "./server-manager";
 
 let mainWindow: BrowserWindow | null = null;
 let projectFolderPickerRegistered = false;
 let kubeconfigFilePickerRegistered = false;
 let openHandlersRegistered = false;
 let dockerWorkerHandlersRegistered = false;
+let serverConfigHandlersRegistered = false;
 let dockerWorkerProcess: ChildProcessWithoutNullStreams | null = null;
 let dockerWorkerContainer = "";
 const BRAND_ICON_PATH = join("assets", "brand", "mspace-icon.png");
@@ -116,6 +124,23 @@ function registerOpenHandlers(): void {
     const candidate = stripLineSuffix(trimmed);
     const target = existsSync(trimmed) ? trimmed : candidate;
     return shell.openPath(target);
+  });
+}
+
+function registerServerConfigHandlers(): void {
+  if (serverConfigHandlersRegistered) return;
+  serverConfigHandlersRegistered = true;
+
+  ipcMain.handle("mspace:set-server-base-url", async (_event, serverUrl: string) => {
+    const config = setConfiguredServerBaseUrl(String(serverUrl || ""));
+    if (config.baseUrl !== "http://127.0.0.1:8787") {
+      await stopServer();
+    }
+    return config;
+  });
+
+  ipcMain.handle("mspace:reset-server-base-url", async () => {
+    return resetConfiguredServerBaseUrl();
   });
 }
 
@@ -251,6 +276,7 @@ function registerDockerWorkerHandlers(): void {
 }
 
 function createWindow(iconPath = resolveBrandIconPath()): void {
+  const serverConfig = getServerConfig();
   const options: BrowserWindowConstructorOptions = {
     width: 1380,
     height: 900,
@@ -262,7 +288,9 @@ function createWindow(iconPath = resolveBrandIconPath()): void {
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),
       additionalArguments: [
-        `--mspace-server-url=${getServerBaseUrl()}`,
+        `--mspace-server-url=${serverConfig.baseUrl}`,
+        `--mspace-server-url-source=${serverConfig.source}`,
+        `--mspace-server-url-locked=${serverConfig.locked ? "1" : "0"}`,
       ],
       sandbox: false,
     },
@@ -283,6 +311,7 @@ function createWindow(iconPath = resolveBrandIconPath()): void {
 }
 
 app.whenReady().then(async () => {
+  registerServerConfigHandlers();
   registerProjectFolderPicker();
   registerKubeconfigFilePicker();
   registerOpenHandlers();

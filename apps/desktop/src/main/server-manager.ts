@@ -1,11 +1,13 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { app } from "electron";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const DEFAULT_SERVER_PORT = 8787;
+const DEFAULT_SERVER_BASE_URL = `http://127.0.0.1:${DEFAULT_SERVER_PORT}`;
 const DEFAULT_START_TIMEOUT_MS = 30_000;
 const EXPECTED_SERVER_PROTOCOL = 1;
+const SERVER_CONFIG_FILE = "server-config.json";
 const EXPECTED_SERVER_CAPABILITIES = [
   "workspaceInboxIssueGrouping",
   "teamWorkspaceCreation",
@@ -16,15 +18,102 @@ const EXPECTED_SERVER_CAPABILITIES = [
   "runtimeTaskQueue",
 ] as const;
 
+type ServerConfigFile = {
+  serverUrl?: unknown;
+};
+
+export type ServerConfig = {
+  baseUrl: string;
+  source: "environment" | "user" | "default";
+  locked: boolean;
+};
+
+function normalizeServerBaseUrl(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("server URL is required");
+  const parsed = new URL(trimmed);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("server URL must use http or https");
+  }
+  return parsed.origin.replace(/\/+$/, "");
+}
+
+function serverConfigPath(): string {
+  return join(app.getPath("userData"), SERVER_CONFIG_FILE);
+}
+
+function readUserConfiguredServerBaseUrl(): string {
+  try {
+    const payload = JSON.parse(readFileSync(serverConfigPath(), "utf8")) as ServerConfigFile;
+    if (typeof payload.serverUrl !== "string") return "";
+    return normalizeServerBaseUrl(payload.serverUrl);
+  } catch {
+    return "";
+  }
+}
+
+function readServerConfig(): ServerConfig {
+  if (process.env.MSPACE_SERVER_URL) {
+    return {
+      baseUrl: normalizeServerBaseUrl(process.env.MSPACE_SERVER_URL),
+      source: "environment",
+      locked: true,
+    };
+  }
+
+  const userConfiguredUrl = readUserConfiguredServerBaseUrl();
+  if (userConfiguredUrl) {
+    return {
+      baseUrl: userConfiguredUrl,
+      source: "user",
+      locked: false,
+    };
+  }
+
+  return {
+    baseUrl: DEFAULT_SERVER_BASE_URL,
+    source: "default",
+    locked: false,
+  };
+}
+
+export function getServerConfig(): ServerConfig {
+  return readServerConfig();
+}
+
+export function setConfiguredServerBaseUrl(value: string): ServerConfig {
+  if (process.env.MSPACE_SERVER_URL) {
+    throw new Error("MSPACE_SERVER_URL controls the server for this launch.");
+  }
+  const baseUrl = normalizeServerBaseUrl(value);
+  mkdirSync(app.getPath("userData"), { recursive: true });
+  writeFileSync(serverConfigPath(), `${JSON.stringify({ serverUrl: baseUrl }, null, 2)}\n`, "utf8");
+  return readServerConfig();
+}
+
+export async function resetConfiguredServerBaseUrl(): Promise<ServerConfig> {
+  if (process.env.MSPACE_SERVER_URL) {
+    throw new Error("MSPACE_SERVER_URL controls the server for this launch.");
+  }
+  try {
+    rmSync(serverConfigPath(), { force: true });
+  } catch {
+    // The config file may not exist yet.
+  }
+  await ensureServerStarted();
+  return readServerConfig();
+}
+
 function readServerPort(): number {
   if (process.env.MSPACE_SERVER_ADDR) {
     const port = Number(process.env.MSPACE_SERVER_ADDR.split(":").at(-1));
     if (Number.isInteger(port) && port > 0) return port;
   }
 
-  if (process.env.MSPACE_SERVER_URL) {
+  const configuredBaseUrl = getServerBaseUrl();
+  if (configuredBaseUrl !== DEFAULT_SERVER_BASE_URL) {
     try {
-      const parsed = new URL(process.env.MSPACE_SERVER_URL);
+      const parsed = new URL(configuredBaseUrl);
       const urlPort = Number(parsed.port);
       if (Number.isInteger(urlPort) && urlPort > 0) return urlPort;
     } catch {
@@ -41,17 +130,13 @@ function readStartTimeoutMs(): number {
   return DEFAULT_START_TIMEOUT_MS;
 }
 
-const SERVER_PORT = readServerPort();
-const START_TIMEOUT_MS = readStartTimeoutMs();
-
 export function getServerBaseUrl(): string {
-  if (process.env.MSPACE_SERVER_URL) {
-    return process.env.MSPACE_SERVER_URL.replace(/\/+$/, "");
-  }
-  return `http://127.0.0.1:${SERVER_PORT}`;
+  return readServerConfig().baseUrl;
 }
 
-const HEALTH_URL = new URL("/health", getServerBaseUrl()).toString();
+function hasConfiguredRemoteServer(): boolean {
+  return readServerConfig().source !== "default";
+}
 
 let serverProcess: ChildProcessWithoutNullStreams | null = null;
 let starting: Promise<void> | null = null;
@@ -85,7 +170,7 @@ function hasExpectedServerCapabilities(payload: ServerHealth): boolean {
 
 async function fetchReadiness(): Promise<ServerReadiness> {
   try {
-    const res = await fetch(HEALTH_URL);
+    const res = await fetch(new URL("/health", getServerBaseUrl()).toString());
     if (!res.ok) return "unavailable";
 
     let payload: ServerHealth;
@@ -113,7 +198,8 @@ function execFileOutput(command: string, args: string[]): Promise<string> {
 }
 
 async function readServerPortPids(): Promise<number[]> {
-  const output = await execFileOutput("lsof", ["-tiTCP:" + SERVER_PORT, "-sTCP:LISTEN"]);
+  const serverPort = readServerPort();
+  const output = await execFileOutput("lsof", ["-tiTCP:" + serverPort, "-sTCP:LISTEN"]);
   const pids = output
     .split(/\s+/)
     .map((pid) => Number(pid))
@@ -122,7 +208,7 @@ async function readServerPortPids(): Promise<number[]> {
 }
 
 async function stopStaleLocalServer(): Promise<void> {
-  if (process.env.MSPACE_SERVER_URL) {
+  if (hasConfiguredRemoteServer()) {
     throw new Error(
       `mspace server at ${getServerBaseUrl()} is healthy but does not expose the expected protocol. Restart the configured server.`,
     );
@@ -134,7 +220,7 @@ async function stopStaleLocalServer(): Promise<void> {
   const pids = await readServerPortPids();
   if (pids.length === 0) return;
 
-  console.warn(`[server] replacing stale local server on port ${SERVER_PORT}: ${pids.join(", ")}`);
+  console.warn(`[server] replacing stale local server on port ${readServerPort()}: ${pids.join(", ")}`);
   for (const pid of pids) {
     try {
       process.kill(pid, "SIGTERM");
@@ -166,13 +252,16 @@ function resolveServerDir(): string {
 
 function readServerAddr(): string {
   if (process.env.MSPACE_SERVER_ADDR) return process.env.MSPACE_SERVER_ADDR;
-  return `127.0.0.1:${SERVER_PORT}`;
+  return `127.0.0.1:${readServerPort()}`;
 }
 
 export async function ensureServerStarted(): Promise<void> {
   const readiness = await fetchReadiness();
   if (readiness === "ready") return;
   if (readiness === "stale") await stopStaleLocalServer();
+  if (hasConfiguredRemoteServer()) {
+    throw new Error(`Configured mspace server at ${getServerBaseUrl()} is not reachable.`);
+  }
   if (starting) return starting;
 
   starting = new Promise<void>((resolve, reject) => {
@@ -200,7 +289,8 @@ export async function ensureServerStarted(): Promise<void> {
       reject(error);
     });
 
-    const deadline = Date.now() + START_TIMEOUT_MS;
+    const startTimeoutMs = readStartTimeoutMs();
+    const deadline = Date.now() + startTimeoutMs;
     const timer = setInterval(async () => {
       if (await fetchReadiness() === "ready") {
         clearInterval(timer);
@@ -211,7 +301,7 @@ export async function ensureServerStarted(): Promise<void> {
       if (Date.now() > deadline) {
         clearInterval(timer);
         starting = null;
-        reject(new Error(`Timed out waiting ${START_TIMEOUT_MS}ms for the mspace server to become healthy`));
+        reject(new Error(`Timed out waiting ${startTimeoutMs}ms for the mspace server to become healthy`));
       }
     }, 500);
   });

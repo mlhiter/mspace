@@ -64,6 +64,7 @@ export const AUTH_TOKEN_STORAGE_KEY = "mspace.authToken";
 export const AUTH_IDENTITY_STORAGE_KEY = "mspace.authIdentity";
 export const SELECTED_WORKSPACE_STORAGE_KEY = "mspace.selectedWorkspaceId";
 const defaultActorName = "mlhiter";
+let controlPlaneBaseUrlOverride = "";
 
 export interface StoredAuthIdentity {
   id?: string;
@@ -100,7 +101,11 @@ export const queryKeys = {
 };
 
 export function getControlPlaneBaseUrl(): string {
-  return window.mspaceDesktop?.serverBaseUrl || "http://127.0.0.1:8787";
+  return controlPlaneBaseUrlOverride || window.mspaceDesktop?.serverBaseUrl || "http://127.0.0.1:8787";
+}
+
+export function setControlPlaneBaseUrl(baseUrl: string): void {
+  controlPlaneBaseUrlOverride = baseUrl.replace(/\/+$/, "");
 }
 
 function browserStorage(): Storage | undefined {

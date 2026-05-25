@@ -925,7 +925,19 @@ export interface AuthMeResult {
 
 export interface MspaceDesktopAPI {
   serverBaseUrl: string;
+  serverBaseUrlSource?: "environment" | "user" | "default";
+  serverBaseUrlLocked?: boolean;
   appVersion: string;
+  setServerBaseUrl?: (serverUrl: string) => Promise<{
+    baseUrl: string;
+    source: "environment" | "user" | "default";
+    locked: boolean;
+  }>;
+  resetServerBaseUrl?: () => Promise<{
+    baseUrl: string;
+    source: "environment" | "user" | "default";
+    locked: boolean;
+  }>;
   selectProjectFolder?: () => Promise<string | null>;
   selectKubeconfigFiles?: () => Promise<string[]>;
   openExternal?: (url: string) => Promise<void>;
