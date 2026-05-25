@@ -6,6 +6,8 @@
   "scripts": {
     "dev:desktop": "pnpm --filter @mspace/desktop dev",
     "build:desktop": "pnpm --filter @mspace/desktop build",
+    "dist:desktop": "pnpm --filter @mspace/desktop dist",
+    "dist:desktop:mac": "pnpm --filter @mspace/desktop dist:mac",
     "dev:website": "pnpm --filter @mspace/website dev",
     "build:website": "pnpm --filter @mspace/website build",
     "preview:website": "pnpm --filter @mspace/website preview",
@@ -17,6 +19,8 @@
     "test": "turbo test"
   },
   "devDependencies": {
+    "electron-builder": "^26.8.1",
+    "png-to-ico": "^3.0.1",
     "turbo": "^2.5.4",
     "typescript": "^5.9.3"
   }

@@ -51,7 +51,7 @@ git tag -a v0.1.0 <commit> -m "v0.1.0"
 git push origin v0.1.0
 ```
 
-After the tag is pushed, GitHub Actions creates or updates a draft GitHub Release and attaches the release verification summary.
+After the tag is pushed, GitHub Actions creates or updates a draft GitHub Release, attaches the release verification summary, and uploads macOS desktop artifacts.
 
 ## Validation
 
@@ -61,6 +61,7 @@ The release workflow should verify the tagged commit with:
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm --filter @mspace/desktop build
+pnpm --filter @mspace/desktop dist:mac
 pnpm --filter @mspace/website build
 (cd server && go test ./...)
 (cd server && go build ./cmd/server)
@@ -69,6 +70,31 @@ pnpm --filter @mspace/website build
 ```
 
 The workflow does not deploy production services, write databases, publish container images, or create npm packages.
+
+## Desktop Artifacts
+
+macOS desktop releases are built with `electron-builder` from `apps/desktop`.
+
+The desktop package includes:
+
+- the Electron renderer/main/preload build from `electron-vite`;
+- a bundled `mspace-server` binary under app resources;
+- a local personal SQLite store at the app user-data path when no remote server is configured;
+- `.dmg` and `.zip` artifacts attached to the GitHub Release.
+
+The packaged app chooses its server in this order:
+
+1. `MSPACE_SERVER_URL`, when set, locks the desktop app to that remote server for the launch.
+2. A user-configured server URL in the desktop settings connects to a remote team/customer server.
+3. The default personal mode starts the bundled local server with `MSPACE_STORE=sqlite` and `MSPACE_SQLITE_PATH=<userData>/mspace.db`.
+
+Build a local macOS package with:
+
+```bash
+pnpm dist:desktop:mac
+```
+
+Unsigned artifacts are acceptable for internal dogfood. Public customer downloads should add Apple Developer ID signing and notarization before being marked ready.
 
 ## Release Channels
 

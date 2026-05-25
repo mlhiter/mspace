@@ -100,7 +100,7 @@ The desktop process starts the server control plane automatically on `127.0.0.1:
 - Git on `PATH`.
 - Codex CLI on `PATH` for real Codex worker sessions.
 - `kubectl` only when running deployment or validation flows that inspect Kubernetes.
-- PostgreSQL through `DATABASE_URL`; the dev helper can start local Docker Postgres.
+- PostgreSQL through `DATABASE_URL` for server/team deployments. Packaged personal desktop mode uses a local SQLite store by default.
 
 ### Run the desktop app
 
@@ -133,6 +133,14 @@ scripts/run-server-worker-codex-dev.sh
 
 For customer Kubernetes deployment, use the Helm chart and runbook under `deploy/helm/mspace` and `docs/kubernetes-deployment.md`.
 
+Build a macOS desktop package for internal dogfood:
+
+```bash
+pnpm dist:desktop:mac
+```
+
+The packaged desktop app includes a bundled `mspace-server` binary. When no remote server is configured, it starts that server in personal mode with a local SQLite store under the app user-data directory.
+
 ### First workflow
 
 1. Sign in with a local account, or use GitHub OAuth when it is configured, then select the personal or team workspace.
@@ -148,13 +156,23 @@ For customer Kubernetes deployment, use the Helm chart and runbook under `deploy
 
 ## Configuration
 
+Desktop team server selection:
+
+- Personal desktop mode uses the local bundled server by default, so most local users do not need to configure a server URL.
+- The sign-in screen keeps remote control-plane setup behind a collapsed Team server entry for deployed customer or team environments.
+- Saved server URLs are stored in the Electron user-data profile for this device and reused on the next launch.
+- `MSPACE_SERVER_URL` still works as a launch-time override and takes precedence over the saved UI value. When it is set, the Team server entry opens in a locked state for that launch.
+
 Runtime variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MSPACE_SERVER_ADDR` | `127.0.0.1:8787` | Address used by the server control plane. |
-| `MSPACE_SERVER_URL` | `http://127.0.0.1:8787` | Server control-plane URL exposed to the desktop renderer. |
+| `MSPACE_SERVER_URL` | `http://127.0.0.1:8787` | Launch-time server control-plane override for desktop and renderer. Takes precedence over the saved Team server setting. |
 | `MSPACE_SERVER_START_TIMEOUT_MS` | `30000` | Startup health-check timeout for the server when launched by Electron. |
+| `MSPACE_STORE` | inferred | Server storage mode: `postgres` when `DATABASE_URL` is set, otherwise `sqlite` for local personal mode. |
+| `MSPACE_SQLITE_PATH` | app/user config path | SQLite file path for local personal mode. |
+| `MSPACE_DATA_DIR` | none | Optional directory used to derive the default SQLite path for the server. |
 | `DATABASE_URL` | none | Postgres connection string for the server control plane. |
 | `MSPACE_DEV_POSTGRES_CONTAINER` | `mspace-postgres-dev` | Local Codex dev helper container name for auto-started Docker Postgres. |
 | `MSPACE_DEV_POSTGRES_VOLUME` | `mspace-postgres-data` | Durable named Docker volume for local control-plane Postgres data. |
@@ -193,6 +211,7 @@ Local data paths:
 pnpm typecheck
 pnpm build:website
 pnpm build:desktop
+pnpm dist:desktop:mac
 pnpm test:server
 (cd packages/ui && pnpm dlx shadcn@latest info --json)
 (cd worker && go test ./...)

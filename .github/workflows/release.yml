@@ -78,7 +78,7 @@ jobs:
             echo "- Server tests/build: passed"
             echo "- Worker tests/build: passed"
             echo
-            echo "This workflow validates the tagged source. It does not publish installers, container images, npm packages, or production deployments."
+            echo "This workflow validates the tagged source and publishes desktop installers from the macOS packaging job. It does not publish container images, npm packages, or production deployments."
           } > release-artifacts/release-verification.md
 
       - name: Upload release verification artifact
@@ -107,3 +107,53 @@ jobs:
               --title "${GITHUB_REF_NAME}" \
               release-artifacts/release-verification.md
           fi
+
+  package-desktop-macos:
+    name: Package macOS desktop app
+    runs-on: macos-latest
+    needs: validate
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.0"
+          cache-dependency-path: server/go.sum
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build desktop installers
+        run: pnpm dist:desktop:mac
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos-${{ github.ref_name }}
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+          if-no-files-found: error
+
+      - name: Attach desktop artifacts to draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            apps/desktop/dist/*.dmg \
+            apps/desktop/dist/*.zip \
+            --clobber

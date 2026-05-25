@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { app } from "electron";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const DEFAULT_SERVER_PORT = 8787;
 const DEFAULT_SERVER_BASE_URL = `http://127.0.0.1:${DEFAULT_SERVER_PORT}`;
@@ -86,6 +86,14 @@ export function setConfiguredServerBaseUrl(value: string): ServerConfig {
     throw new Error("MSPACE_SERVER_URL controls the server for this launch.");
   }
   const baseUrl = normalizeServerBaseUrl(value);
+  if (baseUrl === DEFAULT_SERVER_BASE_URL) {
+    try {
+      rmSync(serverConfigPath(), { force: true });
+    } catch {
+      // The config file may not exist yet.
+    }
+    return readServerConfig();
+  }
   mkdirSync(app.getPath("userData"), { recursive: true });
   writeFileSync(serverConfigPath(), `${JSON.stringify({ serverUrl: baseUrl }, null, 2)}\n`, "utf8");
   return readServerConfig();
@@ -250,9 +258,27 @@ function resolveServerDir(): string {
   return join(app.getAppPath(), "../../server");
 }
 
+function resolveBundledServerBinary(): string {
+  const name = process.platform === "win32" ? "mspace-server.exe" : "mspace-server";
+  const candidates = [
+    join(process.resourcesPath, "bin", name),
+    join(app.getAppPath(), "bin", name),
+    join(app.getAppPath(), "..", "bin", name),
+  ];
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (!found) {
+    throw new Error(`Bundled mspace server binary was not found. Checked: ${candidates.join(", ")}`);
+  }
+  return found;
+}
+
 function readServerAddr(): string {
   if (process.env.MSPACE_SERVER_ADDR) return process.env.MSPACE_SERVER_ADDR;
   return `127.0.0.1:${readServerPort()}`;
+}
+
+function localSQLitePath(): string {
+	return join(app.getPath("userData"), "mspace.db");
 }
 
 export async function ensureServerStarted(): Promise<void> {
@@ -265,12 +291,16 @@ export async function ensureServerStarted(): Promise<void> {
   if (starting) return starting;
 
   starting = new Promise<void>((resolve, reject) => {
-    const serverDir = resolveServerDir();
-    serverProcess = spawn("go", ["run", "./cmd/server"], {
-      cwd: serverDir,
+    const command = app.isPackaged ? resolveBundledServerBinary() : "go";
+    const args = app.isPackaged ? [] : ["run", "./cmd/server"];
+    const cwd = app.isPackaged ? dirname(command) : resolveServerDir();
+    serverProcess = spawn(command, args, {
+      cwd,
       env: {
         ...process.env,
         MSPACE_SERVER_ADDR: readServerAddr(),
+        MSPACE_STORE: process.env.MSPACE_STORE || "sqlite",
+        MSPACE_SQLITE_PATH: process.env.MSPACE_SQLITE_PATH || localSQLitePath(),
       },
       stdio: "pipe",
     });

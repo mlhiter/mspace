@@ -7,6 +7,10 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "prepare:release": "node scripts/prepare-release.mjs",
+    "package:dir": "pnpm run prepare:release && electron-vite build && electron-builder --dir",
+    "dist": "pnpm run prepare:release && electron-vite build && electron-builder",
+    "dist:mac": "pnpm run prepare:release && electron-vite build && electron-builder --mac",
     "typecheck:main": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:renderer": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "pnpm run typecheck:main && pnpm run typecheck:renderer",

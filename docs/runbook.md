@@ -126,13 +126,22 @@ Desktop localization is centralized in `packages/i18n` and currently supports En
 
 Visible product copy in `apps/desktop`, `packages/ui`, or `packages/views` should use `packages/i18n/src/index.ts`. Leave logs, user-authored Markdown, branch names, commit hashes, Kubernetes object names, storage values, and runtime protocol fields literal unless a separate product decision says otherwise.
 
+## Desktop Team Server Selection
+
+Personal desktop mode starts with the local bundled server, so local users usually do not need to think about a server URL. The sign-in screen has a collapsed Team server entry for customer or team deployments such as `https://mspace.example.com`; opening it lets the app check `/health`, save the URL in Electron user data, and reuse it on later launches.
+
+`MSPACE_SERVER_URL` remains the launch-time override. If it is set, it takes precedence over the saved UI value and the Team server entry opens in a locked state for that launch.
+
 ## Environment Variables
 
 | Variable | Used by | Default | Purpose |
 | --- | --- | --- | --- |
 | `MSPACE_SERVER_ADDR` | Server and Electron main process | `127.0.0.1:8787` | Address used when the server control plane listens or is started by desktop. |
-| `MSPACE_SERVER_URL` | Electron preload/renderer | `http://127.0.0.1:8787` | Server control-plane base URL exposed to the renderer. |
+| `MSPACE_SERVER_URL` | Electron main/preload/renderer | `http://127.0.0.1:8787` | Launch-time server control-plane override. Takes precedence over the saved Team server setting. |
 | `MSPACE_SERVER_START_TIMEOUT_MS` | Electron main process | `30000` | How long the desktop waits for the server health check before startup fails. |
+| `MSPACE_STORE` | Server | inferred | Storage mode. Uses `postgres` when `DATABASE_URL` is set, otherwise `sqlite` for local personal mode. |
+| `MSPACE_SQLITE_PATH` | Server and packaged desktop | app/user config path | SQLite file path for local personal mode. |
+| `MSPACE_DATA_DIR` | Server | none | Optional directory used to derive the default SQLite path. |
 | `DATABASE_URL` | Server | none | Postgres connection string for control-plane storage. |
 | `MSPACE_GITHUB_CLIENT_ID` | Server | none | Optional GitHub OAuth App client id. |
 | `MSPACE_GITHUB_CLIENT_SECRET` | Server | none | Optional GitHub OAuth App client secret; keep it server-side only. |
