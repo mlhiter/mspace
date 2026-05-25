@@ -25,7 +25,7 @@ mspace is a review Inbox and Issue workspace for software teams that want coding
 The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, child tasks, comments, agent sessions, source branch state, runtime logs, deployment evidence, preview URL, and cleanup decision in one place.
 
 > [!NOTE]
-> mspace is a runnable local desktop MVP with a server-owned control plane. Local username/password auth works in restricted or offline environments, and GitHub OAuth remains an optional external identity provider. Signed-in personal and team workspaces store product data, runtime task state, test environment records, cluster configs, agent profiles, PR handoffs, worker logs, and results in server Postgres. Runtime workers claim tasks from the server queue and prepare their own repo cache/workdir.
+> mspace is a runnable local desktop MVP with a server-owned control plane. Local username/password auth works in restricted or offline environments, and GitHub OAuth remains an optional external identity provider. Team/shared deployments store product data, runtime task state, test environment records, cluster configs, agent profiles, PR handoffs, worker logs, and results in server Postgres; packaged personal desktop mode runs the same control plane on a local server-owned SQLite store. Runtime workers claim tasks from the server queue and prepare their own repo cache/workdir.
 
 ## Screenshots
 
@@ -83,13 +83,13 @@ mspace separates collaboration, execution, and validation:
 
 | Layer | What it owns | Current implementation |
 | --- | --- | --- |
-| Control plane | Users, workspaces, product data, membership, local password credentials, GitHub identity, mspace auth sessions, agents, clusters, test environments, PR handoffs, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, PostgreSQL through `pgx` |
+| Control plane | Users, workspaces, product data, membership, local password credentials, GitHub identity, mspace auth sessions, agents, clusters, test environments, PR handoffs, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, Postgres for team/shared deployments, local SQLite for packaged personal desktop mode |
 | Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review, language preference | Electron, React, TanStack Router, React Query, shared `@mspace/ui` and `@mspace/i18n` |
 | Runtime worker | Personal or team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
 | Agent runtime | One issue-bound turn in an isolated working directory | Worker-managed git workdir under the selected runtime mode |
 | Validation target | Build, deploy, inspect, preview, and cleanup issue test environments | Namespace-scoped Kubernetes workflow triggered from Issue Detail |
 
-The desktop process starts the server control plane automatically on `127.0.0.1:8787` when no compatible server is already healthy. Execution happens through registered workers, not through a desktop-owned local product store.
+The desktop process uses `MSPACE_SERVER_URL` first, then a saved Team server URL, then starts the local bundled/dev server on `127.0.0.1:8787` when no configured server is active. Execution happens through registered workers, not through a desktop-owned local product store.
 
 ## Quick Start
 
@@ -113,7 +113,7 @@ Run the server separately only when debugging server behavior:
 
 ```bash
 cp .env.example .env.local
-# edit .env.local with DATABASE_URL; GitHub OAuth values are optional
+# edit .env.local with DATABASE_URL only when testing Postgres; GitHub OAuth values are optional
 pnpm run server
 ```
 

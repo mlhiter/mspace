@@ -18,15 +18,16 @@ The product should stay narrow:
 - Public website: Vite, React 19, Tailwind CSS 4, and lucide-react in `apps/website`, deployed through Vercel with the root `vercel.json`. It has a homepage plus a static `Changelog` navigation view backed by `apps/website/src/changelog.ts`; the nav logo uses `apps/website/src/assets/mspace-mark-transparent.png` inside its own gray-white tile.
 - UI system: shadcn/ui source components in `packages/ui/src/components/ui`, Radix UI primitives, lucide-react icons, Material Icon Theme file icons for file surfaces, shared exports through `@mspace/ui`, and shared desktop localization through `@mspace/i18n`.
 - Workspace tooling: pnpm workspaces and Turbo.
-- Server control plane: Go, chi, PostgreSQL through `pgx`, with embedded migrations under `server/internal/control/migrations`.
+- Server control plane: Go and chi. Team/shared server deployments use PostgreSQL through `pgx` with embedded migrations under `server/internal/control/migrations`; packaged personal desktop mode can run the same server contract on a server-owned SQLite snapshot store.
 - Runtime worker: standalone Go daemon in `worker/` that registers with the server using an `msw_...` token, heartbeats, claims matching runtime tasks, completes protocol smoke/noop tasks, runs `issue_type_triage` classification tasks, and can run `agent_session` tasks by preparing its own repo cache/workdir and starting `codex app-server --listen stdio://` there. Docker-backed workers keep target project source under the worker root volume, such as `/var/lib/mspace-worker/repos` and `/var/lib/mspace-worker/workdirs`, instead of editing the host checkout directly.
 - Runtime has two intended deployment forms behind the same control-plane protocol: a fixed Server Worker for personal or team environments, and a later Kubernetes Runtime Provider that creates isolated per-session Pod/Job workspaces. Do not fork the issue/session/log/evidence/PR model by backend; both forms should use `runtime_tasks`, runtime task events/logs, cancellation, and the same session/evidence handoff.
 - The control plane owns users, local password credentials, workspaces, workspace membership, mspace auth sessions, GitHub identity, future GitHub App installation state, projects, project runbooks, issues, child issue tasks, comments, reactions, labels, Inbox receipts, agent profiles, workspace settings, clusters, issue test environments, issue handoffs, agent sessions, runtime registration tokens, runtime worker liveness/capability snapshots, runtime task logs/results, and the server-side runtime task queue.
+- Storage stays server-owned. Team/customer/shared deployments use Postgres. The packaged personal desktop path may use `MSPACE_STORE=sqlite` and `MSPACE_SQLITE_PATH=<Electron userData>/mspace.db`; that is a local personal server store, not a renderer store, sidecar API, or team collaboration backend.
 - Local username/password auth works in restricted or offline environments, while GitHub sign-in remains an optional external identity provider. Either route creates or returns an mspace user, signs an `msp_...` product session, and gives the user a personal workspace by default. Open registration must not grant team workspace creation or shared server runner access.
 - Server admin status is matched by configured auth login, not email. `MSPACE_SERVER_ADMIN_LOGINS` and `MSPACE_BOOTSTRAP_ADMIN_LOGIN` define who may create team workspaces; `MSPACE_BOOTSTRAP_ADMIN_LOGIN` plus `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` can create the first local admin account on server startup. Ordinary users can only enter team workspaces through owner/admin invitations.
 - Desktop GitHub sign-in starts at `GET /api/auth/github/start`, opens the returned GitHub URL in the browser, lets the server-side callback complete OAuth, then polls `GET /api/auth/github/result?state=...` for a single-use OAuth result containing the normal `msp_...` product session token. Desktop password auth posts to `/api/auth/password/register` and `/api/auth/password/login`. Do not move the GitHub client secret into Electron or workers.
 - The renderer stores the mspace session token under `localStorage["mspace.authToken"]`, a lightweight display identity under `localStorage["mspace.authIdentity"]`, and the selected UI locale under `localStorage["mspace.locale"]`.
-- The Electron main process auto-starts the local server control plane on `127.0.0.1:8787` when no healthy compatible server is already listening. It does not start a local product sidecar.
+- The Electron main process chooses the server in this order: `MSPACE_SERVER_URL`, saved Team server URL from Electron user data, then the local bundled/dev server on `127.0.0.1:8787`. It starts the local server only for the default personal path and checks `/health` for protocol/capability compatibility before using a local or remote server.
 - Sidebar navigation currently exposes Inbox, Issues, Agents, Clusters, and Projects, plus a workspace menu entry for Workspace Settings, a global search / Command+K palette for issues and projects, a quick link that opens issue creation from the left rail, and an Active work block for recent issue/session/test-environment activity.
 - Inbox is a review-only feed for per-user workspace issue events. The server control plane stores `issue_events`, `issue_event_receipts`, and `issue_watchers` for signed-in personal and team workspaces.
 - Runtime registration tokens use the `msw_` prefix and are created from the server control plane for personal and team workspaces. Registered workers report name, mode, version, capabilities, labels, status, load, and heartbeat time through `runtime_workers`. Worker mode and task `runtimeMode` must match the workspace kind: personal workspaces use personal workers, and team workspaces use team workers. Server-side `runtime_tasks` can be queued by authenticated workspace users, claimed by eligible online workers, cancelled by workspace users, advanced through claimed/running/final states by the claiming worker, and inspected through `runtime_task_events` plus worker-appended `runtime_task_logs`.
@@ -47,9 +48,9 @@ The product should stay narrow:
 - Failures are captured as `session_failures`, linked to the issue, session, optional deployment evidence, and optional review evidence. Failed sessions and failed deploy/preview/cleanup reconciliation should preserve the failed command, compact error summary/excerpt, phase (`build`, `test`, `image_push`, `pod_startup`, `network_exposure`, `preview_probe`, `agent_interrupted`, or `cleanup`), namespace/resource hints, and continue/retry/stop affordances in Issue Detail. Do not add an issue-level `failed` status for this; keep the issue in a handoff state such as `blocked`.
 - Changed-file chips and rows use `packages/views/src/file-type-icon.tsx`, backed by `material-icon-theme`, so file surfaces match IDE-style file type icons.
 - Agent definitions live in server `agent_profiles`; defaults are seeded for internal `@triage` plus user-facing `@codex`, `@bugfix`, and `@design`.
-- Project creation supports either a desktop folder picker for local repositories or a GitHub repository URL. Project records live in server Postgres.
+- Project creation supports either a desktop folder picker for local repositories or a GitHub repository URL. Project records live in the server store: Postgres for team/shared deployments, SQLite only for packaged personal desktop mode.
 - Project runbooks are agent-discovered project memory stored in server `project_runbooks` with revision history in `project_runbook_revisions`. Projects settings are a full page, not a modal; the runbook is edited through the TipTap Markdown editor, Issue Detail shows a compact sidebar entry that opens a TipTap read-only modal, and project rows use a quiet ghost gear icon for settings. Do not reintroduce install/test/build/deploy command form fields.
-- Local sidecar APIs and file-based databases must not be reintroduced. If a feature needs persistence or collaboration truth, add it to `server/` and its Postgres migrations.
+- Local sidecar APIs and renderer-owned file databases must not be reintroduced. If a feature needs persistence or collaboration truth, add it to `server/`, update the store contract, and include Postgres migrations for shared deployments. The only file-backed product store allowed right now is the server-owned SQLite personal store used by the bundled local desktop server.
 - Issue statuses are explicit handoff states: `open`, `needs_review`, `changes_requested`, `ready_for_test`, `blocked`, `cancelled`, and `closed`. `cancelled` means the issue is closed as not planned; it is not used for a stopped agent session. Transient progress belongs to `agent_sessions` and `issue_test_environments`, not issue status.
 - Supported Codex-backed agents are managed from the Agents route. They share the app-server runtime and differ by stored `agent_profile` prompt instructions.
 - Issue labels use the built-in `issue_label_definitions` taxonomy and `issue_labels` links. The current dimensions are `type` and `priority`.
@@ -111,9 +112,10 @@ pnpm build:website
 pnpm preview:website
 pnpm run server
 pnpm worker
+pnpm dist:desktop:mac
 ```
 
-The desktop app starts the local server control plane automatically on `127.0.0.1:8787` when no healthy server is already listening.
+The desktop app uses `MSPACE_SERVER_URL` first, then a saved Team server URL, then the local bundled/dev server on `127.0.0.1:8787`. The default local personal server uses SQLite unless `DATABASE_URL` or `MSPACE_STORE=postgres` is configured.
 
 Validation:
 
@@ -155,7 +157,7 @@ pnpm test:server
 - Direct Multica code inheritance as the product baseline.
 - Generated scoped kubeconfig and ServiceAccount lifecycle in the current local MVP.
 - Kubernetes-hosted agent runtime in the current local MVP.
-- Local sidecar or file-database product/runtime fallback.
+- Renderer/sidecar-owned file-database product/runtime fallback. The packaged personal SQLite server store is the narrow local exception.
 
 ## Preferred Vocabulary
 

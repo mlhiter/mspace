@@ -1,10 +1,10 @@
 # mspace Control Plane
 
-> Status: server-owned runtime surfaces, updated 2026-05-21
+> Status: server-owned runtime surfaces, updated 2026-05-25
 
 ## Decision
 
-mspace uses the server control plane as the single product and runtime state owner for signed-in workspaces. Desktop is a UI shell. Workers execute tasks. Do not add a local product store or local execution bridge for collaboration features.
+mspace uses the server control plane as the single product and runtime state owner for signed-in workspaces. Desktop is a UI shell. Workers execute tasks. Team/shared deployments use Postgres; packaged personal desktop mode may run the same server on local SQLite. Do not add a renderer-owned product store or local execution bridge for collaboration features.
 
 ## Ownership
 
@@ -30,6 +30,7 @@ The desktop app owns:
 - local UI state;
 - local file pickers;
 - opening external auth flows;
+- saved Team server URL preference for this device;
 - presentation of server state.
 
 Runtime workers own:
@@ -106,9 +107,10 @@ The server module provides:
 - runtime registration tokens, workers, tasks, events, logs, cancellation, worker register/heartbeat/claim/status/log endpoints;
 - deterministic fallback issue-title suggestion and worker-backed `issue_type_triage` classification;
 - Postgres migrations for the above tables;
+- a server-owned SQLite personal store selected by `MSPACE_STORE=sqlite` or by omitting `DATABASE_URL`;
 - memory-backed store used only by tests.
 
-Workspaces have an explicit `kind`: `personal` or `team`. The first password registration or GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in server Postgres. Team collaboration is opt-in: server admins create team workspaces through `POST /api/workspaces`, and invitation/member APIs reject personal workspaces.
+Workspaces have an explicit `kind`: `personal` or `team`. The first password registration or GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in the server store. Team/customer/shared deployments use Postgres. Packaged personal desktop mode can use the local SQLite store under the Electron user-data path. Team collaboration is opt-in: server admins create team workspaces through `POST /api/workspaces`, and invitation/member APIs reject personal workspaces.
 
 The desktop requires an mspace session before product data is available. Issue Detail writes the server comment, then calls `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; the server queues an `agent_session` runtime task and later exposes worker logs/results directly from `runtime_task_logs` and `runtime_tasks.result`.
 
@@ -154,4 +156,4 @@ PR handoff records live in server `issue_handoffs`. The current implementation r
 
 ## Migration Rule
 
-New features should land in `server/` first. If a feature involves users, membership, shared issue ownership, GitHub identity, GitHub App installation credentials, audit, runtime state, clusters, test environments, handoffs, evidence, or cross-device sync, do not add it to a local sidecar store.
+New features should land in `server/` first. If a feature involves users, membership, shared issue ownership, GitHub identity, GitHub App installation credentials, audit, runtime state, clusters, test environments, handoffs, evidence, or cross-device sync, do not add it to a local sidecar store. Update the server store contract and Postgres migrations; the SQLite personal store should remain a local packaged mode, not a separate product model.

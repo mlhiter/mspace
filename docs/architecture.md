@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: server-owned runtime surfaces, updated 2026-05-20
+> Status: server-owned runtime surfaces, updated 2026-05-25
 
 ## Current Implementation Snapshot
 
@@ -10,11 +10,11 @@ The repository contains a runnable desktop MVP with server-owned product and run
 - Public website in `apps/website`, built with Vite, React 19, Tailwind CSS 4, and lucide-react, deployed as a static Vercel site from the root `vercel.json`.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Shared desktop localization lives in `packages/i18n` for `en` and `zh-CN`.
-- Go server control plane in `server/`, built with chi and PostgreSQL through `pgx`.
+- Go server control plane in `server/`, built with chi. Team/shared deployments use PostgreSQL through `pgx`; packaged personal desktop mode can use a server-owned SQLite snapshot store.
 - Go runtime worker in `worker/`, registered to workspaces with `msw_...` tokens.
-- Local username/password auth creates a personal workspace by default and works without GitHub access. GitHub sign-in remains an optional external identity provider. Personal and team workspaces both store product data plus runtime state in server Postgres.
+- Local username/password auth creates a personal workspace by default and works without GitHub access. GitHub sign-in remains an optional external identity provider. Personal and team workspaces both use the server store; team/shared deployments use Postgres, while packaged personal desktop mode can stay local on SQLite.
 - Team collaboration features require an explicit team workspace created from the workspace menu.
-- The desktop starts the server control plane when needed and renders server state. It does not own product truth or runtime persistence.
+- The desktop uses `MSPACE_SERVER_URL`, then a saved Team server URL, then the local bundled/dev server when needed. It renders server state and does not own product truth or runtime persistence.
 
 The control plane owns:
 
@@ -77,9 +77,20 @@ Server
 
 Failed, cancelled, or invalid triage task results mark the issue triage as failed rather than falling back to keyword classification.
 
+## Storage Modes
+
+The store boundary stays inside `server/`.
+
+- `PostgresStore` is the canonical team/customer/shared deployment store. New shared product or runtime state needs server APIs plus Postgres migrations.
+- `SQLiteStore` is the packaged personal desktop store. It wraps `MemoryStore`, persists one `store_snapshots` row, and is selected by `MSPACE_STORE=sqlite` or by omitting `DATABASE_URL`.
+- The desktop sets `MSPACE_SQLITE_PATH=<Electron userData>/mspace.db` when it starts the local bundled server. Standalone server runs can use `MSPACE_SQLITE_PATH` directly or `MSPACE_DATA_DIR` to derive the path.
+- SQLite persistence runs after mutating HTTP requests and the GitHub OAuth GET routes that create or consume OAuth state. It is for single-user personal mode, not team collaboration or cross-device truth.
+
+Do not add a renderer-owned product database or local sidecar API. The local SQLite path is still the server control plane, just using a file-backed personal store.
+
 ## Data Model Summary
 
-Main server-owned table groups:
+Main server-owned state groups:
 
 - Identity: `users`, `user_password_credentials`, `user_identities`, `auth_sessions`, `oauth_states`, `oauth_results`.
 - Workspaces: `workspaces`, `workspace_members`, `workspace_invitations`.

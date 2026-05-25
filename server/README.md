@@ -14,14 +14,19 @@ Create a local env file in the project root:
 cp .env.example .env.local
 ```
 
-Then edit `.env.local`:
+Then edit `.env.local`. Without `DATABASE_URL`, the server defaults to the local SQLite personal store:
 
 ```dotenv
-DATABASE_URL=postgres://mspace:mspace@127.0.0.1:5432/mspace?sslmode=disable
+# Optional. Set for Postgres-backed shared development or deployment.
+# DATABASE_URL=postgres://mspace:mspace@127.0.0.1:5432/mspace?sslmode=disable
+# Optional. Use sqlite for packaged/local personal mode; use postgres for shared deployments.
+# MSPACE_STORE=sqlite
+# MSPACE_SQLITE_PATH=/path/to/mspace.db
+# MSPACE_DATA_DIR=/path/to/mspace-data
 # Optional. Only needed for GitHub OAuth sign-in.
-MSPACE_GITHUB_CLIENT_ID=...
-MSPACE_GITHUB_CLIENT_SECRET=...
-MSPACE_GITHUB_REDIRECT_URI=http://127.0.0.1:8787/api/auth/github/callback
+# MSPACE_GITHUB_CLIENT_ID=...
+# MSPACE_GITHUB_CLIENT_SECRET=...
+# MSPACE_GITHUB_REDIRECT_URI=http://127.0.0.1:8787/api/auth/github/callback
 MSPACE_SERVER_ADMIN_LOGINS=admin,mlhiter
 MSPACE_BOOTSTRAP_ADMIN_LOGIN=admin
 MSPACE_BOOTSTRAP_ADMIN_PASSWORD=change-me-long-random-password
@@ -40,7 +45,7 @@ pnpm run server
 
 The server loads `.env`, `.env.local`, `server/.env`, and `server/.env.local` from the project root. Shell environment variables still take precedence over values from those files.
 
-For local API-shape tests without Postgres, use the in-memory store from tests only. Production and shared development should use Postgres.
+For local personal runs without Postgres, use the SQLite store. Production and shared development should use Postgres. The in-memory store is for tests only.
 
 When `scripts/run-mspace-codex-dev.sh` needs to auto-start local Docker Postgres, it expects the durable data volume above. It labels the container and volume and rejects an existing `mspace-postgres-dev` container if it points at a different Postgres data volume.
 
@@ -147,7 +152,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 
 The workspace Inbox is event-based. `issue_events` stores the append-only review fact, `issue_event_receipts` stores each recipient user's unread/read/archive state, and `issue_watchers` stores the issue-level recipient set. Opening or polling an issue must not clear unread state; clients should call the read-through endpoint after the user intentionally reviews an Inbox row.
 
-Personal workspaces are the default result of password registration or GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in Postgres. Runtime worker registration and task APIs are available to both personal and team workspaces, but the runtime mode must match the workspace kind: personal workspaces use personal workers, while team workspaces use team workers. Team workspaces additionally unlock invitations and shared membership.
+Personal workspaces are the default result of password registration or GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in the server store. Team/shared deployments use Postgres; packaged personal desktop mode can use local SQLite. Runtime worker registration and task APIs are available to both personal and team workspaces, but the runtime mode must match the workspace kind: personal workspaces use personal workers, while team workspaces use team workers. Team workspaces additionally unlock invitations and shared membership.
 
 Issue `project_id` is optional in the control plane. A user can capture a workspace-level issue before the repository is known, comment on it, and attach a project later through `PUT /api/workspaces/{workspaceID}/issues/{issueID}` with `projectId`. If a create request omits `projectId` and the workspace has exactly one project, the server auto-attaches it; zero or multiple projects leave the issue unassigned. Agent execution, PR handoff, and issue test environments require an attached project.
 

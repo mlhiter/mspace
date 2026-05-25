@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-20
+> Status: local MVP implementation snapshot, updated 2026-05-25
 
 ## One-Line Definition
 
@@ -14,7 +14,7 @@ The repository now has a runnable local desktop MVP:
 - create and manage issues in the Issues tab;
 - jump to issues and projects from the sidebar global search or `Command+K` palette;
 - sign in with a local username/password account, or optional GitHub OAuth when available, through the server control plane and show the current user/workspace state in the sidebar;
-- store signed-in workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts in server Postgres for both personal and team workspaces;
+- store signed-in workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts in the server store: Postgres for team/shared deployments, local SQLite for packaged personal desktop mode;
 - write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page, where they can be toggled or deleted;
 - classify new issues asynchronously by queueing `issue_type_triage` runtime tasks that are claimed by Codex-capable workers and reconciled into one Conventional Commit type label by the server;
 - label priority manually from Issue Detail, and scan/filter labels from the Issues list;
@@ -28,7 +28,7 @@ The repository now has a runnable local desktop MVP:
 - preserve completed or cancelled worker session metadata, logs, source evidence, and artifacts in server-owned records;
 - cache imported GitHub repositories inside worker-managed repository roots;
 - show a project runbook in Projects, open it from the Issue Detail sidebar as a read-only TipTap modal, and update it either from direct Markdown edits or from successful agent session artifacts;
-- keep signed-in workspace product and runtime state in server Postgres, including sessions, logs, evidence, clusters, issue test environments, handoffs, and execution metadata;
+- keep signed-in workspace product and runtime state in the server store, including sessions, logs, evidence, clusters, issue test environments, handoffs, and execution metadata;
 - keep the server control plane free of Codex runtime dependencies: no Codex CLI in the server image, no Codex home mount in the server Deployment, and no in-process Codex app-server client;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage workspace automation policy, keeping source commit capture always on while recording branch / PR handoff state from captured source commits;

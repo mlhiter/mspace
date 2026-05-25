@@ -1,13 +1,15 @@
 # mspace Runbook
 
-> Status: server-owned local MVP operations guide, updated 2026-05-20
+> Status: server-owned local MVP operations guide, updated 2026-05-25
 
 ## Local Data
 
-The product and runtime state for signed-in workspaces lives in server Postgres through `DATABASE_URL`.
+The product and runtime state for signed-in workspaces lives in the server store. Team/customer/shared deployments use Postgres through `DATABASE_URL`; packaged personal desktop mode uses the same server APIs with local SQLite.
 
 | Path | Purpose |
 | --- | --- |
+| `<Electron userData>/mspace.db` | Packaged personal desktop SQLite store used by the bundled local server. |
+| `<Electron userData>/server-config.json` | Saved Team server URL for this device. `MSPACE_SERVER_URL` overrides it for the launch. |
 | `~/.mspace/codex-worker-home` | Host-side Codex home copy used by the Docker Codex worker. |
 | `/var/lib/mspace-worker/repos/<cache-key>` | Repository cache inside Docker-backed workers. |
 | `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>` | Per-session workdir inside Docker-backed workers. |
@@ -17,7 +19,7 @@ The product and runtime state for signed-in workspaces lives in server Postgres 
 | `<artifact-dir>/branch-name.json` | Optional agent-proposed source branch name. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-learned project runbook artifact. |
 
-Server Postgres stores users, local password credentials, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, issue handoffs, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs.
+The server store records users, local password credentials, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, issue handoffs, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs. Postgres stores these in migrated tables. SQLite personal mode stores a server-owned snapshot in `store_snapshots` and persists after mutating requests plus the OAuth GET routes that create or consume login state.
 
 Docker-backed workers store target project source under the worker root volume, not in the host checkout. The dry-run worker defaults to the `mspace-worker-dev-root` Docker volume, and the Codex-capable worker defaults to `mspace-worker-codex-dev-root`; both mount that volume at `/var/lib/mspace-worker`.
 
@@ -44,13 +46,13 @@ Start desktop:
 pnpm dev:desktop
 ```
 
-Electron starts the local server control plane automatically if `GET /health` is not already healthy on the configured server URL.
+Electron uses `MSPACE_SERVER_URL` first, then a saved Team server URL, then the local bundled/dev server. It starts the local server control plane automatically only for the default personal path if `GET /health` is not already healthy.
 
 Run the server separately for auth or control-plane debugging:
 
 ```bash
 cp .env.example .env.local
-# edit .env.local with DATABASE_URL; GitHub OAuth values are optional
+# set DATABASE_URL only when testing Postgres; GitHub OAuth values are optional
 pnpm run server
 ```
 
@@ -298,14 +300,15 @@ Check server env first:
 curl -i http://127.0.0.1:8787/api/auth/github/start
 ```
 
-Required variables for this GitHub OAuth path: `DATABASE_URL`, `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI`.
+Required variables for this GitHub OAuth path: `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI`. The desktop shows GitHub login only when `/health` reports `capabilities.githubAuth: true`.
 
 ### Workspace looks empty
 
-Check that the desktop is pointing at the expected server and Postgres volume:
+Check that the desktop is pointing at the expected server. In packaged personal mode, inspect the Electron user-data SQLite path; in Postgres development, inspect the Docker volume:
 
 ```bash
 curl http://127.0.0.1:8787/health
+find "$HOME/Library/Application Support" -maxdepth 3 -name mspace.db 2>/dev/null
 docker inspect mspace-postgres-dev --format '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}'
 docker exec mspace-postgres-dev psql -U mspace -d mspace -Atc "select count(*) from workspaces; select count(*) from projects; select count(*) from issues;"
 ```

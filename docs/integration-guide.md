@@ -1,6 +1,6 @@
 # mspace API Integration Guide
 
-> Status: server-owned local MVP API guide, updated 2026-05-21
+> Status: server-owned local MVP API guide, updated 2026-05-25
 
 This guide covers the current server control-plane API used by the desktop and workers. The control plane normally runs on `http://127.0.0.1:8787`.
 
@@ -14,6 +14,14 @@ curl "$MSPACE_SERVER_BASE/health"
 ```
 
 The Electron preload exposes the server base URL to the renderer through `window.mspaceDesktop.serverBaseUrl`.
+
+The desktop chooses its server in this order:
+
+1. `MSPACE_SERVER_URL`, locked for the current launch.
+2. A saved Team server URL from Electron user data.
+3. The local bundled/dev server on `127.0.0.1:8787`.
+
+Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 1`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, and `runtimeTaskQueue`. `capabilities.githubAuth` is optional behavior metadata: GitHub login is shown only when it is `true`.
 
 Workspace endpoints require:
 
