@@ -1,12 +1,15 @@
 package control
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -66,6 +69,9 @@ func (s *Server) isServerAdmin(user User) bool {
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Use(jsonMiddleware)
+	if persistent, ok := s.store.(interface{ Persist() error }); ok {
+		r.Use(persistStoreMiddleware(persistent))
+	}
 	r.Get("/health", s.handleHealth)
 	r.Get("/api/auth/github/start", s.handleGitHubStart)
 	r.Get("/api/auth/github/callback", s.handleGitHubCallback)
@@ -142,6 +148,39 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/runtime/workers/{workerID}/tasks/{taskID}/logs", s.handleAppendRuntimeTaskLog)
 	r.Post("/api/runtime/workers/{workerID}/tasks/{taskID}/status", s.handleUpdateRuntimeTaskStatus)
 	return r
+}
+
+type responseStatusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *responseStatusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *responseStatusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("response writer does not support hijacking")
+	}
+	return hijacker.Hijack()
+}
+
+func persistStoreMiddleware(store interface{ Persist() error }) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			recorder := &responseStatusRecorder{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(recorder, r)
+			if r.Method == http.MethodGet || r.Method == http.MethodHead || recorder.status >= 500 {
+				return
+			}
+			if err := store.Persist(); err != nil {
+				slog.Error("persist local store", slog.String("error", err.Error()))
+			}
+		})
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

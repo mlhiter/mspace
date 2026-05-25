@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,31 +24,24 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if cfg.DatabaseURL == "" {
-		slog.Error("DATABASE_URL is required for mspace server")
-		os.Exit(1)
-	}
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	store, closeStore, err := openStore(ctx, cfg)
 	if err != nil {
-		slog.Error("connect postgres", "error", err)
+		slog.Error("open store", "error", err)
 		os.Exit(1)
 	}
-	defer pool.Close()
-	if err := pool.Ping(ctx); err != nil {
-		slog.Error("ping postgres", "error", err)
-		os.Exit(1)
-	}
-	if err := control.Migrate(ctx, pool); err != nil {
-		slog.Error("migrate postgres", "error", err)
-		os.Exit(1)
-	}
+	defer closeStore()
 
-	store := control.NewPostgresStore(pool)
 	bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer bootstrapCancel()
 	if err := ensureBootstrapAdmin(bootstrapCtx, store, cfg); err != nil {
 		slog.Error("ensure bootstrap admin", "error", err)
 		os.Exit(1)
+	}
+	if persistent, ok := store.(interface{ Persist() error }); ok {
+		if err := persistent.Persist(); err != nil {
+			slog.Error("persist bootstrap state", "error", err)
+			os.Exit(1)
+		}
 	}
 	github := control.GitHubHTTPClient{
 		ClientID:     cfg.GitHubClientID,
@@ -66,6 +60,8 @@ func loadConfig() control.Config {
 	return control.Config{
 		Addr:                   envDefault("MSPACE_SERVER_ADDR", "127.0.0.1:8787"),
 		DatabaseURL:            strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		StoreMode:              strings.TrimSpace(os.Getenv("MSPACE_STORE")),
+		SQLitePath:             strings.TrimSpace(os.Getenv("MSPACE_SQLITE_PATH")),
 		GitHubClientID:         strings.TrimSpace(os.Getenv("MSPACE_GITHUB_CLIENT_ID")),
 		GitHubClientSecret:     strings.TrimSpace(os.Getenv("MSPACE_GITHUB_CLIENT_SECRET")),
 		GitHubRedirectURI:      strings.TrimSpace(os.Getenv("MSPACE_GITHUB_REDIRECT_URI")),
@@ -77,7 +73,64 @@ func loadConfig() control.Config {
 	}
 }
 
-func ensureBootstrapAdmin(ctx context.Context, store *control.PostgresStore, cfg control.Config) error {
+func openStore(ctx context.Context, cfg control.Config) (control.Store, func(), error) {
+	mode := strings.ToLower(strings.TrimSpace(cfg.StoreMode))
+	if mode == "" {
+		if strings.TrimSpace(cfg.DatabaseURL) == "" {
+			mode = "sqlite"
+		} else {
+			mode = "postgres"
+		}
+	}
+	switch mode {
+	case "postgres":
+		if cfg.DatabaseURL == "" {
+			return nil, nil, fmt.Errorf("DATABASE_URL is required when MSPACE_STORE=postgres")
+		}
+		pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return nil, nil, fmt.Errorf("connect postgres: %w", err)
+		}
+		if err := pool.Ping(ctx); err != nil {
+			pool.Close()
+			return nil, nil, fmt.Errorf("ping postgres: %w", err)
+		}
+		if err := control.Migrate(ctx, pool); err != nil {
+			pool.Close()
+			return nil, nil, fmt.Errorf("migrate postgres: %w", err)
+		}
+		slog.Info("using postgres store")
+		return control.NewPostgresStore(pool), pool.Close, nil
+	case "sqlite":
+		path := strings.TrimSpace(cfg.SQLitePath)
+		if path == "" {
+			path = defaultSQLitePath()
+		}
+		store, err := control.NewSQLiteStore(ctx, path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open sqlite store: %w", err)
+		}
+		slog.Info("using sqlite personal store", "path", store.Path())
+		return store, func() { _ = store.Close() }, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported MSPACE_STORE %q", cfg.StoreMode)
+	}
+}
+
+func defaultSQLitePath() string {
+	if dir := strings.TrimSpace(os.Getenv("MSPACE_DATA_DIR")); dir != "" {
+		return filepath.Join(dir, "mspace.db")
+	}
+	if configDir, err := os.UserConfigDir(); err == nil && strings.TrimSpace(configDir) != "" {
+		return filepath.Join(configDir, "mspace", "mspace.db")
+	}
+	if currentUser, err := user.Current(); err == nil && strings.TrimSpace(currentUser.HomeDir) != "" {
+		return filepath.Join(currentUser.HomeDir, ".mspace", "mspace.db")
+	}
+	return filepath.Join(".", "mspace.db")
+}
+
+func ensureBootstrapAdmin(ctx context.Context, store control.Store, cfg control.Config) error {
 	login := strings.TrimSpace(cfg.BootstrapAdminLogin)
 	password := strings.TrimSpace(cfg.BootstrapAdminPassword)
 	if login == "" && password == "" {

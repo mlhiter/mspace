@@ -51,6 +51,12 @@ func (s *Server) startIssueTypeTriage(userID, workspaceID, issueID string) {
 				return
 			}
 			slog.Warn("failed to enqueue issue type triage", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
+			return
+		}
+		if persistent, ok := s.store.(interface{ Persist() error }); ok {
+			if err := persistent.Persist(); err != nil {
+				slog.Warn("failed to persist issue type triage state", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
+			}
 		}
 	}()
 }
@@ -113,6 +119,18 @@ func (s *Server) hasActiveIssueTypeTriageTask(ctx context.Context, workspaceID, 
 			return false, err
 		}
 		return exists, nil
+	case *SQLiteStore:
+		store.MemoryStore.mu.Lock()
+		defer store.MemoryStore.mu.Unlock()
+		for _, task := range store.MemoryStore.runtimeTasks {
+			if task.WorkspaceID == workspaceID &&
+				task.IssueID == issueID &&
+				task.Kind == "issue_type_triage" &&
+				(task.Status == "queued" || task.Status == "claimed" || task.Status == "running") {
+				return true, nil
+			}
+		}
+		return false, nil
 	case *MemoryStore:
 		store.mu.Lock()
 		defer store.mu.Unlock()
@@ -176,6 +194,20 @@ func (s *Server) loadIssueForTypeTriage(ctx context.Context, workspaceID, issueI
 			return issueTypeTriageDetail{}, err
 		}
 		return issueTypeTriageDetail{Issue: issue, Project: project, Labels: labels, Workspace: workspace}, nil
+	case *SQLiteStore:
+		store.MemoryStore.mu.Lock()
+		defer store.MemoryStore.mu.Unlock()
+		issue, ok := store.MemoryStore.issues[strings.TrimSpace(issueID)]
+		if !ok || issue.WorkspaceID != strings.TrimSpace(workspaceID) {
+			return issueTypeTriageDetail{}, ErrNotFound
+		}
+		workspace, _ := store.MemoryStore.workspaceLocked(workspaceID)
+		return issueTypeTriageDetail{
+			Issue:     issue,
+			Project:   store.MemoryStore.projects[issue.ProjectID],
+			Labels:    store.MemoryStore.issueLabels[issue.ID],
+			Workspace: workspace,
+		}, nil
 	case *MemoryStore:
 		store.mu.Lock()
 		defer store.mu.Unlock()

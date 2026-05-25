@@ -17,6 +17,8 @@ var (
 type Config struct {
 	Addr                   string
 	DatabaseURL            string
+	StoreMode              string
+	SQLitePath             string
 	GitHubClientID         string
 	GitHubClientSecret     string
 	GitHubRedirectURI      string
@@ -1043,6 +1045,7 @@ type PasswordAuthInput struct {
 }
 
 type Store interface {
+	EnsureBootstrapAdmin(ctx Context, input PasswordAuthInput) (User, []Workspace, bool, error)
 	SaveOAuthState(ctx Context, state OAuthState) error
 	ConsumeOAuthState(ctx Context, provider, state string) (OAuthState, error)
 	SaveOAuthResult(ctx Context, provider, state string, result AuthResult, expiresAt time.Time) error
