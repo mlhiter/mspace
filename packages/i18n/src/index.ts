@@ -89,7 +89,7 @@ const resources = {
       },
       auth: {
         signInTitle: "Sign in to mspace",
-        signInDescription: "Use a local account in restricted environments, or connect GitHub when it is available.",
+        signInDescription: "Use a local account. GitHub appears only when this server has OAuth configured.",
         serverSettingsTitle: "Team server",
         serverSettingsDescription: "Use this only when your team has a deployed mspace server. Personal desktop mode stays on the local server.",
         serverUrlLabel: "Server URL",
@@ -1259,7 +1259,7 @@ const resources = {
       },
       auth: {
         signInTitle: "登录 mspace",
-        signInDescription: "受限环境优先使用本地账号；GitHub 可用时也可以连接外部身份。",
+        signInDescription: "优先使用本地账号；只有当前服务器配置了 GitHub OAuth 时才会显示 GitHub 登录。",
         serverSettingsTitle: "团队服务器",
         serverSettingsDescription: "只有团队部署了 mspace server 时才需要这里。个人桌面模式默认使用本地服务器。",
         serverUrlLabel: "服务器地址",

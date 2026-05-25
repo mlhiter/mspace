@@ -196,6 +196,12 @@ func shouldPersistAfterRequest(r *http.Request) bool {
 		path == "/api/auth/github/result"
 }
 
+func (s *Server) githubAuthConfigured() bool {
+	return strings.TrimSpace(s.config.GitHubClientID) != "" &&
+		strings.TrimSpace(s.config.GitHubClientSecret) != "" &&
+		strings.TrimSpace(s.config.GitHubRedirectURI) != ""
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":             true,
@@ -207,6 +213,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"teamWorkspaceCreation":       true,
 			"workspaceInvitations":        true,
 			"workspaceKinds":              true,
+			"githubAuth":                  s.githubAuthConfigured(),
 			"passwordAuth":                true,
 			"runtimeWorkerRegistration":   true,
 			"runtimeTaskQueue":            true,
@@ -216,9 +223,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleGitHubStart(w http.ResponseWriter, r *http.Request) {
-	if strings.TrimSpace(s.config.GitHubClientID) == "" ||
-		strings.TrimSpace(s.config.GitHubClientSecret) == "" ||
-		strings.TrimSpace(s.config.GitHubRedirectURI) == "" {
+	if !s.githubAuthConfigured() {
 		writeError(w, http.StatusServiceUnavailable, errors.New("github login is not configured"))
 		return
 	}

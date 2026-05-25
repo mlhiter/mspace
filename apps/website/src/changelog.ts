@@ -14,6 +14,7 @@ export const changelog: ChangelogEntry[] = [
     items: [
       "Added a collapsed Team server entry on the sign-in screen for testing and saving a remote control-plane URL before authentication.",
       "Persisted the selected server in the Electron user-data profile while keeping `MSPACE_SERVER_URL` as the highest-priority launch override.",
+      "Made GitHub sign-in appear only when the active server reports OAuth as configured, keeping local-account login clean for offline and customer setups.",
       "Updated local Docker worker startup so workers follow the active desktop server instead of assuming the local control plane.",
       "Documented that personal desktop mode stays local by default while team deployments can opt into a saved server URL.",
     ],

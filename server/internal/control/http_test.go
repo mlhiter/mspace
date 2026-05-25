@@ -70,6 +70,9 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	if payload.Capabilities["workspaceKinds"] != true {
 		t.Fatalf("expected workspace kinds capability, got %+v", payload.Capabilities)
 	}
+	if payload.Capabilities["githubAuth"] != false {
+		t.Fatalf("expected disabled github auth capability without OAuth config, got %+v", payload.Capabilities)
+	}
 	if payload.Capabilities["passwordAuth"] != true {
 		t.Fatalf("expected password auth capability, got %+v", payload.Capabilities)
 	}
@@ -78,6 +81,31 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	}
 	if payload.Capabilities["runtimeTaskQueue"] != true {
 		t.Fatalf("expected runtime task queue capability, got %+v", payload.Capabilities)
+	}
+}
+
+func TestHealthReportsGitHubAuthCapability(t *testing.T) {
+	server := NewServer(Config{
+		GitHubClientID:     "client-id",
+		GitHubClientSecret: "client-secret",
+		GitHubRedirectURI:  "http://127.0.0.1:8787/api/auth/github/callback",
+	}, NewMemoryStore(), fakeGitHubClient{})
+	router := server.Routes()
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Capabilities map[string]bool `json:"capabilities"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("parse health response: %v", err)
+	}
+	if payload.Capabilities["githubAuth"] != true {
+		t.Fatalf("expected enabled github auth capability with OAuth config, got %+v", payload.Capabilities)
 	}
 }
 

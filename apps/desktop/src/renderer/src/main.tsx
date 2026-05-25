@@ -83,6 +83,28 @@ const expectedServerCapabilities = [
   "runtimeTaskQueue",
 ] as const;
 
+type ServerHealthPayload = {
+  ok?: unknown;
+  serverProtocol?: unknown;
+  capabilities?: unknown;
+};
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExpectedServerHealth(payload: ServerHealthPayload): boolean {
+  if (payload.ok !== true || payload.serverProtocol !== 1) return false;
+  const capabilities = payload.capabilities;
+  if (!isObjectRecord(capabilities)) return false;
+  return expectedServerCapabilities.every((capability) => capabilities[capability] === true);
+}
+
+function serverSupportsGitHubAuth(payload: ServerHealthPayload | undefined): boolean {
+  const capabilities = payload?.capabilities;
+  return isObjectRecord(capabilities) && capabilities.githubAuth === true;
+}
+
 function RootShell() {
   const { t } = useMspaceTranslation();
   const initialServerBaseUrl = getControlPlaneBaseUrl();
@@ -131,6 +153,21 @@ function RootShell() {
     queryFn: () => controlPlaneApi.me(authToken),
     enabled: authToken !== "",
     retry: false,
+  });
+  const serverHealthQuery = useQuery({
+    queryKey: ["server-health", serverBaseUrl],
+    queryFn: async () => {
+      const response = await fetch(new URL("/health", serverBaseUrl).toString());
+      if (!response.ok) throw new Error(t("auth.serverHealthFailed"));
+      const payload = (await response.json()) as ServerHealthPayload;
+      if (!hasExpectedServerHealth(payload)) {
+        throw new Error(t("auth.serverHealthInvalid"));
+      }
+      return payload;
+    },
+    enabled: authToken === "",
+    retry: false,
+    refetchOnWindowFocus: false,
   });
   const signInMutation = useMutation({
     mutationFn: controlPlaneApi.startGitHubLogin,
@@ -194,16 +231,10 @@ function RootShell() {
 
   async function checkServerUrlCandidate(url: string) {
     const baseUrl = normalizeServerInput(url);
-    const response = await fetch(`${baseUrl}/health`);
+    const response = await fetch(new URL("/health", baseUrl).toString());
     if (!response.ok) throw new Error(t("auth.serverHealthFailed"));
-    const payload = (await response.json()) as {
-      ok?: unknown;
-      serverProtocol?: unknown;
-      capabilities?: Record<string, unknown>;
-    };
-    const capabilities = payload.capabilities;
-    const hasExpectedCapabilities = expectedServerCapabilities.every((capability) => capabilities?.[capability] === true);
-    if (payload.ok !== true || payload.serverProtocol !== 1 || !hasExpectedCapabilities) {
+    const payload = (await response.json()) as ServerHealthPayload;
+    if (!hasExpectedServerHealth(payload)) {
       throw new Error(t("auth.serverHealthInvalid"));
     }
     return baseUrl;
@@ -337,6 +368,7 @@ function RootShell() {
   }
 
   const authError = passwordAuthMutation.error || signInMutation.error || pollQuery.error || (authToken !== "" ? meQuery.error : null);
+  const githubAuthAvailable = serverSupportsGitHubAuth(serverHealthQuery.data);
   const accountStatus =
     authToken && meQuery.data
       ? "signed-in"
@@ -422,7 +454,11 @@ function RootShell() {
           error: authError instanceof Error ? authError.message : undefined,
           actionLabel: pendingAuthState ? t("workspace.waitingForGitHub") : undefined,
         }}
-        onSignIn={() => signInMutation.mutate()}
+        onSignIn={() => {
+          if (githubAuthAvailable) {
+            signInMutation.mutate();
+          }
+        }}
         onSignOut={handleSignOut}
         onSelectWorkspace={handleSelectWorkspace}
         onCreateTeamWorkspace={() => {
@@ -452,11 +488,13 @@ function RootShell() {
             passwordAuthMutation.mutate();
           }}
           onGitHubSignIn={() => {
+            if (!githubAuthAvailable) return;
             passwordAuthMutation.reset();
             signInMutation.mutate();
           }}
           isBusy={pendingAuthState !== "" || signInMutation.isPending || passwordAuthMutation.isPending}
           isGitHubBusy={pendingAuthState !== "" || signInMutation.isPending}
+          githubAuthAvailable={githubAuthAvailable}
           serverBaseUrl={serverBaseUrl}
           serverBaseUrlSource={serverBaseUrlSource}
           serverBaseUrlLocked={serverBaseUrlLocked}
@@ -518,6 +556,7 @@ function AuthRequiredOverlay(props: {
   name: string;
   isBusy?: boolean;
   isGitHubBusy?: boolean;
+  githubAuthAvailable: boolean;
   onModeChange: (mode: "login" | "register") => void;
   onLoginChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
@@ -622,11 +661,15 @@ function AuthRequiredOverlay(props: {
             {props.mode === "register" ? t("auth.createAccount") : t("auth.signIn")}
           </Button>
         </form>
-        <div className="my-4 h-px bg-[color:var(--line)]" />
-        <Button type="button" variant="secondary" className="w-full justify-center" disabled={busy} onClick={props.onGitHubSignIn}>
-          {props.isGitHubBusy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
-          {props.actionLabel || (props.isGitHubBusy ? t("workspace.waitingForGitHub") : t("workspace.signInWithGitHub"))}
-        </Button>
+        {props.githubAuthAvailable ? (
+          <>
+            <div className="my-4 h-px bg-[color:var(--line)]" />
+            <Button type="button" variant="secondary" className="w-full justify-center" disabled={busy} onClick={props.onGitHubSignIn}>
+              {props.isGitHubBusy ? <LoaderCircle data-icon className="animate-spin" /> : <GitBranch data-icon />}
+              {props.actionLabel || (props.isGitHubBusy ? t("workspace.waitingForGitHub") : t("workspace.signInWithGitHub"))}
+            </Button>
+          </>
+        ) : null}
         <div className="mt-4 border-t border-[color:var(--line)] pt-3">
           {teamServerSettingsOpen ? (
             <div className="rounded-[10px] bg-[color:var(--block)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
