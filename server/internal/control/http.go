@@ -173,7 +173,7 @@ func persistStoreMiddleware(store interface{ Persist() error }) func(http.Handle
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			recorder := &responseStatusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(recorder, r)
-			if r.Method == http.MethodGet || r.Method == http.MethodHead || recorder.status >= 500 {
+			if recorder.status >= 500 || !shouldPersistAfterRequest(r) {
 				return
 			}
 			if err := store.Persist(); err != nil {
@@ -181,6 +181,19 @@ func persistStoreMiddleware(store interface{ Persist() error }) func(http.Handle
 			}
 		})
 	}
+}
+
+func shouldPersistAfterRequest(r *http.Request) bool {
+	if r.Method == http.MethodHead {
+		return false
+	}
+	if r.Method != http.MethodGet {
+		return true
+	}
+	path := r.URL.Path
+	return path == "/api/auth/github/start" ||
+		path == "/api/auth/github/callback" ||
+		path == "/api/auth/github/result"
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

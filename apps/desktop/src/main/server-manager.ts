@@ -278,7 +278,7 @@ function readServerAddr(): string {
 }
 
 function localSQLitePath(): string {
-	return join(app.getPath("userData"), "mspace.db");
+  return join(app.getPath("userData"), "mspace.db");
 }
 
 export async function ensureServerStarted(): Promise<void> {

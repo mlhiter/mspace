@@ -73,6 +73,16 @@ function normalizeServerInput(value: string): string {
   return parsed.origin.replace(/\/+$/, "");
 }
 
+const expectedServerCapabilities = [
+  "workspaceInboxIssueGrouping",
+  "teamWorkspaceCreation",
+  "workspaceInvitations",
+  "workspaceKinds",
+  "workspaceCollaboration",
+  "runtimeWorkerRegistration",
+  "runtimeTaskQueue",
+] as const;
+
 function RootShell() {
   const { t } = useMspaceTranslation();
   const initialServerBaseUrl = getControlPlaneBaseUrl();
@@ -191,7 +201,9 @@ function RootShell() {
       serverProtocol?: unknown;
       capabilities?: Record<string, unknown>;
     };
-    if (payload.ok !== true || payload.serverProtocol !== 1 || payload.capabilities?.runtimeTaskQueue !== true) {
+    const capabilities = payload.capabilities;
+    const hasExpectedCapabilities = expectedServerCapabilities.every((capability) => capabilities?.[capability] === true);
+    if (payload.ok !== true || payload.serverProtocol !== 1 || !hasExpectedCapabilities) {
       throw new Error(t("auth.serverHealthInvalid"));
     }
     return baseUrl;
