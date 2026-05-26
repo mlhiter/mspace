@@ -22,3 +22,14 @@ func TestDefaultAgentSessionDeveloperInstructionsAvoidDevServerPreviewURLs(t *te
 		}
 	}
 }
+
+func TestDefaultAgentSessionBranchUsesUniqueSessionSuffix(t *testing.T) {
+	branch := defaultAgentSessionBranch("9840afc5-issue", "session-6bf73ec87ccd6701")
+
+	if branch != "mspace/9840afc5/6bf73ec8" {
+		t.Fatalf("expected branch to use the unique session id suffix, got %q", branch)
+	}
+	if strings.Contains(branch, "/session-") {
+		t.Fatalf("expected branch not to collapse every session id to session-, got %q", branch)
+	}
+}

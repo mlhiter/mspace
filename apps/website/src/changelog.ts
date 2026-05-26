@@ -18,6 +18,7 @@ export const changelog: ChangelogEntry[] = [
       "Reset the local-account form mode when switching between the default local server and a saved or environment-provided team server.",
       "Blocked agent mentions when the selected workspace has no active matching Codex worker, avoiding sessions that sit in the queue waiting for a worker that does not exist.",
       "Added automatic host-local personal worker startup for desktop personal workspaces while keeping team workspaces on explicit registered team workers.",
+      "Fixed default worker session branch names so repeated personal sessions under the same issue no longer collapse to the same `session-` branch.",
     ],
   },
   {

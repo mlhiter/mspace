@@ -1725,7 +1725,7 @@ func buildAgentSessionContext(issue Issue, project Project, runbook ProjectRunbo
 }
 
 func defaultAgentSessionBranch(issueID, sessionID string) string {
-	return "mspace/" + shortIdentifier(issueID) + "/" + shortIdentifier(sessionID)
+	return "mspace/" + shortIdentifier(issueID) + "/" + shortSessionIdentifier(sessionID)
 }
 
 func shortIdentifier(value string) string {
@@ -1734,6 +1734,14 @@ func shortIdentifier(value string) string {
 		return value
 	}
 	return value[:8]
+}
+
+func shortSessionIdentifier(value string) string {
+	trimmed := strings.Trim(strings.TrimSpace(value), "-")
+	if suffix := strings.Trim(strings.TrimPrefix(trimmed, "session-"), "-"); suffix != "" && suffix != trimmed {
+		return shortIdentifier(suffix)
+	}
+	return shortIdentifier(trimmed)
 }
 
 func runtimeTaskChangeNode(task RuntimeTask) IssueChangeNode {
