@@ -173,6 +173,8 @@ export type ShellAccount = {
   name?: string;
   email?: string;
   avatarUrl?: string;
+  identityProvider?: string;
+  identityLogin?: string;
   isServerAdmin?: boolean;
   workspaceName?: string;
   workspaceId?: string;
@@ -502,6 +504,7 @@ function WorkspaceMenu(props: {
   const workspaceLabel = account.workspaceName || (isSignedIn ? t("workspace.personalWorkspace") : t("workspace.localWorkspace"));
   const workspaceKindLabel = workspaceKindLabelFor(account.workspaceKind);
   const statusLabel = isSignedIn ? account.name || account.email || t("workspace.signedIn") : isBusy ? t("workspace.githubLoginPending") : t("workspace.notSignedIn");
+  const accountIdentityLabel = accountIdentityLabelFor(account);
   const workspaces = account.workspaces || [];
 
   useEffect(() => {
@@ -643,7 +646,7 @@ function WorkspaceMenu(props: {
                 <UserAvatar name={account.name} avatarUrl={account.avatarUrl} size="sm" />
                 <div className="min-w-0 flex-1 text-left">
                   <div className="truncate text-[12px] font-medium leading-5 text-[color:var(--text)]">{account.name || t("workspace.mspaceUser")}</div>
-                  <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{account.email || t("workspace.githubConnected")}</div>
+                  <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{accountIdentityLabel}</div>
                 </div>
               </div>
               <LanguageMenuItem />
@@ -807,6 +810,17 @@ function workspaceRoleLabelFor(role: string | undefined) {
     return translate(`workspace.role.${normalized}`);
   }
   return normalized;
+}
+
+function accountIdentityLabelFor(account: ShellAccount) {
+  const provider = account.identityProvider?.trim().toLowerCase();
+  if (provider === "github") {
+    return account.identityLogin ? translate("workspace.githubIdentityConnectedAs", { login: account.identityLogin }) : translate("workspace.githubConnected");
+  }
+  if (provider === "password") {
+    return account.identityLogin ? translate("workspace.localAccountSignedInAs", { login: account.identityLogin }) : translate("workspace.localAccount");
+  }
+  return account.email || translate("workspace.signedIn");
 }
 
 function UserAvatar(props: { name?: string; avatarUrl?: string; size?: "sm" | "md" }) {

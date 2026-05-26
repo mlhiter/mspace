@@ -387,10 +387,16 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	identity, err := s.store.GetUserAuthIdentity(r.Context(), user.ID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user":          user,
 		"workspaces":    workspaces,
 		"isServerAdmin": s.isServerAdmin(user),
+		"identity":      identity,
 	})
 }
 
@@ -1570,12 +1576,17 @@ func (s *Server) authResultForUser(r *http.Request, user User, workspaces []Work
 	if err != nil {
 		return AuthResult{}, err
 	}
+	identity, err := s.store.GetUserAuthIdentity(r.Context(), user.ID)
+	if err != nil {
+		return AuthResult{}, err
+	}
 	return AuthResult{
 		Token:         token,
 		ExpiresAt:     expiresAt.UTC().Format(time.RFC3339),
 		User:          user,
 		Workspaces:    workspaces,
 		IsServerAdmin: s.isServerAdmin(user),
+		Identity:      identity,
 	}, nil
 }
 

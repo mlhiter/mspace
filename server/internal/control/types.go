@@ -1021,15 +1021,17 @@ type IdentityProfile struct {
 }
 
 type AuthResult struct {
-	Token         string      `json:"token"`
-	ExpiresAt     string      `json:"expiresAt"`
-	User          User        `json:"user"`
-	Workspaces    []Workspace `json:"workspaces"`
-	IsServerAdmin bool        `json:"isServerAdmin"`
+	Token         string           `json:"token"`
+	ExpiresAt     string           `json:"expiresAt"`
+	User          User             `json:"user"`
+	Workspaces    []Workspace      `json:"workspaces"`
+	IsServerAdmin bool             `json:"isServerAdmin"`
+	Identity      AuthIdentityInfo `json:"identity"`
 }
 
 type AuthIdentityInfo struct {
-	Login string
+	Provider string `json:"provider"`
+	Login    string `json:"login"`
 }
 
 type AuthPollResult struct {

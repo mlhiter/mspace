@@ -182,6 +182,9 @@ func TestGitHubLoginIssuesMspaceSession(t *testing.T) {
 	if auth.User.Email != "mlhiter@example.com" || len(auth.Workspaces) != 1 || auth.Workspaces[0].Role != "owner" {
 		t.Fatalf("unexpected auth result: %+v", auth)
 	}
+	if auth.Identity.Provider != "github" || auth.Identity.Login != "mlhiter" {
+		t.Fatalf("unexpected auth identity: %+v", auth.Identity)
+	}
 	if auth.Workspaces[0].Kind != "personal" {
 		t.Fatalf("default workspace should be personal, got %+v", auth.Workspaces[0])
 	}
@@ -318,6 +321,9 @@ func TestPasswordAuthIssuesMspaceSession(t *testing.T) {
 	}
 	if !strings.HasPrefix(register.Token, "msp_") {
 		t.Fatalf("expected mspace token, got %q", register.Token)
+	}
+	if register.Identity.Provider != "password" || register.Identity.Login != "local-admin" {
+		t.Fatalf("unexpected registered identity: %+v", register.Identity)
 	}
 	if register.User.Name != "Local Admin" || register.User.Email != "" {
 		t.Fatalf("unexpected registered user: %+v", register.User)

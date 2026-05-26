@@ -375,8 +375,11 @@ func (s *MemoryStore) GetUserAuthIdentity(_ Context, userID string) (AuthIdentit
 	if _, ok := s.users[userID]; !ok {
 		return AuthIdentityInfo{}, ErrNotFound
 	}
-	login := s.identityLoginForUser(userID)
-	return AuthIdentityInfo{Login: login}, nil
+	identity := s.authIdentityForUser(userID)
+	if identity.Login == "" {
+		return AuthIdentityInfo{}, ErrNotFound
+	}
+	return identity, nil
 }
 
 func (s *MemoryStore) CreateAuthSession(_ Context, userID string, ttl time.Duration) (string, time.Time, error) {
@@ -3163,19 +3166,36 @@ func (s *MemoryStore) ensureRuntimeModeAllowedForWorkspaceLocked(workspaceID, ru
 }
 
 func (s *MemoryStore) identityLoginForUser(userID string) string {
+	return s.authIdentityForUser(userID).Login
+}
+
+func (s *MemoryStore) authIdentityForUser(userID string) AuthIdentityInfo {
+	var githubIdentity AuthIdentityInfo
+	var fallbackIdentity AuthIdentityInfo
 	for key, identityUserID := range s.identities {
 		if identityUserID != userID {
 			continue
 		}
+		provider, fallbackLogin, _ := strings.Cut(key, ":")
+		identity := AuthIdentityInfo{Provider: provider, Login: fallbackLogin}
 		if login := strings.TrimSpace(s.identityLogins[key]); login != "" {
-			return login
+			identity.Login = login
 		}
-		parts := strings.SplitN(key, ":", 2)
-		if len(parts) == 2 {
-			return parts[1]
+		if provider == "password" {
+			return identity
+		}
+		if provider == "github" {
+			githubIdentity = identity
+			continue
+		}
+		if fallbackIdentity.Login == "" {
+			fallbackIdentity = identity
 		}
 	}
-	return ""
+	if githubIdentity.Login != "" {
+		return githubIdentity
+	}
+	return fallbackIdentity
 }
 
 func (s *MemoryStore) workspaceName(workspaceID string) string {

@@ -349,23 +349,23 @@ func (s *PostgresStore) GetUserAuthIdentity(ctx Context, userID string) (AuthIde
 	if userID == "" {
 		return AuthIdentityInfo{}, ErrNotFound
 	}
-	var login string
+	var provider, login string
 	err := s.pool.QueryRow(asContext(ctx), `
-		SELECT COALESCE(login, '')
+		SELECT COALESCE(provider, ''), COALESCE(login, '')
 		FROM user_identities
 		WHERE user_id = $1
 		ORDER BY
 			CASE provider WHEN 'password' THEN 0 WHEN 'github' THEN 1 ELSE 2 END,
 			created_at ASC
 		LIMIT 1
-	`, userID).Scan(&login)
+	`, userID).Scan(&provider, &login)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AuthIdentityInfo{}, ErrNotFound
 	}
 	if err != nil {
 		return AuthIdentityInfo{}, err
 	}
-	return AuthIdentityInfo{Login: login}, nil
+	return AuthIdentityInfo{Provider: provider, Login: login}, nil
 }
 
 func (s *PostgresStore) CreateAuthSession(ctx Context, userID string, ttl time.Duration) (string, time.Time, error) {

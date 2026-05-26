@@ -905,12 +905,18 @@ export interface AuthStartResult {
   pollUrl: string;
 }
 
+export interface AuthIdentityInfo {
+  provider: string;
+  login: string;
+}
+
 export interface AuthResult {
   token: string;
   expiresAt: string;
   user: MspaceUser;
   workspaces: MspaceWorkspace[];
   isServerAdmin: boolean;
+  identity: AuthIdentityInfo;
 }
 
 export type AuthPollResult =
@@ -921,6 +927,7 @@ export interface AuthMeResult {
   user: MspaceUser;
   workspaces: MspaceWorkspace[];
   isServerAdmin: boolean;
+  identity: AuthIdentityInfo;
 }
 
 export interface MspaceDesktopAPI {

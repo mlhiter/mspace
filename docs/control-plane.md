@@ -84,6 +84,8 @@ Desktop
 
 The server may use a GitHub OAuth client secret because it is a trusted backend environment. The desktop app must not embed GitHub client secrets. Password hashes are server-side only and stored separately from `user_identities`. Local password registration does not verify email ownership, so the user row keeps its canonical email blank and stores any provided email only on the password identity record; password auth must not merge into an OAuth identity by matching email.
 
+Auth responses expose the selected identity as `identity.provider` plus `identity.login`. The desktop workspace menu should use this explicit provider to show local password accounts separately from GitHub accounts, not infer GitHub connection from `user.email` or avatar state.
+
 Future GitHub repository automation should use GitHub App installation tokens stored and rotated by the control plane. Do not build long-lived repository automation on personal GitHub OAuth tokens stored by desktop or workers.
 
 Open registration creates a personal workspace only. Server admin status is a control-plane flag derived from configured auth logins: `MSPACE_SERVER_ADMIN_LOGINS` plus `MSPACE_BOOTSTRAP_ADMIN_LOGIN`. Matching uses the local password login or GitHub login, not email, because password auth does not verify email ownership. Only server admins can create team workspaces; ordinary registered users can join a team workspace only through an owner/admin invitation.

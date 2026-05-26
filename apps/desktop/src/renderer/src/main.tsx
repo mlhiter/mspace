@@ -458,6 +458,8 @@ function RootShell() {
           name: meQuery.data?.user.name,
           email: meQuery.data?.user.email,
           avatarUrl: meQuery.data?.user.avatarUrl,
+          identityProvider: meQuery.data?.identity.provider,
+          identityLogin: meQuery.data?.identity.login,
           isServerAdmin: meQuery.data?.isServerAdmin,
           workspaceId: currentWorkspace?.id,
           workspaceName: currentWorkspace?.name,
