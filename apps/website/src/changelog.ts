@@ -7,6 +7,20 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-05-26",
+    title: "Source-aware desktop sign-in",
+    summary:
+      "mspace made the desktop sign-in screen match whether the app is using the local personal server or an explicitly configured team server.",
+    items: [
+      "Opened the default local desktop sign-in flow on account creation so first-time personal users do not have to switch tabs.",
+      "Hid GitHub sign-in for the default local personal server even when a development server advertises OAuth support.",
+      "Kept GitHub sign-in available for explicitly configured team servers when `/health` reports OAuth as enabled.",
+      "Reset the local-account form mode when switching between the default local server and a saved or environment-provided team server.",
+      "Blocked agent mentions when the selected workspace has no active matching Codex worker, avoiding sessions that sit in the queue waiting for a worker that does not exist.",
+      "Added automatic host-local personal worker startup for desktop personal workspaces while keeping team workspaces on explicit registered team workers.",
+    ],
+  },
+  {
     date: "2026-05-25",
     title: "Desktop team server selection",
     summary:

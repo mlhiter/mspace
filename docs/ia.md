@@ -543,7 +543,7 @@ Implemented as of 2026-05-11:
 9. Issue labels, stop controls for active sessions, and manual worktree cleanup.
 10. Clusters route with desktop file picker import, first-run `~/.kube` discovery, context listing, reachability status, registry, and preview exposure defaults.
 11. Issue test environment records plus manual deploy/cleanup/retain actions.
-12. Server-backed mspace sign-in, through local password auth or optional GitHub OAuth, with sidebar account/workspace state and local issue/comment actor display snapshots.
+12. Server-backed mspace sign-in: default local personal mode starts on account creation and hides GitHub, while explicitly configured team servers can offer login plus optional GitHub OAuth when `/health` reports `capabilities.githubAuth: true`.
 13. Sidebar global search and Command+K palette for issues and projects.
 14. Commits/Evidence split on Issue Detail, with structured `session_review_evidence` snapshots and compact evidence-command persistence.
 15. Issue-level branch / PR handoff records, including local PR creation, existing PR auto-detection by source branch, status refresh, source commits, preview URL, and evidence summary.

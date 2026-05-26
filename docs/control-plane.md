@@ -62,7 +62,7 @@ Desktop
   -> call mspace APIs with Authorization: Bearer msp_...
 ```
 
-GitHub remains optional when the environment can reach GitHub. The server reports this as `capabilities.githubAuth` from `/health`; the desktop shows GitHub sign-in only when that value is `true`, which requires `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` to all be configured.
+GitHub remains optional when the environment can reach GitHub. The server reports this as `capabilities.githubAuth` from `/health`, which is `true` only when `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` are all configured. The desktop still treats the default local personal server as local-account-only: it starts on account creation and hides GitHub. GitHub sign-in is shown only for an explicitly configured team server, either a saved Team server URL or `MSPACE_SERVER_URL`, when that configured server advertises `capabilities.githubAuth: true`.
 
 ```text
 Desktop

@@ -56,13 +56,15 @@ cp .env.example .env.local
 pnpm run server
 ```
 
-For local worker testing, start a Docker-backed worker from Workspace Settings:
+For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker before it submits an agent mention. The worker uses the active desktop server URL, a short-lived workspace registration token, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
+
+For team or Docker-backed worker testing, start a worker from Workspace Settings:
 
 1. Sign in with a local account or configured GitHub OAuth, then select the target workspace.
 2. Open Workspace Settings.
 3. In Runtime, click `Start worker`.
 
-mspace creates a short-lived internal worker bootstrap credential, injects it into the Docker worker process, and refreshes the Workers list after registration. The desktop button starts the Codex-capable Docker worker, so local `CODEX_HOME` must contain valid `auth.json` and `config.toml` files.
+mspace creates a short-lived internal worker bootstrap credential, injects it into the worker process, and refreshes the Workers list after registration. The desktop button starts the Codex-capable Docker worker, so local `CODEX_HOME` must contain valid `auth.json` and `config.toml` files.
 
 Run a worker manually only when debugging an external worker or terminal-only setup:
 
@@ -130,9 +132,17 @@ Visible product copy in `apps/desktop`, `packages/ui`, or `packages/views` shoul
 
 ## Desktop Team Server Selection
 
-Personal desktop mode starts with the local bundled server, so local users usually do not need to think about a server URL. The sign-in screen has a collapsed Team server entry for customer or team deployments such as `https://mspace.example.com`; opening it lets the app check `/health`, save the URL in Electron user data, and reuse it on later launches.
+Personal desktop mode starts with the local bundled server, so local users usually do not need to think about a server URL. The default local sign-in opens on account creation and hides GitHub sign-in, even when a local dev server is configured with OAuth variables. The sign-in screen has a collapsed Team server entry for customer or team deployments such as `https://mspace.example.com`; opening it lets the app check `/health`, save the URL in Electron user data, and reuse it on later launches.
 
 `MSPACE_SERVER_URL` remains the launch-time override. If it is set, it takes precedence over the saved UI value and the Team server entry opens in a locked state for that launch.
+
+Use the same override when testing GitHub OAuth against the local server:
+
+```bash
+MSPACE_SERVER_URL=http://127.0.0.1:8787 pnpm dev:desktop
+```
+
+That explicit source makes the desktop use the configured-team-server sign-in path, so GitHub can appear when `/health` reports `capabilities.githubAuth: true`.
 
 ## Environment Variables
 
@@ -165,6 +175,7 @@ Personal desktop mode starts with the local bundled server, so local users usual
 | `MSPACE_WORKER_CODEX_HOME_SOURCE` | Docker Codex worker script | `${CODEX_HOME:-~/.codex}` | Source Codex home copied into a dedicated worker Codex home before container startup. |
 | `MSPACE_WORKER_CODEX_HOME_DIR` | Docker Codex worker script | `~/.mspace/codex-worker-home` | Host directory mounted into the Codex-capable dev worker as `CODEX_HOME`. |
 | `MSPACE_WORKER_CODEX_CLI_VERSION` | Docker Codex worker script | `0.130.0` | `@openai/codex` npm version installed into `worker/Dockerfile.codex-dev`. |
+| `MSPACE_AUTO_PERSONAL_WORKER` | Electron main process | enabled | Set to `0` to prevent the desktop from auto-starting a host-local personal worker before agent mentions. |
 
 Cluster, project, and issue test environment fields are passed into sessions as:
 
@@ -300,7 +311,7 @@ Check server env first:
 curl -i http://127.0.0.1:8787/api/auth/github/start
 ```
 
-Required variables for this GitHub OAuth path: `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI`. The desktop shows GitHub login only when `/health` reports `capabilities.githubAuth: true`.
+Required variables for this GitHub OAuth path: `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI`. The desktop shows GitHub login only for an explicitly configured team server when `/health` reports `capabilities.githubAuth: true`. If the button is hidden while debugging local OAuth, launch desktop with `MSPACE_SERVER_URL=http://127.0.0.1:8787 pnpm dev:desktop` instead of relying on the default local personal server source.
 
 ### Workspace looks empty
 
@@ -315,7 +326,7 @@ docker exec mspace-postgres-dev psql -U mspace -d mspace -Atc "select count(*) f
 
 ### Worker does not claim tasks
 
-Check the worker is registered and has matching mode/capabilities:
+Agent mentions are rejected before queueing when no matching active Codex worker exists. Check the worker is registered, online, fresh, and has matching mode/capabilities:
 
 ```bash
 curl -H "Authorization: Bearer <msp-token>" \

@@ -60,7 +60,7 @@ Password auth is the default path for restricted or offline environments:
 3. Desktop stores the returned `msp_...` token.
 4. Desktop clients call mspace APIs with `Authorization: Bearer <msp_...>`.
 
-GitHub OAuth is optional. The desktop sign-in screen shows GitHub login only when `/health` reports `capabilities.githubAuth: true`, which requires `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` to all be configured:
+GitHub OAuth is optional. The server advertises OAuth availability through `/health` with `capabilities.githubAuth: true`, which requires `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` to all be configured. The desktop also gates the button by server source: the default local personal server stays local-account-only, while saved Team server URLs and `MSPACE_SERVER_URL` launches can show GitHub when this capability is true.
 
 1. Desktop starts GitHub login through `GET /api/auth/github/start`.
 2. Desktop opens the returned `authorizeUrl` in the browser.

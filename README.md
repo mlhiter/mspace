@@ -117,7 +117,7 @@ cp .env.example .env.local
 pnpm run server
 ```
 
-Start a worker from Workspace Settings for the normal local dogfood flow, or run one manually:
+Personal desktop workspaces start a host-local Codex worker automatically before an agent mention is submitted. Team workspaces still need an explicit team worker from Workspace Settings or an external runtime. Run a worker manually only when debugging:
 
 ```bash
 export MSPACE_RUNTIME_TOKEN="msw_..."
@@ -139,7 +139,7 @@ Build a macOS desktop package for internal dogfood:
 pnpm dist:desktop:mac
 ```
 
-The packaged desktop app includes a bundled `mspace-server` binary. When no remote server is configured, it starts that server in personal mode with a local SQLite store under the app user-data directory.
+The packaged desktop app includes bundled `mspace-server` and `mspace-worker` binaries. When no remote server is configured, it starts the server in personal mode with a local SQLite store under the app user-data directory; the personal worker is kept alive against the selected personal workspace before Codex-backed agent turns.
 
 ### First workflow
 
@@ -147,7 +147,7 @@ The packaged desktop app includes a bundled `mspace-server` binary. When no remo
 2. Create an issue in the Issues tab with a document-style note.
 3. Attach or create a project before agent execution, PR handoff, project runbook access, or test environments.
 4. Create/import a cluster config in Clusters if the issue needs a Kubernetes test environment.
-5. Create a worker token from Workspace Settings and start a matching personal or team worker. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
+5. For personal desktop workspaces, let mspace start the local worker when you mention an agent. For team workspaces, create a worker token from Workspace Settings and start a matching team worker. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
 6. Mention an enabled agent profile, such as `@codex`, in an issue comment.
 7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
 8. Use Commits for source review and PR handoff.
@@ -159,10 +159,11 @@ The packaged desktop app includes a bundled `mspace-server` binary. When no remo
 Desktop team server selection:
 
 - Personal desktop mode uses the local bundled server by default, so most local users do not need to configure a server URL.
-- The sign-in screen keeps remote control-plane setup behind a collapsed Team server entry for deployed customer or team environments.
+- The default local personal sign-in starts in account-creation mode and hides GitHub sign-in, even if the local dev server has OAuth variables configured.
+- The sign-in screen keeps remote control-plane setup behind a collapsed Team server entry for deployed customer or team environments. Explicit team server launches start in login mode.
 - Saved server URLs are stored in the Electron user-data profile for this device and reused on the next launch.
 - `MSPACE_SERVER_URL` still works as a launch-time override and takes precedence over the saved UI value. When it is set, the Team server entry opens in a locked state for that launch.
-- GitHub sign-in appears only when the active server reports `capabilities.githubAuth: true` from `/health`, which requires all three `MSPACE_GITHUB_*` OAuth variables to be configured. Default local SQLite personal mode shows only local account sign-in.
+- GitHub sign-in appears only for an explicitly configured team server, either a saved Team server URL or `MSPACE_SERVER_URL`, when that server reports `capabilities.githubAuth: true` from `/health`. For local OAuth debugging against `127.0.0.1:8787`, launch with `MSPACE_SERVER_URL=http://127.0.0.1:8787 pnpm dev:desktop` so the desktop treats the server as configured instead of default local personal mode.
 
 Runtime variables:
 
@@ -192,6 +193,7 @@ Runtime variables:
 | `MSPACE_WORKER_WORK_ROOT` | `/var/lib/mspace-worker` in Docker | Runtime worker root for `repos/<cache-key>` and `workdirs/<project-id>/<session-id>`. |
 | `MSPACE_WORKER_CODEX_HOME_DIR` | `~/.mspace/codex-worker-home` | Host Codex home copy mounted by the Docker Codex dev worker. |
 | `MSPACE_WORKER_CODEX_CLI_VERSION` | `0.130.0` | Codex CLI version installed by the Docker Codex dev worker image. |
+| `MSPACE_AUTO_PERSONAL_WORKER` | enabled | Set to `0` to disable the desktop's automatic host-local personal worker. |
 
 Local data paths:
 

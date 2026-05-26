@@ -12,7 +12,7 @@ The repository contains a runnable desktop MVP with server-owned product and run
 - Shared desktop localization lives in `packages/i18n` for `en` and `zh-CN`.
 - Go server control plane in `server/`, built with chi. Team/shared deployments use PostgreSQL through `pgx`; packaged personal desktop mode can use a server-owned SQLite snapshot store.
 - Go runtime worker in `worker/`, registered to workspaces with `msw_...` tokens.
-- Local username/password auth creates a personal workspace by default and works without GitHub access. GitHub sign-in remains an optional external identity provider. Personal and team workspaces both use the server store; team/shared deployments use Postgres, while packaged personal desktop mode can stay local on SQLite.
+- Local username/password auth creates a personal workspace by default and works without GitHub access. Default local personal sign-in opens on account creation and hides GitHub. GitHub sign-in remains an optional external identity provider for explicitly configured team servers, from a saved Team server URL or `MSPACE_SERVER_URL`, when `/health` reports `capabilities.githubAuth: true`. Personal and team workspaces both use the server store; team/shared deployments use Postgres, while packaged personal desktop mode can stay local on SQLite.
 - Team collaboration features require an explicit team workspace created from the workspace menu.
 - The desktop uses `MSPACE_SERVER_URL`, then a saved Team server URL, then the local bundled/dev server when needed. It renders server state and does not own product truth or runtime persistence.
 

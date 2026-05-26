@@ -90,6 +90,10 @@ const resources = {
       auth: {
         signInTitle: "Sign in to mspace",
         signInDescription: "Use a local account. GitHub appears only when this server has OAuth configured.",
+        localAccountTitle: "Create your local account",
+        localAccountDescription: "Personal desktop mode starts locally. Create an account here, or sign in if you already made one.",
+        teamServerTitle: "Sign in to your team server",
+        teamServerDescription: "Use the account method configured by this server. GitHub appears only when team OAuth is enabled.",
         serverSettingsTitle: "Team server",
         serverSettingsDescription: "Use this only when your team has a deployed mspace server. Personal desktop mode stays on the local server.",
         serverUrlLabel: "Server URL",
@@ -1260,6 +1264,10 @@ const resources = {
       auth: {
         signInTitle: "登录 mspace",
         signInDescription: "优先使用本地账号；只有当前服务器配置了 GitHub OAuth 时才会显示 GitHub 登录。",
+        localAccountTitle: "创建本地账号",
+        localAccountDescription: "个人桌面模式默认在本机运行。先创建账号；如果已经创建过，也可以直接登录。",
+        teamServerTitle: "登录团队服务器",
+        teamServerDescription: "使用这个服务器配置的账号方式；只有团队开启了 GitHub OAuth 时才会显示 GitHub 登录。",
         serverSettingsTitle: "团队服务器",
         serverSettingsDescription: "只有团队部署了 mspace server 时才需要这里。个人桌面模式默认使用本地服务器。",
         serverUrlLabel: "服务器地址",

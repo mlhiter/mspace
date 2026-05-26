@@ -89,6 +89,9 @@ type ServerHealthPayload = {
   capabilities?: unknown;
 };
 
+type ServerBaseUrlSource = "environment" | "user" | "default";
+type PasswordAuthMode = "login" | "register";
+
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -105,15 +108,22 @@ function serverSupportsGitHubAuth(payload: ServerHealthPayload | undefined): boo
   return isObjectRecord(capabilities) && capabilities.githubAuth === true;
 }
 
+function isConfiguredTeamServer(source: ServerBaseUrlSource): boolean {
+  return source !== "default";
+}
+
+function defaultPasswordAuthMode(source: ServerBaseUrlSource): PasswordAuthMode {
+  return isConfiguredTeamServer(source) ? "login" : "register";
+}
+
 function RootShell() {
   const { t } = useMspaceTranslation();
   const initialServerBaseUrl = getControlPlaneBaseUrl();
+  const initialServerBaseUrlSource = window.mspaceDesktop?.serverBaseUrlSource || "default";
   const [authToken, setAuthToken] = useState(() => window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || "");
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(() => window.localStorage.getItem(SELECTED_WORKSPACE_STORAGE_KEY) || "");
   const [serverBaseUrl, setServerBaseUrlState] = useState(initialServerBaseUrl);
-  const [serverBaseUrlSource, setServerBaseUrlSource] = useState<"environment" | "user" | "default">(
-    window.mspaceDesktop?.serverBaseUrlSource || "default",
-  );
+  const [serverBaseUrlSource, setServerBaseUrlSource] = useState<ServerBaseUrlSource>(initialServerBaseUrlSource);
   const [serverBaseUrlLocked, setServerBaseUrlLocked] = useState(Boolean(window.mspaceDesktop?.serverBaseUrlLocked));
   const [serverUrlDraft, setServerUrlDraft] = useState(initialServerBaseUrl);
   const [serverUrlSaved, setServerUrlSaved] = useState(false);
@@ -121,7 +131,7 @@ function RootShell() {
   const [serverUrlChecking, setServerUrlChecking] = useState(false);
   const [serverUrlSaving, setServerUrlSaving] = useState(false);
   const [pendingAuthState, setPendingAuthState] = useState("");
-  const [passwordAuthMode, setPasswordAuthMode] = useState<"login" | "register">("login");
+  const [passwordAuthMode, setPasswordAuthMode] = useState<PasswordAuthMode>(() => defaultPasswordAuthMode(initialServerBaseUrlSource));
   const [passwordAuthLogin, setPasswordAuthLogin] = useState("");
   const [passwordAuthPassword, setPasswordAuthPassword] = useState("");
   const [passwordAuthName, setPasswordAuthName] = useState("");
@@ -138,13 +148,15 @@ function RootShell() {
     void queryClient.clear();
   }
 
-  function applyServerConfig(config: { baseUrl: string; source: "environment" | "user" | "default"; locked: boolean }) {
+  function applyServerConfig(config: { baseUrl: string; source: ServerBaseUrlSource; locked: boolean }) {
     setControlPlaneBaseUrl(config.baseUrl);
     setServerBaseUrlState(config.baseUrl);
     setServerBaseUrlSource(config.source);
     setServerBaseUrlLocked(config.locked);
     setServerUrlDraft(config.baseUrl);
     setServerUrlError("");
+    setPasswordAuthMode(defaultPasswordAuthMode(config.source));
+    setPasswordAuthPassword("");
     clearAuthState();
   }
 
@@ -368,7 +380,8 @@ function RootShell() {
   }
 
   const authError = passwordAuthMutation.error || signInMutation.error || pollQuery.error || (authToken !== "" ? meQuery.error : null);
-  const githubAuthAvailable = serverSupportsGitHubAuth(serverHealthQuery.data);
+  const configuredTeamServer = isConfiguredTeamServer(serverBaseUrlSource);
+  const githubAuthAvailable = configuredTeamServer && serverSupportsGitHubAuth(serverHealthQuery.data);
   const accountStatus =
     authToken && meQuery.data
       ? "signed-in"
@@ -495,6 +508,7 @@ function RootShell() {
           isBusy={pendingAuthState !== "" || signInMutation.isPending || passwordAuthMutation.isPending}
           isGitHubBusy={pendingAuthState !== "" || signInMutation.isPending}
           githubAuthAvailable={githubAuthAvailable}
+          configuredTeamServer={configuredTeamServer}
           serverBaseUrl={serverBaseUrl}
           serverBaseUrlSource={serverBaseUrlSource}
           serverBaseUrlLocked={serverBaseUrlLocked}
@@ -557,14 +571,15 @@ function AuthRequiredOverlay(props: {
   isBusy?: boolean;
   isGitHubBusy?: boolean;
   githubAuthAvailable: boolean;
-  onModeChange: (mode: "login" | "register") => void;
+  configuredTeamServer: boolean;
+  onModeChange: (mode: PasswordAuthMode) => void;
   onLoginChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
   onNameChange: (value: string) => void;
   onPasswordSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onGitHubSignIn: () => void;
   serverBaseUrl: string;
-  serverBaseUrlSource: "environment" | "user" | "default";
+  serverBaseUrlSource: ServerBaseUrlSource;
   serverBaseUrlLocked: boolean;
   serverUrlDraft: string;
   serverUrlError: string;
@@ -582,7 +597,6 @@ function AuthRequiredOverlay(props: {
   const passwordDisabled = busy || props.login.trim() === "" || props.password === "" || (props.mode === "register" && props.password.length < 8);
   const serverUrlDirty = props.serverUrlDraft.trim().replace(/\/+$/, "") !== props.serverBaseUrl;
   const serverUrlControlsDisabled = props.serverBaseUrlLocked || props.serverUrlChecking || props.serverUrlSaving;
-  const hasConfiguredTeamServer = props.serverBaseUrlSource !== "default";
 
   useEffect(() => {
     if (props.serverBaseUrlLocked || props.serverUrlError) {
@@ -605,9 +619,11 @@ function AuthRequiredOverlay(props: {
             {busy ? <LoaderCircle data-icon className="animate-spin" /> : <LogIn data-icon />}
           </span>
           <div className="min-w-0">
-            <h1 className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">{t("auth.signInTitle")}</h1>
+            <h1 className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">
+              {props.configuredTeamServer ? t("auth.teamServerTitle") : t("auth.localAccountTitle")}
+            </h1>
             <p className="mt-1 text-[13px] leading-5 text-[color:var(--muted)]">
-              {t("auth.signInDescription")}
+              {props.configuredTeamServer ? t("auth.teamServerDescription") : t("auth.localAccountDescription")}
             </p>
           </div>
         </div>
@@ -744,9 +760,9 @@ function AuthRequiredOverlay(props: {
               >
                 <Server data-icon className="shrink-0" />
                 <span className="truncate">
-                  {hasConfiguredTeamServer ? t("auth.teamServerActive", { url: props.serverBaseUrl }) : t("auth.teamServerLink")}
+                  {props.configuredTeamServer ? t("auth.teamServerActive", { url: props.serverBaseUrl }) : t("auth.teamServerLink")}
                 </span>
-                {hasConfiguredTeamServer ? (
+                {props.configuredTeamServer ? (
                   <span className="shrink-0 rounded-[6px] bg-[color:var(--block)] px-1.5 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
                     {serverSourceLabel}
                   </span>

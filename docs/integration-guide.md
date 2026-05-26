@@ -21,7 +21,7 @@ The desktop chooses its server in this order:
 2. A saved Team server URL from Electron user data.
 3. The local bundled/dev server on `127.0.0.1:8787`.
 
-Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 1`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, and `runtimeTaskQueue`. `capabilities.githubAuth` is optional behavior metadata: GitHub login is shown only when it is `true`.
+Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 1`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, and `runtimeTaskQueue`. `capabilities.githubAuth` is optional behavior metadata. GitHub login is shown only when the desktop is using an explicitly configured team server, from either `MSPACE_SERVER_URL` or a saved Team server URL, and that server reports `capabilities.githubAuth: true`. The default local personal server stays local-account-only and starts on account creation.
 
 Workspace endpoints require:
 
