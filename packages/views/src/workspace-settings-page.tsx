@@ -60,6 +60,8 @@ import { useMspaceTranslation, t as translate } from "@mspace/i18n";
 import { useMspaceAuth } from "./auth-context";
 import { RelativeTime } from "./time";
 
+const ACTIVE_WORKER_MAX_AGE_MS = 45 * 1000;
+
 const defaultSettingsForm: UpdateWorkspaceSettingsInput = {
 	autoCreateDraftPr: false,
 };
@@ -1065,7 +1067,7 @@ function WorkerList(props: { workers: RuntimeWorker[]; loading: boolean }) {
 							<div className="mt-1 truncate text-[12px] leading-5 text-[color:var(--muted)]">{worker.version || t("workspaceSettings.list.versionNotReported")}</div>
 						</div>
 						<div className="flex min-w-0 flex-wrap items-center gap-1.5">
-							<RuntimeStatusPill status={worker.status} />
+							<RuntimeStatusPill status={workerDisplayStatus(worker)} />
 							<StatusPill>{worker.mode}</StatusPill>
 						</div>
 						<span className="font-mono text-[12px] tabular-nums text-[color:var(--muted)]">{worker.currentLoad}</span>
@@ -1251,6 +1253,13 @@ function TokenStatus(props: { token: RuntimeRegistrationToken }) {
 	if (props.token.revoked) return <RuntimeStatusPill status="revoked" />;
 	if (new Date(props.token.expiresAt).getTime() < Date.now()) return <RuntimeStatusPill status="expired" />;
 	return <RuntimeStatusPill status="active" />;
+}
+
+function workerDisplayStatus(worker: RuntimeWorker) {
+	if (worker.status.trim().toLowerCase() !== "online") return worker.status;
+	const lastSeenAt = new Date(worker.lastSeenAt).getTime();
+	if (!Number.isFinite(lastSeenAt)) return "stale";
+	return Date.now() - lastSeenAt > ACTIVE_WORKER_MAX_AGE_MS ? "stale" : worker.status;
 }
 
 function MemberAvatar(props: { member: WorkspaceMember }) {
