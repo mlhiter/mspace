@@ -127,6 +127,9 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}` | Edit the current user's eligible human comment. |
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Add the current user's reaction to a comment. |
 | `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/comments/{commentID}/reactions/{reaction}` | Remove the current user's reaction from a comment. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/sessions` | Queue an `agent_session` runtime task after a supported agent mention, attached project, and active matching Codex worker. |
+| `GET` | `/api/workspaces/{workspaceID}/sessions/{sessionID}` | Load session detail derived from the runtime task and worker logs. |
+| `POST` | `/api/workspaces/{workspaceID}/sessions/{sessionID}/cancel` | Request cancellation for the session's runtime task. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-deploy` | Queue a server-owned test deployment session for an issue. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/cleanup` | Queue test namespace cleanup for an issue. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/retain` | Retain the issue test namespace for debugging. |
@@ -163,6 +166,8 @@ Issue `project_id` is optional in the control plane. A user can capture a worksp
 Workspace Settings exposes the first UI-testable collaboration loop. Owners and admins can create one-time `msi_...` invite links, copy the link, inspect pending/accepted/revoked invitations, and revoke unused invitations. A signed-in teammate opens the invite route, accepts it through the UI, and then sees the shared workspace in the workspace switcher. The accepted member can inspect shared members, Inbox receipts, workers, and runtime tasks according to their workspace role.
 
 ## Runtime Worker Registry
+
+Agent-session creation is guarded by worker liveness. The server checks that the requested `runtimeMode` matches the workspace kind and that a matching online worker with Codex capability and a fresh heartbeat exists before creating the session and runtime task; otherwise it returns HTTP `409` with `no active codex worker`. UI clients should preflight `/runtime-workers` before saving a trigger comment. Desktop personal mode can auto-start the host-local personal worker, while team workspaces require an explicitly connected team worker.
 
 Runtime registration tokens use the `msw_` prefix and are returned only once. The server stores a hash and prefix, then workers use the token to register, heartbeat, claim eligible tasks, and report task status.
 

@@ -200,6 +200,9 @@ Local data paths:
 
 | Path | Purpose |
 | --- | --- |
+| `<Electron userData>/mspace.db` | Packaged personal desktop SQLite store used by the bundled local server. |
+| `<Electron userData>/worker/` | Host-local personal worker root for desktop-managed repo caches, workdirs, and artifacts. |
+| `<Electron userData>/worker/tokens/<workspace-id>.token` | Short-lived personal worker credential file written by Electron and reread by the worker. |
 | `~/.mspace/codex-worker-home` | Host-side Codex home copy for Docker Codex workers. |
 | `/var/lib/mspace-worker/repos/<cache-key>` | Repository cache inside Docker-backed workers. |
 | `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>` | Per-session worker workdir inside Docker-backed workers. |

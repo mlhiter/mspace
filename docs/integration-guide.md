@@ -1,6 +1,6 @@
 # mspace API Integration Guide
 
-> Status: server-owned local MVP API guide, updated 2026-05-25
+> Status: server-owned local MVP API guide, updated 2026-05-27
 
 This guide covers the current server control-plane API used by the desktop and workers. The control plane normally runs on `http://127.0.0.1:8787`.
 
@@ -170,7 +170,7 @@ curl -X PUT "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues/<issue-id>
 | `DELETE` | `/api/workspaces/{workspaceID}/clusters/{clusterID}` | Delete an unused cluster config. |
 | `GET` | `/api/workspaces/{workspaceID}/clusters/discover-defaults` | Discover kubeconfig candidates and contexts under `~/.kube`. |
 | `POST` | `/api/workspaces/{workspaceID}/clusters/import` | Import selected kubeconfig files. |
-| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/sessions` | Queue an `agent_session` runtime task after a supported agent mention. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/sessions` | Queue an `agent_session` runtime task after a supported agent mention, attached project, and active matching Codex worker. |
 | `GET` | `/api/workspaces/{workspaceID}/sessions/{sessionID}` | Load session detail derived from the runtime task and worker logs. |
 | `POST` | `/api/workspaces/{workspaceID}/sessions/{sessionID}/cancel` | Request cancellation for the session's runtime task. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-deploy` | Queue a test deployment session. |
@@ -194,10 +194,12 @@ Workspace settings currently include:
 
 ## Server Agent Sessions
 
-Issue Detail starts a worker turn in two steps:
+Issue Detail starts a worker turn only after a worker preflight:
 
-1. Write the human comment through `POST /api/workspaces/{workspaceID}/issues/{issueID}/comments`.
-2. Call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions` with the comment id as `triggerCommentId`.
+1. Refresh `GET /api/workspaces/{workspaceID}/runtime-workers` and look for a worker in the selected workspace and runtime mode with `codex:true`, `status:"online"`, and a fresh heartbeat.
+2. In personal desktop mode, ask Electron to ensure the host-local personal worker, then wait briefly for it to heartbeat. Team workspaces do not auto-start a worker; the user must connect a matching team worker.
+3. Write the human comment through `POST /api/workspaces/{workspaceID}/issues/{issueID}/comments`.
+4. Call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions` with the comment id as `triggerCommentId`.
 
 Personal workspaces use `runtimeMode: "personal"`; team workspaces use `runtimeMode: "team"`. Both modes share the same server tables, worker claim protocol, task logs, cancellation, and result shape.
 
@@ -211,7 +213,9 @@ Personal workspaces use `runtimeMode: "personal"`; team workspaces use `runtimeM
 }
 ```
 
-The server validates that the issue has an attached project, snapshots issue/project/runbook/comment/child issue/label context into the runtime task payload, and returns the server `AgentSession`. The worker prepares its own repo cache and workdir, appends logs to `runtime_task_logs`, and reports Codex thread/turn ids plus source branch and commit metadata in `runtime_tasks.result`. Server Issue Detail includes matching sessions by mapping `runtime_tasks` with `kind="agent_session"` back into its `sessions` field, and the Commits tab derives change nodes from task results.
+The server validates that the issue has an attached project, that `runtimeMode` matches the workspace kind, and that a matching active Codex worker exists before it creates `agent_sessions` or `runtime_tasks`. If no worker is online, the server returns HTTP `409` with `{"error":"no active codex worker"}`. Clients should keep the preflight before the trigger comment so unsupported `@codex` turns do not leave a human comment waiting for a worker that cannot claim the task.
+
+When accepted, the server snapshots issue/project/runbook/comment/child issue/label context into the runtime task payload and returns the server `AgentSession`. The worker prepares its own repo cache and workdir, appends logs to `runtime_task_logs`, and reports Codex thread/turn ids plus source branch and commit metadata in `runtime_tasks.result`. Server Issue Detail includes matching sessions by mapping `runtime_tasks` with `kind="agent_session"` back into its `sessions` field, and the Commits tab derives change nodes from task results.
 
 ## Test Environment Flow
 

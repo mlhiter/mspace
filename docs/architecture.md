@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: server-owned runtime surfaces, updated 2026-05-25
+> Status: server-owned runtime surfaces, updated 2026-05-27
 
 ## Current Implementation Snapshot
 
@@ -38,6 +38,7 @@ The server does not own any Codex process or credential lifecycle. It queues tas
 
 ```text
 Desktop Issue Detail
+  -> verify attached project and matching active Codex worker
   -> POST server comment
   -> POST server agent session
 Server
@@ -61,6 +62,8 @@ Desktop
 Personal and team workspaces use the same server API and runtime task protocol. `runtimeMode` controls which workers can claim the task, not which product model is used.
 
 In desktop personal mode, Electron manages the local worker bootstrap credential lifecycle. It creates a short-lived personal `msw_...` credential, writes it to an Electron user-data token file, starts a host-local worker with `MSPACE_RUNTIME_TOKEN_FILE`, renews the credential before expiry, and revokes the previous token after a grace period. The worker rereads the token file for runtime calls, so renewal normally does not require user action or a worker restart.
+
+Agent session creation is guarded rather than left to wait in the queue. Issue Detail refreshes runtime worker liveness before writing the trigger comment; personal desktop mode may start the host-local worker and wait for a fresh heartbeat. The server repeats the same active Codex worker check and returns HTTP `409` with `no active codex worker` when no matching online worker exists.
 
 Issue type triage follows the same boundary:
 

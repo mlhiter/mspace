@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-05-19
+> Status: local MVP implementation snapshot, updated 2026-05-27
 
 ## IA Goal
 
@@ -253,7 +253,7 @@ The composer is the main interaction control:
 - Markdown comments stay on the issue through the same TipTap-backed document editor used for issue creation, including image upload, paste, drop, and thumbnail previews;
 - comment reactions stay as lightweight metadata on comments and should not rewrite the Markdown body or agent prompt history;
 - the latest human-authored comment can be edited inline only while it is still unconsumed by an agent session, including adding a supported agent mention and then saving that edit to queue the turn;
-- supported agent mentions save the comment and queue a worker-backed Codex app-server turn with the selected managed profile;
+- supported agent mentions first verify a matching active Codex worker, then save the trigger comment and queue a worker-backed Codex app-server turn with the selected managed profile;
 - unsupported agent mentions should be visible but not queued;
 - when an agent is already working, a second agent turn should be disabled until the current turn finishes or is stopped.
 - issue lifecycle actions live in the composer footer with the comment submit controls. Show the primary close or reopen action directly, hide less common close reasons such as `Close as not planned` behind a compact dropdown, and do not repeat the current issue status inside the composer.
@@ -306,7 +306,8 @@ Current implementation:
 - shows issue body first, then a timeline of human comments, Codex turns, and failure/deploy attention events;
 - supports rich Markdown comments and managed agent mentions from the same reply box;
 - reads enabled mention suggestions from the Agents module instead of a frontend constant;
-- saves the comment before queuing the worker-backed Codex session, so the current turn is visible in the issue history;
+- checks worker liveness before saving an agent trigger comment; personal desktop mode may auto-start the local worker, while team workspaces require a connected team worker;
+- saves the trigger comment before queuing the worker-backed Codex session, so accepted turns are visible in the issue history;
 - sends the mention-stripped comment as the current turn request, ahead of the original issue context;
 - shows Type and Priority controls in the quiet metadata sidebar, with a `Classifying...` state while a worker-backed `issue_type_triage` task assigns type;
 - keeps the quiet metadata sidebar on Overview only, while Commits, Sessions, and Evidence use the full page width for review-heavy content;

@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-05-25
+> Status: local MVP implementation snapshot, updated 2026-05-27
 
 ## One-Line Definition
 
@@ -21,7 +21,7 @@ The repository now has a runnable local desktop MVP:
 - manage Codex-backed agents from the Agents route, including mention, description, enabled state, and role instructions;
 - use Inbox as a review feed for unread issue and session updates;
 - open document-style issue detail pages with Markdown-backed rich comments, image attachment thumbnails, lightweight reactions, and linked sessions;
-- mention an enabled agent from issue detail and queue server-owned runtime tasks that a worker runs through Codex app-server with the matching managed profile;
+- mention an enabled agent from issue detail only when a matching active Codex worker exists, then queue server-owned runtime tasks that a worker runs through Codex app-server with the matching managed profile;
 - edit the latest unconsumed human comment, then stop and retry a session when a bad prompt has already been consumed;
 - stop a queued or running session from Issue Detail or Session Detail without cancelling the whole issue;
 - run sessions in worker-managed git workdirs under the configured worker root;
@@ -169,6 +169,8 @@ A user creates a session by writing an issue comment that mentions an enabled ag
 - stores the selected profile in `agent_sessions.agent_profile` and injects the profile instructions from `agent_profiles` into the Codex prompt;
 - streams agent messages, command execution items, status changes, and diagnostics;
 - passes the selected cluster, Kubernetes context, issue namespace, image registry, and exposure settings into the app-server process and turn prompt.
+
+Before the trigger comment is written, mspace checks that a matching active Codex worker exists. Personal desktop workspaces can auto-start the host-local personal worker and wait for it to heartbeat; team workspaces require a connected team worker. The server enforces the same check and returns a visible conflict instead of creating an unclaimable agent session.
 
 Scoped namespace, ServiceAccount, and kubeconfig generation are target behavior, not implemented behavior in the current local MVP.
 
