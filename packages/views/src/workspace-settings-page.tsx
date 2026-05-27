@@ -64,6 +64,7 @@ const ACTIVE_WORKER_MAX_AGE_MS = 45 * 1000;
 
 const defaultSettingsForm: UpdateWorkspaceSettingsInput = {
 	autoCreateDraftPr: false,
+	autoDeployTestEnvironment: false,
 };
 
 const defaultTokenForm: CreateRuntimeRegistrationTokenInput = {
@@ -167,6 +168,7 @@ export function WorkspaceSettingsPage() {
 		if (!settingsQuery.data) return;
 		setForm({
 			autoCreateDraftPr: settingsQuery.data.autoCreateDraftPr,
+			autoDeployTestEnvironment: settingsQuery.data.autoDeployTestEnvironment,
 		});
 	}, [settingsQuery.data]);
 
@@ -178,7 +180,10 @@ export function WorkspaceSettingsPage() {
 		mutationFn: (input: UpdateWorkspaceSettingsInput) =>
 			controlPlaneApi.updateWorkspaceSettings(auth.token, workspaceID, input),
 		onSuccess: async (settings) => {
-			setForm({ autoCreateDraftPr: settings.autoCreateDraftPr });
+			setForm({
+				autoCreateDraftPr: settings.autoCreateDraftPr,
+				autoDeployTestEnvironment: settings.autoDeployTestEnvironment,
+			});
 			await queryClient.invalidateQueries({ queryKey: settingsQueryKey });
 		},
 	});
@@ -267,7 +272,11 @@ export function WorkspaceSettingsPage() {
 		},
 	});
 
-	const isDirty = Boolean(settingsQuery.data && form.autoCreateDraftPr !== settingsQuery.data.autoCreateDraftPr);
+	const isDirty = Boolean(
+		settingsQuery.data &&
+			(form.autoCreateDraftPr !== settingsQuery.data.autoCreateDraftPr ||
+				form.autoDeployTestEnvironment !== settingsQuery.data.autoDeployTestEnvironment),
+	);
 	const workers = workersQuery.data || [];
 	const tokens = tokensQuery.data || [];
 	const tasks = tasksQuery.data || [];
@@ -406,7 +415,20 @@ export function WorkspaceSettingsPage() {
 								checked={form.autoCreateDraftPr}
 								disabled={!settingsQuery.data || saveSettings.isPending}
 								aria-label={t("workspaceSettings.section.autoDraftPr")}
-								onCheckedChange={(checked) => setForm({ autoCreateDraftPr: checked })}
+								onCheckedChange={(checked) => setForm((current) => ({ ...current, autoCreateDraftPr: checked }))}
+							/>
+						}
+					/>
+					<SettingsRow
+						icon={RefreshCw}
+						title={t("workspaceSettings.section.autoTestDeploy")}
+						description={t("workspaceSettings.section.autoTestDeployDescription")}
+						control={
+							<Switch
+								checked={form.autoDeployTestEnvironment}
+								disabled={!settingsQuery.data || saveSettings.isPending}
+								aria-label={t("workspaceSettings.section.autoTestDeploy")}
+								onCheckedChange={(checked) => setForm((current) => ({ ...current, autoDeployTestEnvironment: checked }))}
 							/>
 						}
 					/>

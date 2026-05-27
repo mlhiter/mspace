@@ -1240,7 +1240,30 @@ func (s *PostgresStore) CreateRuntimeTask(ctx Context, userID, workspaceID strin
 	if err := ensureRuntimeModeAllowedForWorkspace(dbctx, tx, workspaceID, normalized.RuntimeMode); err != nil {
 		return RuntimeTask{}, err
 	}
-	row := tx.QueryRow(dbctx, `
+	task, err := insertRuntimeTaskRecord(dbctx, tx, workspaceID, userID, normalized)
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return RuntimeTask{}, err
+	}
+	return task, nil
+}
+
+func insertRuntimeTaskRecord(ctx context.Context, q queryer, workspaceID, userID string, input CreateRuntimeTaskInput) (RuntimeTask, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	normalized, err := normalizeCreateRuntimeTaskInput(input)
+	if err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := ensureWorkspaceMember(ctx, q, workspaceID, userID); err != nil {
+		return RuntimeTask{}, err
+	}
+	if err := ensureRuntimeModeAllowedForWorkspace(ctx, q, workspaceID, normalized.RuntimeMode); err != nil {
+		return RuntimeTask{}, err
+	}
+	row := q.QueryRow(ctx, `
 		INSERT INTO runtime_tasks (
 			workspace_id,
 			issue_id,
@@ -1279,14 +1302,11 @@ func (s *PostgresStore) CreateRuntimeTask(ctx Context, userID, workspaceID strin
 	if err != nil {
 		return RuntimeTask{}, err
 	}
-	if err := insertRuntimeTaskEvent(dbctx, tx, task.WorkspaceID, task.ID, "", userID, "created", map[string]any{
+	if err := insertRuntimeTaskEvent(ctx, q, task.WorkspaceID, task.ID, "", userID, "created", map[string]any{
 		"kind":        task.Kind,
 		"runtimeMode": task.RuntimeMode,
 		"status":      task.Status,
 	}); err != nil {
-		return RuntimeTask{}, err
-	}
-	if err := tx.Commit(dbctx); err != nil {
 		return RuntimeTask{}, err
 	}
 	return task, nil
@@ -2353,6 +2373,7 @@ func normalizeCreateAgentSessionInput(input CreateAgentSessionInput) CreateAgent
 	input.SourceSessionID = strings.TrimSpace(input.SourceSessionID)
 	input.SourceCommitSHA = strings.TrimSpace(input.SourceCommitSHA)
 	input.TriggerCommentID = strings.TrimSpace(input.TriggerCommentID)
+	input.Automation = strings.TrimSpace(input.Automation)
 	return input
 }
 

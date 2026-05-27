@@ -1550,6 +1550,7 @@ func runtimeTaskToAgentSession(task RuntimeTask) (AgentSession, error) {
 		SourceCommitSHA  string `json:"sourceCommitSha"`
 		TriggerCommentID string `json:"triggerCommentId"`
 		ArtifactDir      string `json:"artifactDir"`
+		Automation       string `json:"automation"`
 	}
 	_ = json.Unmarshal(task.Payload, &payload)
 
@@ -1644,6 +1645,7 @@ func buildAgentSessionPayload(sessionID string, issue Issue, project Project, ru
 		"sourceSessionId":  input.SourceSessionID,
 		"sourceCommitSha":  input.SourceCommitSHA,
 		"triggerCommentId": input.TriggerCommentID,
+		"automation":       input.Automation,
 		"contextMarkdown":  buildAgentSessionContext(issue, project, runbook, comments, labels, childIssues, input),
 		"artifactDir":      "",
 		"repository": map[string]string{
@@ -2063,7 +2065,11 @@ func listIssueLabels(ctx context.Context, q queryer, workspaceID, issueID string
 }
 
 func (s *PostgresStore) listChildIssues(ctx context.Context, workspaceID, issueID string) ([]IssueListItem, error) {
-	rows, err := s.pool.Query(ctx, issueListQuery(`
+	return listChildIssuesForQueryer(ctx, s.pool, workspaceID, issueID)
+}
+
+func listChildIssuesForQueryer(ctx context.Context, q queryer, workspaceID, issueID string) ([]IssueListItem, error) {
+	rows, err := q.Query(ctx, issueListQuery(`
 		WHERE i.workspace_id = $1 AND i.parent_issue_id = $2
 	`, `
 		ORDER BY i.sort_order ASC, i.created_at ASC
@@ -2078,7 +2084,7 @@ func (s *PostgresStore) listChildIssues(ctx context.Context, workspaceID, issueI
 		if err != nil {
 			return nil, err
 		}
-		labels, err := s.listIssueLabels(ctx, workspaceID, item.ID)
+		labels, err := listIssueLabels(ctx, q, workspaceID, item.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -2089,7 +2095,15 @@ func (s *PostgresStore) listChildIssues(ctx context.Context, workspaceID, issueI
 }
 
 func (s *PostgresStore) listIssueComments(ctx context.Context, workspaceID, issueID, viewerUserID string) ([]Comment, error) {
-	rows, err := s.pool.Query(ctx, `
+	return listIssueCommentsForQueryer(ctx, s.pool, workspaceID, issueID, viewerUserID)
+}
+
+func listIssueCommentsForQueryer(ctx context.Context, q queryer, workspaceID, issueID string, viewerUserID ...string) ([]Comment, error) {
+	viewerID := ""
+	if len(viewerUserID) > 0 {
+		viewerID = strings.TrimSpace(viewerUserID[0])
+	}
+	rows, err := q.Query(ctx, `
 		SELECT id::text, issue_id::text, author_type, COALESCE(author_user_id::text, ''), author_name, author_avatar_url, body, created_at, updated_at, edited_at
 		FROM comments
 		WHERE workspace_id = $1 AND issue_id = $2
@@ -2105,7 +2119,7 @@ func (s *PostgresStore) listIssueComments(ctx context.Context, workspaceID, issu
 		if err != nil {
 			return nil, err
 		}
-		comment.Reactions, err = listCommentReactionSummaries(ctx, s.pool, workspaceID, issueID, comment.ID, viewerUserID)
+		comment.Reactions, err = listCommentReactionSummaries(ctx, q, workspaceID, issueID, comment.ID, viewerID)
 		if err != nil {
 			return nil, err
 		}

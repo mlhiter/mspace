@@ -25,6 +25,11 @@ import (
 
 const defaultImportedClusterImageRegistryPrefix = "crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter"
 
+const (
+	testDeployAutomation                = "test_deploy"
+	autoDeployTestEnvironmentAutomation = "auto_test_deploy"
+)
+
 func (s *PostgresStore) GetWorkspaceSettings(ctx Context, userID, workspaceID string) (WorkspaceSettings, error) {
 	dbctx := asContext(ctx)
 	if err := ensureWorkspaceMember(dbctx, s.pool, strings.TrimSpace(workspaceID), strings.TrimSpace(userID)); err != nil {
@@ -40,13 +45,14 @@ func (s *PostgresStore) UpdateWorkspaceSettings(ctx Context, userID, workspaceID
 		return WorkspaceSettings{}, err
 	}
 	row := s.pool.QueryRow(dbctx, `
-		INSERT INTO workspace_settings (workspace_id, auto_create_draft_pr)
-		VALUES ($1, $2)
+		INSERT INTO workspace_settings (workspace_id, auto_create_draft_pr, auto_deploy_test_environment)
+		VALUES ($1, $2, $3)
 		ON CONFLICT (workspace_id) DO UPDATE
 		SET auto_create_draft_pr = EXCLUDED.auto_create_draft_pr,
+			auto_deploy_test_environment = EXCLUDED.auto_deploy_test_environment,
 			updated_at = now()
-		RETURNING auto_create_draft_pr, created_at, updated_at
-	`, workspaceID, input.AutoCreateDraftPR)
+		RETURNING auto_create_draft_pr, auto_deploy_test_environment, created_at, updated_at
+	`, workspaceID, input.AutoCreateDraftPR, input.AutoDeployTestEnvironment)
 	return scanWorkspaceSettings(row)
 }
 
@@ -56,7 +62,7 @@ func ensureWorkspaceSettings(ctx context.Context, q queryer, workspaceID string)
 		VALUES ($1)
 		ON CONFLICT (workspace_id) DO UPDATE
 		SET workspace_id = EXCLUDED.workspace_id
-		RETURNING auto_create_draft_pr, created_at, updated_at
+		RETURNING auto_create_draft_pr, auto_deploy_test_environment, created_at, updated_at
 	`, strings.TrimSpace(workspaceID))
 	return scanWorkspaceSettings(row)
 }
@@ -64,7 +70,7 @@ func ensureWorkspaceSettings(ctx context.Context, q queryer, workspaceID string)
 func scanWorkspaceSettings(row scanner) (WorkspaceSettings, error) {
 	var settings WorkspaceSettings
 	var createdAt, updatedAt time.Time
-	if err := row.Scan(&settings.AutoCreateDraftPR, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&settings.AutoCreateDraftPR, &settings.AutoDeployTestEnvironment, &createdAt, &updatedAt); err != nil {
 		return WorkspaceSettings{}, err
 	}
 	settings.CreatedAt = createdAt.UTC().Format(time.RFC3339)
@@ -829,9 +835,14 @@ func (s *PostgresStore) StartIssueTestDeploy(ctx Context, userID, workspaceID, i
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
 	issueID = strings.TrimSpace(issueID)
+	userID = strings.TrimSpace(userID)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
 		return TestEnvironmentSessionResult{}, err
 	}
+	return s.queueIssueTestDeploy(ctx, dbctx, userID, workspaceID, issueID, input, false)
+}
+
+func (s *PostgresStore) queueIssueTestDeploy(ctx Context, dbctx context.Context, userID, workspaceID, issueID string, input StartTestDeployInput, automated bool) (TestEnvironmentSessionResult, error) {
 	detail, err := s.GetIssue(ctx, userID, workspaceID, issueID)
 	if err != nil {
 		return TestEnvironmentSessionResult{}, err
@@ -842,6 +853,10 @@ func (s *PostgresStore) StartIssueTestDeploy(ctx Context, userID, workspaceID, i
 	if hasActiveAgentSession(detail.Sessions) {
 		return TestEnvironmentSessionResult{}, errors.New("issue already has an active session")
 	}
+	return s.queueIssueTestDeployForDetail(ctx, dbctx, userID, workspaceID, issueID, detail, input, automated)
+}
+
+func (s *PostgresStore) queueIssueTestDeployForDetail(ctx Context, dbctx context.Context, userID, workspaceID, issueID string, detail IssueDetail, input StartTestDeployInput, automated bool) (TestEnvironmentSessionResult, error) {
 	environment, err := s.buildIssueTestEnvironment(dbctx, detail, input)
 	if err != nil {
 		return TestEnvironmentSessionResult{}, err
@@ -855,9 +870,10 @@ func (s *PostgresStore) StartIssueTestDeploy(ctx Context, userID, workspaceID, i
 	session, err := s.CreateAgentSession(ctx, userID, workspaceID, issueID, CreateAgentSessionInput{
 		Provider:        "codex",
 		AgentProfile:    firstNonEmpty(strings.TrimSpace(input.AgentProfile), "codex"),
-		Command:         buildIssueTestDeployPrompt(detail, environment, sourceNode),
+		Command:         buildIssueTestDeployPrompt(detail, environment, sourceNode, automated),
 		SourceSessionID: sourceNode.SessionID,
 		SourceCommitSHA: sourceNode.CommitSHA,
+		Automation:      testDeployAutomationMarker(automated),
 	})
 	if err != nil {
 		return TestEnvironmentSessionResult{}, err
@@ -867,8 +883,13 @@ func (s *PostgresStore) StartIssueTestDeploy(ctx Context, userID, workspaceID, i
 	if err := s.saveIssueTestEnvironment(dbctx, workspaceID, environment); err != nil {
 		return TestEnvironmentSessionResult{}, err
 	}
+	verb := "Queued test deployment"
+	if automated {
+		verb = "Auto-queued test deployment"
+	}
 	_ = s.addSystemComment(dbctx, workspaceID, issueID, fmt.Sprintf(
-		"Queued test deployment session `%s` for namespace `%s`.\n\nSource commit: `%s`\nCluster: `%s`\nRegistry: `%s`\nExposure: %s",
+		"%s session `%s` for namespace `%s`.\n\nSource commit: `%s`\nCluster: `%s`\nRegistry: `%s`\nExposure: %s",
+		verb,
 		shortIdentifier(session.ID),
 		environment.Namespace,
 		shortCommitSHA(sourceNode.CommitSHA),
@@ -1197,10 +1218,14 @@ func selectIssueChangeNodeForDeploy(nodes []IssueChangeNode, sourceCommitSHA, so
 	return IssueChangeNode{}, errors.New("selected source commit was not found on this issue")
 }
 
-func buildIssueTestDeployPrompt(detail IssueDetail, environment IssueTestEnvironment, source IssueChangeNode) string {
+func buildIssueTestDeployPrompt(detail IssueDetail, environment IssueTestEnvironment, source IssueChangeNode, automated bool) string {
 	var builder strings.Builder
 	builder.WriteString("Deploy a test environment for this issue.\n\n")
-	builder.WriteString("The user manually triggered this deployment after agent work, so do not create a PR unless explicitly asked in a separate turn.\n\n")
+	if automated {
+		builder.WriteString("mspace automatically queued this deployment after a successful source session because the workspace auto-deploy test environment setting is enabled. Do not create a PR unless explicitly asked in a separate turn.\n\n")
+	} else {
+		builder.WriteString("The user manually triggered this deployment after agent work, so do not create a PR unless explicitly asked in a separate turn.\n\n")
+	}
 	builder.WriteString("Source code to deploy:\n")
 	builder.WriteString(fmt.Sprintf("- Source commit: %s\n", source.CommitSHA))
 	builder.WriteString(fmt.Sprintf("- Source session: %s\n", shortIdentifier(source.SessionID)))
@@ -1272,6 +1297,42 @@ func previewStrategyLabel(environment IssueTestEnvironment) string {
 		return fmt.Sprintf("NodePort via `%s`", environment.NodeHost)
 	}
 	return "NodePort with discovered node address"
+}
+
+func testDeployAutomationMarker(automated bool) string {
+	if automated {
+		return autoDeployTestEnvironmentAutomation
+	}
+	return testDeployAutomation
+}
+
+func runtimeTaskAutomation(task RuntimeTask) string {
+	var payload struct {
+		Automation string `json:"automation"`
+	}
+	_ = json.Unmarshal(task.Payload, &payload)
+	return strings.TrimSpace(payload.Automation)
+}
+
+func isAutoDeployTestEnvironmentTask(task RuntimeTask) bool {
+	return runtimeTaskAutomation(task) == autoDeployTestEnvironmentAutomation
+}
+
+func isIssueTestDeployTask(task RuntimeTask) bool {
+	switch runtimeTaskAutomation(task) {
+	case testDeployAutomation, autoDeployTestEnvironmentAutomation:
+		return true
+	default:
+		return false
+	}
+}
+
+func runtimeTaskIsDryRun(task RuntimeTask) bool {
+	var result struct {
+		DryRun bool `json:"dryRun"`
+	}
+	_ = json.Unmarshal(task.Result, &result)
+	return result.DryRun
 }
 
 func (s *PostgresStore) loadIssueTestEnvironment(ctx context.Context, workspaceID, issueID string) (IssueTestEnvironment, error) {
@@ -1861,11 +1922,15 @@ func issueHandoffComment(handoff IssueHandoff) string {
 }
 
 func (s *PostgresStore) addSystemComment(ctx context.Context, workspaceID, issueID, body string) error {
+	return addSystemCommentRecord(ctx, s.pool, workspaceID, issueID, body)
+}
+
+func addSystemCommentRecord(ctx context.Context, q queryer, workspaceID, issueID, body string) error {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `
+	_, err := q.Exec(ctx, `
 		INSERT INTO comments (workspace_id, issue_id, author_type, author_name, body)
 		VALUES ($1, $2, 'system', 'mspace', $3)
 	`, workspaceID, issueID, body)
@@ -1904,7 +1969,200 @@ func (s *PostgresStore) reconcileAgentSessionRuntimeResult(ctx context.Context, 
 			return err
 		}
 	}
+	if task.Status == "completed" {
+		if err := s.queueAutomaticTestDeployIfEnabled(ctx, q, task); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (s *PostgresStore) queueAutomaticTestDeployIfEnabled(ctx context.Context, q queryer, task RuntimeTask) error {
+	if strings.TrimSpace(task.IssueID) == "" || isIssueTestDeployTask(task) || runtimeTaskIsDryRun(task) {
+		return nil
+	}
+	source := runtimeTaskSource(task)
+	if strings.TrimSpace(source.CommitSHA) == "" || strings.TrimSpace(source.Error) != "" {
+		return nil
+	}
+	settings, err := ensureWorkspaceSettings(ctx, q, task.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	if !settings.AutoDeployTestEnvironment {
+		return nil
+	}
+	userID, err := runtimeTaskCreator(ctx, q, task.WorkspaceID, task.ID)
+	if errors.Is(err, ErrNotFound) || userID == "" {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	issue, err := loadIssue(ctx, q, task.WorkspaceID, task.IssueID)
+	if errors.Is(err, ErrNotFound) || issue.ProjectID == "" {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	project, err := resolveIssueProject(ctx, q, task.WorkspaceID, issue.ProjectID, "")
+	if err != nil {
+		return err
+	}
+	workspace, err := loadWorkspaceForUser(ctx, q, task.WorkspaceID, userID)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := ensureRuntimeModeAllowedForWorkspace(ctx, q, task.WorkspaceID, firstNonEmpty(task.RuntimeMode, workspace.Kind)); err != nil {
+		return err
+	}
+	hasActiveWorker, err := hasActiveCodexWorkerRecord(ctx, q, task.WorkspaceID, firstNonEmpty(task.RuntimeMode, workspace.Kind))
+	if err != nil {
+		return err
+	}
+	if !hasActiveWorker {
+		_ = addSystemCommentRecord(ctx, q, task.WorkspaceID, task.IssueID, "Skipped automatic test deployment: no active Codex worker is connected.")
+		return nil
+	}
+	if hasActiveQueuedOrRunningAgentSession(ctx, q, task.WorkspaceID, task.IssueID, task.ID) {
+		return nil
+	}
+	runbook, _ := loadProjectRunbookSnapshot(ctx, q, task.WorkspaceID, project.ID)
+	comments, err := listIssueCommentsForQueryer(ctx, q, task.WorkspaceID, task.IssueID)
+	if err != nil {
+		return err
+	}
+	labels, err := listIssueLabels(ctx, q, task.WorkspaceID, task.IssueID)
+	if err != nil {
+		return err
+	}
+	childIssues, err := listChildIssuesForQueryer(ctx, q, task.WorkspaceID, task.IssueID)
+	if err != nil {
+		return err
+	}
+	detail := IssueDetail{
+		Issue:           issue,
+		Project:         project,
+		TestEnvironment: nil,
+		ChildIssues:     childIssues,
+		Labels:          labels,
+		Comments:        comments,
+		Sessions:        []AgentSession{},
+		ChangeNodes:     []IssueChangeNode{runtimeTaskChangeNode(task)},
+	}
+	existingEnvironment, err := loadIssueTestEnvironmentRecord(ctx, q, task.WorkspaceID, task.IssueID)
+	if errors.Is(err, ErrNotFound) {
+		existingEnvironment = IssueTestEnvironment{}
+	} else if err != nil {
+		return err
+	}
+	if existingEnvironment.IssueID != "" {
+		detail.TestEnvironment = &existingEnvironment
+	}
+	environment, err := s.buildIssueTestEnvironment(ctx, detail, StartTestDeployInput{})
+	if err != nil {
+		_ = addSystemCommentRecord(ctx, q, task.WorkspaceID, task.IssueID, fmt.Sprintf("Skipped automatic test deployment: %s", err.Error()))
+		return nil
+	}
+	sourceNode := detail.ChangeNodes[0]
+	environment.SourceSessionID = sourceNode.SessionID
+	environment.SourceCommitSHA = sourceNode.CommitSHA
+	sessionID, err := newAgentSessionID()
+	if err != nil {
+		return err
+	}
+	input := CreateAgentSessionInput{
+		Provider:        "codex",
+		AgentProfile:    "codex",
+		RuntimeMode:     firstNonEmpty(task.RuntimeMode, workspace.Kind),
+		Command:         buildIssueTestDeployPrompt(detail, environment, sourceNode, true),
+		SourceSessionID: sourceNode.SessionID,
+		SourceCommitSHA: sourceNode.CommitSHA,
+		Automation:      testDeployAutomationMarker(true),
+	}
+	if input.RuntimeMode != workspace.Kind {
+		return ErrForbidden
+	}
+	input.Branch = defaultAgentSessionBranch(task.IssueID, sessionID)
+	payload, err := json.Marshal(buildAgentSessionPayload(sessionID, issue, project, runbook, comments, labels, childIssues, input))
+	if err != nil {
+		return err
+	}
+	capabilities, err := json.Marshal(map[string]bool{"codex": true})
+	if err != nil {
+		return err
+	}
+	queued, err := insertRuntimeTaskRecord(ctx, q, task.WorkspaceID, userID, CreateRuntimeTaskInput{
+		IssueID:              issue.ID,
+		SessionID:            sessionID,
+		ProjectID:            project.ID,
+		Kind:                 "agent_session",
+		Priority:             0,
+		RuntimeMode:          input.RuntimeMode,
+		RequiredCapabilities: capabilities,
+		Payload:              payload,
+	})
+	if err != nil {
+		return err
+	}
+	environment.LastDeploySessionID = sessionID
+	environment.NamespaceStatus = "deploying"
+	if err := saveIssueTestEnvironmentRecord(ctx, q, task.WorkspaceID, environment); err != nil {
+		return err
+	}
+	_ = addSystemCommentRecord(ctx, q, task.WorkspaceID, task.IssueID, fmt.Sprintf(
+		"Auto-queued test deployment session `%s` for namespace `%s`.\n\nSource commit: `%s`\nCluster: `%s`\nRegistry: `%s`\nExposure: %s",
+		shortIdentifier(sessionID),
+		environment.Namespace,
+		shortCommitSHA(sourceNode.CommitSHA),
+		environment.ClusterID,
+		environment.ImageRegistryPrefix,
+		previewStrategyLabel(environment),
+	))
+	_ = insertRuntimeTaskEvent(ctx, q, queued.WorkspaceID, queued.ID, "", userID, "auto_deploy_queued", map[string]any{
+		"sourceTaskId":    task.ID,
+		"sourceSessionId": firstNonEmpty(task.SessionID, task.ID),
+		"sourceCommitSha": sourceNode.CommitSHA,
+		"testEnvironment": environment.Namespace,
+	})
+	return nil
+}
+
+func runtimeTaskCreator(ctx context.Context, q queryer, workspaceID, taskID string) (string, error) {
+	var userID string
+	err := q.QueryRow(ctx, `
+		SELECT COALESCE(created_by_user_id::text, '')
+		FROM runtime_tasks
+		WHERE workspace_id = $1 AND id = $2
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(taskID)).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(userID), nil
+}
+
+func hasActiveQueuedOrRunningAgentSession(ctx context.Context, q queryer, workspaceID, issueID, excludedTaskID string) bool {
+	var exists bool
+	err := q.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM runtime_tasks
+			WHERE workspace_id = $1
+				AND issue_id = $2
+				AND kind = 'agent_session'
+				AND ($3 = '' OR id::text <> $3)
+				AND status IN ('queued', 'claimed', 'running')
+			LIMIT 1
+		)
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(issueID), strings.TrimSpace(excludedTaskID)).Scan(&exists)
+	return err == nil && exists
 }
 
 func (s *PostgresStore) reconcileSuccessfulIssueTestEnvironment(ctx context.Context, q queryer, task RuntimeTask, session AgentSession, artifacts RuntimeTaskArtifactResult) error {

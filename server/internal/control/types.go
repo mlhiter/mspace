@@ -720,6 +720,7 @@ type CreateAgentSessionInput struct {
 	SourceSessionID  string `json:"sourceSessionId"`
 	SourceCommitSHA  string `json:"sourceCommitSha"`
 	TriggerCommentID string `json:"triggerCommentId"`
+	Automation       string `json:"automation"`
 }
 
 type CreateIssueInput struct {
@@ -770,13 +771,15 @@ type UpdateCommentInput struct {
 }
 
 type WorkspaceSettings struct {
-	AutoCreateDraftPR bool   `json:"autoCreateDraftPr"`
-	CreatedAt         string `json:"createdAt"`
-	UpdatedAt         string `json:"updatedAt"`
+	AutoCreateDraftPR         bool   `json:"autoCreateDraftPr"`
+	AutoDeployTestEnvironment bool   `json:"autoDeployTestEnvironment"`
+	CreatedAt                 string `json:"createdAt"`
+	UpdatedAt                 string `json:"updatedAt"`
 }
 
 type WorkspaceSettingsInput struct {
-	AutoCreateDraftPR bool `json:"autoCreateDraftPr"`
+	AutoCreateDraftPR         bool `json:"autoCreateDraftPr"`
+	AutoDeployTestEnvironment bool `json:"autoDeployTestEnvironment"`
 }
 
 type AgentProfile struct {

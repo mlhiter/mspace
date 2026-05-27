@@ -73,12 +73,14 @@ export interface ActiveWorkItem {
 
 export interface WorkspaceSettings {
 	autoCreateDraftPr: boolean;
+	autoDeployTestEnvironment: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
 
 export interface UpdateWorkspaceSettingsInput {
   autoCreateDraftPr: boolean;
+  autoDeployTestEnvironment: boolean;
 }
 
 export interface InboxItem {

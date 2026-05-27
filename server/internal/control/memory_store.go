@@ -1127,6 +1127,7 @@ func (s *MemoryStore) UpdateWorkspaceSettings(_ Context, userID, workspaceID str
 	}
 	settings := s.workspaceSettingsLocked(workspaceID)
 	settings.AutoCreateDraftPR = input.AutoCreateDraftPR
+	settings.AutoDeployTestEnvironment = input.AutoDeployTestEnvironment
 	settings.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.workspaceSettings[workspaceID] = settings
 	return settings, nil
@@ -1828,6 +1829,10 @@ func (s *MemoryStore) StartIssueTestDeploy(_ Context, userID, workspaceID, issue
 	if detail.Project.ID == "" {
 		return TestEnvironmentSessionResult{}, errors.New("attach a project before starting a test deployment")
 	}
+	return s.queueIssueTestDeployLocked(userID, workspaceID, issueID, detail, input, false)
+}
+
+func (s *MemoryStore) queueIssueTestDeployLocked(userID, workspaceID, issueID string, detail IssueDetail, input StartTestDeployInput, automated bool) (TestEnvironmentSessionResult, error) {
 	if hasActiveAgentSession(detail.Sessions) {
 		return TestEnvironmentSessionResult{}, errors.New("issue already has an active session")
 	}
@@ -1844,9 +1849,10 @@ func (s *MemoryStore) StartIssueTestDeploy(_ Context, userID, workspaceID, issue
 	session, err := s.createAgentSessionLocked(userID, workspaceID, issueID, CreateAgentSessionInput{
 		Provider:        "codex",
 		AgentProfile:    firstNonEmpty(input.AgentProfile, "codex"),
-		Command:         buildIssueTestDeployPrompt(detail, environment, sourceNode),
+		Command:         buildIssueTestDeployPrompt(detail, environment, sourceNode, automated),
 		SourceSessionID: sourceNode.SessionID,
 		SourceCommitSHA: sourceNode.CommitSHA,
+		Automation:      testDeployAutomationMarker(automated),
 	})
 	if err != nil {
 		return TestEnvironmentSessionResult{}, err
@@ -2231,6 +2237,74 @@ func (s *MemoryStore) reconcileAgentSessionRuntimeResultLocked(task RuntimeTask)
 	if task.Status == "failed" || task.Status == "cancelled" {
 		s.storeRuntimeSessionFailureLocked(task, session)
 	}
+	if task.Status == "completed" {
+		s.queueAutomaticTestDeployIfEnabledLocked(task)
+	}
+}
+
+func (s *MemoryStore) queueAutomaticTestDeployIfEnabledLocked(task RuntimeTask) {
+	if strings.TrimSpace(task.IssueID) == "" || isIssueTestDeployTask(task) || runtimeTaskIsDryRun(task) {
+		return
+	}
+	source := runtimeTaskSource(task)
+	if strings.TrimSpace(source.CommitSHA) == "" || strings.TrimSpace(source.Error) != "" {
+		return
+	}
+	settings := s.workspaceSettingsLocked(task.WorkspaceID)
+	if !settings.AutoDeployTestEnvironment {
+		return
+	}
+	var userID string
+	for _, event := range s.runtimeTaskEvents {
+		if event.TaskID == task.ID && event.Kind == "created" {
+			userID = event.ActorUserID
+			break
+		}
+	}
+	if userID == "" {
+		return
+	}
+	issue, ok := s.issues[task.IssueID]
+	if !ok || issue.ProjectID == "" {
+		return
+	}
+	project, ok := s.projects[issue.ProjectID]
+	if !ok {
+		return
+	}
+	workspace, ok := s.workspaceLocked(task.WorkspaceID)
+	if !ok {
+		return
+	}
+	runtimeMode := firstNonEmpty(task.RuntimeMode, workspace.Kind)
+	if !s.hasActiveCodexWorkerLocked(task.WorkspaceID, runtimeMode, time.Now().UTC()) {
+		return
+	}
+	for _, candidate := range s.runtimeTasks {
+		if candidate.WorkspaceID == task.WorkspaceID &&
+			candidate.IssueID == task.IssueID &&
+			candidate.ID != task.ID &&
+			candidate.Kind == "agent_session" &&
+			(candidate.Status == "queued" || candidate.Status == "claimed" || candidate.Status == "running") {
+			return
+		}
+	}
+	var existingEnvironment *IssueTestEnvironment
+	if environment, ok := s.testEnvironments[task.IssueID]; ok {
+		copy := environment
+		existingEnvironment = &copy
+	}
+	detail := IssueDetail{
+		Issue:           issue,
+		Project:         project,
+		TestEnvironment: existingEnvironment,
+		ChildIssues:     []IssueListItem{},
+		Labels:          s.issueLabels[task.IssueID],
+		Comments:        []Comment{},
+		Sessions:        []AgentSession{},
+		ChangeNodes:     []IssueChangeNode{runtimeTaskChangeNode(task)},
+	}
+	_, _ = s.queueIssueTestDeployLocked(userID, task.WorkspaceID, task.IssueID, detail, StartTestDeployInput{}, true)
 }
 
 func (s *MemoryStore) reconcileSuccessfulIssueTestEnvironmentLocked(task RuntimeTask, session AgentSession, artifacts RuntimeTaskArtifactResult) {

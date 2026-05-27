@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS workspace_settings (
   workspace_id UUID PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
   auto_create_draft_pr BOOLEAN NOT NULL DEFAULT FALSE,
+  auto_deploy_test_environment BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

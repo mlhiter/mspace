@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -1840,4 +1841,404 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	if invalidTokenClaimRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("invalid worker token should be unauthorized, status=%d body=%s", invalidTokenClaimRecorder.Code, invalidTokenClaimRecorder.Body.String())
 	}
+}
+
+func TestAutoDeployTestEnvironmentQueuesAfterSourceSession(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "auto-deploy-owner",
+		Login:          "auto-deploy-owner",
+		Name:           "Auto Deploy Owner",
+		Email:          "auto-deploy-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	settingsRecorder := httptest.NewRecorder()
+	settingsReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/workspace/settings", strings.NewReader(`{"autoCreateDraftPr":false,"autoDeployTestEnvironment":true}`))
+	settingsReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(settingsRecorder, settingsReq)
+	if settingsRecorder.Code != http.StatusOK {
+		t.Fatalf("update workspace settings status=%d body=%s", settingsRecorder.Code, settingsRecorder.Body.String())
+	}
+	var settings WorkspaceSettings
+	if err := json.Unmarshal(settingsRecorder.Body.Bytes(), &settings); err != nil {
+		t.Fatalf("parse settings: %v", err)
+	}
+	if !settings.AutoDeployTestEnvironment {
+		t.Fatalf("expected auto deploy setting to be enabled: %+v", settings)
+	}
+
+	clusterResult, err := store.ImportKubeconfigs(context.Background(), user.ID, workspaceID, []string{"/tmp/mspace-auto-deploy-kubeconfig"})
+	if err != nil {
+		t.Fatalf("import kubeconfig: %v", err)
+	}
+	if len(clusterResult.Imported) != 1 {
+		t.Fatalf("expected one imported cluster, got %+v", clusterResult)
+	}
+	cluster := clusterResult.Imported[0]
+	project, err := store.CreateProject(context.Background(), user.ID, workspaceID, ProjectInput{
+		Name:             "Auto Deploy Project",
+		SourceType:       "github",
+		RepoURL:          "https://github.com/mlhiter/auto-deploy-project.git",
+		DefaultBranch:    "main",
+		DefaultClusterID: cluster.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Body:      "Fix a source bug and deploy the result automatically.",
+	})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+
+	createTokenRecorder := httptest.NewRecorder()
+	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"auto deploy worker","expiresInHours":12}`))
+	createTokenReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createTokenRecorder, createTokenReq)
+	if createTokenRecorder.Code != http.StatusCreated {
+		t.Fatalf("create runtime token status=%d body=%s", createTokenRecorder.Code, createTokenRecorder.Body.String())
+	}
+	var tokenResult RuntimeRegistrationTokenResult
+	if err := json.Unmarshal(createTokenRecorder.Body.Bytes(), &tokenResult); err != nil {
+		t.Fatalf("parse runtime token: %v", err)
+	}
+
+	registerRecorder := httptest.NewRecorder()
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"auto-deploy-worker","mode":"personal","version":"0.1.0","capabilities":{"codex":true,"docker":true,"kubectl":true},"labels":{"host":"local"}}`))
+	registerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(registerRecorder, registerReq)
+	if registerRecorder.Code != http.StatusCreated {
+		t.Fatalf("register worker status=%d body=%s", registerRecorder.Code, registerRecorder.Body.String())
+	}
+	var worker RuntimeWorker
+	if err := json.Unmarshal(registerRecorder.Body.Bytes(), &worker); err != nil {
+		t.Fatalf("parse worker: %v", err)
+	}
+
+	createSessionRecorder := httptest.NewRecorder()
+	createSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{"provider":"codex","agentProfile":"codex","command":"Fix the source bug."}`))
+	createSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createSessionRecorder, createSessionReq)
+	if createSessionRecorder.Code != http.StatusCreated {
+		t.Fatalf("create agent session status=%d body=%s", createSessionRecorder.Code, createSessionRecorder.Body.String())
+	}
+	var sourceSession AgentSession
+	if err := json.Unmarshal(createSessionRecorder.Body.Bytes(), &sourceSession); err != nil {
+		t.Fatalf("parse source session: %v", err)
+	}
+
+	claimSourceRecorder := httptest.NewRecorder()
+	claimSourceReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	claimSourceReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(claimSourceRecorder, claimSourceReq)
+	if claimSourceRecorder.Code != http.StatusOK {
+		t.Fatalf("claim source task status=%d body=%s", claimSourceRecorder.Code, claimSourceRecorder.Body.String())
+	}
+	var sourceTask RuntimeTask
+	if err := json.Unmarshal(claimSourceRecorder.Body.Bytes(), &sourceTask); err != nil {
+		t.Fatalf("parse claimed source task: %v", err)
+	}
+	if sourceTask.ID != sourceSession.RuntimeTaskID {
+		t.Fatalf("expected source task %s, got %+v", sourceSession.RuntimeTaskID, sourceTask)
+	}
+
+	completeSourceRecorder := httptest.NewRecorder()
+	completeSourceReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+sourceTask.ID+"/status", strings.NewReader(`{"status":"completed","result":{"exitCode":0,"source":{"commitSha":"1111111111111111111111111111111111111111","shortCommitSha":"111111111111","branch":"fix/auto-deploy","subject":"fix auto deploy","filesChanged":1,"changes":[],"diffPreview":"diff --git a/app.go b/app.go"}}}`))
+	completeSourceReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(completeSourceRecorder, completeSourceReq)
+	if completeSourceRecorder.Code != http.StatusOK {
+		t.Fatalf("complete source task status=%d body=%s", completeSourceRecorder.Code, completeSourceRecorder.Body.String())
+	}
+
+	tasksRecorder := httptest.NewRecorder()
+	tasksReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks", nil)
+	tasksReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(tasksRecorder, tasksReq)
+	if tasksRecorder.Code != http.StatusOK {
+		t.Fatalf("list runtime tasks status=%d body=%s", tasksRecorder.Code, tasksRecorder.Body.String())
+	}
+	var tasks []RuntimeTask
+	if err := json.Unmarshal(tasksRecorder.Body.Bytes(), &tasks); err != nil {
+		t.Fatalf("parse runtime tasks: %v", err)
+	}
+	var deployTask RuntimeTask
+	for _, task := range tasks {
+		if task.ID != sourceTask.ID && task.Kind == "agent_session" {
+			var payload struct {
+				Automation      string `json:"automation"`
+				SourceCommitSHA string `json:"sourceCommitSha"`
+			}
+			_ = json.Unmarshal(task.Payload, &payload)
+			if payload.Automation == autoDeployTestEnvironmentAutomation {
+				deployTask = task
+				if payload.SourceCommitSHA != "1111111111111111111111111111111111111111" {
+					t.Fatalf("auto deploy task used wrong source commit: %+v", payload)
+				}
+			}
+		}
+	}
+	if deployTask.ID == "" {
+		t.Fatalf("expected an auto deploy task, got %+v", tasks)
+	}
+	if deployTask.Status != "queued" || deployTask.RuntimeMode != "personal" || deployTask.IssueID != issueID || deployTask.ProjectID != project.ID {
+		t.Fatalf("unexpected auto deploy task: %+v", deployTask)
+	}
+
+	detail, err := store.GetIssue(context.Background(), user.ID, workspaceID, issueID)
+	if err != nil {
+		t.Fatalf("get issue detail: %v", err)
+	}
+	if detail.TestEnvironment == nil {
+		t.Fatalf("expected test environment to be created")
+	}
+	if detail.TestEnvironment.NamespaceStatus != "deploying" ||
+		detail.TestEnvironment.LastDeploySessionID != deployTask.SessionID ||
+		detail.TestEnvironment.SourceCommitSHA != "1111111111111111111111111111111111111111" {
+		t.Fatalf("unexpected test environment: %+v", detail.TestEnvironment)
+	}
+
+	claimDeployRecorder := httptest.NewRecorder()
+	claimDeployReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	claimDeployReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(claimDeployRecorder, claimDeployReq)
+	if claimDeployRecorder.Code != http.StatusOK {
+		t.Fatalf("claim auto deploy task status=%d body=%s", claimDeployRecorder.Code, claimDeployRecorder.Body.String())
+	}
+	var claimedDeployTask RuntimeTask
+	if err := json.Unmarshal(claimDeployRecorder.Body.Bytes(), &claimedDeployTask); err != nil {
+		t.Fatalf("parse claimed auto deploy task: %v", err)
+	}
+	if claimedDeployTask.ID != deployTask.ID {
+		t.Fatalf("expected deploy task %s, got %+v", deployTask.ID, claimedDeployTask)
+	}
+
+	completeDeployRecorder := httptest.NewRecorder()
+	completeDeployReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+claimedDeployTask.ID+"/status", strings.NewReader(`{"status":"completed","result":{"exitCode":0,"source":{"commitSha":"2222222222222222222222222222222222222222","shortCommitSha":"222222222222","branch":"deploy/auto","subject":"deploy auto","filesChanged":1},"testEnvironment":{"previewUrl":"http://127.0.0.1:31000"}}}`))
+	completeDeployReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(completeDeployRecorder, completeDeployReq)
+	if completeDeployRecorder.Code != http.StatusOK {
+		t.Fatalf("complete auto deploy task status=%d body=%s", completeDeployRecorder.Code, completeDeployRecorder.Body.String())
+	}
+
+	finalTasksRecorder := httptest.NewRecorder()
+	finalTasksReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks", nil)
+	finalTasksReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(finalTasksRecorder, finalTasksReq)
+	if finalTasksRecorder.Code != http.StatusOK {
+		t.Fatalf("list final runtime tasks status=%d body=%s", finalTasksRecorder.Code, finalTasksRecorder.Body.String())
+	}
+	var finalTasks []RuntimeTask
+	if err := json.Unmarshal(finalTasksRecorder.Body.Bytes(), &finalTasks); err != nil {
+		t.Fatalf("parse final runtime tasks: %v", err)
+	}
+	autoDeployCount := 0
+	for _, task := range finalTasks {
+		if isAutoDeployTestEnvironmentTask(task) {
+			autoDeployCount++
+		}
+	}
+	if autoDeployCount != 1 {
+		t.Fatalf("auto deploy task should not recursively queue another deploy, count=%d tasks=%+v", autoDeployCount, finalTasks)
+	}
+}
+
+func TestManualTestDeploySessionDoesNotTriggerAutomaticDeploy(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "manual-deploy-owner",
+		Login:          "manual-deploy-owner",
+		Name:           "Manual Deploy Owner",
+		Email:          "manual-deploy-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	if _, err := store.UpdateWorkspaceSettings(context.Background(), user.ID, workspaceID, WorkspaceSettingsInput{AutoDeployTestEnvironment: true}); err != nil {
+		t.Fatalf("enable auto deploy setting: %v", err)
+	}
+	clusterResult, err := store.ImportKubeconfigs(context.Background(), user.ID, workspaceID, []string{"/tmp/mspace-manual-deploy-kubeconfig"})
+	if err != nil {
+		t.Fatalf("import kubeconfig: %v", err)
+	}
+	cluster := clusterResult.Imported[0]
+	project, err := store.CreateProject(context.Background(), user.ID, workspaceID, ProjectInput{
+		Name:             "Manual Deploy Project",
+		SourceType:       "github",
+		RepoURL:          "https://github.com/mlhiter/manual-deploy-project.git",
+		DefaultBranch:    "main",
+		DefaultClusterID: cluster.ID,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Body:      "Deploy an already reviewed commit manually.",
+	})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+
+	tokenResult, worker := registerTestRuntimeWorker(t, router, sessionToken, workspaceID)
+
+	sourceSession, err := store.CreateAgentSession(context.Background(), user.ID, workspaceID, issueID, CreateAgentSessionInput{
+		Provider:     "codex",
+		AgentProfile: "codex",
+		Command:      "Produce a source commit.",
+	})
+	if err != nil {
+		t.Fatalf("create source session: %v", err)
+	}
+	sourceTask, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, `{"status":"completed","result":{"exitCode":0,"source":{"commitSha":"3333333333333333333333333333333333333333","shortCommitSha":"333333333333","branch":"fix/manual-source","subject":"fix manual source","filesChanged":1}}}`)
+	if err != nil {
+		t.Fatalf("complete source task: %v", err)
+	}
+	if sourceTask.ID != sourceSession.RuntimeTaskID {
+		t.Fatalf("expected source task %s, got %+v", sourceSession.RuntimeTaskID, sourceTask)
+	}
+	autoDeployTask := findAutoDeployTask(t, store, user.ID, workspaceID, issueID, sourceTask.ID)
+
+	_, err = claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, `{"status":"completed","result":{"exitCode":0,"testEnvironment":{"previewUrl":"http://127.0.0.1:31001"}}}`)
+	if err != nil {
+		t.Fatalf("complete first auto deploy task: %v", err)
+	}
+
+	result, err := store.StartIssueTestDeploy(context.Background(), user.ID, workspaceID, issueID, StartTestDeployInput{
+		SourceCommitSHA: "3333333333333333333333333333333333333333",
+	})
+	if err != nil {
+		t.Fatalf("start manual test deploy: %v", err)
+	}
+	manualDeployTask, err := runtimeTaskBySession(store, workspaceID, result.SessionID)
+	if err != nil {
+		t.Fatalf("lookup manual deploy task: %v", err)
+	}
+	if runtimeTaskAutomation(manualDeployTask) != testDeployAutomation {
+		t.Fatalf("expected manual deploy task marker %q, got payload %s", testDeployAutomation, manualDeployTask.Payload)
+	}
+
+	claimedManualDeploy, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, `{"status":"completed","result":{"exitCode":0,"source":{"commitSha":"4444444444444444444444444444444444444444","shortCommitSha":"444444444444","branch":"deploy/manual","subject":"deploy manual","filesChanged":1},"testEnvironment":{"previewUrl":"http://127.0.0.1:31002"}}}`)
+	if err != nil {
+		t.Fatalf("complete manual deploy task: %v", err)
+	}
+	if claimedManualDeploy.ID != manualDeployTask.ID {
+		t.Fatalf("expected manual deploy task %s, got %+v", manualDeployTask.ID, claimedManualDeploy)
+	}
+
+	tasks, err := store.ListRuntimeTasks(context.Background(), user.ID, workspaceID)
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	autoDeployCount := 0
+	for _, task := range tasks {
+		if isAutoDeployTestEnvironmentTask(task) {
+			autoDeployCount++
+		}
+	}
+	if autoDeployCount != 1 || autoDeployTask.ID == "" {
+		t.Fatalf("manual test deploy should not queue another auto deploy, count=%d tasks=%+v", autoDeployCount, tasks)
+	}
+}
+
+func registerTestRuntimeWorker(t *testing.T, router http.Handler, sessionToken, workspaceID string) (RuntimeRegistrationTokenResult, RuntimeWorker) {
+	t.Helper()
+	createTokenRecorder := httptest.NewRecorder()
+	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"test worker","expiresInHours":12}`))
+	createTokenReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createTokenRecorder, createTokenReq)
+	if createTokenRecorder.Code != http.StatusCreated {
+		t.Fatalf("create runtime token status=%d body=%s", createTokenRecorder.Code, createTokenRecorder.Body.String())
+	}
+	var tokenResult RuntimeRegistrationTokenResult
+	if err := json.Unmarshal(createTokenRecorder.Body.Bytes(), &tokenResult); err != nil {
+		t.Fatalf("parse runtime token: %v", err)
+	}
+
+	registerRecorder := httptest.NewRecorder()
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"test-worker","mode":"personal","version":"0.1.0","capabilities":{"codex":true,"docker":true,"kubectl":true},"labels":{"host":"local"}}`))
+	registerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(registerRecorder, registerReq)
+	if registerRecorder.Code != http.StatusCreated {
+		t.Fatalf("register worker status=%d body=%s", registerRecorder.Code, registerRecorder.Body.String())
+	}
+	var worker RuntimeWorker
+	if err := json.Unmarshal(registerRecorder.Body.Bytes(), &worker); err != nil {
+		t.Fatalf("parse worker: %v", err)
+	}
+	return tokenResult, worker
+}
+
+func claimAndCompleteTask(t *testing.T, router http.Handler, token, workerID, completionPayload string) (RuntimeTask, error) {
+	t.Helper()
+	claimRecorder := httptest.NewRecorder()
+	claimReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+workerID+"/tasks/claim", nil)
+	claimReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(claimRecorder, claimReq)
+	if claimRecorder.Code != http.StatusOK {
+		return RuntimeTask{}, fmt.Errorf("claim task status=%d body=%s", claimRecorder.Code, claimRecorder.Body.String())
+	}
+	var task RuntimeTask
+	if err := json.Unmarshal(claimRecorder.Body.Bytes(), &task); err != nil {
+		return RuntimeTask{}, err
+	}
+
+	completeRecorder := httptest.NewRecorder()
+	completeReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+workerID+"/tasks/"+task.ID+"/status", strings.NewReader(completionPayload))
+	completeReq.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(completeRecorder, completeReq)
+	if completeRecorder.Code != http.StatusOK {
+		return RuntimeTask{}, fmt.Errorf("complete task status=%d body=%s", completeRecorder.Code, completeRecorder.Body.String())
+	}
+	if err := json.Unmarshal(completeRecorder.Body.Bytes(), &task); err != nil {
+		return RuntimeTask{}, err
+	}
+	return task, nil
+}
+
+func findAutoDeployTask(t *testing.T, store *MemoryStore, userID, workspaceID, issueID, sourceTaskID string) RuntimeTask {
+	t.Helper()
+	tasks, err := store.ListRuntimeTasks(context.Background(), userID, workspaceID)
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+	for _, task := range tasks {
+		if task.ID != sourceTaskID && task.IssueID == issueID && isAutoDeployTestEnvironmentTask(task) {
+			return task
+		}
+	}
+	t.Fatalf("expected auto deploy task, got %+v", tasks)
+	return RuntimeTask{}
+}
+
+func runtimeTaskBySession(store *MemoryStore, workspaceID, sessionID string) (RuntimeTask, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, task := range store.runtimeTasks {
+		if task.WorkspaceID == workspaceID && task.SessionID == sessionID {
+			return task, nil
+		}
+	}
+	return RuntimeTask{}, ErrNotFound
 }
