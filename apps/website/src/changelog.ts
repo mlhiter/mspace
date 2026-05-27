@@ -16,6 +16,7 @@ export const changelog: ChangelogEntry[] = [
       "Hid GitHub sign-in for the default local personal server even when a development server advertises OAuth support.",
       "Kept GitHub sign-in available for explicitly configured team servers when `/health` reports OAuth as enabled.",
       "Reset the local-account form mode when switching between the default local server and a saved or environment-provided team server.",
+      "Added an opt-in workspace setting that automatically queues an issue test-environment deployment after a source session captures a commit.",
       "Blocked agent mentions when the selected workspace has no active matching Codex worker, avoiding sessions that sit in the queue waiting for a worker that does not exist.",
       "Added automatic host-local personal worker startup for desktop personal workspaces while keeping team workspaces on explicit registered team workers.",
       "Fixed default worker session branch names so repeated personal sessions under the same issue no longer collapse to the same `session-` branch.",

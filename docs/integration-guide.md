@@ -181,6 +181,17 @@ curl -X PUT "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues/<issue-id>
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Store or update the issue PR handoff from selected source evidence. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the issue handoff record. |
 
+Workspace settings currently include:
+
+```json
+{
+  "autoCreateDraftPr": false,
+  "autoDeployTestEnvironment": false
+}
+```
+
+`autoDeployTestEnvironment` is opt-in. When it is `true`, the server queues a deploy/test session after a completed non-dry-run source session captures a commit and the issue has an attached project, resolvable deploy settings, no active issue session, and a matching online Codex worker. The queued deploy task uses the same `agent_session` and `issue_test_environments` contracts as a manual test deploy, with automation marker `auto_test_deploy`.
+
 ## Server Agent Sessions
 
 Issue Detail starts a worker turn in two steps:
@@ -218,7 +229,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues/<issue-id
   }'
 ```
 
-The server first creates the `agent_session` runtime task with Kubernetes and source metadata. After queueing succeeds, it stores or updates `issue_test_environments` with the deployment session id and `deploying` state. The worker performs the deploy/test turn and can write `test-environment.json` in its artifact directory to report preview values.
+The server first creates the `agent_session` runtime task with Kubernetes and source metadata. After queueing succeeds, it stores or updates `issue_test_environments` with the deployment session id and `deploying` state. The worker performs the deploy/test turn and can write `test-environment.json` in its artifact directory to report preview values. Automatic test deploys follow this same path and pin `sourceSessionId` / `sourceCommitSha` to the completed source session that triggered them.
 
 Inspect live namespace resources:
 
@@ -257,6 +268,8 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/runtime-tasks" \
 ```
 
 The server rejects runtime worker registration and runtime task creation when the submitted mode does not match the workspace kind. A token minted in a personal workspace can only register a personal worker, and a token minted in a team workspace can only register a team worker. Manual runtime task requests follow the same rule: `runtimeMode:"personal"` for personal workspaces and `runtimeMode:"team"` for team workspaces.
+
+Desktop personal workers use the same token endpoints, but the user normally never sees the raw credential. Electron creates a 12-hour personal worker credential, writes it to an Electron user-data token file, renews it before expiry, and revokes the replaced credential after a short grace period. The worker supports `MSPACE_RUNTIME_TOKEN_FILE` and rereads that file for runtime API calls, so token renewal is designed to be invisible to personal users.
 
 Runtime task kinds used by the current product path:
 

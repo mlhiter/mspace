@@ -56,7 +56,7 @@ cp .env.example .env.local
 pnpm run server
 ```
 
-For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker before it submits an agent mention. The worker uses the active desktop server URL, a short-lived workspace registration token, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
+For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker before it submits an agent mention. The worker uses the active desktop server URL, a short-lived workspace registration token, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Electron writes the credential to `<Electron userData>/worker/tokens/<workspace-id>.token`, renews the 12-hour credential before expiry, and revokes the previous credential after a short grace period. The worker rereads the token file for runtime API calls, so credential renewal should be invisible during normal personal use. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
 
 For team or Docker-backed worker testing, start a worker from Workspace Settings:
 
@@ -96,6 +96,15 @@ scripts/run-server-worker-codex-dev.sh
 Worker-issued Codex sessions should not start or keep development servers running by default. Prefer non-interactive validation such as lint, tests, typecheck, build, or short internal probes. If a temporary server is needed, stop it before the session finishes and do not present container-local `localhost` or `127.0.0.1` as a user-facing preview.
 
 Cancellation is cooperative. Stopping a worker-backed session requests cancellation on the server task; the worker polls its claimed task and interrupts Codex app-server when it sees `cancelled`.
+
+## Workspace Automation
+
+Workspace Settings has two automation switches:
+
+- Source commit capture is always on and records source changes as issue change nodes.
+- `autoDeployTestEnvironment` is opt-in and queues a deploy/test session after a successful source session captures a commit.
+
+Automatic test deploy uses the same `agent_session` path as a manual test deploy. It is intentionally conservative: the triggering task must be completed, non-dry-run, and not itself a deploy/test task; it must have a source commit and no source error; the issue must have an attached project; cluster and deploy settings must resolve; no other agent session can be active for the issue; and a matching online Codex worker must exist. If no worker is connected or deploy settings cannot be resolved, the server adds a compact system comment explaining why the deploy was skipped.
 
 ## Kubernetes Customer Deployment
 
@@ -337,6 +346,10 @@ curl -H "Authorization: Bearer <msp-token>" \
 ```
 
 The task's `runtimeMode` and `requiredCapabilities` must match the worker heartbeat.
+
+### Personal worker credential expires
+
+The desktop-managed personal worker should renew credentials automatically. Check the Electron log for `[personal-worker] credential renewal failed` or `restart failed` first. If renewal keeps failing, confirm the user is still signed in, the selected server URL is reachable, and the personal workspace id has not changed. As a last local debug step, stop and restart the personal worker by switching server source or relaunching the desktop app; do not create a long-lived manual worker token for normal personal mode.
 
 ### Codex worker fails authentication
 

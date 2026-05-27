@@ -60,6 +60,8 @@ Desktop
 
 Personal and team workspaces use the same server API and runtime task protocol. `runtimeMode` controls which workers can claim the task, not which product model is used.
 
+In desktop personal mode, Electron manages the local worker bootstrap credential lifecycle. It creates a short-lived personal `msw_...` credential, writes it to an Electron user-data token file, starts a host-local worker with `MSPACE_RUNTIME_TOKEN_FILE`, renews the credential before expiry, and revokes the previous token after a grace period. The worker rereads the token file for runtime calls, so renewal normally does not require user action or a worker restart.
+
 Issue type triage follows the same boundary:
 
 ```text
@@ -176,6 +178,8 @@ Clusters are reusable workspace records with:
 - readiness status and last check time.
 
 Each issue can have one `issue_test_environments` record. It stores selected cluster id, namespace, namespace state, cleanup state, preview URL, deployment session id, cleanup session id, selected source session/commit, registry, kubeconfig, context, exposure mode, domain, ingress class, and NodePort host.
+
+Workspace Settings can opt into automatic test deployment. The server queues it only after a completed, non-dry-run source session reports a source commit, and it reuses the normal deploy/test session path with the captured source session and commit. The guardrails are intentionally conservative: no recursive deploy task, no missing project, no unresolved cluster/deploy settings, no active issue session, and no queueing without a matching online Codex worker.
 
 The Resources API uses Kubernetes typed clients and fixes the namespace from the server environment record. It should expose only Pods, Services, Deployments, Ingresses, and recent Events for that issue namespace.
 

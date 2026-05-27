@@ -140,6 +140,8 @@ Registration tokens are workspace-scoped bootstrap secrets for worker daemons. T
 
 Worker mode is part of the workspace trust boundary. Personal workspace tokens can register only personal workers and can queue only personal runtime tasks. Team workspace tokens can register only team workers and can queue only team runtime tasks. This keeps open self-registration useful for local personal runners without granting access to shared server runners until the user has been invited into the team workspace.
 
+Desktop personal workers are managed by Electron rather than by a human copying a token. Before a personal agent turn is queued, the desktop creates a 12-hour workspace registration credential, writes it to an Electron user-data token file, starts or reuses a host-local worker in `personal` mode, and schedules renewal before expiry. The worker reads the token file for runtime API calls, so renewal is normally invisible; Electron revokes the previous credential after a short grace period and also revokes the active credential when the personal worker is stopped or the server source changes.
+
 The first worker daemon exists as `worker/`. It registers, heartbeats, claims matching tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks from server payloads, and can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers keep repository caches and worktrees under `/var/lib/mspace-worker`, backed by a Docker volume, so target project source is isolated from the host checkout.
 
 Workers forward system, status, agent, command, file, and tool logs to `runtime_task_logs`, poll claimed tasks for cancellation, interrupt Codex when requested, capture a source commit when code changed, and return worker workdir, artifact dir, source commit, changed files, and diff preview in the task result.
@@ -151,6 +153,8 @@ Real Codex worker sessions should prefer non-interactive validation and must not
 ## Test Environment And Handoff
 
 Cluster configs live in server `clusters`. One issue can have one `issue_test_environments` row. Test deployment is queued through the same agent-session/runtime-task protocol as normal coding turns, with resolved cluster, namespace, source commit, registry, and exposure settings in the payload.
+
+Manual deploy/test remains available from Issue Detail. Workspace owners/admins can also enable `autoDeployTestEnvironment` in Workspace Settings. When enabled, the server watches completed non-dry-run source sessions; if the task produced a source commit, is not itself a deploy/test task, the issue has an attached project, deploy settings can be resolved, no other agent session is active for the issue, and a matching active Codex worker is online, the server queues one automated deploy/test `agent_session` for that exact source commit. Skips are either silent when the issue is not deployable or recorded as a compact system comment when the user needs to reconnect a worker or fix deploy settings.
 
 The Resources tab reads live namespace state through `GET /api/workspaces/{workspaceID}/issues/{issueID}/test-environment/resources`. The server uses Kubernetes client APIs and fixes the namespace from the issue environment record; the frontend must not pass arbitrary namespace input.
 

@@ -67,6 +67,7 @@ Production deployment uses the root `vercel.json`:
 - Per-session worker-managed git worktrees, changed file lists, diff previews, commits, and comparison against the project default branch.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and update the issue test environment record.
+- Opt-in workspace automation that queues the same test deployment flow after a successful source session captures a commit, when the issue and runtime are ready.
 - Issue Resources tab for the current test namespace, showing Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events without accepting cross-namespace input.
 - Issue Evidence tab for the current review packet, with full-width pages for previous attempts and Kubernetes snapshot history.
 - Issue-level branch / PR handoff records that keep one current PR with source branch, source commit, head commit, commit list, preview URL, evidence summary, local preflight errors, and refreshable PR state.
@@ -117,7 +118,7 @@ cp .env.example .env.local
 pnpm run server
 ```
 
-Personal desktop workspaces start a host-local Codex worker automatically before an agent mention is submitted. Team workspaces still need an explicit team worker from Workspace Settings or an external runtime. Run a worker manually only when debugging:
+Personal desktop workspaces start a host-local Codex worker automatically before an agent mention is submitted. The desktop creates a short-lived `msw_...` credential, stores it in an Electron user-data token file, renews it before expiry, and revokes the previous credential after the worker has had time to pick up the replacement. Team workspaces still need an explicit team worker from Workspace Settings or an external runtime. Run a worker manually only when debugging:
 
 ```bash
 export MSPACE_RUNTIME_TOKEN="msw_..."
@@ -139,7 +140,7 @@ Build a macOS desktop package for internal dogfood:
 pnpm dist:desktop:mac
 ```
 
-The packaged desktop app includes bundled `mspace-server` and `mspace-worker` binaries. When no remote server is configured, it starts the server in personal mode with a local SQLite store under the app user-data directory; the personal worker is kept alive against the selected personal workspace before Codex-backed agent turns.
+The packaged desktop app includes bundled `mspace-server` and `mspace-worker` binaries. When no remote server is configured, it starts the server in personal mode with a local SQLite store under the app user-data directory; the personal worker is kept alive against the selected personal workspace before Codex-backed agent turns, and its bootstrap credential is renewed in the background.
 
 ### First workflow
 
@@ -151,7 +152,7 @@ The packaged desktop app includes bundled `mspace-server` and `mspace-worker` bi
 6. Mention an enabled agent profile, such as `@codex`, in an issue comment.
 7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
 8. Use Commits for source review and PR handoff.
-9. Trigger a manual test deployment from Issue Detail when ready.
+9. Trigger a manual test deployment from Issue Detail when ready, or enable workspace auto-deploy to queue it after successful source sessions.
 10. Use Resources and Evidence to inspect namespace state, preview status, command evidence, failures, and cleanup decisions.
 
 ## Configuration

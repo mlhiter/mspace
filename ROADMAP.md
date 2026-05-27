@@ -27,7 +27,7 @@ The roadmap intentionally keeps fixed worker workflow first. Kubernetes is the m
 
 The server control-plane slice now owns local password auth, optional GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, workspace settings, agent profiles, clusters, issue test environments, PR handoffs, runtime registration, runtime tasks, worker logs, and runtime results. Team/shared workspace data uses server Postgres; packaged personal desktop mode can use the same server contract on a local SQLite store. Runtime execution happens through registered workers that claim server tasks. Open registration stays enabled for personal workspaces, while team workspace creation and shared server runner access are gated by server admin creation plus owner/admin invitations.
 
-The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, and bilingual desktop UI support for English and Simplified Chinese. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
+The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, opt-in automatic test deploy after captured source commits, automatic personal worker startup/credential renewal, and bilingual desktop UI support for English and Simplified Chinese. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 
 ## Approved Execution Plan
 
@@ -167,7 +167,7 @@ Build:
 - Store project default cluster id.
 - Store one test environment record per issue: cluster id, namespace, preview URL, deploy session, cleanup session, namespace state, and cleanup state.
 - Show a narrow Resources tab for the current issue namespace: Pods, Services and NodePort mappings, Deployments, Ingresses, and Events.
-- Add a manual "Deploy test env" action from Issue Detail.
+- Add a manual "Deploy test env" action from Issue Detail, plus opt-in workspace automation for source-session completion.
 - Queue an agent deployment turn that creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default, uses Ingress when configured, checks the preview URL, and writes preview output back.
 - Add manual retain/cleanup namespace decisions from Issue Detail.
 - Attach Kubernetes evidence to the issue and session.
@@ -175,7 +175,7 @@ Build:
 Acceptance:
 
 - A user can configure or import kubeconfig path and image registry prefix once in Clusters.
-- A user can trigger a test deployment only when ready, instead of every agent session deploying automatically.
+- A user can trigger a test deployment manually when ready, or explicitly opt a workspace into automatic deploy after successful source sessions.
 - The agent creates and manages the issue namespace.
 - The UI shows the selected cluster, issue namespace, namespace state, cleanup state, exposure mode, and preview URL when available.
 - The user can refresh current namespace Pods, Services, Deployments, Ingresses, and Events without entering a namespace or leaving the issue.

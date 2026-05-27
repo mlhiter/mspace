@@ -32,6 +32,7 @@ The repository now has a runnable local desktop MVP:
 - keep the server control plane free of Codex runtime dependencies: no Codex CLI in the server image, no Codex home mount in the server Deployment, and no in-process Codex app-server client;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage workspace automation policy, keeping source commit capture always on while recording branch / PR handoff state from captured source commits;
+- optionally queue an automatic issue test-environment deployment after a successful source session captures a commit, using the same source commit and deploy/test path as manual deployment;
 - manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
 - choose a default cluster per project and select a cluster when manually deploying an issue test environment;
 - manually trigger an issue-scoped test deployment where the agent creates the namespace, builds and pushes images, deploys resources, and returns a preview URL;
@@ -123,7 +124,7 @@ The intended order is:
 - Kubernetes environment for deployment and validation;
 - Kubernetes-hosted runtimes later when the Server Worker flow is solid.
 
-The product wedge is not "agent runs in Kubernetes" on day one. The wedge is "after worker-backed agent work, the user can manually ask the agent to prove the change in a real issue-scoped Kubernetes environment and return a URL the team can open."
+The product wedge is not "agent runs in Kubernetes" on day one. The wedge is "after worker-backed agent work, the user can ask the agent to prove the change in a real issue-scoped Kubernetes environment and return a URL the team can open." Manual deployment stays the default review control; workspace owners/admins can opt into automatic test deployment after source sessions when the project, cluster, registry, and worker prerequisites are already ready.
 
 ### Inbox and Issue Flow
 
@@ -216,6 +217,7 @@ MVP features:
 - manual session worktree cleanup controls;
 - reusable Clusters route for kubeconfig discovery/import, registry, and exposure defaults;
 - project default cluster selection;
+- opt-in automatic test deploy after captured source commits;
 - terminal/progress stream;
 - session workspace inspection;
 - branch comparison against project default branch;
