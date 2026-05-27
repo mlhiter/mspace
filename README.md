@@ -59,7 +59,7 @@ Production deployment uses the root `vercel.json`:
 - Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, mspace session tokens, personal/team workspaces, workspace membership, invitations, Inbox receipts, projects, runbooks, issues, comments, reactions, labels, runtime worker registration, agent profiles, clusters, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
 - Runtime worker daemon in `worker/` that registers with `msw_...`, heartbeats, claims matching server tasks, prepares its own repo cache/workdir, runs `codex app-server --listen stdio://`, streams logs, captures source metadata, and reports task results.
 - Codex execution belongs to runtime workers. The server image does not install Codex or mount Codex credentials.
-- Workspace Settings for team access, worker tokens, worker liveness, task events, task logs, and workspace automation.
+- Workspace Settings for team access, worker credentials, worker liveness, issue-linked runtime tasks, task events, task logs, and workspace automation.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, Material Icon Theme file icons, and shadcn/ui source components in `@mspace/ui`.
 - Bilingual desktop UI support for English and Simplified Chinese through `@mspace/i18n`.
 - Document-style issue creation and comments with TipTap Markdown editing, inline child issues from checklist rows, image rendering for stable attachment URLs, and lightweight comment reactions.
@@ -118,7 +118,7 @@ cp .env.example .env.local
 pnpm run server
 ```
 
-Personal desktop workspaces start a host-local Codex worker automatically before an agent mention is submitted. The desktop creates a short-lived `msw_...` credential, stores it in an Electron user-data token file, renews it before expiry, and revokes the previous credential after the worker has had time to pick up the replacement. Team workspaces still need an explicit team worker from Workspace Settings or an external runtime. Run a worker manually only when debugging:
+Personal desktop workspaces start a host-local Codex worker automatically before an agent mention is submitted. The desktop creates a short-lived `msw_...` credential, stores it in an Electron user-data token file, renews it before expiry, and revokes the previous credential after the worker has had time to pick up the replacement. Workspace Settings labels these desktop-managed credentials as automatic and keeps expired or replaced credentials in history so renewals do not look like duplicate manual tokens. Team workspaces still need an explicit team worker from Workspace Settings or an external runtime. Run a worker manually only when debugging:
 
 ```bash
 export MSPACE_RUNTIME_TOKEN="msw_..."
@@ -148,7 +148,7 @@ The packaged desktop app includes bundled `mspace-server` and `mspace-worker` bi
 2. Create an issue in the Issues tab with a document-style note.
 3. Attach or create a project before agent execution, PR handoff, project runbook access, or test environments.
 4. Create/import a cluster config in Clusters if the issue needs a Kubernetes test environment.
-5. For personal desktop workspaces, let mspace start the local worker when you mention an agent. For team workspaces, create a worker token from Workspace Settings and start a matching team worker. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
+5. For personal desktop workspaces, let mspace start the local worker when you mention an agent. For team workspaces, create a worker credential from Workspace Settings and start a matching team worker. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
 6. Mention an enabled agent profile, such as `@codex`, in an issue comment.
 7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
 8. Use Commits for source review and PR handoff.

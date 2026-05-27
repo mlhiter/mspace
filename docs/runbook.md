@@ -56,7 +56,7 @@ cp .env.example .env.local
 pnpm run server
 ```
 
-For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker before it submits an agent mention. The worker uses the active desktop server URL, a short-lived workspace registration token, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Electron writes the credential to `<Electron userData>/worker/tokens/<workspace-id>.token`, renews the 12-hour credential before expiry, and revokes the previous credential after a short grace period. The worker rereads the token file for runtime API calls, so credential renewal should be invisible during normal personal use. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
+For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker before it submits an agent mention. The worker uses the active desktop server URL, a short-lived workspace registration credential, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Electron writes the credential to `<Electron userData>/worker/tokens/<workspace-id>.token`, renews the 12-hour credential before expiry, and revokes the previous credential after a short grace period. The worker rereads the token file for runtime API calls, so credential renewal should be invisible during normal personal use. Workspace Settings labels these rows as automatic desktop credentials and keeps expired/replaced rows under credential history. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
 
 For team or Docker-backed worker testing, start a worker from Workspace Settings:
 
@@ -73,7 +73,7 @@ export MSPACE_RUNTIME_TOKEN="msw_..."
 pnpm worker
 ```
 
-The worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks from server payloads, and can execute `agent_session` tasks by preparing its own repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, then starting `codex app-server --listen stdio://` there.
+The worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks from server payloads, and can execute `agent_session` tasks by preparing its own repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, then starting `codex app-server --listen stdio://` there. Workspace Settings shows these tasks as issue-linked operational rows and keeps protocol payloads, results, events, and logs in expandable details.
 
 Codex configuration and authentication belong to worker runtimes. The server control plane queues work and applies runtime results, but it does not install Codex or mount Codex credentials.
 
@@ -238,7 +238,7 @@ curl -H "Authorization: Bearer <msp-token>" \
   http://127.0.0.1:8787/api/workspaces/<workspace-id>/inbox
 ```
 
-Runtime worker token:
+Manual runtime worker credential for external worker debugging:
 
 ```bash
 curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-registration-tokens" \
@@ -247,7 +247,7 @@ curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-regist
   -d '{"name":"local worker","expiresInHours":12}'
 ```
 
-Queue a protocol task:
+Queue a protocol task through the API debug path:
 
 ```bash
 curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks" \
@@ -349,7 +349,7 @@ The task's `runtimeMode` and `requiredCapabilities` must match the worker heartb
 
 ### Personal worker credential expires
 
-The desktop-managed personal worker should renew credentials automatically. Check the Electron log for `[personal-worker] credential renewal failed` or `restart failed` first. If renewal keeps failing, confirm the user is still signed in, the selected server URL is reachable, and the personal workspace id has not changed. As a last local debug step, stop and restart the personal worker by switching server source or relaunching the desktop app; do not create a long-lived manual worker token for normal personal mode.
+The desktop-managed personal worker should renew credentials automatically. Check the Electron log for `[personal-worker] credential renewal failed` or `restart failed` first. If renewal keeps failing, confirm the user is still signed in, the selected server URL is reachable, and the personal workspace id has not changed. As a last local debug step, stop and restart the personal worker by switching server source or relaunching the desktop app; do not create a long-lived manual worker credential for normal personal mode.
 
 ### Codex worker fails authentication
 

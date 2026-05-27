@@ -405,7 +405,12 @@ Workspace Settings owns workspace automation, team access, and runtime worker po
 - opens from the workspace identity menu, not from the main navigation rail;
 - keeps source commit capture always on for issue review and deploy continuation;
 - shows team workspace creation only to server admins, while ordinary registered users stay in personal workspaces until invited;
-- limits runtime credential creation to workspace owner/admin users and keeps runtime mode fixed to the current workspace kind;
+- limits manual runtime credential creation to workspace owner/admin users and keeps runtime mode fixed to the current workspace kind;
+- separates active worker credentials from expired or replaced credential history, with desktop personal-worker credentials labeled as automatic;
+- shows runtime tasks as issue-linked operational rows with Task, Issue, Status, Worker, Updated, and Action columns;
+- links issue-backed runtime tasks to the issue page, and agent-session tasks to the matching Issue Detail session when a session exists;
+- keeps raw task kind, required capabilities, payload, result, events, and logs in expandable task details;
+- does not expose a generic queue-task button in the normal UI, since product flows create issue triage, agent-session, and deploy/test tasks;
 - exposes handoff automation policy while source commit capture stays always on;
 - explains that GitHub App-backed PR automation is a server-owned executor step that is still future work.
 

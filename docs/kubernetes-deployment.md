@@ -195,11 +195,11 @@ If BuildKit is enabled, also verify it:
 kubectl -n mspace-system rollout status statefulset/mspace-buildkit
 ```
 
-The worker should appear online in Workspace Settings.
+The worker should appear online in Workspace Settings. The same page also shows active worker credentials separately from expired or replaced credential history.
 
 ## Protocol Smoke
 
-From Workspace Settings, queue or inspect runtime tasks. For API-level smoke:
+Workspace Settings lets operators inspect issue-linked runtime tasks, expand events/logs/payloads, and cancel queued/running tasks, but the normal UI does not expose a generic queue-task form. For API-level smoke:
 
 ```bash
 curl -X POST "https://mspace.example.com/api/workspaces/<workspace-id>/runtime-tasks" \

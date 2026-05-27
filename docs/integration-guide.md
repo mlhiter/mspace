@@ -250,7 +250,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration token metadata without raw token values. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and heartbeat state. |
-| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a runtime task manually. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a runtime task manually for API-level smoke/debug tooling. Product UI flows normally create tasks through issue triage, agent session, or test deploy routes. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks` | List recent runtime tasks. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/logs` | List worker-appended logs for one runtime task. |
@@ -262,7 +262,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/logs` | Append a log line to a claimed/running task. |
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/status` | Move a claimed task to `running`, `completed`, `failed`, or `cancelled`. |
 
-Queue a protocol smoke task:
+Queue a protocol smoke task from API/debug tooling:
 
 ```bash
 curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/runtime-tasks" \
@@ -274,6 +274,10 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/runtime-tasks" \
 The server rejects runtime worker registration and runtime task creation when the submitted mode does not match the workspace kind. A token minted in a personal workspace can only register a personal worker, and a token minted in a team workspace can only register a team worker. Manual runtime task requests follow the same rule: `runtimeMode:"personal"` for personal workspaces and `runtimeMode:"team"` for team workspaces.
 
 Desktop personal workers use the same token endpoints, but the user normally never sees the raw credential. Electron creates a 12-hour personal worker credential, writes it to an Electron user-data token file, renews it before expiry, and revokes the replaced credential after a short grace period. The worker supports `MSPACE_RUNTIME_TOKEN_FILE` and rereads that file for runtime API calls, so token renewal is designed to be invisible to personal users.
+
+Workspace Settings lists runtime tasks as an operations surface: task purpose, linked Issue title when available, status, worker, update time, and detail/cancel actions. Agent-session task links include `sessionId` so Issue Detail can scroll to the relevant session card. Pure protocol tasks such as `issue_type_triage` may only open the Issue page because they do not have a session card. Raw protocol payloads remain in expanded details instead of the primary row.
+
+Desktop personal worker credentials are named `Desktop personal worker credential` and shown as automatic desktop credentials. Workspace Settings separates active credentials from expired or replaced credential history so background renewal does not look like a pile of duplicate manual credentials.
 
 Runtime task kinds used by the current product path:
 

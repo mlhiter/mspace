@@ -194,9 +194,11 @@ Workspace Settings is accessed from the workspace identity menu. It owns:
 
 - workspace automation;
 - team-only members and invitations;
-- worker registration tokens for owner/admin users;
+- worker credentials for owner/admin users, separating active credentials from expired or replaced history;
 - worker liveness/capabilities;
-- runtime tasks, task events, and worker logs.
+- issue-linked runtime tasks, task events, and worker logs.
+
+The runtime task table is an operations/readability surface, not a generic task creation form. Rows should lead with the user-facing task purpose, show the linked Issue title when an issue exists, link agent-session tasks back to the relevant Issue Detail session, and leave protocol kind, capabilities, payload, result, events, and logs in expanded details. Manual protocol-smoke task creation remains available through the API for debugging, but the normal Workspace Settings UI should not ask users to create raw runtime tasks.
 
 Open account registration creates a personal workspace and a personal runtime boundary. Only server-admin logins configured by `MSPACE_SERVER_ADMIN_LOGINS` or `MSPACE_BOOTSTRAP_ADMIN_LOGIN` can create team workspaces. Team server runners are reachable only through membership in a team workspace, and runtime worker/task mode must match the workspace kind.
 
