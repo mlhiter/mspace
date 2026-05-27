@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import {
 	Activity,
 	ChevronDown,
@@ -29,8 +30,8 @@ import {
 	getControlPlaneBaseUrl,
 	queryKeys,
 	type CreateRuntimeRegistrationTokenInput,
-	type CreateRuntimeTaskInput,
 	type CreateWorkspaceInvitationInput,
+	type IssueListItem,
 	type RuntimeRegistrationToken,
 	type RuntimeRegistrationTokenResult,
 	type RuntimeTask,
@@ -53,14 +54,14 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Switch,
-	Textarea,
 	cn,
 } from "@mspace/ui";
 import { useMspaceTranslation, t as translate } from "@mspace/i18n";
 import { useMspaceAuth } from "./auth-context";
-import { RelativeTime } from "./time";
+import { formatRelativeTime, RelativeTime } from "./time";
 
 const ACTIVE_WORKER_MAX_AGE_MS = 45 * 1000;
+const DESKTOP_PERSONAL_WORKER_CREDENTIAL_NAME = "Desktop personal worker credential";
 
 const defaultSettingsForm: UpdateWorkspaceSettingsInput = {
 	autoCreateDraftPr: false,
@@ -76,28 +77,6 @@ const defaultInvitationForm: CreateWorkspaceInvitationInput = {
 	email: "",
 	role: "member",
 	expiresInHours: 168,
-};
-
-type RuntimeTaskForm = {
-	issueId: string;
-	sessionId: string;
-	projectId: string;
-	kind: string;
-	priority: string;
-	runtimeMode: "personal" | "team";
-	requiredCapabilities: string;
-	payload: string;
-};
-
-const defaultTaskForm: RuntimeTaskForm = {
-	issueId: "",
-	sessionId: "",
-	projectId: "",
-	kind: "protocol_smoke",
-	priority: "0",
-	runtimeMode: "personal",
-	requiredCapabilities: `{"protocolSmoke":true}`,
-	payload: `{"source":"workspace-settings"}`,
 };
 
 export function WorkspaceSettingsPage() {
@@ -148,6 +127,12 @@ export function WorkspaceSettingsPage() {
 		enabled: runtimeEnabled,
 		refetchInterval: runtimeEnabled ? 5_000 : false,
 	});
+	const issuesQuery = useQuery({
+		queryKey: queryKeys.workspaceIssues(workspaceID, auth.token),
+		queryFn: () => controlPlaneApi.listIssues(auth.token, workspaceID),
+		enabled: runtimeEnabled,
+		refetchInterval: runtimeEnabled ? 15_000 : false,
+	});
 
 	const [form, setForm] = useState<UpdateWorkspaceSettingsInput>(defaultSettingsForm);
 	const [invitationModalOpen, setInvitationModalOpen] = useState(false);
@@ -159,9 +144,6 @@ export function WorkspaceSettingsPage() {
 	const [copyState, setCopyState] = useState("");
 	const [dockerWorkerStatus, setDockerWorkerStatus] = useState("");
 	const [dockerWorkerError, setDockerWorkerError] = useState("");
-	const [taskModalOpen, setTaskModalOpen] = useState(false);
-	const [taskForm, setTaskForm] = useState<RuntimeTaskForm>(defaultTaskForm);
-	const [taskFormError, setTaskFormError] = useState("");
 	const [selectedTaskID, setSelectedTaskID] = useState("");
 
 	useEffect(() => {
@@ -171,10 +153,6 @@ export function WorkspaceSettingsPage() {
 			autoDeployTestEnvironment: settingsQuery.data.autoDeployTestEnvironment,
 		});
 	}, [settingsQuery.data]);
-
-	useEffect(() => {
-		setTaskForm((current) => ({ ...current, runtimeMode: defaultRuntimeMode }));
-	}, [defaultRuntimeMode]);
 
 	const saveSettings = useMutation({
 		mutationFn: (input: UpdateWorkspaceSettingsInput) =>
@@ -252,16 +230,6 @@ export function WorkspaceSettingsPage() {
 			await queryClient.invalidateQueries({ queryKey: queryKeys.runtimeRegistrationTokens(workspaceID, auth.token) });
 		},
 	});
-	const createTask = useMutation({
-		mutationFn: (input: CreateRuntimeTaskInput) => controlPlaneApi.createRuntimeTask(auth.token, workspaceID, input),
-		onSuccess: async (task) => {
-			setSelectedTaskID(task.id);
-			setTaskModalOpen(false);
-			setTaskForm({ ...defaultTaskForm, runtimeMode: defaultRuntimeMode });
-			setTaskFormError("");
-			await queryClient.invalidateQueries({ queryKey: queryKeys.runtimeTasks(workspaceID, auth.token) });
-		},
-	});
 	const cancelTask = useMutation({
 		mutationFn: (taskID: string) => controlPlaneApi.cancelRuntimeTask(auth.token, workspaceID, taskID, { reason: t("workspaceSettings.taskCancelReason") }),
 		onSuccess: async (_task, taskID) => {
@@ -280,6 +248,7 @@ export function WorkspaceSettingsPage() {
 	const workers = workersQuery.data || [];
 	const tokens = tokensQuery.data || [];
 	const tasks = tasksQuery.data || [];
+	const issues = issuesQuery.data || [];
 	const members = membersQuery.data || [];
 	const invitations = invitationsQuery.data || [];
 	const canManageWorkspace = auth.workspace?.role === "owner" || auth.workspace?.role === "admin";
@@ -292,7 +261,7 @@ export function WorkspaceSettingsPage() {
 		: tokensQuery.error || workersQuery.error || tasksQuery.error;
 
 	function refreshRuntime() {
-		const refreshes: Array<Promise<unknown>> = [tokensQuery.refetch(), workersQuery.refetch(), tasksQuery.refetch()];
+		const refreshes: Array<Promise<unknown>> = [tokensQuery.refetch(), workersQuery.refetch(), tasksQuery.refetch(), issuesQuery.refetch()];
 		if (isTeamWorkspace) {
 			refreshes.push(membersQuery.refetch(), invitationsQuery.refetch());
 		}
@@ -321,17 +290,6 @@ export function WorkspaceSettingsPage() {
 			name: tokenForm.name.trim() || defaultTokenForm.name,
 			expiresInHours: tokenForm.expiresInHours,
 		});
-	}
-
-	function submitTask(event: FormEvent<HTMLFormElement>) {
-		event.preventDefault();
-		if (!runtimeEnabled) return;
-		setTaskFormError("");
-		try {
-			createTask.mutate(normalizeRuntimeTaskForm(taskForm, defaultRuntimeMode));
-		} catch (error) {
-			setTaskFormError(error instanceof Error ? error.message : t("workspaceSettings.taskFormInvalid"));
-		}
 	}
 
 	async function copyCreatedToken() {
@@ -565,16 +523,11 @@ export function WorkspaceSettingsPage() {
 				<RuntimePanel
 					title={t("workspaceSettings.section.taskQueue")}
 					description={t("workspaceSettings.section.taskQueueDescription")}
-					actions={
-						<Button type="button" variant="secondary" size="sm" disabled={!runtimeEnabled} onClick={() => setTaskModalOpen(true)}>
-							<Plus data-icon />
-							{t("workspaceSettings.section.queueTask")}
-						</Button>
-					}
 				>
 					<TaskList
 						tasks={tasks}
 						workers={workers}
+						issues={issues}
 						loading={tasksQuery.isPending && runtimeEnabled}
 						token={auth.token}
 						workspaceID={workspaceID}
@@ -774,59 +727,6 @@ export function WorkspaceSettingsPage() {
 				</Modal>
 			) : null}
 
-			{taskModalOpen ? (
-				<Modal title={t("workspaceSettings.modal.taskTitle")} description={t("workspaceSettings.modal.taskDescription")} onClose={() => setTaskModalOpen(false)}>
-					<form className="grid gap-4" onSubmit={submitTask}>
-						{taskFormError ? <Notice tone="danger">{taskFormError}</Notice> : null}
-						{createTask.error ? <Notice tone="danger">{createTask.error.message}</Notice> : null}
-						<div className="grid gap-3 md:grid-cols-2">
-							<Field label={t("workspaceSettings.modal.kind")}>
-								<Input value={taskForm.kind} onChange={(event) => setTaskForm({ ...taskForm, kind: event.target.value })} />
-							</Field>
-							<Field label={t("workspaceSettings.modal.runtimeMode")}>
-								<Select
-									value={defaultRuntimeMode}
-									onValueChange={() => setTaskForm({ ...taskForm, runtimeMode: defaultRuntimeMode })}
-								>
-									<SelectTrigger>
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value={defaultRuntimeMode}>{runtimeModeLabel}</SelectItem>
-									</SelectContent>
-								</Select>
-							</Field>
-							<Field label={t("workspaceSettings.modal.priority")}>
-								<Input type="number" min={0} value={taskForm.priority} onChange={(event) => setTaskForm({ ...taskForm, priority: event.target.value })} />
-							</Field>
-							<Field label={t("workspaceSettings.modal.issueId")}>
-								<Input value={taskForm.issueId} onChange={(event) => setTaskForm({ ...taskForm, issueId: event.target.value })} placeholder={t("workspaceSettings.modal.optional")} />
-							</Field>
-							<Field label={t("workspaceSettings.modal.projectId")}>
-								<Input value={taskForm.projectId} onChange={(event) => setTaskForm({ ...taskForm, projectId: event.target.value })} placeholder={t("workspaceSettings.modal.optional")} />
-							</Field>
-							<Field label={t("workspaceSettings.modal.sessionId")}>
-								<Input value={taskForm.sessionId} onChange={(event) => setTaskForm({ ...taskForm, sessionId: event.target.value })} placeholder={t("workspaceSettings.modal.optional")} />
-							</Field>
-						</div>
-						<Field label={t("workspaceSettings.modal.requiredCapabilities")} hint={t("workspaceSettings.modal.requiredCapabilitiesHint", { example: '{"protocolSmoke":true}' })}>
-							<Textarea value={taskForm.requiredCapabilities} onChange={(event) => setTaskForm({ ...taskForm, requiredCapabilities: event.target.value })} />
-						</Field>
-						<Field label={t("workspaceSettings.modal.payload")} hint={t("workspaceSettings.modal.payloadHint")}>
-							<Textarea value={taskForm.payload} onChange={(event) => setTaskForm({ ...taskForm, payload: event.target.value })} />
-						</Field>
-						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
-							<Button type="button" variant="secondary" onClick={() => setTaskModalOpen(false)}>
-								{t("common.cancel")}
-							</Button>
-							<Button type="submit" disabled={!runtimeEnabled || createTask.isPending}>
-								<ListChecks data-icon />
-								{createTask.isPending ? t("workspaceSettings.modal.queueing") : t("workspaceSettings.section.queueTask")}
-							</Button>
-						</div>
-					</form>
-				</Modal>
-			) : null}
 		</PageFrame>
 	);
 }
@@ -1020,6 +920,8 @@ function RegistrationTokenList(props: {
 	onRevoke: (tokenID: string) => void;
 }) {
 	const { t } = useMspaceTranslation();
+	const currentTokens = props.tokens.filter((token) => tokenStatusValue(token) === "active");
+	const historyTokens = props.tokens.filter((token) => tokenStatusValue(token) !== "active");
 
 	if (props.loading) return <LoadingBlock>{t("workspaceSettings.list.loadingCredentials")}</LoadingBlock>;
 	if (props.tokens.length === 0) {
@@ -1027,7 +929,36 @@ function RegistrationTokenList(props: {
 	}
 	return (
 		<div>
-			<TableHeader columns="grid-cols-[minmax(160px,1.2fr)_120px_150px_150px_110px_96px]">
+			<CredentialTable tokens={currentTokens} disabled={props.disabled} onRevoke={props.onRevoke} />
+			{currentTokens.length === 0 ? (
+				<div className="border-t border-[color:var(--line)] px-4 py-4">
+					<Notice>{t("workspaceSettings.list.noActiveCredentialsBody")}</Notice>
+				</div>
+			) : null}
+			{historyTokens.length > 0 ? (
+				<details className="border-t border-[color:var(--line)] bg-[color:var(--block)]">
+					<summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-[12px] font-medium leading-5 text-[color:var(--muted)] marker:hidden">
+						<span>{t("workspaceSettings.list.historyCredentials", { count: historyTokens.length })}</span>
+						<span className="text-[color:var(--faint)]">{t("workspaceSettings.list.historyCredentialsHint")}</span>
+					</summary>
+					<CredentialTable tokens={historyTokens} disabled={props.disabled} onRevoke={props.onRevoke} historical />
+				</details>
+			) : null}
+		</div>
+	);
+}
+
+function CredentialTable(props: {
+	tokens: RuntimeRegistrationToken[];
+	disabled: boolean;
+	historical?: boolean;
+	onRevoke: (tokenID: string) => void;
+}) {
+	const { t } = useMspaceTranslation();
+	if (props.tokens.length === 0) return null;
+	return (
+		<div>
+			<TableHeader columns="grid-cols-[minmax(190px,1.3fr)_120px_150px_150px_120px_96px]">
 				<span>{t("workspaceSettings.list.name")}</span>
 				<span>{t("workspaceSettings.list.prefix")}</span>
 				<span>{t("workspaceSettings.list.expires")}</span>
@@ -1036,30 +967,37 @@ function RegistrationTokenList(props: {
 				<span className="text-right">{t("workspaceSettings.list.actions")}</span>
 			</TableHeader>
 			<div className="divide-y divide-[color:var(--line)]">
-				{props.tokens.map((token) => (
-					<div key={token.id} className="grid grid-cols-[minmax(160px,1.2fr)_120px_150px_150px_110px_96px] items-center gap-4 px-4 py-3 text-[13px]">
-						<div className="min-w-0">
-							<div className="truncate font-medium text-[color:var(--text)]">{token.name}</div>
-							<InlineMeta icon={KeyRound}>{t("workspaceSettings.list.created")} <RelativeTime value={token.createdAt} /></InlineMeta>
+				{props.tokens.map((token) => {
+					const status = tokenStatusValue(token);
+					const canRevoke = status === "active" && !props.historical;
+					return (
+						<div key={token.id} className="grid grid-cols-[minmax(190px,1.3fr)_120px_150px_150px_120px_96px] items-center gap-4 px-4 py-3 text-[13px]">
+							<div className="min-w-0">
+								<div className="flex min-w-0 items-center gap-2">
+									<span className="truncate font-medium text-[color:var(--text)]">{credentialDisplayName(token)}</span>
+									{isDesktopPersonalWorkerCredential(token) ? <StatusPill>{t("workspaceSettings.list.automaticCredential")}</StatusPill> : null}
+								</div>
+								<InlineMeta icon={KeyRound}>{credentialMeta(token)}</InlineMeta>
+							</div>
+							<span className="truncate font-mono text-[12px] text-[color:var(--muted)]">{token.tokenPrefix}</span>
+							<span className="text-[12px] text-[color:var(--muted)]"><RelativeTime value={token.expiresAt} /></span>
+							<span className="text-[12px] text-[color:var(--muted)]">{token.lastUsedAt ? <RelativeTime value={token.lastUsedAt} /> : t("workspaceSettings.list.never")}</span>
+							<RuntimeStatusPill status={status} />
+							<div className="flex justify-end">
+								<Button
+									type="button"
+									variant="ghost"
+									size="icon"
+									aria-label={t("workspaceSettings.list.revokeCredential", { name: credentialDisplayName(token) })}
+									disabled={props.disabled || !canRevoke}
+									onClick={() => props.onRevoke(token.id)}
+								>
+									<Trash2 data-icon />
+								</Button>
+							</div>
 						</div>
-						<span className="truncate font-mono text-[12px] text-[color:var(--muted)]">{token.tokenPrefix}</span>
-						<span className="text-[12px] text-[color:var(--muted)]"><RelativeTime value={token.expiresAt} /></span>
-						<span className="text-[12px] text-[color:var(--muted)]">{token.lastUsedAt ? <RelativeTime value={token.lastUsedAt} /> : t("workspaceSettings.list.never")}</span>
-						<TokenStatus token={token} />
-						<div className="flex justify-end">
-							<Button
-								type="button"
-								variant="ghost"
-								size="icon"
-								aria-label={t("workspaceSettings.list.revokeCredential", { name: token.name })}
-								disabled={props.disabled || token.revoked}
-								onClick={() => props.onRevoke(token.id)}
-							>
-								<Trash2 data-icon />
-							</Button>
-						</div>
-					</div>
-				))}
+					);
+				})}
 			</div>
 		</div>
 	);
@@ -1105,6 +1043,7 @@ function WorkerList(props: { workers: RuntimeWorker[]; loading: boolean }) {
 function TaskList(props: {
 	tasks: RuntimeTask[];
 	workers: RuntimeWorker[];
+	issues: IssueListItem[];
 	loading: boolean;
 	token: string;
 	workspaceID: string;
@@ -1115,16 +1054,17 @@ function TaskList(props: {
 }) {
 	const { t } = useMspaceTranslation();
 	const workerByID = useMemo(() => new Map(props.workers.map((worker) => [worker.id, worker])), [props.workers]);
+	const issueTitleByID = useMemo(() => new Map(props.issues.map((issue) => [issue.id, issue.title])), [props.issues]);
 	if (props.loading) return <LoadingBlock>{t("workspaceSettings.list.loadingTasks")}</LoadingBlock>;
 	if (props.tasks.length === 0) {
 		return <EmptyRuntimeBlock icon={ListChecks} title={t("workspaceSettings.list.noTasksTitle")} body={t("workspaceSettings.list.noTasksBody")} />;
 	}
 	return (
 		<div>
-			<TableHeader columns="grid-cols-[minmax(180px,1fr)_130px_110px_minmax(180px,1fr)_150px_92px]">
+			<TableHeader columns="grid-cols-[minmax(220px,1.25fr)_minmax(190px,1fr)_96px_minmax(160px,0.9fr)_130px_100px]">
 				<span>{t("workspaceSettings.list.task")}</span>
+				<span>{t("workspaceSettings.list.issue")}</span>
 				<span>{t("workspaceSettings.list.status")}</span>
-				<span>{t("workspaceSettings.list.priority")}</span>
 				<span>{t("workspaceSettings.list.worker")}</span>
 				<span>{t("workspaceSettings.list.updated")}</span>
 				<span>{t("workspaceSettings.list.action")}</span>
@@ -1134,9 +1074,10 @@ function TaskList(props: {
 					const worker = task.claimedByWorkerId ? workerByID.get(task.claimedByWorkerId) : undefined;
 					const selected = props.selectedTaskID === task.id;
 					const cancellable = ["queued", "claimed", "running"].includes(task.status);
+					const display = runtimeTaskDisplay(task, issueTitleByID.get(task.issueId) || "");
 					return (
 						<div key={task.id}>
-							<div className="grid w-full grid-cols-[minmax(180px,1fr)_130px_110px_minmax(180px,1fr)_150px_92px] items-center gap-4 px-4 py-3 transition-colors hover:bg-[color:var(--hover)]">
+							<div className="grid w-full grid-cols-[minmax(220px,1.25fr)_minmax(190px,1fr)_96px_minmax(160px,0.9fr)_130px_100px] items-center gap-4 px-4 py-3 transition-colors hover:bg-[color:var(--hover)]">
 								<button
 									type="button"
 									className="min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)]"
@@ -1146,22 +1087,29 @@ function TaskList(props: {
 									<div className="min-w-0">
 										<div className="flex min-w-0 items-center gap-2">
 											{selected ? <ChevronDown data-icon className="shrink-0 text-[color:var(--faint)]" /> : <ChevronRight data-icon className="shrink-0 text-[color:var(--faint)]" />}
-											<span className="truncate text-[13px] font-medium text-[color:var(--text)]">{task.kind}</span>
+											<span className="truncate text-[13px] font-medium text-[color:var(--text)]">{display.title}</span>
 											<StatusPill>{task.runtimeMode}</StatusPill>
 										</div>
 										<div className="mt-1 truncate pl-6 text-[12px] leading-5 text-[color:var(--muted)]">
-											{task.issueId || task.projectId || task.sessionId || task.id}
+											{display.subtitle}
 										</div>
 									</div>
 								</button>
+								<RuntimeTaskIssueLink task={task} display={display} />
 								<RuntimeStatusPill status={task.status} />
-								<span className="font-mono text-[12px] tabular-nums text-[color:var(--muted)]">{task.priority}</span>
 								<span className="truncate text-[12px] leading-5 text-[color:var(--muted)]">{worker?.name || task.claimedByWorkerId || t("workspaceSettings.list.unclaimed")}</span>
 								<span className="text-[12px] leading-5 text-[color:var(--muted)]"><RelativeTime value={task.updatedAt} /></span>
-								<Button type="button" variant="ghost" size="sm" disabled={!cancellable || props.cancellingTaskID === task.id} onClick={() => props.onCancelTask(task.id)}>
-									<X data-icon />
-									{props.cancellingTaskID === task.id ? t("workspaceSettings.list.cancelling") : t("workspaceSettings.list.cancel")}
-								</Button>
+								{cancellable ? (
+									<Button type="button" variant="ghost" size="sm" disabled={props.cancellingTaskID === task.id} onClick={() => props.onCancelTask(task.id)}>
+										<X data-icon />
+										{props.cancellingTaskID === task.id ? t("workspaceSettings.list.cancelling") : t("workspaceSettings.list.cancel")}
+									</Button>
+								) : (
+									<Button type="button" variant="ghost" size="sm" onClick={() => props.onSelectTask(selected ? "" : task.id)}>
+										<Activity data-icon />
+										{selected ? t("workspaceSettings.list.hideDetails") : t("workspaceSettings.list.details")}
+									</Button>
+								)}
 							</div>
 							{selected ? <RuntimeTaskEvidence task={task} token={props.token} workspaceID={props.workspaceID} /> : null}
 						</div>
@@ -1169,6 +1117,24 @@ function TaskList(props: {
 				})}
 			</div>
 		</div>
+	);
+}
+
+function RuntimeTaskIssueLink(props: { task: RuntimeTask; display: RuntimeTaskDisplay }) {
+	const { t } = useMspaceTranslation();
+	if (!props.task.issueId) {
+		return <span className="truncate text-[12px] leading-5 text-[color:var(--faint)]">{t("workspaceSettings.list.noLinkedIssue")}</span>;
+	}
+	return (
+		<Link
+			to="/issues/$issueId"
+			params={{ issueId: props.task.issueId }}
+			search={runtimeTaskIssueSearch(props.task)}
+			className="min-w-0 rounded-[6px] px-1 py-1 text-left text-[12px] font-medium leading-5 text-[color:var(--muted-strong)] transition-colors hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)]"
+			title={props.display.issue}
+		>
+			<span className="block truncate">{props.display.issue}</span>
+		</Link>
 	);
 }
 
@@ -1194,6 +1160,12 @@ function RuntimeTaskEvidence(props: { task: RuntimeTask; token: string; workspac
 	return (
 		<div className="border-t border-[color:var(--line)] bg-[color:var(--block)] px-4 py-4">
 			{failed ? <Notice tone="danger">{failed.message}</Notice> : null}
+			<div className="mb-4 grid gap-2 rounded-[8px] bg-[color:var(--surface)] p-3 shadow-[inset_0_0_0_1px_var(--line)] md:grid-cols-4">
+				<TaskMeta label={t("workspaceSettings.list.taskKind")} value={props.task.kind} />
+				<TaskMeta label={t("workspaceSettings.list.priority")} value={String(props.task.priority)} />
+				<TaskMeta label={t("workspaceSettings.list.taskId")} value={shortId(props.task.id)} mono />
+				<TaskMeta label={t("workspaceSettings.list.sessionId")} value={props.task.sessionId ? shortId(props.task.sessionId) : t("workspaceSettings.list.none")} mono={Boolean(props.task.sessionId)} />
+			</div>
 			<div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
 				<div className="min-w-0">
 					<div className="mb-2 flex items-center gap-2 text-[12px] font-medium leading-5 text-[color:var(--muted)]">
@@ -1252,6 +1224,15 @@ function RuntimeTaskEvidence(props: { task: RuntimeTask; token: string; workspac
 	);
 }
 
+function TaskMeta(props: { label: string; value: string; mono?: boolean }) {
+	return (
+		<div className="min-w-0">
+			<div className="text-[11px] font-medium leading-5 text-[color:var(--faint)]">{props.label}</div>
+			<div className={cn("truncate text-[12px] leading-5 text-[color:var(--muted-strong)]", props.mono && "font-mono")}>{props.value}</div>
+		</div>
+	);
+}
+
 function RuntimeJSONBlock(props: { label: string; value: Record<string, unknown> }) {
 	return (
 		<div className="min-w-0">
@@ -1271,17 +1252,146 @@ function TableHeader(props: { columns: string; children: ReactNode }) {
 	);
 }
 
-function TokenStatus(props: { token: RuntimeRegistrationToken }) {
-	if (props.token.revoked) return <RuntimeStatusPill status="revoked" />;
-	if (new Date(props.token.expiresAt).getTime() < Date.now()) return <RuntimeStatusPill status="expired" />;
-	return <RuntimeStatusPill status="active" />;
-}
-
 function workerDisplayStatus(worker: RuntimeWorker) {
 	if (worker.status.trim().toLowerCase() !== "online") return worker.status;
 	const lastSeenAt = new Date(worker.lastSeenAt).getTime();
 	if (!Number.isFinite(lastSeenAt)) return "stale";
 	return Date.now() - lastSeenAt > ACTIVE_WORKER_MAX_AGE_MS ? "stale" : worker.status;
+}
+
+function tokenStatusValue(token: RuntimeRegistrationToken) {
+	if (token.revoked) return "revoked";
+	if (new Date(token.expiresAt).getTime() < Date.now()) return "expired";
+	return "active";
+}
+
+function credentialDisplayName(token: RuntimeRegistrationToken) {
+	return isDesktopPersonalWorkerCredential(token) ? translate("workspaceSettings.list.desktopAutomaticCredential") : token.name;
+}
+
+function credentialMeta(token: RuntimeRegistrationToken) {
+	const created = translate("workspaceSettings.list.created");
+	if (isDesktopPersonalWorkerCredential(token)) {
+		return `${created} ${formatRelativeTime(token.createdAt)} · ${translate("workspaceSettings.list.desktopAutomaticCredentialMeta")}`;
+	}
+	return `${created} ${formatRelativeTime(token.createdAt)} · ${translate("workspaceSettings.list.manualCredentialMeta")}`;
+}
+
+function isDesktopPersonalWorkerCredential(token: RuntimeRegistrationToken) {
+	return token.name.trim() === DESKTOP_PERSONAL_WORKER_CREDENTIAL_NAME;
+}
+
+type RuntimeTaskDisplay = {
+	title: string;
+	subtitle: string;
+	issue: string;
+};
+
+function runtimeTaskDisplay(task: RuntimeTask, issueTitleFallback = ""): RuntimeTaskDisplay {
+	const issueTitle = payloadText(task.payload, ["issueTitle"]) || nestedPayloadText(task.payload, ["issue", "title"]) || issueTitleFallback.trim();
+	const projectName = payloadText(task.payload, ["projectName"]) || nestedPayloadText(task.payload, ["project", "name"]) || repositoryLabel(task.payload);
+	const issueLabel = issueTitle || (task.issueId ? translate("workspaceSettings.list.issueFallback", { id: shortId(task.issueId) }) : "");
+	const issueColumn = issueLabel || translate("workspaceSettings.list.noLinkedIssue");
+	const projectLabel = projectName || (task.projectId ? translate("workspaceSettings.list.projectFallback", { id: shortId(task.projectId) }) : "");
+	const sessionLabel = task.sessionId ? translate("workspaceSettings.list.sessionFallback", { id: shortId(task.sessionId) }) : "";
+	const agentProfile = payloadText(task.payload, ["agentProfile"]);
+	const automation = payloadText(task.payload, ["automation"]);
+	const sourceSessionId = payloadText(task.payload, ["sourceSessionId"]);
+
+	if (task.kind === "issue_type_triage") {
+		return {
+			title: translate("workspaceSettings.list.taskIssueTriage"),
+			subtitle: compactTaskParts([projectLabel, taskIdentity(task)]),
+			issue: issueColumn,
+		};
+	}
+
+	if (task.kind === "agent_session") {
+		const titleKey = automation === "auto_test_deploy" ? "workspaceSettings.list.taskAutoDeploy" : "workspaceSettings.list.taskAgentSession";
+		const actor = agentProfile ? `@${agentProfile}` : translate("workspaceSettings.list.agentFallback");
+		return {
+			title: translate(titleKey, { actor }),
+			subtitle: compactTaskParts([
+				projectLabel,
+				sessionLabel,
+				sourceSessionId ? translate("workspaceSettings.list.sourceSessionFallback", { id: shortId(sourceSessionId) }) : "",
+				taskIdentity(task),
+			]),
+			issue: issueColumn,
+		};
+	}
+
+	if (task.kind === "protocol_smoke") {
+		return {
+			title: translate("workspaceSettings.list.taskProtocolSmoke"),
+			subtitle: compactTaskParts([projectLabel || issueLabel, taskIdentity(task)]),
+			issue: issueColumn,
+		};
+	}
+
+	if (task.kind === "noop") {
+		return {
+			title: translate("workspaceSettings.list.taskNoop"),
+			subtitle: compactTaskParts([projectLabel || issueLabel, taskIdentity(task)]),
+			issue: issueColumn,
+		};
+	}
+
+	return {
+		title: runtimeStatusLabel(task.kind),
+		subtitle: compactTaskParts([issueLabel, projectLabel, sessionLabel, taskIdentity(task)]),
+		issue: issueColumn,
+	};
+}
+
+function runtimeTaskIssueSearch(task: RuntimeTask) {
+	if (task.sessionId) return { sessionId: task.sessionId };
+	if (task.id) return { runtimeTaskId: task.id };
+	return {};
+}
+
+function taskIdentity(task: RuntimeTask) {
+	return translate("workspaceSettings.list.taskIdFallback", { id: shortId(task.id) });
+}
+
+function compactTaskParts(parts: string[]) {
+	return parts.map((part) => part.trim()).filter(Boolean).join(" · ") || translate("workspaceSettings.list.none");
+}
+
+function payloadText(payload: Record<string, unknown>, keys: string[]) {
+	for (const key of keys) {
+		const value = payload?.[key];
+		if (typeof value === "string" && value.trim()) return value.trim();
+	}
+	return "";
+}
+
+function nestedPayloadText(payload: Record<string, unknown>, path: string[]) {
+	let value: unknown = payload;
+	for (const key of path) {
+		if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+		value = (value as Record<string, unknown>)[key];
+	}
+	return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function repositoryLabel(payload: Record<string, unknown>) {
+	const owner = nestedPayloadText(payload, ["repository", "owner"]);
+	const repo = nestedPayloadText(payload, ["repository", "repo"]);
+	if (owner && repo) return `${owner}/${repo}`;
+	if (repo) return repo;
+	const url = nestedPayloadText(payload, ["repository", "url"]);
+	return url ? lastPathSegment(url) : "";
+}
+
+function lastPathSegment(value: string) {
+	const trimmed = value.trim().replace(/\/+$/, "");
+	const last = trimmed.split(/[/:]/).filter(Boolean).at(-1) || "";
+	return last.endsWith(".git") ? last.slice(0, -4) : last;
+}
+
+function shortId(value: string) {
+	return value ? value.slice(0, 8) : "";
 }
 
 function MemberAvatar(props: { member: WorkspaceMember }) {
@@ -1331,7 +1441,7 @@ function RuntimeStatusPill(props: { status: string }) {
 							? "bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
 							: "bg-[color:var(--block)] text-[color:var(--muted)]";
 	return (
-		<span className={cn("inline-flex h-6 max-w-full items-center gap-1.5 rounded-full px-2 text-[12px] font-medium leading-5", tone)}>
+		<span className={cn("inline-flex h-6 w-fit max-w-full justify-self-start items-center gap-1.5 rounded-full px-2 text-[12px] font-medium leading-5", tone)}>
 			<Circle data-icon className="size-3" />
 			<span className="truncate">{runtimeStatusLabel(normalized)}</span>
 		</span>
@@ -1404,35 +1514,6 @@ function Modal(props: { title: string; description: string; onClose: () => void;
 			</div>
 		</div>
 	);
-}
-
-function normalizeRuntimeTaskForm(form: RuntimeTaskForm, runtimeMode: "personal" | "team"): CreateRuntimeTaskInput {
-	const priority = Number(form.priority || 0);
-	if (!Number.isFinite(priority) || priority < 0) {
-		throw new Error(translate("workspaceSettings.priorityInvalid"));
-	}
-	const kind = form.kind.trim();
-	if (!kind) {
-		throw new Error(translate("workspaceSettings.taskKindRequired"));
-	}
-	return {
-		issueId: form.issueId.trim(),
-		sessionId: form.sessionId.trim(),
-		projectId: form.projectId.trim(),
-		kind,
-		priority,
-		runtimeMode,
-		requiredCapabilities: parseJSONObject(form.requiredCapabilities, translate("workspaceSettings.modal.requiredCapabilities")),
-		payload: parseJSONObject(form.payload, translate("workspaceSettings.modal.payload")),
-	};
-}
-
-function parseJSONObject(value: string, label: string): Record<string, unknown> {
-	const parsed = JSON.parse(value || "{}") as unknown;
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error(translate("workspaceSettings.jsonObjectRequired", { label }));
-	}
-	return parsed as Record<string, unknown>;
 }
 
 function jsonSummary(value: Record<string, unknown>) {

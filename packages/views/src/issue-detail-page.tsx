@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import type { Editor } from "@tiptap/core";
@@ -121,6 +121,10 @@ function isIssueTab(value: unknown): value is IssueTab {
 
 function issueTabSearch(tab: IssueTab) {
   return tab === "overview" ? {} : { tab };
+}
+
+function issueSessionDomId(sessionId: string) {
+  return `issue-session-${sessionId}`;
 }
 
 interface ActorIdentity {
@@ -1887,7 +1891,7 @@ function IssueSessionsTab(props: { sessions: AgentSession[]; agents: AgentProfil
       {sessions.map((session) => {
         const agent = sessionAgent(session, props.agents);
         return (
-          <div key={session.id} className="grid gap-1 rounded-[9px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+          <div id={issueSessionDomId(session.id)} key={session.id} className="scroll-mt-8 grid gap-1 rounded-[9px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <ActorMark actor={codexActor(agent.name)} size="sm" />
               <span className="font-medium text-[13px] leading-5 text-[color:var(--text)]">{agent.name}</span>
@@ -2783,9 +2787,10 @@ function TimelineShell(props: {
   title: React.ReactNode;
   time: string;
   children?: React.ReactNode;
+  id?: string;
 }) {
   return (
-    <article className="grid grid-cols-[32px_minmax(0,1fr)] gap-3">
+    <article id={props.id} className="scroll-mt-8 grid grid-cols-[32px_minmax(0,1fr)] gap-3">
       <ActorMark actor={props.actor} />
       <div className="min-w-0 pb-8">
         <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -3459,6 +3464,7 @@ function DeployTimelineItem(props: {
   onRetry?: () => void;
   isRetrying?: boolean;
   canRetry?: boolean;
+  anchorId?: string;
 }) {
   const { t } = useMspaceTranslation();
   const agent = sessionAgent(props.session, props.agents);
@@ -3470,6 +3476,7 @@ function DeployTimelineItem(props: {
   const previewUrl = props.testEnvironment.previewUrl;
   return (
     <TimelineShell
+      id={props.anchorId}
       actor={codexActor(agent.name)}
       title={
         <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
@@ -3564,6 +3571,7 @@ function SessionTimelineItem(props: {
   isStopping?: boolean;
   stopError?: Error | null;
   onStop?: () => void;
+  anchorId?: string;
 }) {
   const { t } = useMspaceTranslation();
   const { session, logs } = props;
@@ -3578,6 +3586,7 @@ function SessionTimelineItem(props: {
   if (isEmptyCancelledSession && !props.isSnapshotPending) {
     return (
       <TimelineShell
+        id={props.anchorId}
         actor={codexActor(agent.name)}
         title={
           <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
@@ -3593,6 +3602,7 @@ function SessionTimelineItem(props: {
 
   return (
     <TimelineShell
+      id={props.anchorId}
       actor={codexActor(agent.name)}
       title={title}
       time={session.updatedAt || session.createdAt}
@@ -4909,9 +4919,11 @@ function ProjectAttachModal(props: {
 export function IssueDetailPage() {
   const { t } = useMspaceTranslation();
   const { issueId = "" } = useParams({ strict: false }) as { issueId?: string };
-  const search = useSearch({ strict: false }) as { tab?: string };
+  const search = useSearch({ strict: false }) as { tab?: string; sessionId?: string; runtimeTaskId?: string };
   const navigate = useNavigate();
   const searchTab = isIssueTab(search.tab) ? search.tab : "overview";
+  const linkedSessionId = typeof search.sessionId === "string" ? search.sessionId.trim() : "";
+  const linkedRuntimeTaskId = typeof search.runtimeTaskId === "string" ? search.runtimeTaskId.trim() : "";
   const queryClient = useQueryClient();
   const auth = useMspaceAuth();
   const workspaceId = auth.workspace?.id || "";
@@ -4953,6 +4965,7 @@ export function IssueDetailPage() {
   const [projectAttachOpen, setProjectAttachOpen] = useState(false);
   const [newProjectRepoUrl, setNewProjectRepoUrl] = useState("");
   const [newProjectName, setNewProjectName] = useState("");
+  const scrolledLinkedSessionTarget = useRef("");
   const [testDeployForm, setTestDeployForm] = useState<StartTestDeployInput>({
     agentProfile: "codex",
     clusterId: "",
@@ -5188,6 +5201,22 @@ export function IssueDetailPage() {
     if (issueTab !== "resources" || !issueId || !detail?.testEnvironment) return;
     void resourcesQuery.refetch();
   }, [detail?.testEnvironment?.namespace, issueId, issueTab, resourcesQuery.refetch]);
+
+  useEffect(() => {
+    if (!detail || issueTab !== "overview") return;
+    const targetKey = linkedSessionId ? `session:${linkedSessionId}` : linkedRuntimeTaskId ? `task:${linkedRuntimeTaskId}` : "";
+    if (!targetKey || scrolledLinkedSessionTarget.current === targetKey) return;
+    const targetSession = linkedSessionId
+      ? listOrEmpty(detail.sessions).find((session) => session.id === linkedSessionId)
+      : linkedRuntimeTaskId
+        ? listOrEmpty(detail.sessions).find((session) => session.runtimeTaskId === linkedRuntimeTaskId)
+        : undefined;
+    if (!targetSession) return;
+    scrolledLinkedSessionTarget.current = targetKey;
+    window.requestAnimationFrame(() => {
+      document.getElementById(issueSessionDomId(targetSession.id))?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [detail, issueTab, linkedRuntimeTaskId, linkedSessionId]);
 
   const invalidateIssueHandoffSurfaces = useCallback(async () => {
     await Promise.all([
@@ -6030,6 +6059,7 @@ export function IssueDetailPage() {
                         return (
                           <DeployTimelineItem
                             key={`session-${item.session.id}`}
+                            anchorId={issueSessionDomId(item.session.id)}
                             session={item.session}
                             logs={sessionSnapshot?.logs || []}
                             changes={sessionSnapshot?.changes || []}
@@ -6048,6 +6078,7 @@ export function IssueDetailPage() {
 	                      return (
 	                        <SessionTimelineItem
 	                          key={`session-${item.session.id}`}
+                            anchorId={issueSessionDomId(item.session.id)}
 	                          session={item.session}
                           logs={sessionSnapshot?.logs || []}
                           changes={sessionSnapshot?.changes || []}

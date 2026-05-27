@@ -7,6 +7,19 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-05-27",
+    title: "Clearer workspace runtime settings",
+    summary:
+      "mspace made Workspace Settings explain worker credentials and runtime tasks in product language instead of exposing only low-level protocol records.",
+    items: [
+      "Separated active worker credentials from expired or replaced credential history so desktop personal worker renewals no longer look like duplicate manual tokens.",
+      "Labeled desktop-managed personal worker credentials as automatic credentials with metadata that explains they are managed by the desktop worker lifecycle.",
+      "Renamed the task queue surface to runtime tasks, added an Issue-title column, and linked issue-backed tasks back to the relevant Issue Detail session.",
+      "Kept protocol kind, capabilities, payload, result, events, and logs available in task details for debugging without making raw runtime fields the primary row content.",
+      "Removed the manual queue-task button from the normal runtime settings surface and replaced final-state cancel actions with detail controls.",
+    ],
+  },
+  {
     date: "2026-05-26",
     title: "Source-aware desktop sign-in",
     summary:
@@ -111,7 +124,7 @@ export const changelog: ChangelogEntry[] = [
       "Exposed Runtime registry and queue controls from Workspace Settings for personal and team workspaces, while keeping invitations and shared member controls team-only.",
       "Kept worker logs and returned source metadata in server runtime task records instead of importing worker logs/results into a local store.",
       "Made the Docker dry-run Server Worker script usable from non-interactive shells while preserving the same queue, claim, log, and source-diff loop.",
-      "Added a Workspace Settings action that starts the local Docker worker by generating and injecting a short-lived internal bootstrap credential, so local team-mode testing no longer requires copying raw worker tokens.",
+      "Added a Workspace Settings action that starts the local Docker worker by generating and injecting a short-lived internal bootstrap credential, so local team-mode testing no longer requires copying raw worker credentials.",
       "Added a Codex-capable Docker worker image and startup script that installs the Linux Codex CLI, mounts a dedicated worker Codex home, and advertises `codex:true,dryRun:false` for real Team worker sessions.",
       "Documented the worker authentication boundary so dry-run testing, local Codex credentials, and future managed team runtime credentials stay distinct.",
     ],
