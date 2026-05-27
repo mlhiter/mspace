@@ -1709,6 +1709,9 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 	if normalized.RuntimeMode != workspace.Kind {
 		return AgentSession{}, ErrForbidden
 	}
+	if !s.hasActiveCodexWorkerLocked(workspaceID, normalized.RuntimeMode, time.Now().UTC()) {
+		return AgentSession{}, ErrNoActiveCodexWorker
+	}
 	sessionID, err := newAgentSessionID()
 	if err != nil {
 		return AgentSession{}, err
@@ -3139,6 +3142,15 @@ func (s *MemoryStore) runtimeWorkerByID(workspaceID, workerID string) (RuntimeWo
 		}
 	}
 	return RuntimeWorker{}, false
+}
+
+func (s *MemoryStore) hasActiveCodexWorkerLocked(workspaceID, runtimeMode string, now time.Time) bool {
+	for _, worker := range s.runtimeWorkers {
+		if isActiveCodexWorker(worker, workspaceID, runtimeMode, now) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MemoryStore) hasWorkspaceRole(workspaceID, userID string, roles ...string) bool {

@@ -35,6 +35,7 @@ var branchSlugUnsafePattern = regexp.MustCompile(`[^a-z0-9]+`)
 type config struct {
 	ServerURL         string
 	Token             string
+	TokenFile         string
 	Name              string
 	Mode              string
 	Version           string
@@ -107,6 +108,7 @@ type updateTaskStatusInput struct {
 type runtimeClient struct {
 	baseURL    string
 	token      string
+	tokenFile  string
 	httpClient *http.Client
 }
 
@@ -422,6 +424,7 @@ func configFromArgs(args []string) (config, error) {
 	labelsText := defaultLabels
 	fs.StringVar(&cfg.ServerURL, "server", defaultServer, "mspace server base URL")
 	fs.StringVar(&cfg.Token, "token", envFirst("MSPACE_RUNTIME_TOKEN"), "runtime registration token with msw_ prefix")
+	fs.StringVar(&cfg.TokenFile, "token-file", envFirst("MSPACE_RUNTIME_TOKEN_FILE"), "path to a file containing the runtime registration token")
 	fs.StringVar(&cfg.Name, "name", defaultName, "worker name")
 	fs.StringVar(&cfg.Mode, "mode", envDefault("MSPACE_WORKER_MODE", "team"), "worker runtime mode: personal or team")
 	fs.StringVar(&cfg.Version, "version", envDefault("MSPACE_WORKER_VERSION", workerVersion), "worker version")
@@ -450,6 +453,7 @@ func configFromArgs(args []string) (config, error) {
 func normalizeConfig(cfg config) (config, error) {
 	cfg.ServerURL = strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
 	cfg.Token = strings.TrimSpace(cfg.Token)
+	cfg.TokenFile = strings.TrimSpace(cfg.TokenFile)
 	cfg.Name = strings.TrimSpace(cfg.Name)
 	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
 	cfg.Version = strings.TrimSpace(cfg.Version)
@@ -460,7 +464,16 @@ func normalizeConfig(cfg config) (config, error) {
 	if _, err := url.ParseRequestURI(cfg.ServerURL); err != nil {
 		return config{}, fmt.Errorf("server URL is invalid: %w", err)
 	}
-	if !strings.HasPrefix(cfg.Token, "msw_") {
+	if cfg.TokenFile != "" {
+		if abs, err := filepath.Abs(cfg.TokenFile); err == nil {
+			cfg.TokenFile = abs
+		}
+		token, err := readRuntimeToken(cfg.Token, cfg.TokenFile)
+		if err != nil {
+			return config{}, err
+		}
+		cfg.Token = token
+	} else if !strings.HasPrefix(cfg.Token, "msw_") {
 		return config{}, errors.New("runtime token with msw_ prefix is required")
 	}
 	if cfg.Name == "" {
@@ -494,6 +507,7 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 	client := &runtimeClient{
 		baseURL:    cfg.ServerURL,
 		token:      cfg.Token,
+		tokenFile:  cfg.TokenFile,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 	worker, err := client.register(ctx, cfg.workerInput("online", 0, true))
@@ -2405,6 +2419,29 @@ func (c *runtimeClient) register(ctx context.Context, input runtimeWorkerInput) 
 	return worker, err
 }
 
+func readRuntimeToken(fallbackToken string, tokenFile string) (string, error) {
+	if strings.TrimSpace(tokenFile) == "" {
+		token := strings.TrimSpace(fallbackToken)
+		if !strings.HasPrefix(token, "msw_") {
+			return "", errors.New("runtime token with msw_ prefix is required")
+		}
+		return token, nil
+	}
+	content, err := os.ReadFile(tokenFile)
+	if err != nil {
+		return "", fmt.Errorf("read runtime token file: %w", err)
+	}
+	token := strings.TrimSpace(string(content))
+	if !strings.HasPrefix(token, "msw_") {
+		return "", errors.New("runtime token file must contain a token with msw_ prefix")
+	}
+	return token, nil
+}
+
+func (c *runtimeClient) runtimeToken() (string, error) {
+	return readRuntimeToken(c.token, c.tokenFile)
+}
+
 func (c *runtimeClient) heartbeat(ctx context.Context, workerID string, input runtimeWorkerInput) (runtimeWorker, error) {
 	var worker runtimeWorker
 	err := c.doJSON(ctx, http.MethodPost, "/api/runtime/workers/"+url.PathEscape(workerID)+"/heartbeat", input, http.StatusOK, &worker)
@@ -2416,7 +2453,11 @@ func (c *runtimeClient) claim(ctx context.Context, workerID string) (*runtimeTas
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	token, err := c.runtimeToken()
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -2503,7 +2544,11 @@ func (c *runtimeClient) doJSON(ctx context.Context, method, path string, input a
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	token, err := c.runtimeToken()
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	if input != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

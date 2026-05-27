@@ -1700,6 +1700,8 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		status = http.StatusUnauthorized
 	} else if errors.Is(err, ErrForbidden) {
 		status = http.StatusForbidden
+	} else if errors.Is(err, ErrNoActiveCodexWorker) {
+		status = http.StatusConflict
 	} else if errors.Is(err, ErrConflict) {
 		status = http.StatusConflict
 	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") {

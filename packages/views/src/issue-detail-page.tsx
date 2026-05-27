@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import {
   controlPlaneApi,
+  getControlPlaneBaseUrl,
   getStoredAuthIdentity,
   queryKeys,
   type AgentProfile,
@@ -58,6 +59,7 @@ import {
   type ReviewEvidenceCheck,
   type ReviewEvidenceCommand,
   type ReviewEvidenceResult,
+  type RuntimeWorker,
   type SessionFailure,
   type SessionLog,
   type SessionReviewEvidence,
@@ -331,6 +333,34 @@ function cleanupDecisionLabel(status: string) {
   if (status === "cleaned") return translate("issueDetail.environment.cleaned");
   if (status === "cleanup_failed") return translate("issueDetail.environment.cleanupFailed");
   return status ? status.replace(/[_-]+/g, " ") : translate("issueDetail.environment.notDecided");
+}
+
+function hasCodexCapability(worker: RuntimeWorker) {
+  return worker.capabilities?.codex === true;
+}
+
+function isFreshWorkerHeartbeat(value: string) {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= 45_000;
+}
+
+function activeCodexWorker(workers: RuntimeWorker[], workspaceId: string, runtimeMode: string) {
+  return workers.find(
+    (worker) =>
+      worker.workspaceId === workspaceId &&
+      worker.mode === runtimeMode &&
+      worker.status === "online" &&
+      hasCodexCapability(worker) &&
+      isFreshWorkerHeartbeat(worker.lastSeenAt),
+  );
+}
+
+function isNoActiveCodexWorkerError(error: unknown) {
+  return error instanceof Error && /no active codex worker/i.test(error.message);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function namespaceStatusLabel(status: string) {
@@ -4889,6 +4919,7 @@ export function IssueDetailPage() {
   const issueQueryKey = queryKeys.workspaceIssue(workspaceId, issueId, auth.token);
   const issuesQueryKey = queryKeys.workspaceIssues(workspaceId, auth.token);
   const inboxQueryKey = queryKeys.workspaceInbox(workspaceId, auth.token);
+  const runtimeWorkersQueryKey = queryKeys.runtimeWorkers(workspaceId, auth.token);
   const labelDefinitionsQueryKey = queryKeys.workspaceIssueLabelDefinitions(workspaceId, auth.token);
   const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
   const agentsQueryKey = queryKeys.agents(workspaceId, auth.token);
@@ -4960,6 +4991,12 @@ export function IssueDetailPage() {
     enabled: serverWorkspaceReady,
     retry: false,
   });
+  const runtimeWorkersQuery = useQuery({
+    queryKey: runtimeWorkersQueryKey,
+    queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
+    refetchInterval: 5_000,
+  });
 
   useEffect(() => {
     setIssueTab(searchTab);
@@ -4981,6 +5018,7 @@ export function IssueDetailPage() {
     enabled: serverWorkspaceReady && runbookOpen && Boolean(detail?.project?.id),
   });
   const agents = listOrEmpty(agentsQuery.data);
+  const runtimeWorkers = listOrEmpty(runtimeWorkersQuery.data);
   const clusters = listOrEmpty(clustersQuery.data);
   const projects = listOrEmpty(projectsQuery.data);
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
@@ -5019,6 +5057,12 @@ export function IssueDetailPage() {
   const editingMentionMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingMentionMenuDismissed && editingAgentSuggestions.length > 0;
   const runtimeMode = auth.workspace?.kind === "team" ? "team" : "personal";
   const runtimeLabel = runtimeMode === "team" ? t("issueDetail.composer.teamWorker") : t("issueDetail.composer.personalWorker");
+  const hasMatchingCodexWorker = Boolean(activeCodexWorker(runtimeWorkers, workspaceId, runtimeMode));
+  const workerUnavailableText =
+    runtimeMode === "personal"
+      ? t("issueDetail.composer.personalWorkerUnavailable")
+      : t("issueDetail.composer.teamWorkerUnavailable");
+  const workerStartingText = t("issueDetail.composer.personalWorkerStarting");
   const canSaveEditingComment =
     Boolean(editingCommentId) &&
     Boolean(editingCommentBody.trim()) &&
@@ -5030,6 +5074,8 @@ export function IssueDetailPage() {
       ? t("issueDetail.composer.agentAlreadyWorking", { name: editingMentionedAgentConfig?.name })
       : !hasProject
         ? t("issueDetail.composer.attachProjectBeforeAgent")
+        : !hasMatchingCodexWorker
+          ? workerUnavailableText
         : t("issueDetail.composer.willRunAfterSave", { name: editingMentionedAgentConfig?.name, runtime: runtimeLabel })
     : isUnsupportedEditingAgentMention
       ? t("issueDetail.composer.agentUnavailable", { mention: editingMentionedAgent })
@@ -5039,6 +5085,10 @@ export function IssueDetailPage() {
       ? t("issueDetail.composer.agentWorking")
       : !hasProject
         ? t("issueDetail.composer.attachProject")
+        : !hasMatchingCodexWorker
+          ? runtimeMode === "personal"
+            ? t("issueDetail.composer.startPersonalWorker")
+            : t("issueDetail.composer.connectWorker")
         : t("issueDetail.composer.saveAndStart")
     : t("issueDetail.composer.saveEdit");
   const composerHelperText = isSupportedAgentMention
@@ -5046,10 +5096,38 @@ export function IssueDetailPage() {
       ? t("issueDetail.composer.agentAlreadyWorking", { name: mentionedAgentConfig?.name })
       : !hasProject
         ? t("issueDetail.composer.attachProjectBeforeAgent")
+        : !hasMatchingCodexWorker
+          ? workerUnavailableText
         : t("issueDetail.composer.willRunOnRuntime", { name: mentionedAgentConfig?.name, runtime: runtimeLabel })
     : isUnsupportedAgentMention
       ? t("issueDetail.composer.agentUnavailable", { mention: mentionedAgent })
       : t("issueDetail.composer.commentsStay");
+  const ensureAgentWorkerReady = useCallback(async () => {
+    const workers = await queryClient.fetchQuery({
+      queryKey: runtimeWorkersQueryKey,
+      queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
+      staleTime: 0,
+    });
+    if (activeCodexWorker(workers, workspaceId, runtimeMode)) return;
+    if (runtimeMode !== "personal" || !window.mspaceDesktop?.ensurePersonalWorker) {
+      throw new Error(workerUnavailableText);
+    }
+    await window.mspaceDesktop.ensurePersonalWorker({
+      authToken: auth.token,
+      workspaceId,
+      serverUrl: getControlPlaneBaseUrl(),
+    });
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      await sleep(1_000);
+      const refreshed = await queryClient.fetchQuery({
+        queryKey: runtimeWorkersQueryKey,
+        queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
+        staleTime: 0,
+      });
+      if (activeCodexWorker(refreshed, workspaceId, runtimeMode)) return;
+    }
+    throw new Error(workerStartingText);
+  }, [auth.token, queryClient, runtimeMode, runtimeWorkersQueryKey, workerStartingText, workerUnavailableText, workspaceId]);
   const syncEditingCommentEditorSnapshot = useCallback((editor: Editor) => {
     const match = mentionMatchInEditor(editor);
     setEditingCommentMentionMatch(match);
@@ -5149,14 +5227,22 @@ export function IssueDetailPage() {
         if (!project?.id) {
           throw new Error(t("issueDetail.composer.attachProjectBeforeAgent"));
         }
+        await ensureAgentWorkerReady();
         const comment = await controlPlaneApi.addComment(auth.token, workspaceId, issueId, commentInput);
-        await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
-          provider: agentConfig.provider,
-          agentProfile: agentConfig.id,
-          runtimeMode,
-          command: trimmedBody,
-          triggerCommentId: comment.commentId,
-        });
+        try {
+          await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
+            provider: agentConfig.provider,
+            agentProfile: agentConfig.id,
+            runtimeMode,
+            command: trimmedBody,
+            triggerCommentId: comment.commentId,
+          });
+        } catch (error) {
+          if (isNoActiveCodexWorkerError(error)) {
+            throw new Error(workerUnavailableText);
+          }
+          throw error;
+        }
         return;
       }
       await controlPlaneApi.addComment(auth.token, workspaceId, issueId, commentInput);
@@ -5176,7 +5262,19 @@ export function IssueDetailPage() {
     !sendComposer.isPending &&
     !isUnsupportedAgentMention &&
     (!isSupportedAgentMention || hasProject) &&
-    !(isSupportedAgentMention && hasActiveSession);
+    !(isSupportedAgentMention && hasActiveSession) &&
+    !(isSupportedAgentMention && runtimeMode === "team" && !hasMatchingCodexWorker);
+  const sendAgentLabel = sendComposer.isPending
+    ? t("issueDetail.composer.sending")
+    : isSupportedAgentMention && !hasMatchingCodexWorker
+      ? runtimeMode === "personal"
+        ? t("issueDetail.composer.startPersonalWorker")
+        : t("issueDetail.composer.connectWorker")
+      : isSupportedAgentMention
+        ? hasActiveSession
+          ? t("issueDetail.composer.agentWorking")
+          : t("issueDetail.composer.sendTo", { name: mentionedAgentConfig?.name })
+        : t("issueDetail.composer.comment");
 
   const updateComment = useMutation({
     mutationFn: async (input: { commentId: string; body: string; agentConfig?: AgentProfile }) => {
@@ -5184,7 +5282,6 @@ export function IssueDetailPage() {
       const commentInput = {
         body: trimmedBody,
       };
-      const comment = await controlPlaneApi.updateComment(auth.token, workspaceId, issueId, input.commentId, commentInput);
       if (input.agentConfig) {
         if (!detail) {
           throw new Error(t("issueDetail.page.issueNotLoaded"));
@@ -5193,13 +5290,24 @@ export function IssueDetailPage() {
         if (!project?.id) {
           throw new Error(t("issueDetail.composer.attachProjectBeforeAgent"));
         }
-        await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
-          provider: input.agentConfig.provider,
-          agentProfile: input.agentConfig.id,
-          runtimeMode,
-          command: trimmedBody,
-          triggerCommentId: input.commentId,
-        });
+        await ensureAgentWorkerReady();
+      }
+      const comment = await controlPlaneApi.updateComment(auth.token, workspaceId, issueId, input.commentId, commentInput);
+      if (input.agentConfig) {
+        try {
+          await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
+            provider: input.agentConfig.provider,
+            agentProfile: input.agentConfig.id,
+            runtimeMode,
+            command: trimmedBody,
+            triggerCommentId: input.commentId,
+          });
+        } catch (error) {
+          if (isNoActiveCodexWorkerError(error)) {
+            throw new Error(workerUnavailableText);
+          }
+          throw error;
+        }
       }
       return comment;
     },
@@ -6034,7 +6142,7 @@ export function IssueDetailPage() {
                       {isSupportedAgentMention ? (
                         <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[color:var(--line)] bg-[color:var(--surface)] px-2 text-[11px] font-medium text-[color:var(--ink)]">
                           <Bot className="size-3.5" />
-                          {runtimeLabel}
+                          {hasMatchingCodexWorker ? runtimeLabel : t("issueDetail.composer.noActiveWorker")}
                         </span>
                       ) : null}
                       <span className="min-w-[180px] flex-1">{composerHelperText}</span>
@@ -6055,13 +6163,7 @@ export function IssueDetailPage() {
                         disabled={!canSendComposer}
                       >
                         <Send data-icon />
-                        {sendComposer.isPending
-                          ? t("issueDetail.composer.sending")
-                          : isSupportedAgentMention
-                            ? hasActiveSession
-                              ? t("issueDetail.composer.agentWorking")
-                              : t("issueDetail.composer.sendTo", { name: mentionedAgentConfig?.name })
-                            : t("issueDetail.composer.comment")}
+                        {sendAgentLabel}
                       </Button>
                     </div>
                   </div>

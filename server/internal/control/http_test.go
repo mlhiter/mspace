@@ -1033,6 +1033,33 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 		t.Fatalf("unexpected comments: %+v", detail.Comments)
 	}
 
+	noWorkerSessionRecorder := httptest.NewRecorder()
+	noWorkerSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/sessions", strings.NewReader(`{"provider":"codex","agentProfile":"codex","runtimeMode":"personal","command":"@codex update the docs","triggerCommentId":"`+commentResult.CommentID+`"}`))
+	noWorkerSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(noWorkerSessionRecorder, noWorkerSessionReq)
+	if noWorkerSessionRecorder.Code != http.StatusConflict || !strings.Contains(noWorkerSessionRecorder.Body.String(), "no active codex worker") {
+		t.Fatalf("create agent session without worker status=%d body=%s", noWorkerSessionRecorder.Code, noWorkerSessionRecorder.Body.String())
+	}
+
+	personalTokenRecorder := httptest.NewRecorder()
+	personalTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"personal worker","expiresInHours":12}`))
+	personalTokenReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(personalTokenRecorder, personalTokenReq)
+	if personalTokenRecorder.Code != http.StatusCreated {
+		t.Fatalf("create personal runtime token status=%d body=%s", personalTokenRecorder.Code, personalTokenRecorder.Body.String())
+	}
+	var personalTokenResult RuntimeRegistrationTokenResult
+	if err := json.Unmarshal(personalTokenRecorder.Body.Bytes(), &personalTokenResult); err != nil {
+		t.Fatalf("parse personal runtime token: %v", err)
+	}
+	personalWorkerRecorder := httptest.NewRecorder()
+	personalWorkerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"personal-worker-1","mode":"personal","version":"0.1.0","capabilities":{"codex":true},"labels":{"host":"local"}}`))
+	personalWorkerReq.Header.Set("Authorization", "Bearer "+personalTokenResult.Token)
+	router.ServeHTTP(personalWorkerRecorder, personalWorkerReq)
+	if personalWorkerRecorder.Code != http.StatusCreated {
+		t.Fatalf("register personal worker status=%d body=%s", personalWorkerRecorder.Code, personalWorkerRecorder.Body.String())
+	}
+
 	createSessionRecorder := httptest.NewRecorder()
 	createSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/sessions", strings.NewReader(`{"provider":"codex","agentProfile":"codex","runtimeMode":"personal","command":"@codex update the docs","triggerCommentId":"`+commentResult.CommentID+`"}`))
 	createSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)

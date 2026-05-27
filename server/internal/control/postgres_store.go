@@ -1198,6 +1198,27 @@ func (s *PostgresStore) ListRuntimeWorkers(ctx Context, userID, workspaceID stri
 	return workers, nil
 }
 
+func (s *PostgresStore) hasActiveCodexWorker(ctx context.Context, workspaceID, runtimeMode string) (bool, error) {
+	return hasActiveCodexWorkerRecord(ctx, s.pool, workspaceID, runtimeMode)
+}
+
+func hasActiveCodexWorkerRecord(ctx context.Context, q queryer, workspaceID, runtimeMode string) (bool, error) {
+	var exists bool
+	err := q.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM runtime_workers
+			WHERE workspace_id = $1
+				AND mode = $2
+				AND status = 'online'
+				AND capabilities @> '{"codex": true}'::jsonb
+				AND last_seen_at >= now() - interval '45 seconds'
+			LIMIT 1
+		)
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(runtimeMode)).Scan(&exists)
+	return exists, err
+}
+
 func (s *PostgresStore) CreateRuntimeTask(ctx Context, userID, workspaceID string, input CreateRuntimeTaskInput) (RuntimeTask, error) {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)

@@ -441,6 +441,40 @@ func TestConfigRequiresRuntimeToken(t *testing.T) {
 	}
 }
 
+func TestRuntimeClientReadsUpdatedTokenFile(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "runtime.token")
+	if err := os.WriteFile(tokenPath, []byte("msw_first\n"), 0o600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+	cfg, err := normalizeConfig(config{
+		ServerURL:         "http://127.0.0.1:8787",
+		TokenFile:         tokenPath,
+		Name:              "worker",
+		Mode:              "personal",
+		Version:           workerVersion,
+		Capabilities:      json.RawMessage(`{}`),
+		Labels:            json.RawMessage(`{}`),
+		WorkRoot:          t.TempDir(),
+		PollInterval:      time.Second,
+		HeartbeatInterval: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("normalize config: %v", err)
+	}
+	client := runtimeClient{token: cfg.Token, tokenFile: cfg.TokenFile}
+	token, err := client.runtimeToken()
+	if err != nil || token != "msw_first" {
+		t.Fatalf("expected first token, got token=%q err=%v", token, err)
+	}
+	if err := os.WriteFile(tokenPath, []byte("msw_second\n"), 0o600); err != nil {
+		t.Fatalf("rotate token: %v", err)
+	}
+	token, err = client.runtimeToken()
+	if err != nil || token != "msw_second" {
+		t.Fatalf("expected rotated token, got token=%q err=%v", token, err)
+	}
+}
+
 func TestDefaultAgentSessionDeveloperInstructionsAvoidDevServerPreviewURLs(t *testing.T) {
 	instructions := defaultAgentSessionDeveloperInstructions()
 	required := []string{

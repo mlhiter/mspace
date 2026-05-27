@@ -535,6 +535,13 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 	if normalized.RuntimeMode != workspace.Kind {
 		return AgentSession{}, ErrForbidden
 	}
+	hasActiveWorker, err := s.hasActiveCodexWorker(dbctx, workspaceID, normalized.RuntimeMode)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if !hasActiveWorker {
+		return AgentSession{}, ErrNoActiveCodexWorker
+	}
 	issue, err := loadIssue(dbctx, s.pool, workspaceID, issueID)
 	if err != nil {
 		return AgentSession{}, err

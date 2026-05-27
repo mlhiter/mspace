@@ -963,6 +963,19 @@ export interface MspaceDesktopAPI {
     containerName: string;
     script: string;
   }>;
+  ensurePersonalWorker?: (input: {
+    authToken: string;
+    workspaceId: string;
+    serverUrl?: string;
+  }) => Promise<{
+    ok: boolean;
+    status: string;
+    workerName: string;
+  }>;
+  stopPersonalWorker?: () => Promise<{
+    ok: boolean;
+    status: string;
+  }>;
 }
 
 declare global {

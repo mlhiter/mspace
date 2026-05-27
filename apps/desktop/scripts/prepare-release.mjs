@@ -8,7 +8,9 @@ const repoRoot = resolve(import.meta.dirname, "../../..");
 const desktopRoot = resolve(repoRoot, "apps/desktop");
 const buildDir = resolve(desktopRoot, "build");
 const serverOut = resolve(desktopRoot, "resources/bin/mspace-server");
+const workerOut = resolve(desktopRoot, "resources/bin/mspace-worker");
 const serverBuildDir = resolve(buildDir, "server");
+const workerBuildDir = resolve(buildDir, "worker");
 const pngIcon = resolve(desktopRoot, "assets/brand/mspace-icon.png");
 const icnsIcon = resolve(buildDir, "icon.icns");
 const icoIcon = resolve(buildDir, "icon.ico");
@@ -51,14 +53,33 @@ async function buildServer(output, goos, goarch) {
   });
 }
 
+async function buildWorker(output, goos, goarch) {
+  await exec("go", ["build", "-o", output, "."], {
+    cwd: resolve(repoRoot, "worker"),
+    env: {
+      ...process.env,
+      CGO_ENABLED: "0",
+      GOOS: goos,
+      GOARCH: goarch,
+    },
+  });
+}
+
 if (process.platform === "darwin") {
   await rm(serverBuildDir, { recursive: true, force: true });
+  await rm(workerBuildDir, { recursive: true, force: true });
   await mkdir(serverBuildDir, { recursive: true });
+  await mkdir(workerBuildDir, { recursive: true });
   const arm64Server = resolve(serverBuildDir, "mspace-server-arm64");
   const x64Server = resolve(serverBuildDir, "mspace-server-x64");
+  const arm64Worker = resolve(workerBuildDir, "mspace-worker-arm64");
+  const x64Worker = resolve(workerBuildDir, "mspace-worker-x64");
   await buildServer(arm64Server, "darwin", "arm64");
   await buildServer(x64Server, "darwin", "amd64");
+  await buildWorker(arm64Worker, "darwin", "arm64");
+  await buildWorker(x64Worker, "darwin", "amd64");
   await exec("lipo", ["-create", arm64Server, x64Server, "-output", serverOut]);
+  await exec("lipo", ["-create", arm64Worker, x64Worker, "-output", workerOut]);
 } else {
   const goos = goosByPlatform[process.platform];
   const goarch = goarchByArch[process.arch];
@@ -66,6 +87,7 @@ if (process.platform === "darwin") {
     throw new Error(`Unsupported release host for bundled server: ${process.platform}/${process.arch}`);
   }
   await buildServer(serverOut, goos, goarch);
+  await buildWorker(workerOut, goos, goarch);
 }
 
 await copyFile(pngIcon, resolve(buildDir, "icon.png"));

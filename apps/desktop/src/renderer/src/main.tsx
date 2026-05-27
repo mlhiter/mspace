@@ -139,6 +139,9 @@ function RootShell() {
   const [teamWorkspaceName, setTeamWorkspaceName] = useState("");
 
   function clearAuthState() {
+    void window.mspaceDesktop?.stopPersonalWorker?.().catch((error) => {
+      console.warn(`Failed to stop personal worker while clearing auth state: ${error instanceof Error ? error.message : String(error)}`);
+    });
     window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
     window.localStorage.removeItem(SELECTED_WORKSPACE_STORAGE_KEY);
     setStoredAuthIdentity(null);
@@ -458,8 +461,8 @@ function RootShell() {
           name: meQuery.data?.user.name,
           email: meQuery.data?.user.email,
           avatarUrl: meQuery.data?.user.avatarUrl,
-          identityProvider: meQuery.data?.identity.provider,
-          identityLogin: meQuery.data?.identity.login,
+          identityProvider: meQuery.data?.identity?.provider,
+          identityLogin: meQuery.data?.identity?.login,
           isServerAdmin: meQuery.data?.isServerAdmin,
           workspaceId: currentWorkspace?.id,
           workspaceName: currentWorkspace?.name,

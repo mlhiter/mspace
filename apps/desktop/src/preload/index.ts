@@ -49,6 +49,19 @@ const desktopAPI = {
     containerName: string;
     script: string;
   }>,
+  ensurePersonalWorker: (input: {
+    authToken: string;
+    workspaceId: string;
+    serverUrl?: string;
+  }) => ipcRenderer.invoke("mspace:ensure-personal-worker", input) as Promise<{
+    ok: boolean;
+    status: string;
+    workerName: string;
+  }>,
+  stopPersonalWorker: () => ipcRenderer.invoke("mspace:stop-personal-worker") as Promise<{
+    ok: boolean;
+    status: string;
+  }>,
 };
 
 contextBridge.exposeInMainWorld("mspaceDesktop", desktopAPI);

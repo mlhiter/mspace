@@ -8,10 +8,11 @@ import (
 )
 
 var (
-	ErrNotFound  = errors.New("not found")
-	ErrExpired   = errors.New("expired")
-	ErrForbidden = errors.New("forbidden")
-	ErrConflict  = errors.New("conflict")
+	ErrNotFound            = errors.New("not found")
+	ErrExpired             = errors.New("expired")
+	ErrForbidden           = errors.New("forbidden")
+	ErrConflict            = errors.New("conflict")
+	ErrNoActiveCodexWorker = errors.New("no active codex worker")
 )
 
 type Config struct {
