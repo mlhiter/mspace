@@ -408,6 +408,7 @@ Workspace Settings owns workspace automation, team access, and runtime worker po
 - limits manual runtime credential creation to workspace owner/admin users and keeps runtime mode fixed to the current workspace kind;
 - separates active worker credentials from expired or replaced credential history, with desktop personal-worker credentials labeled as automatic;
 - shows runtime tasks as issue-linked operational rows with Task, Issue, Status, Worker, Updated, and Action columns;
+- paginates runtime tasks so Workspace Settings stays bounded when the queue history grows;
 - links issue-backed runtime tasks to the issue page, and agent-session tasks to the matching Issue Detail session when a session exists;
 - keeps raw task kind, required capabilities, payload, result, events, and logs in expandable task details;
 - does not expose a generic queue-task button in the normal UI, since product flows create issue triage, agent-session, and deploy/test tasks;

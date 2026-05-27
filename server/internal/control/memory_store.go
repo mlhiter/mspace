@@ -2814,17 +2814,28 @@ func (s *MemoryStore) DeleteCommentReaction(_ Context, userID, workspaceID, issu
 }
 
 func (s *MemoryStore) ListRuntimeTasks(_ Context, userID, workspaceID string) ([]RuntimeTask, error) {
+	result, err := s.ListRuntimeTasksPage(nil, userID, workspaceID, RuntimeTaskListOptions{Limit: maxRuntimeTaskListLimit})
+	if err != nil {
+		return nil, err
+	}
+	return result.Tasks, nil
+}
+
+func (s *MemoryStore) ListRuntimeTasksPage(_ Context, userID, workspaceID string, options RuntimeTaskListOptions) (RuntimeTaskListResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	options = normalizeRuntimeTaskListOptions(options)
 	workspaceID = strings.TrimSpace(workspaceID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
-		return nil, ErrNotFound
+		return RuntimeTaskListResult{}, ErrNotFound
 	}
 	tasks := []RuntimeTask{}
+	statusCounts := map[string]int{}
 	for _, task := range s.runtimeTasks {
 		if task.WorkspaceID == workspaceID {
 			tasks = append(tasks, task)
+			statusCounts[task.Status]++
 		}
 	}
 	sort.Slice(tasks, func(i, j int) bool {
@@ -2833,10 +2844,35 @@ func (s *MemoryStore) ListRuntimeTasks(_ Context, userID, workspaceID string) ([
 		}
 		return tasks[i].CreatedAt > tasks[j].CreatedAt
 	})
-	if len(tasks) > 100 {
-		tasks = tasks[:100]
+	total := len(tasks)
+	start := options.Offset
+	if start > total {
+		start = total
 	}
-	return tasks, nil
+	end := start + options.Limit
+	if end > total {
+		end = total
+	}
+	return RuntimeTaskListResult{
+		Tasks:        tasks[start:end],
+		Total:        total,
+		Limit:        options.Limit,
+		Offset:       options.Offset,
+		StatusCounts: statusCounts,
+	}, nil
+}
+
+func normalizeRuntimeTaskListOptions(options RuntimeTaskListOptions) RuntimeTaskListOptions {
+	if options.Limit <= 0 {
+		options.Limit = defaultRuntimeTaskListLimit
+	}
+	if options.Limit > maxRuntimeTaskListLimit {
+		options.Limit = maxRuntimeTaskListLimit
+	}
+	if options.Offset < 0 {
+		options.Offset = 0
+	}
+	return options
 }
 
 func (s *MemoryStore) ListRuntimeTaskEvents(_ Context, userID, workspaceID, taskID string) ([]RuntimeTaskEvent, error) {

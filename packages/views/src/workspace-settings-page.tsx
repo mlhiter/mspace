@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import {
 	Activity,
 	ChevronDown,
+	ChevronLeft,
 	ChevronRight,
 	CheckCircle2,
 	Circle,
@@ -35,6 +36,7 @@ import {
 	type RuntimeRegistrationToken,
 	type RuntimeRegistrationTokenResult,
 	type RuntimeTask,
+	type RuntimeTaskListResult,
 	type RuntimeWorker,
 	type WorkspaceInvitation,
 	type WorkspaceInvitationResult,
@@ -62,6 +64,7 @@ import { formatRelativeTime, RelativeTime } from "./time";
 
 const ACTIVE_WORKER_MAX_AGE_MS = 45 * 1000;
 const DESKTOP_PERSONAL_WORKER_CREDENTIAL_NAME = "Desktop personal worker credential";
+const RUNTIME_TASKS_PAGE_SIZE = 7;
 
 const defaultSettingsForm: UpdateWorkspaceSettingsInput = {
 	autoCreateDraftPr: false,
@@ -91,6 +94,14 @@ export function WorkspaceSettingsPage() {
 	const settingsQueryKey = queryKeys.workspaceSettings(workspaceID, auth.token);
 	const defaultRuntimeMode = isTeamWorkspace ? "team" : "personal";
 	const runtimeModeLabel = isTeamWorkspace ? t("workspaceSettings.summary.team") : t("workspaceSettings.summary.personal");
+	const [runtimeTasksPage, setRuntimeTasksPage] = useState(0);
+	const [selectedTaskID, setSelectedTaskID] = useState("");
+	const runtimeTasksOffset = runtimeTasksPage * RUNTIME_TASKS_PAGE_SIZE;
+
+	useEffect(() => {
+		setSelectedTaskID("");
+		setRuntimeTasksPage(0);
+	}, [workspaceID]);
 
 	const settingsQuery = useQuery({
 		queryKey: settingsQueryKey,
@@ -122,8 +133,8 @@ export function WorkspaceSettingsPage() {
 		refetchInterval: runtimeEnabled ? 5_000 : false,
 	});
 	const tasksQuery = useQuery({
-		queryKey: queryKeys.runtimeTasks(workspaceID, auth.token),
-		queryFn: () => controlPlaneApi.listRuntimeTasks(auth.token, workspaceID),
+		queryKey: queryKeys.runtimeTasks(workspaceID, auth.token, RUNTIME_TASKS_PAGE_SIZE, runtimeTasksOffset),
+		queryFn: () => controlPlaneApi.listRuntimeTasks(auth.token, workspaceID, { limit: RUNTIME_TASKS_PAGE_SIZE, offset: runtimeTasksOffset }),
 		enabled: runtimeEnabled,
 		refetchInterval: runtimeEnabled ? 5_000 : false,
 	});
@@ -144,7 +155,6 @@ export function WorkspaceSettingsPage() {
 	const [copyState, setCopyState] = useState("");
 	const [dockerWorkerStatus, setDockerWorkerStatus] = useState("");
 	const [dockerWorkerError, setDockerWorkerError] = useState("");
-	const [selectedTaskID, setSelectedTaskID] = useState("");
 
 	useEffect(() => {
 		if (!settingsQuery.data) return;
@@ -153,6 +163,13 @@ export function WorkspaceSettingsPage() {
 			autoDeployTestEnvironment: settingsQuery.data.autoDeployTestEnvironment,
 		});
 	}, [settingsQuery.data]);
+
+	useEffect(() => {
+		const total = tasksQuery.data?.total || 0;
+		if (total === 0 || runtimeTasksOffset < total) return;
+		setSelectedTaskID("");
+		setRuntimeTasksPage(Math.max(0, Math.ceil(total / RUNTIME_TASKS_PAGE_SIZE) - 1));
+	}, [runtimeTasksOffset, tasksQuery.data?.total]);
 
 	const saveSettings = useMutation({
 		mutationFn: (input: UpdateWorkspaceSettingsInput) =>
@@ -234,7 +251,7 @@ export function WorkspaceSettingsPage() {
 		mutationFn: (taskID: string) => controlPlaneApi.cancelRuntimeTask(auth.token, workspaceID, taskID, { reason: t("workspaceSettings.taskCancelReason") }),
 		onSuccess: async (_task, taskID) => {
 			await Promise.all([
-				queryClient.invalidateQueries({ queryKey: queryKeys.runtimeTasks(workspaceID, auth.token) }),
+				queryClient.invalidateQueries({ queryKey: ["runtime-tasks", workspaceID, auth.token] }),
 				queryClient.invalidateQueries({ queryKey: queryKeys.runtimeTaskEvents(workspaceID, taskID, auth.token) }),
 			]);
 		},
@@ -247,7 +264,8 @@ export function WorkspaceSettingsPage() {
 	);
 	const workers = workersQuery.data || [];
 	const tokens = tokensQuery.data || [];
-	const tasks = tasksQuery.data || [];
+	const tasksPage = tasksQuery.data || emptyRuntimeTaskListResult(RUNTIME_TASKS_PAGE_SIZE, runtimeTasksOffset);
+	const tasks = tasksPage.tasks || [];
 	const issues = issuesQuery.data || [];
 	const members = membersQuery.data || [];
 	const invitations = invitationsQuery.data || [];
@@ -255,7 +273,7 @@ export function WorkspaceSettingsPage() {
 	const canStartLocalWorker = runtimeEnabled && canManageWorkspace && Boolean(window.mspaceDesktop?.startDockerWorker);
 	const canManageRuntimeCredentials = runtimeEnabled && canManageWorkspace;
 	const onlineWorkerCount = workers.filter((worker) => worker.status === "online").length;
-	const queuedTaskCount = tasks.filter((task) => task.status === "queued").length;
+	const queuedTaskCount = tasksPage.statusCounts?.queued || 0;
 	const runtimeError = isTeamWorkspace
 		? membersQuery.error || invitationsQuery.error || tokensQuery.error || workersQuery.error || tasksQuery.error
 		: tokensQuery.error || workersQuery.error || tasksQuery.error;
@@ -451,7 +469,7 @@ export function WorkspaceSettingsPage() {
 							<div className="grid gap-3 border-b border-[color:var(--line)] p-4 md:grid-cols-3">
 								<RuntimeSummaryCard icon={SquareTerminal} label={t("workspaceSettings.summary.runtimeMode")} value={runtimeModeLabel} meta={t("workspaceSettings.summary.serverOwnedQueue")} />
 								<RuntimeSummaryCard icon={ServerCog} label={t("workspaceSettings.summary.workers")} value={t("workspaceSettings.summary.online", { count: onlineWorkerCount })} meta={t("workspaceSettings.summary.registered", { count: workers.length })} />
-								<RuntimeSummaryCard icon={ListChecks} label={t("workspaceSettings.summary.taskQueue")} value={t("workspaceSettings.summary.queued", { count: queuedTaskCount })} meta={t("workspaceSettings.summary.recentTasks", { count: tasks.length })} />
+								<RuntimeSummaryCard icon={ListChecks} label={t("workspaceSettings.summary.taskQueue")} value={t("workspaceSettings.summary.queued", { count: queuedTaskCount })} meta={t("workspaceSettings.summary.recentTasks", { count: tasksPage.total })} />
 							</div>
 							<SettingsRow
 								icon={Settings2}
@@ -526,6 +544,9 @@ export function WorkspaceSettingsPage() {
 				>
 					<TaskList
 						tasks={tasks}
+						page={runtimeTasksPage}
+						pageSize={RUNTIME_TASKS_PAGE_SIZE}
+						total={tasksPage.total}
 						workers={workers}
 						issues={issues}
 						loading={tasksQuery.isPending && runtimeEnabled}
@@ -533,6 +554,10 @@ export function WorkspaceSettingsPage() {
 						workspaceID={workspaceID}
 						selectedTaskID={selectedTaskID}
 						onSelectTask={setSelectedTaskID}
+						onPageChange={(page) => {
+							setSelectedTaskID("");
+							setRuntimeTasksPage(page);
+						}}
 						cancellingTaskID={cancelTask.variables || ""}
 						onCancelTask={(taskID) => cancelTask.mutate(taskID)}
 					/>
@@ -814,6 +839,16 @@ function RuntimeSummaryCard(props: { icon: LucideIcon; label: string; value: str
 	);
 }
 
+function emptyRuntimeTaskListResult(limit: number, offset: number): RuntimeTaskListResult {
+	return {
+		tasks: [],
+		total: 0,
+		limit,
+		offset,
+		statusCounts: {},
+	};
+}
+
 function MemberList(props: { members: WorkspaceMember[]; loading: boolean; currentUserID: string }) {
 	const { t } = useMspaceTranslation();
 
@@ -1042,6 +1077,9 @@ function WorkerList(props: { workers: RuntimeWorker[]; loading: boolean }) {
 
 function TaskList(props: {
 	tasks: RuntimeTask[];
+	page: number;
+	pageSize: number;
+	total: number;
 	workers: RuntimeWorker[];
 	issues: IssueListItem[];
 	loading: boolean;
@@ -1049,12 +1087,15 @@ function TaskList(props: {
 	workspaceID: string;
 	selectedTaskID: string;
 	onSelectTask: (taskID: string) => void;
+	onPageChange: (page: number) => void;
 	cancellingTaskID?: string;
 	onCancelTask: (taskID: string) => void;
 }) {
 	const { t } = useMspaceTranslation();
 	const workerByID = useMemo(() => new Map(props.workers.map((worker) => [worker.id, worker])), [props.workers]);
 	const issueTitleByID = useMemo(() => new Map(props.issues.map((issue) => [issue.id, issue.title])), [props.issues]);
+	const totalPages = Math.max(1, Math.ceil(props.total / props.pageSize));
+	const clampedPage = Math.min(props.page, totalPages - 1);
 	if (props.loading) return <LoadingBlock>{t("workspaceSettings.list.loadingTasks")}</LoadingBlock>;
 	if (props.tasks.length === 0) {
 		return <EmptyRuntimeBlock icon={ListChecks} title={t("workspaceSettings.list.noTasksTitle")} body={t("workspaceSettings.list.noTasksBody")} />;
@@ -1115,6 +1156,60 @@ function TaskList(props: {
 						</div>
 					);
 				})}
+			</div>
+			{props.total > props.pageSize ? (
+				<TablePagination
+					page={clampedPage}
+					pageSize={props.pageSize}
+					total={props.total}
+					onPageChange={props.onPageChange}
+				/>
+			) : null}
+		</div>
+	);
+}
+
+function TablePagination(props: {
+	page: number;
+	pageSize: number;
+	total: number;
+	onPageChange: (page: number) => void;
+}) {
+	const { t } = useMspaceTranslation();
+	const totalPages = Math.max(1, Math.ceil(props.total / props.pageSize));
+	const start = props.page * props.pageSize + 1;
+	const end = Math.min(props.total, start + props.pageSize - 1);
+	const canGoPrevious = props.page > 0;
+	const canGoNext = props.page < totalPages - 1;
+	return (
+		<div className="flex min-w-0 flex-col gap-3 border-t border-[color:var(--line)] bg-[color:var(--block)] px-4 py-3 md:flex-row md:items-center md:justify-between">
+			<div className="text-[12px] leading-5 text-[color:var(--muted)]">
+				{t("workspaceSettings.list.taskPageRange", { start, end, total: props.total })}
+			</div>
+			<div className="flex items-center gap-2">
+				<Button
+					type="button"
+					variant="ghost"
+					size="sm"
+					disabled={!canGoPrevious}
+					onClick={() => props.onPageChange(Math.max(0, props.page - 1))}
+				>
+					<ChevronLeft data-icon />
+					{t("workspaceSettings.list.previousPage")}
+				</Button>
+				<span className="min-w-[72px] text-center text-[12px] leading-5 text-[color:var(--muted)]">
+					{t("workspaceSettings.list.pageIndicator", { page: props.page + 1, totalPages })}
+				</span>
+				<Button
+					type="button"
+					variant="ghost"
+					size="sm"
+					disabled={!canGoNext}
+					onClick={() => props.onPageChange(Math.min(totalPages - 1, props.page + 1))}
+				>
+					{t("workspaceSettings.list.nextPage")}
+					<ChevronRight data-icon />
+				</Button>
 			</div>
 		</div>
 	);

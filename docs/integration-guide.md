@@ -251,7 +251,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and heartbeat state. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a runtime task manually for API-level smoke/debug tooling. Product UI flows normally create tasks through issue triage, agent session, or test deploy routes. |
-| `GET` | `/api/workspaces/{workspaceID}/runtime-tasks` | List recent runtime tasks. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-tasks?limit=10&offset=0` | List runtime tasks with pagination metadata and status counts. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/logs` | List worker-appended logs for one runtime task. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/cancel` | Request cancellation for a queued, claimed, or running task. |
@@ -276,6 +276,8 @@ The server rejects runtime worker registration and runtime task creation when th
 Desktop personal workers use the same token endpoints, but the user normally never sees the raw credential. Electron creates a 12-hour personal worker credential, writes it to an Electron user-data token file, renews it before expiry, and revokes the replaced credential after a short grace period. The worker supports `MSPACE_RUNTIME_TOKEN_FILE` and rereads that file for runtime API calls, so token renewal is designed to be invisible to personal users.
 
 Workspace Settings lists runtime tasks as an operations surface: task purpose, linked Issue title when available, status, worker, update time, and detail/cancel actions. Agent-session task links include `sessionId` so Issue Detail can scroll to the relevant session card. Pure protocol tasks such as `issue_type_triage` may only open the Issue page because they do not have a session card. Raw protocol payloads remain in expanded details instead of the primary row.
+
+The runtime task list endpoint returns `{ tasks, total, limit, offset, statusCounts }`. Use `limit` and `offset` for paged UI lists; the server clamps invalid limits and keeps the result ordered by newest task first. Desktop clients normalize older array responses defensively so a renderer update does not crash while a local or remote server is still restarting onto the paged contract.
 
 Desktop personal worker credentials are named `Desktop personal worker credential` and shown as automatic desktop credentials. Workspace Settings separates active credentials from expired or replaced credential history so background renewal does not look like a pile of duplicate manual credentials.
 

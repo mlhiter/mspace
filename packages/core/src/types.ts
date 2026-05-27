@@ -177,6 +177,14 @@ export interface RuntimeTask {
 	updatedAt: string;
 }
 
+export interface RuntimeTaskListResult {
+	tasks: RuntimeTask[];
+	total: number;
+	limit: number;
+	offset: number;
+	statusCounts: Record<string, number>;
+}
+
 export interface CancelRuntimeTaskInput {
 	reason?: string;
 }

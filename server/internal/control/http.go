@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,8 @@ type Server struct {
 const serverProtocolVersion = 1
 const maxIssueAttachmentBytes = 10 << 20
 const maxPasswordAuthBodyBytes = 4 << 10
+const defaultRuntimeTaskListLimit = 10
+const maxRuntimeTaskListLimit = 100
 
 func NewServer(config Config, store Store, github GitHubClient) *Server {
 	config = config.withDefaults()
@@ -1389,12 +1392,37 @@ func (s *Server) handleListRuntimeTasks(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
-	tasks, err := s.store.ListRuntimeTasks(r.Context(), user.ID, workspaceID)
+	query := r.URL.Query()
+	tasks, err := s.store.ListRuntimeTasksPage(r.Context(), user.ID, workspaceID, parseRuntimeTaskListOptions(query))
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
+	if _, hasLimit := query["limit"]; !hasLimit {
+		if _, hasOffset := query["offset"]; !hasOffset {
+			writeJSON(w, http.StatusOK, tasks.Tasks)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, tasks)
+}
+
+func parseRuntimeTaskListOptions(values url.Values) RuntimeTaskListOptions {
+	options := RuntimeTaskListOptions{
+		Limit:  defaultRuntimeTaskListLimit,
+		Offset: 0,
+	}
+	if raw := strings.TrimSpace(values.Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			options.Limit = parsed
+		}
+	}
+	if raw := strings.TrimSpace(values.Get("offset")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			options.Offset = parsed
+		}
+	}
+	return normalizeRuntimeTaskListOptions(options)
 }
 
 func (s *Server) handleListRuntimeTaskEvents(w http.ResponseWriter, r *http.Request) {

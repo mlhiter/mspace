@@ -1313,10 +1313,48 @@ func insertRuntimeTaskRecord(ctx context.Context, q queryer, workspaceID, userID
 }
 
 func (s *PostgresStore) ListRuntimeTasks(ctx Context, userID, workspaceID string) ([]RuntimeTask, error) {
-	dbctx := asContext(ctx)
-	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+	result, err := s.ListRuntimeTasksPage(ctx, userID, workspaceID, RuntimeTaskListOptions{Limit: maxRuntimeTaskListLimit})
+	if err != nil {
 		return nil, err
 	}
+	return result.Tasks, nil
+}
+
+func (s *PostgresStore) ListRuntimeTasksPage(ctx Context, userID, workspaceID string, options RuntimeTaskListOptions) (RuntimeTaskListResult, error) {
+	dbctx := asContext(ctx)
+	options = normalizeRuntimeTaskListOptions(options)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return RuntimeTaskListResult{}, err
+	}
+
+	statusRows, err := s.pool.Query(dbctx, `
+		SELECT status, COUNT(*)::int
+		FROM runtime_tasks
+		WHERE workspace_id = $1
+		GROUP BY status
+	`, workspaceID)
+	if err != nil {
+		return RuntimeTaskListResult{}, err
+	}
+	statusCounts := map[string]int{}
+	total := 0
+	for statusRows.Next() {
+		var status string
+		var count int
+		if err := statusRows.Scan(&status, &count); err != nil {
+			statusRows.Close()
+			return RuntimeTaskListResult{}, err
+		}
+		statusCounts[status] = count
+		total += count
+	}
+	if err := statusRows.Err(); err != nil {
+		statusRows.Close()
+		return RuntimeTaskListResult{}, err
+	}
+	statusRows.Close()
+
 	rows, err := s.pool.Query(dbctx, `
 		SELECT
 			id::text,
@@ -1341,10 +1379,10 @@ func (s *PostgresStore) ListRuntimeTasks(ctx Context, userID, workspaceID string
 		FROM runtime_tasks
 		WHERE workspace_id = $1
 		ORDER BY created_at DESC, id DESC
-		LIMIT 100
-	`, strings.TrimSpace(workspaceID))
+		LIMIT $2 OFFSET $3
+	`, workspaceID, options.Limit, options.Offset)
 	if err != nil {
-		return nil, err
+		return RuntimeTaskListResult{}, err
 	}
 	defer rows.Close()
 
@@ -1352,14 +1390,20 @@ func (s *PostgresStore) ListRuntimeTasks(ctx Context, userID, workspaceID string
 	for rows.Next() {
 		task, err := scanRuntimeTask(rows)
 		if err != nil {
-			return nil, err
+			return RuntimeTaskListResult{}, err
 		}
 		tasks = append(tasks, task)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return RuntimeTaskListResult{}, err
 	}
-	return tasks, nil
+	return RuntimeTaskListResult{
+		Tasks:        tasks,
+		Total:        total,
+		Limit:        options.Limit,
+		Offset:       options.Offset,
+		StatusCounts: statusCounts,
+	}, nil
 }
 
 func (s *PostgresStore) ListRuntimeTaskEvents(ctx Context, userID, workspaceID, taskID string) ([]RuntimeTaskEvent, error) {

@@ -142,7 +142,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration credential. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and their latest heartbeat state. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a runtime task for API-level smoke/debug tooling. Current product task kinds include `protocol_smoke`, `noop`, `issue_type_triage`, and `agent_session`. |
-| `GET` | `/api/workspaces/{workspaceID}/runtime-tasks` | List recent runtime tasks for the workspace. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-tasks?limit=10&offset=0` | List runtime tasks for the workspace with pagination metadata and status counts. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/logs` | List worker-appended logs for one runtime task. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/cancel` | Request cancellation for a queued, claimed, or running runtime task. |

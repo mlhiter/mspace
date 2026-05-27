@@ -15,6 +15,7 @@ export const changelog: ChangelogEntry[] = [
       "Separated active worker credentials from expired or replaced credential history so desktop personal worker renewals no longer look like duplicate manual tokens.",
       "Labeled desktop-managed personal worker credentials as automatic credentials with metadata that explains they are managed by the desktop worker lifecycle.",
       "Renamed the task queue surface to runtime tasks, added an Issue-title column, and linked issue-backed tasks back to the relevant Issue Detail session.",
+      "Paginated runtime tasks in Workspace Settings so busy workspaces can move through task history without relying on one long scrolling table.",
       "Kept protocol kind, capabilities, payload, result, events, and logs available in task details for debugging without making raw runtime fields the primary row content.",
       "Removed the manual queue-task button from the normal runtime settings surface and replaced final-state cancel actions with detail controls.",
     ],

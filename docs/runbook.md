@@ -342,7 +342,7 @@ curl -H "Authorization: Bearer <msp-token>" \
   http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-workers
 
 curl -H "Authorization: Bearer <msp-token>" \
-  http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks
+  "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks?limit=10&offset=0"
 ```
 
 The task's `runtimeMode` and `requiredCapabilities` must match the worker heartbeat.

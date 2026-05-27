@@ -40,6 +40,7 @@ import type {
   RuntimeRegistrationTokenResult,
   RuntimeTask,
   RuntimeTaskEvent,
+  RuntimeTaskListResult,
   RuntimeTaskLog,
   RuntimeWorker,
   SessionDetail,
@@ -82,7 +83,7 @@ export const queryKeys = {
 	workspaceInvitations: (workspaceId: string, token: string) => ["workspace-invitations", workspaceId, token] as const,
 	runtimeRegistrationTokens: (workspaceId: string, token: string) => ["runtime-registration-tokens", workspaceId, token] as const,
 	runtimeWorkers: (workspaceId: string, token: string) => ["runtime-workers", workspaceId, token] as const,
-	runtimeTasks: (workspaceId: string, token: string) => ["runtime-tasks", workspaceId, token] as const,
+	runtimeTasks: (workspaceId: string, token: string, limit = 10, offset = 0) => ["runtime-tasks", workspaceId, token, limit, offset] as const,
   runtimeTaskEvents: (workspaceId: string, taskId: string, token: string) => ["runtime-task-events", workspaceId, taskId, token] as const,
   runtimeTaskLogs: (workspaceId: string, taskId: string, token: string) => ["runtime-task-logs", workspaceId, taskId, token] as const,
   workspaceIssueLabelDefinitions: (workspaceId: string, token: string) =>
@@ -218,6 +219,32 @@ function authHeaders(token: string): HeadersInit {
   };
 }
 
+function normalizeRuntimeTaskListResult(payload: RuntimeTaskListResult | RuntimeTask[], input: { limit?: number; offset?: number }): RuntimeTaskListResult {
+	const limit = typeof input.limit === "number" && input.limit > 0 ? input.limit : 10;
+	const offset = typeof input.offset === "number" && input.offset > 0 ? input.offset : 0;
+	if (Array.isArray(payload)) {
+		const tasks = payload.slice(offset, offset + limit);
+		return {
+			tasks,
+			total: payload.length,
+			limit,
+			offset,
+			statusCounts: payload.reduce<Record<string, number>>((counts, task) => {
+				counts[task.status] = (counts[task.status] || 0) + 1;
+				return counts;
+			}, {}),
+		};
+	}
+	const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+	return {
+		tasks,
+		total: typeof payload.total === "number" ? payload.total : tasks.length,
+		limit: typeof payload.limit === "number" && payload.limit > 0 ? payload.limit : limit,
+		offset: typeof payload.offset === "number" && payload.offset >= 0 ? payload.offset : offset,
+		statusCounts: payload.statusCounts || {},
+	};
+}
+
 export const controlPlaneApi = {
   startGitHubLogin: () =>
     requestControlPlane<AuthStartResult>("/api/auth/github/start"),
@@ -318,10 +345,15 @@ export const controlPlaneApi = {
 			headers: authHeaders(token),
 			body: JSON.stringify(input),
 		}),
-	listRuntimeTasks: (token: string, workspaceId: string) =>
-		requestControlPlane<RuntimeTask[]>(`/api/workspaces/${workspaceId}/runtime-tasks`, {
+	listRuntimeTasks: (token: string, workspaceId: string, input: { limit?: number; offset?: number } = {}) => {
+		const params = new URLSearchParams();
+		if (typeof input.limit === "number") params.set("limit", String(input.limit));
+		if (typeof input.offset === "number") params.set("offset", String(input.offset));
+		const query = params.toString();
+		return requestControlPlane<RuntimeTaskListResult | RuntimeTask[]>(`/api/workspaces/${workspaceId}/runtime-tasks${query ? `?${query}` : ""}`, {
 			headers: authHeaders(token),
-		}),
+		}).then((payload) => normalizeRuntimeTaskListResult(payload, input));
+	},
 	listRuntimeTaskEvents: (token: string, workspaceId: string, taskId: string) =>
 		requestControlPlane<RuntimeTaskEvent[]>(`/api/workspaces/${workspaceId}/runtime-tasks/${taskId}/events`, {
 			headers: authHeaders(token),

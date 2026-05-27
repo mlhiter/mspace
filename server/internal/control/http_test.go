@@ -1843,6 +1843,80 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	}
 }
 
+func TestRuntimeTaskListPagination(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "task-pagination-owner",
+		Login:          "task-pagination-owner",
+		Name:           "Task Pagination Owner",
+		Email:          "task-pagination-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createdIDs := make([]string, 0, 12)
+	for index := 0; index < 12; index++ {
+		createRecorder := httptest.NewRecorder()
+		body := fmt.Sprintf(`{"issueId":"issue-%02d","kind":"agent_session","priority":%d,"runtimeMode":"personal","requiredCapabilities":{"codex":true},"payload":{"prompt":"task %02d"}}`, index, index, index)
+		createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(body))
+		createReq.Header.Set("Authorization", "Bearer "+sessionToken)
+		router.ServeHTTP(createRecorder, createReq)
+		if createRecorder.Code != http.StatusCreated {
+			t.Fatalf("create runtime task %d status=%d body=%s", index, createRecorder.Code, createRecorder.Body.String())
+		}
+		var task RuntimeTask
+		if err := json.Unmarshal(createRecorder.Body.Bytes(), &task); err != nil {
+			t.Fatalf("parse runtime task %d: %v", index, err)
+		}
+		createdIDs = append(createdIDs, task.ID)
+	}
+
+	pageRecorder := httptest.NewRecorder()
+	pageReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks?limit=5&offset=5", nil)
+	pageReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(pageRecorder, pageReq)
+	if pageRecorder.Code != http.StatusOK {
+		t.Fatalf("list paged runtime tasks status=%d body=%s", pageRecorder.Code, pageRecorder.Body.String())
+	}
+	var page RuntimeTaskListResult
+	if err := json.Unmarshal(pageRecorder.Body.Bytes(), &page); err != nil {
+		t.Fatalf("parse paged runtime tasks: %v", err)
+	}
+	if page.Total != 12 || page.Limit != 5 || page.Offset != 5 || len(page.Tasks) != 5 || page.StatusCounts["queued"] != 12 {
+		t.Fatalf("unexpected page metadata: %+v", page)
+	}
+	for index, task := range page.Tasks {
+		expectedID := createdIDs[len(createdIDs)-1-5-index]
+		if task.ID != expectedID {
+			t.Fatalf("unexpected task at page index %d: got %s want %s page=%+v created=%+v", index, task.ID, expectedID, page.Tasks, createdIDs)
+		}
+	}
+
+	legacyRecorder := httptest.NewRecorder()
+	legacyReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks", nil)
+	legacyReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(legacyRecorder, legacyReq)
+	if legacyRecorder.Code != http.StatusOK {
+		t.Fatalf("list legacy runtime tasks status=%d body=%s", legacyRecorder.Code, legacyRecorder.Body.String())
+	}
+	var legacyTasks []RuntimeTask
+	if err := json.Unmarshal(legacyRecorder.Body.Bytes(), &legacyTasks); err != nil {
+		t.Fatalf("parse legacy runtime tasks: %v", err)
+	}
+	if len(legacyTasks) != 10 || legacyTasks[0].ID != createdIDs[len(createdIDs)-1] {
+		t.Fatalf("unexpected legacy runtime tasks: %+v", legacyTasks)
+	}
+}
+
 func TestAutoDeployTestEnvironmentQueuesAfterSourceSession(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
@@ -1964,18 +2038,18 @@ func TestAutoDeployTestEnvironmentQueuesAfterSourceSession(t *testing.T) {
 	}
 
 	tasksRecorder := httptest.NewRecorder()
-	tasksReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks", nil)
+	tasksReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks?limit=10&offset=0", nil)
 	tasksReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(tasksRecorder, tasksReq)
 	if tasksRecorder.Code != http.StatusOK {
 		t.Fatalf("list runtime tasks status=%d body=%s", tasksRecorder.Code, tasksRecorder.Body.String())
 	}
-	var tasks []RuntimeTask
-	if err := json.Unmarshal(tasksRecorder.Body.Bytes(), &tasks); err != nil {
+	var tasksPage RuntimeTaskListResult
+	if err := json.Unmarshal(tasksRecorder.Body.Bytes(), &tasksPage); err != nil {
 		t.Fatalf("parse runtime tasks: %v", err)
 	}
 	var deployTask RuntimeTask
-	for _, task := range tasks {
+	for _, task := range tasksPage.Tasks {
 		if task.ID != sourceTask.ID && task.Kind == "agent_session" {
 			var payload struct {
 				Automation      string `json:"automation"`
@@ -1991,7 +2065,7 @@ func TestAutoDeployTestEnvironmentQueuesAfterSourceSession(t *testing.T) {
 		}
 	}
 	if deployTask.ID == "" {
-		t.Fatalf("expected an auto deploy task, got %+v", tasks)
+		t.Fatalf("expected an auto deploy task, got %+v", tasksPage)
 	}
 	if deployTask.Status != "queued" || deployTask.RuntimeMode != "personal" || deployTask.IssueID != issueID || deployTask.ProjectID != project.ID {
 		t.Fatalf("unexpected auto deploy task: %+v", deployTask)
@@ -2034,24 +2108,24 @@ func TestAutoDeployTestEnvironmentQueuesAfterSourceSession(t *testing.T) {
 	}
 
 	finalTasksRecorder := httptest.NewRecorder()
-	finalTasksReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks", nil)
+	finalTasksReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks?limit=10&offset=0", nil)
 	finalTasksReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(finalTasksRecorder, finalTasksReq)
 	if finalTasksRecorder.Code != http.StatusOK {
 		t.Fatalf("list final runtime tasks status=%d body=%s", finalTasksRecorder.Code, finalTasksRecorder.Body.String())
 	}
-	var finalTasks []RuntimeTask
-	if err := json.Unmarshal(finalTasksRecorder.Body.Bytes(), &finalTasks); err != nil {
+	var finalTasksPage RuntimeTaskListResult
+	if err := json.Unmarshal(finalTasksRecorder.Body.Bytes(), &finalTasksPage); err != nil {
 		t.Fatalf("parse final runtime tasks: %v", err)
 	}
 	autoDeployCount := 0
-	for _, task := range finalTasks {
+	for _, task := range finalTasksPage.Tasks {
 		if isAutoDeployTestEnvironmentTask(task) {
 			autoDeployCount++
 		}
 	}
 	if autoDeployCount != 1 {
-		t.Fatalf("auto deploy task should not recursively queue another deploy, count=%d tasks=%+v", autoDeployCount, finalTasks)
+		t.Fatalf("auto deploy task should not recursively queue another deploy, count=%d tasks=%+v", autoDeployCount, finalTasksPage)
 	}
 }
 

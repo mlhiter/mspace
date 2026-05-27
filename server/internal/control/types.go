@@ -954,6 +954,19 @@ type RuntimeTask struct {
 	UpdatedAt            string          `json:"updatedAt"`
 }
 
+type RuntimeTaskListOptions struct {
+	Limit  int
+	Offset int
+}
+
+type RuntimeTaskListResult struct {
+	Tasks        []RuntimeTask  `json:"tasks"`
+	Total        int            `json:"total"`
+	Limit        int            `json:"limit"`
+	Offset       int            `json:"offset"`
+	StatusCounts map[string]int `json:"statusCounts"`
+}
+
 type RuntimeTaskEvent struct {
 	ID          string          `json:"id"`
 	WorkspaceID string          `json:"workspaceId"`
@@ -1123,6 +1136,7 @@ type Store interface {
 	ListRuntimeWorkers(ctx Context, userID, workspaceID string) ([]RuntimeWorker, error)
 	CreateRuntimeTask(ctx Context, userID, workspaceID string, input CreateRuntimeTaskInput) (RuntimeTask, error)
 	ListRuntimeTasks(ctx Context, userID, workspaceID string) ([]RuntimeTask, error)
+	ListRuntimeTasksPage(ctx Context, userID, workspaceID string, options RuntimeTaskListOptions) (RuntimeTaskListResult, error)
 	ListRuntimeTaskEvents(ctx Context, userID, workspaceID, taskID string) ([]RuntimeTaskEvent, error)
 	ListRuntimeTaskLogs(ctx Context, userID, workspaceID, taskID string) ([]RuntimeTaskLog, error)
 	CancelRuntimeTask(ctx Context, userID, workspaceID, taskID string, input CancelRuntimeTaskInput) (RuntimeTask, error)
