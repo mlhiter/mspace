@@ -406,7 +406,7 @@ Workspace Settings owns workspace automation, team access, and runtime worker po
 - lets team workspace owners/admins edit the current team workspace name, mark, and description from the identity section;
 - keeps source commit capture always on for issue review and deploy continuation;
 - shows team workspace creation only to server admins, while ordinary registered users stay in personal workspaces until invited;
-- limits manual runtime credential creation to workspace owner/admin users and keeps runtime mode fixed to the current workspace kind;
+- connects worker environments through owner/admin-only one-time install commands, keeps runtime mode fixed to the current workspace kind, and leaves raw runtime credential creation to API/debug paths;
 - separates active worker credentials from expired or replaced credential history, with desktop personal-worker credentials labeled as automatic;
 - shows runtime tasks as issue-linked operational rows with Task, Issue, Status, Worker, Updated, and Action columns;
 - paginates runtime tasks so Workspace Settings stays bounded when the queue history grows;

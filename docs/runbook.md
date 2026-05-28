@@ -177,12 +177,14 @@ That explicit source makes the desktop use the configured-team-server sign-in pa
 | `MSPACE_RUNTIME_TOKEN` | Worker | none | Internal runtime bootstrap credential with `msw_` prefix. |
 | `MSPACE_WORKER_NAME` | Worker | host-derived | Stable worker name shown in Workspace Settings. |
 | `MSPACE_WORKER_MODE` | Worker | `team` | Runtime mode reported to the server; `team` or `personal`. |
-| `MSPACE_WORKER_CAPABILITIES` | Worker | `{"protocolSmoke":true,"codex":false,"dryRun":true}` | JSON object used by server-side capability matching. |
-| `MSPACE_WORKER_LABELS` | Worker | `{}` | JSON object for placement or inventory labels. |
+| `MSPACE_WORKER_IMAGE` | Docker worker install command | `crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-worker-codex:dev` | Docker image used by generated self-host worker install commands. |
+| `MSPACE_WORKER_CONTAINER` | Docker worker install command | `${MSPACE_WORKER_NAME}` | Docker container name used by generated self-host worker install commands. |
+| `MSPACE_WORKER_CAPABILITIES` | Worker | worker-dependent | JSON object used by server-side capability matching. The plain worker default is `{"protocolSmoke":true,"codex":false,"dryRun":true}`; generated self-host install commands default to `{"protocolSmoke":true,"codex":true,"docker":true,"kubectl":true,"buildkit":false,"dryRun":false}`. |
+| `MSPACE_WORKER_LABELS` | Worker | worker-dependent | JSON object for placement or inventory labels. Generated self-host install commands default to `{"provider":"self-host","environment":"docker"}`. |
 | `MSPACE_WORKER_POLL_INTERVAL` | Worker | `5s` | How often the worker polls the runtime task queue. |
 | `MSPACE_WORKER_HEARTBEAT_INTERVAL` | Worker | `10s` | How often the worker reports liveness and load. |
 | `MSPACE_WORKER_WORK_ROOT` | Worker | `/tmp/mspace-worker` or `/var/lib/mspace-worker` in Docker | Root directory for worker-managed repository caches, session worktrees, and artifacts. |
-| `MSPACE_WORKER_VOLUME` | Docker worker scripts | `mspace-worker-dev-root` or `mspace-worker-codex-dev-root` | Docker volume mounted at `/var/lib/mspace-worker`. |
+| `MSPACE_WORKER_VOLUME` | Docker worker scripts | `mspace-worker-${MSPACE_WORKER_NAME}` in install commands | Docker volume mounted at `/var/lib/mspace-worker`. Dev helper scripts may use their own fixed dev volume names. |
 | `MSPACE_WORKER_CODEX_HOME_SOURCE` | Docker Codex worker script | `${CODEX_HOME:-~/.codex}` | Source Codex home copied into a dedicated worker Codex home before container startup. |
 | `MSPACE_WORKER_CODEX_HOME_DIR` | Docker Codex worker script | `~/.mspace/codex-worker-home` | Host directory mounted into the Codex-capable dev worker as `CODEX_HOME`. |
 | `MSPACE_WORKER_CODEX_CLI_VERSION` | Docker Codex worker script | `0.130.0` | `@openai/codex` npm version installed into `worker/Dockerfile.codex-dev`. |

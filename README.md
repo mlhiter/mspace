@@ -193,9 +193,15 @@ Runtime variables:
 | `MSPACE_BOOTSTRAP_ADMIN_NAME` | login | Optional display name for the bootstrap admin account. |
 | `MSPACE_BOOTSTRAP_ADMIN_EMAIL` | none | Optional bootstrap identity email; not used for admin matching. |
 | `MSPACE_RUNTIME_TOKEN` | none | `msw_...` runtime worker registration token used by `pnpm worker`. |
-| `MSPACE_WORKER_CAPABILITIES` | `{"protocolSmoke":true,"codex":false,"dryRun":true}` | Worker capability JSON used by server-side task matching. |
-| `MSPACE_WORKER_VOLUME` | script-specific | Docker volume mounted at `/var/lib/mspace-worker` for worker-managed repo caches, session worktrees, and artifacts. |
+| `MSPACE_WORKER_NAME` | host-derived | Stable worker name shown in Workspace Settings. |
+| `MSPACE_WORKER_MODE` | `team` | Runtime mode reported to the server by install commands and worker scripts; `team` or `personal`. |
+| `MSPACE_WORKER_IMAGE` | `crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-worker-codex:dev` | Docker image used by generated self-host worker install commands. |
+| `MSPACE_WORKER_CONTAINER` | `MSPACE_WORKER_NAME` | Docker container name used by generated self-host worker install commands. |
+| `MSPACE_WORKER_CAPABILITIES` | worker-dependent | Worker capability JSON used by server-side task matching. The plain worker default is `{"protocolSmoke":true,"codex":false,"dryRun":true}`; generated self-host install commands default to Codex/Docker/Kubectl-capable JSON with `dryRun:false`. |
+| `MSPACE_WORKER_LABELS` | worker-dependent | Worker placement/inventory labels. Generated self-host install commands default to `{"provider":"self-host","environment":"docker"}`. |
+| `MSPACE_WORKER_VOLUME` | `mspace-worker-${MSPACE_WORKER_NAME}` in install commands | Docker volume mounted at `/var/lib/mspace-worker` for worker-managed repo caches, session worktrees, and artifacts. |
 | `MSPACE_WORKER_WORK_ROOT` | `/var/lib/mspace-worker` in Docker | Runtime worker root for `repos/<cache-key>` and `workdirs/<project-id>/<session-id>`. |
+| `MSPACE_WORKER_CODEX_HOME_SOURCE` | `${CODEX_HOME:-~/.codex}` | Source Codex home copied into the generated self-host worker Codex home before container startup. |
 | `MSPACE_WORKER_CODEX_HOME_DIR` | `~/.mspace/codex-worker-home` | Host Codex home copy mounted by the Docker Codex dev worker. |
 | `MSPACE_WORKER_CODEX_CLI_VERSION` | `0.130.0` | Codex CLI version installed by the Docker Codex dev worker image. |
 | `MSPACE_AUTO_PERSONAL_WORKER` | enabled | Set to `0` to disable the desktop's automatic host-local personal worker. |
