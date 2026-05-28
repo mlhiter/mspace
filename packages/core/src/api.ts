@@ -53,6 +53,8 @@ import type {
   UpdateIssueInput,
   UpdateProjectInput,
   UpdateProjectRunbookInput,
+  UpdateWorkspaceInput,
+  UpdateWorkspaceResult,
   UpdateWorkspaceSettingsInput,
   WorkspaceSettings,
   WorkspaceInvitation,
@@ -271,6 +273,12 @@ export const controlPlaneApi = {
   createWorkspace: (token: string, input: CreateWorkspaceInput) =>
     requestControlPlane<CreateWorkspaceResult>("/api/workspaces", {
       method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  updateWorkspace: (token: string, workspaceId: string, input: UpdateWorkspaceInput) =>
+    requestControlPlane<UpdateWorkspaceResult>(`/api/workspaces/${workspaceId}`, {
+      method: "PUT",
       headers: authHeaders(token),
       body: JSON.stringify(input),
     }),

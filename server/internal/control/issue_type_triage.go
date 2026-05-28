@@ -238,13 +238,13 @@ func (s *Server) loadIssueForTypeTriage(ctx context.Context, workspaceID, issueI
 
 func loadWorkspaceForIssueTriage(ctx context.Context, q queryer, workspaceID string) (Workspace, error) {
 	row := q.QueryRow(ctx, `
-		SELECT id::text, name, slug, kind, '', created_at, updated_at
+		SELECT id::text, name, slug, kind, '', icon, description, created_at, updated_at
 		FROM workspaces
 		WHERE id = $1
 	`, strings.TrimSpace(workspaceID))
 	var workspace Workspace
 	var createdAt, updatedAt time.Time
-	if err := row.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &workspace.Icon, &workspace.Description, &createdAt, &updatedAt); err != nil {
 		return Workspace{}, err
 	}
 	workspace.CreatedAt = createdAt.UTC().Format(time.RFC3339)

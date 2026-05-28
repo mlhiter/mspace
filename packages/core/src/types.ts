@@ -842,6 +842,8 @@ export interface MspaceWorkspace {
   slug: string;
   kind: "personal" | "team" | string;
   role: string;
+  icon: string;
+  description: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -852,6 +854,17 @@ export interface CreateWorkspaceInput {
 }
 
 export interface CreateWorkspaceResult {
+  workspace: MspaceWorkspace;
+  workspaces: MspaceWorkspace[];
+}
+
+export interface UpdateWorkspaceInput {
+  name: string;
+  icon: string;
+  description: string;
+}
+
+export interface UpdateWorkspaceResult {
   workspace: MspaceWorkspace;
   workspaces: MspaceWorkspace[];
 }

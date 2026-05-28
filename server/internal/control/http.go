@@ -84,6 +84,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/auth/me", s.handleMe)
 	r.Get("/api/workspaces", s.handleWorkspaces)
 	r.Post("/api/workspaces", s.handleCreateWorkspace)
+	r.Put("/api/workspaces/{workspaceID}", s.handleUpdateWorkspace)
 	r.Post("/api/workspace-invitations/accept", s.handleAcceptWorkspaceInvitation)
 	r.Get("/api/workspaces/{workspaceID}/members", s.handleListWorkspaceMembers)
 	r.Post("/api/workspaces/{workspaceID}/invitations", s.handleCreateWorkspaceInvitation)
@@ -431,6 +432,27 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, CreateWorkspaceResult{
+		Workspace:  workspace,
+		Workspaces: workspaces,
+	})
+}
+
+func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := UpdateWorkspaceInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspace, workspaces, err := s.store.UpdateWorkspace(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, UpdateWorkspaceResult{
 		Workspace:  workspace,
 		Workspaces: workspaces,
 	})

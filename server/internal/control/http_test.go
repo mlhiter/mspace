@@ -766,6 +766,159 @@ func TestWorkspaceInvitationFlow(t *testing.T) {
 	}
 }
 
+func TestTeamWorkspaceIdentityFlow(t *testing.T) {
+	store := NewMemoryStore()
+	owner, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "rename-owner",
+		Login:          "rename-owner",
+		Name:           "Rename Owner",
+		Email:          "rename-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert owner: %v", err)
+	}
+	ownerToken, _, err := store.CreateAuthSession(context.Background(), owner.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create owner session: %v", err)
+	}
+	personalWorkspaceID := workspaces[0].ID
+	teamWorkspace, _, err := store.CreateWorkspace(context.Background(), owner.ID, CreateWorkspaceInput{Name: "Old Team", Kind: "team"})
+	if err != nil {
+		t.Fatalf("create team workspace: %v", err)
+	}
+	workspaceID := teamWorkspace.ID
+
+	member, _, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "rename-member",
+		Login:          "rename-member",
+		Name:           "Rename Member",
+		Email:          "rename-member@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert member: %v", err)
+	}
+	memberToken, _, err := store.CreateAuthSession(context.Background(), member.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create member session: %v", err)
+	}
+
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	inviteRecorder := httptest.NewRecorder()
+	inviteReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/invitations", strings.NewReader(`{"email":"rename-member@example.com","role":"member","expiresInHours":24}`))
+	inviteReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(inviteRecorder, inviteReq)
+	if inviteRecorder.Code != http.StatusCreated {
+		t.Fatalf("create invitation status=%d body=%s", inviteRecorder.Code, inviteRecorder.Body.String())
+	}
+	var invite WorkspaceInvitationResult
+	if err := json.Unmarshal(inviteRecorder.Body.Bytes(), &invite); err != nil {
+		t.Fatalf("parse invitation: %v", err)
+	}
+	acceptRecorder := httptest.NewRecorder()
+	acceptReq := httptest.NewRequest(http.MethodPost, "/api/workspace-invitations/accept", strings.NewReader(`{"token":"`+invite.Token+`"}`))
+	acceptReq.Header.Set("Authorization", "Bearer "+memberToken)
+	router.ServeHTTP(acceptRecorder, acceptReq)
+	if acceptRecorder.Code != http.StatusOK {
+		t.Fatalf("accept invitation status=%d body=%s", acceptRecorder.Code, acceptRecorder.Body.String())
+	}
+
+	memberUpdateRecorder := httptest.NewRecorder()
+	memberUpdateReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID, strings.NewReader(`{"name":"Member Rename","icon":"MR","description":"Member edit."}`))
+	memberUpdateReq.Header.Set("Authorization", "Bearer "+memberToken)
+	router.ServeHTTP(memberUpdateRecorder, memberUpdateReq)
+	if memberUpdateRecorder.Code != http.StatusForbidden {
+		t.Fatalf("workspace member identity update should be forbidden, status=%d body=%s", memberUpdateRecorder.Code, memberUpdateRecorder.Body.String())
+	}
+
+	personalUpdateRecorder := httptest.NewRecorder()
+	personalUpdateReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+personalWorkspaceID, strings.NewReader(`{"name":"Personal Rename","icon":"P","description":"Personal edit."}`))
+	personalUpdateReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(personalUpdateRecorder, personalUpdateReq)
+	if personalUpdateRecorder.Code != http.StatusForbidden {
+		t.Fatalf("personal workspace identity update through team endpoint should be forbidden, status=%d body=%s", personalUpdateRecorder.Code, personalUpdateRecorder.Body.String())
+	}
+
+	invalidIconRecorder := httptest.NewRecorder()
+	invalidIconReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID, strings.NewReader(`{"name":"Renamed Team","icon":"12345678901234567","description":"Engineering workspace."}`))
+	invalidIconReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(invalidIconRecorder, invalidIconReq)
+	if invalidIconRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("long workspace icon should be rejected, status=%d body=%s", invalidIconRecorder.Code, invalidIconRecorder.Body.String())
+	}
+
+	longDescription := strings.Repeat("d", 281)
+	invalidDescriptionRecorder := httptest.NewRecorder()
+	invalidDescriptionReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID, strings.NewReader(`{"name":"Renamed Team","icon":"RT","description":"`+longDescription+`"}`))
+	invalidDescriptionReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(invalidDescriptionRecorder, invalidDescriptionReq)
+	if invalidDescriptionRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("long workspace description should be rejected, status=%d body=%s", invalidDescriptionRecorder.Code, invalidDescriptionRecorder.Body.String())
+	}
+
+	updateRecorder := httptest.NewRecorder()
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID, strings.NewReader(`{"name":"Renamed Team","icon":"RT","description":"Engineering workspace for customer-facing agent work."}`))
+	updateReq.Header.Set("Authorization", "Bearer "+ownerToken)
+	router.ServeHTTP(updateRecorder, updateReq)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("update team workspace identity status=%d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	var updateResult UpdateWorkspaceResult
+	if err := json.Unmarshal(updateRecorder.Body.Bytes(), &updateResult); err != nil {
+		t.Fatalf("parse update result: %v", err)
+	}
+	if updateResult.Workspace.ID != workspaceID ||
+		updateResult.Workspace.Name != "Renamed Team" ||
+		updateResult.Workspace.Icon != "RT" ||
+		updateResult.Workspace.Description != "Engineering workspace for customer-facing agent work." ||
+		updateResult.Workspace.Role != "owner" {
+		t.Fatalf("unexpected workspace identity result: %+v", updateResult.Workspace)
+	}
+	foundUpdated := false
+	for _, workspace := range updateResult.Workspaces {
+		if workspace.ID == workspaceID &&
+			workspace.Name == "Renamed Team" &&
+			workspace.Icon == "RT" &&
+			workspace.Description == "Engineering workspace for customer-facing agent work." &&
+			workspace.Role == "owner" {
+			foundUpdated = true
+			break
+		}
+	}
+	if !foundUpdated {
+		t.Fatalf("expected updated workspace in owner list, got %+v", updateResult.Workspaces)
+	}
+
+	memberListRecorder := httptest.NewRecorder()
+	memberListReq := httptest.NewRequest(http.MethodGet, "/api/workspaces", nil)
+	memberListReq.Header.Set("Authorization", "Bearer "+memberToken)
+	router.ServeHTTP(memberListRecorder, memberListReq)
+	if memberListRecorder.Code != http.StatusOK {
+		t.Fatalf("member workspace list status=%d body=%s", memberListRecorder.Code, memberListRecorder.Body.String())
+	}
+	var memberWorkspaces []Workspace
+	if err := json.Unmarshal(memberListRecorder.Body.Bytes(), &memberWorkspaces); err != nil {
+		t.Fatalf("parse member workspaces: %v", err)
+	}
+	foundMemberRenamed := false
+	for _, workspace := range memberWorkspaces {
+		if workspace.ID == workspaceID &&
+			workspace.Name == "Renamed Team" &&
+			workspace.Icon == "RT" &&
+			workspace.Description == "Engineering workspace for customer-facing agent work." &&
+			workspace.Role == "member" {
+			foundMemberRenamed = true
+			break
+		}
+	}
+	if !foundMemberRenamed {
+		t.Fatalf("expected updated workspace in member list, got %+v", memberWorkspaces)
+	}
+}
+
 func TestWorkspaceMembersCannotMutateRuntimeConfiguration(t *testing.T) {
 	store := NewMemoryStore()
 	owner, _, err := store.UpsertIdentity(context.Background(), IdentityProfile{

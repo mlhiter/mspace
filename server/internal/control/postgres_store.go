@@ -439,13 +439,13 @@ func (s *PostgresStore) CreateWorkspace(ctx Context, userID string, input Create
 		WITH created_workspace AS (
 			INSERT INTO workspaces (name, slug, kind)
 			VALUES ($1, $2, $3)
-			RETURNING id, name, slug, kind, created_at, updated_at
+			RETURNING id, name, slug, kind, icon, description, created_at, updated_at
 		), created_member AS (
 			INSERT INTO workspace_members (workspace_id, user_id, role)
 			SELECT id, $4, 'owner' FROM created_workspace
 		)
-		SELECT id::text, name, slug, kind, 'owner', created_at, updated_at FROM created_workspace
-	`, normalized.Name, slug, normalized.Kind, userID).Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &createdAt, &updatedAt)
+		SELECT id::text, name, slug, kind, 'owner', icon, description, created_at, updated_at FROM created_workspace
+	`, normalized.Name, slug, normalized.Kind, userID).Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &workspace.Icon, &workspace.Description, &createdAt, &updatedAt)
 	if err != nil {
 		return Workspace{}, nil, err
 	}
@@ -456,6 +456,47 @@ func (s *PostgresStore) CreateWorkspace(ctx Context, userID string, input Create
 		return Workspace{}, nil, err
 	}
 	if err := tx.Commit(dbctx); err != nil {
+		return Workspace{}, nil, err
+	}
+	return workspace, workspaces, nil
+}
+
+func (s *PostgresStore) UpdateWorkspace(ctx Context, userID, workspaceID string, input UpdateWorkspaceInput) (Workspace, []Workspace, error) {
+	dbctx := asContext(ctx)
+	userID = strings.TrimSpace(userID)
+	workspaceID = strings.TrimSpace(workspaceID)
+	normalized, err := normalizeUpdateWorkspaceInput(input)
+	if err != nil {
+		return Workspace{}, nil, err
+	}
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return Workspace{}, nil, err
+	}
+	if err := ensureTeamWorkspace(dbctx, s.pool, workspaceID); err != nil {
+		return Workspace{}, nil, err
+	}
+
+	var workspace Workspace
+	var createdAt, updatedAt time.Time
+	row := s.pool.QueryRow(dbctx, `
+		UPDATE workspaces w
+		SET name = $1, icon = $2, description = $3, updated_at = now()
+		FROM workspace_members wm
+		WHERE w.id = wm.workspace_id
+			AND w.id = $4
+			AND wm.user_id = $5
+		RETURNING w.id::text, w.name, w.slug, w.kind, wm.role, w.icon, w.description, w.created_at, w.updated_at
+	`, normalized.Name, normalized.Icon, normalized.Description, workspaceID, userID)
+	if err := row.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &workspace.Icon, &workspace.Description, &createdAt, &updatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Workspace{}, nil, ErrNotFound
+		}
+		return Workspace{}, nil, err
+	}
+	workspace.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	workspace.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	workspaces, err := listWorkspaces(dbctx, s.pool, userID)
+	if err != nil {
 		return Workspace{}, nil, err
 	}
 	return workspace, workspaces, nil
@@ -1984,6 +2025,7 @@ func ensureDefaultWorkspace(ctx context.Context, q queryer, user User, login str
 	if name == "" {
 		name = "My"
 	}
+	workspaceName := defaultPersonalWorkspaceName(name)
 	slug := defaultWorkspaceSlug(login, user.ID)
 	var workspace Workspace
 	var createdAt, updatedAt time.Time
@@ -1991,13 +2033,13 @@ func ensureDefaultWorkspace(ctx context.Context, q queryer, user User, login str
 			WITH created_workspace AS (
 				INSERT INTO workspaces (name, slug, kind)
 				VALUES ($1, $2, 'personal')
-				RETURNING id, name, slug, kind, created_at, updated_at
+				RETURNING id, name, slug, kind, icon, description, created_at, updated_at
 			), created_member AS (
 				INSERT INTO workspace_members (workspace_id, user_id, role)
 				SELECT id, $3, 'owner' FROM created_workspace
 			)
-			SELECT id::text, name, slug, kind, 'owner', created_at, updated_at FROM created_workspace
-		`, name+"'s workspace", slug, user.ID).Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &createdAt, &updatedAt)
+			SELECT id::text, name, slug, kind, 'owner', icon, description, created_at, updated_at FROM created_workspace
+		`, workspaceName, slug, user.ID).Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &workspace.Icon, &workspace.Description, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -2008,7 +2050,7 @@ func ensureDefaultWorkspace(ctx context.Context, q queryer, user User, login str
 
 func listWorkspaces(ctx context.Context, q queryer, userID string) ([]Workspace, error) {
 	rows, err := q.Query(ctx, `
-		SELECT w.id::text, w.name, w.slug, w.kind, wm.role, w.created_at, w.updated_at
+		SELECT w.id::text, w.name, w.slug, w.kind, wm.role, w.icon, w.description, w.created_at, w.updated_at
 		FROM workspace_members wm
 		JOIN workspaces w ON w.id = wm.workspace_id
 		WHERE wm.user_id = $1
@@ -2023,7 +2065,7 @@ func listWorkspaces(ctx context.Context, q queryer, userID string) ([]Workspace,
 	for rows.Next() {
 		var workspace Workspace
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &workspace.Icon, &workspace.Description, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		workspace.CreatedAt = createdAt.UTC().Format(time.RFC3339)
@@ -2490,7 +2532,7 @@ func normalizeCreateWorkspaceInput(input CreateWorkspaceInput) (CreateWorkspaceI
 	if input.Name == "" {
 		return CreateWorkspaceInput{}, errors.New("workspace name is required")
 	}
-	if len(input.Name) > 120 {
+	if len([]rune(input.Name)) > 120 {
 		return CreateWorkspaceInput{}, errors.New("workspace name must be 120 characters or less")
 	}
 	input.Kind = strings.ToLower(strings.TrimSpace(input.Kind))
@@ -2499,6 +2541,25 @@ func normalizeCreateWorkspaceInput(input CreateWorkspaceInput) (CreateWorkspaceI
 	}
 	if input.Kind != "team" {
 		return CreateWorkspaceInput{}, errors.New("only team workspaces can be created explicitly")
+	}
+	return input, nil
+}
+
+func normalizeUpdateWorkspaceInput(input UpdateWorkspaceInput) (UpdateWorkspaceInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" {
+		return UpdateWorkspaceInput{}, errors.New("workspace name is required")
+	}
+	if len([]rune(input.Name)) > 120 {
+		return UpdateWorkspaceInput{}, errors.New("workspace name must be 120 characters or less")
+	}
+	input.Icon = strings.TrimSpace(input.Icon)
+	if len([]rune(input.Icon)) > 16 {
+		return UpdateWorkspaceInput{}, errors.New("workspace icon must be 16 characters or less")
+	}
+	input.Description = strings.TrimSpace(input.Description)
+	if len([]rune(input.Description)) > 280 {
+		return UpdateWorkspaceInput{}, errors.New("workspace description must be 280 characters or less")
 	}
 	return input, nil
 }

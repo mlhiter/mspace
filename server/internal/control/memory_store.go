@@ -164,7 +164,7 @@ func (s *MemoryStore) EnsureBootstrapAdmin(_ Context, input PasswordAuthInput) (
 	}
 	workspace := Workspace{
 		ID:        "workspace-" + userID,
-		Name:      name + "'s workspace",
+		Name:      defaultPersonalWorkspaceName(name),
 		Slug:      defaultWorkspaceSlug(normalized.Login, userID),
 		Kind:      "personal",
 		Role:      "owner",
@@ -266,7 +266,7 @@ func (s *MemoryStore) UpsertIdentity(_ Context, profile IdentityProfile) (User, 
 	}
 	workspace := Workspace{
 		ID:        "workspace-" + userID,
-		Name:      name + "'s workspace",
+		Name:      defaultPersonalWorkspaceName(name),
 		Slug:      defaultWorkspaceSlug(profile.Login, userID),
 		Kind:      "personal",
 		Role:      "owner",
@@ -321,7 +321,7 @@ func (s *MemoryStore) CreatePasswordIdentity(_ Context, input PasswordAuthInput)
 	}
 	workspace := Workspace{
 		ID:        "workspace-" + userID,
-		Name:      name + "'s workspace",
+		Name:      defaultPersonalWorkspaceName(name),
 		Slug:      defaultWorkspaceSlug(normalized.Login, userID),
 		Kind:      "personal",
 		Role:      "owner",
@@ -429,13 +429,15 @@ func (s *MemoryStore) CreateWorkspace(_ Context, userID string, input CreateWork
 	now := time.Now().UTC().Format(time.RFC3339)
 	workspaceID := fmt.Sprintf("workspace-%04d", s.nextID)
 	workspace := Workspace{
-		ID:        workspaceID,
-		Name:      normalized.Name,
-		Slug:      workspaceSlug(normalized.Name, strings.TrimPrefix(workspaceID, "workspace-")),
-		Kind:      normalized.Kind,
-		Role:      "owner",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          workspaceID,
+		Name:        normalized.Name,
+		Slug:        workspaceSlug(normalized.Name, strings.TrimPrefix(workspaceID, "workspace-")),
+		Kind:        normalized.Kind,
+		Role:        "owner",
+		Icon:        "",
+		Description: "",
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	s.workspaces[userID] = append(s.workspaces[userID], workspace)
 	if s.workspaceMembers[workspace.ID] == nil {
@@ -443,6 +445,55 @@ func (s *MemoryStore) CreateWorkspace(_ Context, userID string, input CreateWork
 	}
 	s.workspaceMembers[workspace.ID][userID] = "owner"
 	return workspace, append([]Workspace(nil), s.workspaces[userID]...), nil
+}
+
+func (s *MemoryStore) UpdateWorkspace(_ Context, userID, workspaceID string, input UpdateWorkspaceInput) (Workspace, []Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	userID = strings.TrimSpace(userID)
+	workspaceID = strings.TrimSpace(workspaceID)
+	normalized, err := normalizeUpdateWorkspaceInput(input)
+	if err != nil {
+		return Workspace{}, nil, err
+	}
+	if !s.isTeamWorkspace(workspaceID) {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return Workspace{}, nil, ErrNotFound
+		}
+		return Workspace{}, nil, ErrForbidden
+	}
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return Workspace{}, nil, ErrNotFound
+		}
+		return Workspace{}, nil, ErrForbidden
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var updated Workspace
+	for memberUserID, workspaces := range s.workspaces {
+		for index, workspace := range workspaces {
+			if workspace.ID != workspaceID {
+				continue
+			}
+			workspace.Name = normalized.Name
+			workspace.Icon = normalized.Icon
+			workspace.Description = normalized.Description
+			workspace.UpdatedAt = now
+			if role := s.workspaceMembers[workspaceID][memberUserID]; role != "" {
+				workspace.Role = role
+			}
+			s.workspaces[memberUserID][index] = workspace
+			if memberUserID == userID {
+				updated = workspace
+			}
+		}
+	}
+	if updated.ID == "" {
+		return Workspace{}, nil, ErrNotFound
+	}
+	return updated, append([]Workspace(nil), s.workspaces[userID]...), nil
 }
 
 func (s *MemoryStore) ListWorkspaceMembers(_ Context, userID, workspaceID string) ([]WorkspaceMember, error) {

@@ -102,3 +102,15 @@ func workspaceSlug(name, suffix string) string {
 	}
 	return base + "-" + suffix
 }
+
+func defaultPersonalWorkspaceName(name string) string {
+	workspaceName := strings.TrimSpace(name)
+	if workspaceName == "" {
+		workspaceName = "My"
+	}
+	workspaceName += "'s workspace"
+	if len([]rune(workspaceName)) > 120 {
+		return string([]rune(workspaceName)[:120])
+	}
+	return workspaceName
+}

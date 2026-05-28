@@ -56,13 +56,15 @@ type User struct {
 }
 
 type Workspace struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Slug      string `json:"slug"`
-	Kind      string `json:"kind"`
-	Role      string `json:"role"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Kind        string `json:"kind"`
+	Role        string `json:"role"`
+	Icon        string `json:"icon"`
+	Description string `json:"description"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 type CreateWorkspaceInput struct {
@@ -71,6 +73,17 @@ type CreateWorkspaceInput struct {
 }
 
 type CreateWorkspaceResult struct {
+	Workspace  Workspace   `json:"workspace"`
+	Workspaces []Workspace `json:"workspaces"`
+}
+
+type UpdateWorkspaceInput struct {
+	Name        string `json:"name"`
+	Icon        string `json:"icon"`
+	Description string `json:"description"`
+}
+
+type UpdateWorkspaceResult struct {
 	Workspace  Workspace   `json:"workspace"`
 	Workspaces []Workspace `json:"workspaces"`
 }
@@ -1076,6 +1089,7 @@ type Store interface {
 	CreateAuthSession(ctx Context, userID string, ttl time.Duration) (token string, expiresAt time.Time, err error)
 	GetUserBySessionToken(ctx Context, token string) (User, []Workspace, error)
 	CreateWorkspace(ctx Context, userID string, input CreateWorkspaceInput) (Workspace, []Workspace, error)
+	UpdateWorkspace(ctx Context, userID, workspaceID string, input UpdateWorkspaceInput) (Workspace, []Workspace, error)
 	ListWorkspaceMembers(ctx Context, userID, workspaceID string) ([]WorkspaceMember, error)
 	CreateWorkspaceInvitation(ctx Context, userID, workspaceID string, input CreateWorkspaceInvitationInput) (WorkspaceInvitationResult, error)
 	ListWorkspaceInvitations(ctx Context, userID, workspaceID string) ([]WorkspaceInvitation, error)

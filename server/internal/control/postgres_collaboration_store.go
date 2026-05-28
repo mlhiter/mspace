@@ -704,14 +704,14 @@ func (s *PostgresStore) getAgentSessionRuntimeTask(ctx context.Context, workspac
 
 func loadWorkspaceForUser(ctx context.Context, q queryer, workspaceID, userID string) (Workspace, error) {
 	row := q.QueryRow(ctx, `
-		SELECT w.id::text, w.name, w.slug, w.kind, wm.role, w.created_at, w.updated_at
+		SELECT w.id::text, w.name, w.slug, w.kind, wm.role, w.icon, w.description, w.created_at, w.updated_at
 		FROM workspace_members wm
 		JOIN workspaces w ON w.id = wm.workspace_id
 		WHERE wm.workspace_id = $1 AND wm.user_id = $2
 	`, workspaceID, userID)
 	var workspace Workspace
 	var createdAt, updatedAt time.Time
-	if err := row.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&workspace.ID, &workspace.Name, &workspace.Slug, &workspace.Kind, &workspace.Role, &workspace.Icon, &workspace.Description, &createdAt, &updatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Workspace{}, ErrNotFound
 		}
