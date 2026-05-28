@@ -403,6 +403,7 @@ Workspace Settings owns workspace automation, team access, and runtime worker po
 ### Current implementation
 
 - opens from the workspace identity menu, not from the main navigation rail;
+- lets team workspace owners/admins edit the current team workspace name, mark, and description from the identity section;
 - keeps source commit capture always on for issue review and deploy continuation;
 - shows team workspace creation only to server admins, while ordinary registered users stay in personal workspaces until invited;
 - limits manual runtime credential creation to workspace owner/admin users and keeps runtime mode fixed to the current workspace kind;

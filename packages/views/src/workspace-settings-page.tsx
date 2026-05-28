@@ -9,12 +9,14 @@ import {
 	CheckCircle2,
 	Circle,
 	Copy,
+	Edit3,
 	GitCommit,
 	GitPullRequest,
 	KeyRound,
 	ListChecks,
 	MailPlus,
 	ShieldCheck,
+	StickyNote,
 	UsersRound,
 	Plus,
 	RefreshCw,
@@ -38,6 +40,7 @@ import {
 	type RuntimeTask,
 	type RuntimeTaskListResult,
 	type RuntimeWorker,
+	type UpdateWorkspaceInput,
 	type WorkspaceInvitation,
 	type WorkspaceInvitationResult,
 	type WorkspaceMember,
@@ -45,6 +48,11 @@ import {
 } from "@mspace/core";
 import {
 	Button,
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
 	Field,
 	InlineMeta,
 	Input,
@@ -56,6 +64,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Switch,
+	Textarea,
 	cn,
 } from "@mspace/ui";
 import { useMspaceTranslation, t as translate } from "@mspace/i18n";
@@ -81,6 +90,25 @@ const defaultInvitationForm: CreateWorkspaceInvitationInput = {
 	role: "member",
 	expiresInHours: 168,
 };
+
+const WORKSPACE_EMOJI_GROUPS = [
+	{
+		key: "workspaceEmojiCategoryWork",
+		options: ["💼", "🧭", "📌", "🗂️", "🧩", "📝", "📚", "🔖"],
+	},
+	{
+		key: "workspaceEmojiCategoryTech",
+		options: ["⚙️", "🛠️", "💻", "⌨️", "🧪", "🔧", "📦", "☁️"],
+	},
+	{
+		key: "workspaceEmojiCategoryProgress",
+		options: ["🚀", "✨", "⚡", "🔥", "✅", "🎯", "🏁", "🔍"],
+	},
+	{
+		key: "workspaceEmojiCategoryTeam",
+		options: ["👥", "🤝", "💬", "🧠", "🪄", "🌱", "🛡️", "🏗️"],
+	},
+] as const;
 
 export function WorkspaceSettingsPage() {
 	const { t } = useMspaceTranslation();
@@ -146,6 +174,9 @@ export function WorkspaceSettingsPage() {
 	});
 
 	const [form, setForm] = useState<UpdateWorkspaceSettingsInput>(defaultSettingsForm);
+	const [workspaceName, setWorkspaceName] = useState(auth.workspace?.name || "");
+	const [workspaceIcon, setWorkspaceIcon] = useState(auth.workspace?.icon || "");
+	const [workspaceDescription, setWorkspaceDescription] = useState(auth.workspace?.description || "");
 	const [invitationModalOpen, setInvitationModalOpen] = useState(false);
 	const [invitationForm, setInvitationForm] = useState<CreateWorkspaceInvitationInput>(defaultInvitationForm);
 	const [createdInvitation, setCreatedInvitation] = useState<WorkspaceInvitationResult | null>(null);
@@ -165,6 +196,12 @@ export function WorkspaceSettingsPage() {
 	}, [settingsQuery.data]);
 
 	useEffect(() => {
+		setWorkspaceName(auth.workspace?.name || "");
+		setWorkspaceIcon(auth.workspace?.icon || "");
+		setWorkspaceDescription(auth.workspace?.description || "");
+	}, [auth.workspace?.id, auth.workspace?.name, auth.workspace?.icon, auth.workspace?.description]);
+
+	useEffect(() => {
 		const total = tasksQuery.data?.total || 0;
 		if (total === 0 || runtimeTasksOffset < total) return;
 		setSelectedTaskID("");
@@ -180,6 +217,15 @@ export function WorkspaceSettingsPage() {
 				autoDeployTestEnvironment: settings.autoDeployTestEnvironment,
 			});
 			await queryClient.invalidateQueries({ queryKey: settingsQueryKey });
+		},
+	});
+	const updateWorkspace = useMutation({
+		mutationFn: (input: UpdateWorkspaceInput) => controlPlaneApi.updateWorkspace(auth.token, workspaceID, input),
+		onSuccess: async (result) => {
+			setWorkspaceName(result.workspace.name);
+			setWorkspaceIcon(result.workspace.icon);
+			setWorkspaceDescription(result.workspace.description);
+			await auth.refreshAuth?.();
 		},
 	});
 	const createInvitation = useMutation({
@@ -262,6 +308,17 @@ export function WorkspaceSettingsPage() {
 			(form.autoCreateDraftPr !== settingsQuery.data.autoCreateDraftPr ||
 				form.autoDeployTestEnvironment !== settingsQuery.data.autoDeployTestEnvironment),
 	);
+	const trimmedWorkspaceName = workspaceName.trim();
+	const trimmedWorkspaceIcon = workspaceIcon.trim();
+	const trimmedWorkspaceDescription = workspaceDescription.trim();
+	const workspaceIdentityDirty = Boolean(
+		auth.workspace &&
+			trimmedWorkspaceName !== "" &&
+			(trimmedWorkspaceName !== auth.workspace.name ||
+				trimmedWorkspaceIcon !== (auth.workspace.icon || "") ||
+				trimmedWorkspaceDescription !== (auth.workspace.description || "")),
+	);
+	const workspaceDefaultIcon = trimmedWorkspaceName.slice(0, 1).toUpperCase() || "m";
 	const workers = workersQuery.data || [];
 	const tokens = tokensQuery.data || [];
 	const tasksPage = tasksQuery.data || emptyRuntimeTaskListResult(RUNTIME_TASKS_PAGE_SIZE, runtimeTasksOffset);
@@ -307,6 +364,16 @@ export function WorkspaceSettingsPage() {
 		createToken.mutate({
 			name: tokenForm.name.trim() || defaultTokenForm.name,
 			expiresInHours: tokenForm.expiresInHours,
+		});
+	}
+
+	function submitWorkspaceIdentity(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!runtimeEnabled || !isTeamWorkspace || !canManageWorkspace || !workspaceIdentityDirty) return;
+		updateWorkspace.mutate({
+			name: trimmedWorkspaceName,
+			icon: trimmedWorkspaceIcon,
+			description: trimmedWorkspaceDescription,
 		});
 	}
 
@@ -365,11 +432,87 @@ export function WorkspaceSettingsPage() {
 			<div className="grid gap-6">
 				{settingsQuery.error ? <Notice tone="danger">{settingsQuery.error.message}</Notice> : null}
 				{saveSettings.error ? <Notice tone="danger">{saveSettings.error.message}</Notice> : null}
+				{updateWorkspace.error ? <Notice tone="danger">{updateWorkspace.error.message}</Notice> : null}
 				{runtimeError ? <Notice tone="danger">{runtimeError.message}</Notice> : null}
 				{createInvitation.error ? <Notice tone="danger">{createInvitation.error.message}</Notice> : null}
 				{revokeInvitation.error ? <Notice tone="danger">{revokeInvitation.error.message}</Notice> : null}
 				{dockerWorkerError ? <Notice tone="danger">{dockerWorkerError}</Notice> : null}
 				{dockerWorkerStatus ? <Notice>{t("workspaceSettings.workerListUpdateNotice", { status: dockerWorkerStatus })}</Notice> : null}
+
+				{isTeamWorkspace ? (
+					<SettingsSection
+						title={t("workspaceSettings.section.identity")}
+						description={t("workspaceSettings.section.identityDescription")}
+						meta={t("workspaceSettings.summary.team")}
+					>
+						<form onSubmit={submitWorkspaceIdentity}>
+							<SettingsRow
+								icon={Edit3}
+								title={t("workspaceSettings.section.workspaceName")}
+								description={t("workspaceSettings.section.workspaceNameDescription")}
+								control={
+									<div className="w-full min-w-0 md:w-[360px]">
+										<Input
+											value={workspaceName}
+											disabled={!runtimeEnabled || !canManageWorkspace || updateWorkspace.isPending}
+											maxLength={120}
+											aria-label={t("workspaceSettings.section.workspaceName")}
+											onChange={(event) => setWorkspaceName(event.target.value)}
+											className="w-full"
+										/>
+									</div>
+								}
+							/>
+							<SettingsRow
+								icon={StickyNote}
+								title={t("workspaceSettings.section.workspaceIcon")}
+								description={t("workspaceSettings.section.workspaceIconDescription")}
+								control={
+									<WorkspaceIconPicker
+										value={workspaceIcon}
+										defaultValue={workspaceDefaultIcon}
+										disabled={!runtimeEnabled || !canManageWorkspace || updateWorkspace.isPending}
+										onChange={setWorkspaceIcon}
+									/>
+								}
+							/>
+							<SettingsRow
+								icon={ListChecks}
+								title={t("workspaceSettings.section.workspaceDescription")}
+								description={t("workspaceSettings.section.workspaceDescriptionDescription")}
+								control={
+									<div className="w-full min-w-0 md:w-[360px]">
+										<Textarea
+											value={workspaceDescription}
+											disabled={!runtimeEnabled || !canManageWorkspace || updateWorkspace.isPending}
+											maxLength={280}
+											aria-label={t("workspaceSettings.section.workspaceDescription")}
+											onChange={(event) => setWorkspaceDescription(event.target.value)}
+											placeholder={t("workspaceSettings.section.workspaceDescriptionPlaceholder")}
+											className="min-h-[84px] w-full resize-none"
+										/>
+										<div className="mt-1 text-right text-[11px] leading-4 text-[color:var(--faint)]">
+											{trimmedWorkspaceDescription.length}/280
+										</div>
+									</div>
+								}
+							/>
+							{canManageWorkspace ? (
+								<div className="flex justify-end border-t border-[color:var(--line)] px-4 py-3">
+									<Button type="submit" size="sm" disabled={!workspaceIdentityDirty || updateWorkspace.isPending}>
+										<Save data-icon />
+										{updateWorkspace.isPending ? t("workspaceSettings.saving") : t("workspaceSettings.save")}
+									</Button>
+								</div>
+							) : null}
+						</form>
+						{!canManageWorkspace ? (
+							<div className="border-t border-[color:var(--line)] p-4">
+								<Notice>{t("workspaceSettings.notice.identityPermission")}</Notice>
+							</div>
+						) : null}
+					</SettingsSection>
+				) : null}
 
 				<SettingsSection
 					title={t("workspaceSettings.section.automation")}
@@ -800,6 +943,95 @@ function SettingsRow(props: {
 			</span>
 			<div className="justify-self-start md:justify-self-end">{props.control}</div>
 		</div>
+	);
+}
+
+function WorkspaceIconPicker(props: {
+	value: string;
+	defaultValue: string;
+	disabled: boolean;
+	onChange: (value: string) => void;
+}) {
+	const { t } = useMspaceTranslation();
+	const [open, setOpen] = useState(false);
+	const trimmedValue = props.value.trim();
+	const selectedLabel = trimmedValue || props.defaultValue;
+
+	return (
+		<DropdownMenu open={open} onOpenChange={setOpen}>
+			<DropdownMenuTrigger asChild>
+				<button
+					type="button"
+					disabled={props.disabled}
+					className="flex h-9 w-full min-w-0 items-center justify-between gap-3 rounded-[8px] bg-[color:var(--paper)] px-2.5 text-left shadow-[inset_0_0_0_1px_var(--line)] outline-none transition-[background-color,box-shadow] duration-150 ease-out hover:bg-[color:var(--hover)] focus-visible:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)] disabled:pointer-events-none disabled:opacity-50 md:w-[360px]"
+					aria-label={t("workspaceSettings.section.workspaceIcon")}
+				>
+					<span className="flex min-w-0 items-center gap-2.5">
+						<span className="grid size-7 shrink-0 place-items-center rounded-[7px] bg-[color:var(--surface)] px-1 text-[17px] leading-none shadow-[inset_0_0_0_1px_var(--line)]">
+							<span className="max-w-full truncate">{selectedLabel}</span>
+						</span>
+						<span className="truncate text-[13px] font-medium leading-5 text-[color:var(--text)]">
+							{trimmedValue
+								? t("workspaceSettings.section.workspaceIconSelected", { mark: selectedLabel })
+								: t("workspaceSettings.section.workspaceIconDefaultOption", { mark: selectedLabel })}
+						</span>
+					</span>
+					<ChevronDown data-icon className="shrink-0 text-[color:var(--muted)]" />
+				</button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" className="w-[320px] p-2">
+				<div className="flex items-center justify-between gap-2 px-1 pb-1">
+					<DropdownMenuLabel className="px-0 py-0">
+						{t("workspaceSettings.section.workspaceEmojiPicker")}
+					</DropdownMenuLabel>
+					<button
+						type="button"
+						disabled={props.disabled}
+						onClick={() => {
+							props.onChange("");
+							setOpen(false);
+						}}
+						className={cn(
+							"inline-flex h-7 items-center gap-1.5 rounded-[7px] px-2 text-[12px] font-medium leading-4 text-[color:var(--muted-strong)] outline-none transition-[background-color,box-shadow,color] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)] disabled:pointer-events-none disabled:opacity-50",
+							!trimmedValue && "bg-[color:var(--hover)] text-[color:var(--text)]",
+						)}
+					>
+						<span className="grid size-5 place-items-center rounded-[6px] bg-[color:var(--surface)] text-[11px] font-semibold leading-none shadow-[inset_0_0_0_1px_var(--line)]">
+							{props.defaultValue}
+						</span>
+						{t("workspaceSettings.section.workspaceIconUseDefault")}
+					</button>
+				</div>
+				{WORKSPACE_EMOJI_GROUPS.map((group, index) => (
+					<div key={group.key}>
+						{index > 0 ? <DropdownMenuSeparator /> : null}
+						<DropdownMenuLabel>{t(`workspaceSettings.section.${group.key}`)}</DropdownMenuLabel>
+						<div className="grid grid-cols-8 gap-1 px-1 pb-1">
+							{group.options.map((emoji) => (
+								<button
+									key={emoji}
+									type="button"
+									disabled={props.disabled}
+									aria-pressed={trimmedValue === emoji}
+									aria-label={t("workspaceSettings.section.workspaceIconOption", { mark: emoji })}
+									title={t("workspaceSettings.section.workspaceIconOption", { mark: emoji })}
+									onClick={() => {
+										props.onChange(emoji);
+										setOpen(false);
+									}}
+									className={cn(
+										"grid size-8 place-items-center rounded-[7px] text-[18px] leading-none outline-none transition-[background-color,box-shadow,transform] duration-150 ease-out hover:bg-[color:var(--hover)] focus-visible:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)] active:scale-95 disabled:pointer-events-none disabled:opacity-50",
+										trimmedValue === emoji && "bg-[color:var(--hover)] shadow-[inset_0_0_0_1px_var(--accent)]",
+									)}
+								>
+									<span aria-hidden="true">{emoji}</span>
+								</button>
+							))}
+						</div>
+					</div>
+				))}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 

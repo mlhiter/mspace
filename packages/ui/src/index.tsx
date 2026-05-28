@@ -178,9 +178,11 @@ export type ShellAccount = {
   isServerAdmin?: boolean;
   workspaceName?: string;
   workspaceId?: string;
+  workspaceIcon?: string;
+  workspaceDescription?: string;
   workspaceKind?: string;
   workspaceRole?: string;
-  workspaces?: Array<{ id: string; name: string; role?: string; kind?: string }>;
+  workspaces?: Array<{ id: string; name: string; role?: string; kind?: string; icon?: string; description?: string }>;
   error?: string;
   actionLabel?: string;
 };
@@ -503,6 +505,7 @@ function WorkspaceMenu(props: {
   const rootRef = useRef<HTMLDivElement>(null);
   const workspaceLabel = account.workspaceName || (isSignedIn ? t("workspace.personalWorkspace") : t("workspace.localWorkspace"));
   const workspaceKindLabel = workspaceKindLabelFor(account.workspaceKind);
+  const workspaceDescription = account.workspaceDescription?.trim();
   const statusLabel = isSignedIn ? account.name || account.email || t("workspace.signedIn") : isBusy ? t("workspace.githubLoginPending") : t("workspace.notSignedIn");
   const accountIdentityLabel = accountIdentityLabelFor(account);
   const workspaces = account.workspaces || [];
@@ -534,13 +537,12 @@ function WorkspaceMenu(props: {
         className="group flex min-h-10 w-full items-center gap-2.5 rounded-[8px] px-2 py-1.5 text-left transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]"
         onClick={() => setOpen((value) => !value)}
       >
-        <div className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-[color:var(--paper)] text-[color:var(--ink)] shadow-[inset_0_0_0_1px_var(--line)]">
-          {props.brandLogoSrc ? (
-            <img src={props.brandLogoSrc} alt="" className="h-5 w-7 object-contain" />
-          ) : (
-            <span className="text-[13px] font-semibold">m</span>
-          )}
-        </div>
+        <WorkspaceMark
+          name={workspaceLabel}
+          icon={account.workspaceIcon}
+          brandLogoSrc={props.brandLogoSrc}
+          size="md"
+        />
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13px] font-semibold leading-5">{workspaceLabel}</div>
           <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
@@ -559,17 +561,16 @@ function WorkspaceMenu(props: {
           className="absolute left-0 top-[calc(100%+7px)] z-30 w-[232px] overflow-hidden rounded-[10px] bg-[color:var(--paper)] p-1 shadow-[0_16px_36px_rgba(0,0,0,0.12),inset_0_0_0_1px_var(--line)]"
         >
           <div className="flex min-w-0 items-center gap-2 rounded-[8px] px-2 py-2">
-            <div className="grid size-7 shrink-0 place-items-center overflow-hidden rounded-[7px] bg-[color:var(--block)] text-[color:var(--ink)] shadow-[inset_0_0_0_1px_var(--line)]">
-              {props.brandLogoSrc ? (
-                <img src={props.brandLogoSrc} alt="" className="h-4 w-6 object-contain" />
-              ) : (
-                <span className="text-[12px] font-semibold">m</span>
-              )}
-            </div>
+            <WorkspaceMark
+              name={workspaceLabel}
+              icon={account.workspaceIcon}
+              brandLogoSrc={props.brandLogoSrc}
+              size="sm"
+            />
             <div className="min-w-0 flex-1">
               <div className="truncate text-[12px] font-semibold leading-5 text-[color:var(--text)]">{workspaceLabel}</div>
               <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">
-                {isSignedIn ? `${workspaceKindLabel || t("workspace.workspace")} · ${workspaceRoleLabelFor(account.workspaceRole)}` : t("workspace.localWorkspace")}
+                {workspaceDescription || (isSignedIn ? `${workspaceKindLabel || t("workspace.workspace")} · ${workspaceRoleLabelFor(account.workspaceRole)}` : t("workspace.localWorkspace"))}
               </div>
             </div>
           </div>
@@ -587,7 +588,7 @@ function WorkspaceMenu(props: {
                       role="menuitemradio"
                       aria-checked={selected}
                       className={cn(
-                        "group flex min-h-8 w-full items-center gap-2 rounded-[7px] px-1.5 text-left text-[12px] font-medium transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99] [&_[data-icon]]:size-3.5",
+                        "group flex min-h-9 w-full items-center gap-2 rounded-[7px] px-1.5 py-1 text-left text-[12px] font-medium transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99] [&_[data-icon]]:size-3.5",
                         selected ? "bg-[color:var(--selection)] text-[color:var(--text)]" : "text-[color:var(--muted-strong)]",
                       )}
                       onClick={() => {
@@ -595,13 +596,14 @@ function WorkspaceMenu(props: {
                         props.onSelectWorkspace?.(workspace.id);
                       }}
                     >
-                      {selected ? <CheckCircle2 data-icon className="text-[color:var(--success)]" /> : <Circle data-icon className="text-[color:var(--faint)]" />}
+                      <WorkspaceMark name={workspace.name} icon={workspace.icon} size="xs" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate">{workspace.name}</span>
                         <span className="block truncate text-[11px] font-normal leading-4 text-[color:var(--muted)]">
-                          {workspaceKindLabelFor(workspace.kind)} · {workspaceRoleLabelFor(workspace.role)}
+                          {workspace.description?.trim() || `${workspaceKindLabelFor(workspace.kind)} · ${workspaceRoleLabelFor(workspace.role)}`}
                         </span>
                       </span>
+                      {selected ? <CheckCircle2 data-icon className="shrink-0 text-[color:var(--success)]" /> : null}
                     </button>
                   );
                 })}
@@ -821,6 +823,30 @@ function accountIdentityLabelFor(account: ShellAccount) {
     return account.identityLogin ? translate("workspace.localAccountSignedInAs", { login: account.identityLogin }) : translate("workspace.localAccount");
   }
   return account.email || translate("workspace.signedIn");
+}
+
+function WorkspaceMark(props: { name?: string; icon?: string; brandLogoSrc?: string; size?: "xs" | "sm" | "md" }) {
+  const mark = props.icon?.trim();
+  const initial = props.name?.trim().slice(0, 1).toUpperCase() || "m";
+  const sizeClass =
+    props.size === "xs"
+      ? "size-6 rounded-[6px] text-[11px]"
+      : props.size === "sm"
+        ? "size-7 rounded-[7px] text-[12px]"
+        : "size-8 rounded-[8px] text-[13px]";
+  const logoClass = props.size === "sm" ? "h-4 w-6" : "h-5 w-7";
+
+  return (
+    <span className={cn("grid shrink-0 place-items-center overflow-hidden bg-[color:var(--paper)] font-semibold text-[color:var(--ink)] shadow-[inset_0_0_0_1px_var(--line)]", sizeClass)}>
+      {mark ? (
+        <span className="max-w-full truncate px-1 leading-none">{mark}</span>
+      ) : props.brandLogoSrc ? (
+        <img src={props.brandLogoSrc} alt="" className={cn("object-contain", logoClass)} />
+      ) : (
+        <span>{initial}</span>
+      )}
+    </span>
+  );
 }
 
 function UserAvatar(props: { name?: string; avatarUrl?: string; size?: "sm" | "md" }) {

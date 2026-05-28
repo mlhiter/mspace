@@ -447,6 +447,7 @@ function RootShell() {
         workspace: currentWorkspace,
         selectedWorkspaceId: currentWorkspace?.id,
         selectWorkspace: handleSelectWorkspace,
+        refreshAuth: () => queryClient.invalidateQueries({ queryKey: queryKeys.authMe(authToken) }),
         status: accountStatus,
       }}
     >
@@ -466,9 +467,18 @@ function RootShell() {
           isServerAdmin: meQuery.data?.isServerAdmin,
           workspaceId: currentWorkspace?.id,
           workspaceName: currentWorkspace?.name,
+          workspaceIcon: currentWorkspace?.icon,
+          workspaceDescription: currentWorkspace?.description,
           workspaceKind: currentWorkspace?.kind,
           workspaceRole: currentWorkspace?.role,
-          workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, role: workspace.role, kind: workspace.kind })),
+          workspaces: workspaces.map((workspace) => ({
+            id: workspace.id,
+            name: workspace.name,
+            role: workspace.role,
+            kind: workspace.kind,
+            icon: workspace.icon,
+            description: workspace.description,
+          })),
           error: authError instanceof Error ? authError.message : undefined,
           actionLabel: pendingAuthState ? t("workspace.waitingForGitHub") : undefined,
         }}

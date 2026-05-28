@@ -8,6 +8,7 @@ export interface MspaceAuthContextValue {
   workspace?: MspaceWorkspace;
   selectedWorkspaceId?: string;
   selectWorkspace?: (workspaceId: string) => void;
+  refreshAuth?: () => Promise<unknown>;
   status: "signed-in" | "signed-out" | "loading" | "error";
 }
 
