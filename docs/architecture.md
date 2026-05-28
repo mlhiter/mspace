@@ -192,13 +192,17 @@ Preview probing is internal/background-driven. It updates test-environment state
 
 Workspace Settings is accessed from the workspace identity menu. It owns:
 
+- team workspace identity editing for owner/admin users: name, mark, and description;
 - workspace automation;
 - team-only members and invitations;
-- worker credentials for owner/admin users, separating active credentials from expired or replaced history;
+- worker environment connection for owner/admin users through a short-lived install command;
+- worker credential audit history, separating active bootstrap credentials from expired or replaced history;
 - worker liveness/capabilities;
 - issue-linked runtime tasks, task events, and worker logs.
 
 The runtime task table is an operations/readability surface, not a generic task creation form. Rows should lead with the user-facing task purpose, show the linked Issue title when an issue exists, link agent-session tasks back to the relevant Issue Detail session, and leave protocol kind, capabilities, payload, result, events, and logs in expanded details. Manual protocol-smoke task creation remains available through the API for debugging, but the normal Workspace Settings UI should not ask users to create raw runtime tasks.
+
+Normal worker setup should not ask users to create or copy raw `msw_...` credentials. The product path is `Connect worker environment`, which returns a one-time install command for the target server, VM, DevBox, or Docker-capable host. The command embeds the short-lived bootstrap credential once, starts the Docker-backed worker, and leaves subsequent liveness and capability inspection to the Workers list. Raw credential endpoints stay available for Electron's automatic personal worker lifecycle and API-level recovery/debugging.
 
 Open account registration creates a personal workspace and a personal runtime boundary. Only server-admin logins configured by `MSPACE_SERVER_ADMIN_LOGINS` or `MSPACE_BOOTSTRAP_ADMIN_LOGIN` can create team workspaces. Team server runners are reachable only through membership in a team workspace, and runtime worker/task mode must match the workspace kind.
 

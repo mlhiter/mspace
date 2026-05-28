@@ -12,9 +12,9 @@ desktop client
   -> mspace-server Deployment
   -> Postgres
 
-mspace-worker StatefulSet
+self-hosted mspace worker
   -> claims runtime_tasks from server
-  -> stores repo cache and session workdirs on PVC
+  -> stores repo cache and session workdirs on its worker volume
   -> runs codex app-server
   -> uses buildctl and kubectl for issue test deployments
 
@@ -128,9 +128,11 @@ Open the desktop app with:
 MSPACE_SERVER_URL=https://mspace.example.com pnpm dev:desktop
 ```
 
-Sign in with the bootstrap local admin account, or with a GitHub identity listed in `secrets.serverAdminLogins`, then create or select the customer team workspace. Ordinary self-registered accounts can use only their personal workspace and local personal runner until invited into this team workspace. Create a runtime registration token from Workspace Settings in the team workspace and copy the raw `msw_...` token once.
+Sign in with the bootstrap local admin account, or with a GitHub identity listed in `secrets.serverAdminLogins`, then create or select the customer team workspace. Ordinary self-registered accounts can use only their personal workspace and local personal runner until invited into this team workspace.
 
-Create a Secret for that token. Do not put the token directly in Helm values:
+For a self-hosted worker on a customer server, VM, DevBox, or Docker-capable host, open Workspace Settings, choose `Connect environment`, copy the generated install command, and run it in that target environment. The command embeds a short-lived workspace bootstrap credential once and starts the Docker-backed Codex worker. The raw `msw_...` token API remains available for recovery/debugging, but it is not the normal customer setup path.
+
+For the Helm-managed fixed Worker StatefulSet path, create a runtime registration token through the API or an internal admin/debug flow and put it in a Kubernetes Secret. Do not put the token directly in Helm values:
 
 ```bash
 kubectl -n mspace-system create secret generic mspace-runtime-token \

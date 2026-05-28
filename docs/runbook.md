@@ -58,15 +58,17 @@ pnpm run server
 
 For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker before it submits an agent mention. The worker uses the active desktop server URL, a short-lived workspace registration credential, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Electron writes the credential to `<Electron userData>/worker/tokens/<workspace-id>.token`, renews the 12-hour credential before expiry, and revokes the previous credential after a short grace period. The worker rereads the token file for runtime API calls, so credential renewal should be invisible during normal personal use. Workspace Settings labels these rows as automatic desktop credentials and keeps expired/replaced rows under credential history. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
 
-For team or Docker-backed worker testing, start a worker from Workspace Settings:
+For team or self-hosted worker environments, connect the target environment from Workspace Settings:
 
 1. Sign in with a local account or configured GitHub OAuth, then select the target workspace.
 2. Open Workspace Settings.
-3. In Runtime, click `Start worker`.
+3. In Runtime, click `Connect environment`.
+4. Copy the generated install command.
+5. Run it on the server, VM, DevBox, or other Docker-capable host that should execute mspace agent work.
 
-mspace creates a short-lived internal worker bootstrap credential, injects it into the worker process, and refreshes the Workers list after registration. The desktop button starts the Codex-capable Docker worker, so local `CODEX_HOME` must contain valid `auth.json` and `config.toml` files.
+mspace creates a short-lived internal worker bootstrap credential and embeds it in the install command once. The target environment must have Docker and a usable Codex home with `auth.json` and `config.toml`. The command starts the Codex-capable worker container, and Workspace Settings refreshes the Workers list after registration.
 
-Run a worker manually only when debugging an external worker or terminal-only setup:
+Run a worker manually only when debugging or recovering an external worker or terminal-only setup:
 
 ```bash
 export MSPACE_RUNTIME_TOKEN="msw_..."
@@ -115,7 +117,7 @@ deploy/scripts/build-images.sh
 helm upgrade --install mspace deploy/helm/mspace -n mspace-system -f /tmp/mspace-values.yaml
 ```
 
-See `docs/kubernetes-deployment.md` for the two-stage install: server first, then create a workspace-scoped `msw_...` runtime token and enable the worker.
+See `docs/kubernetes-deployment.md` for the customer install shape: server first, then connect the workspace-scoped worker environment.
 
 ## Website
 

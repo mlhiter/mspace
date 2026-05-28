@@ -140,6 +140,21 @@ export interface RuntimeRegistrationTokenResult {
 	registrationToken: RuntimeRegistrationToken;
 }
 
+export interface CreateWorkerInstallationInput {
+	name: string;
+	expiresInHours: number;
+}
+
+export interface WorkerInstallationResult {
+	installCommand: string;
+	installScriptUrl: string;
+	serverUrl: string;
+	runtimeMode: string;
+	workerName: string;
+	credentialPrefix: string;
+	expiresAt: string;
+}
+
 export interface RuntimeWorker {
 	id: string;
 	workspaceId: string;

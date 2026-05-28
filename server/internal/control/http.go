@@ -76,6 +76,7 @@ func (s *Server) Routes() http.Handler {
 		r.Use(persistStoreMiddleware(persistent))
 	}
 	r.Get("/health", s.handleHealth)
+	r.Get("/install/worker", s.handleWorkerInstallScript)
 	r.Get("/api/auth/github/start", s.handleGitHubStart)
 	r.Get("/api/auth/github/callback", s.handleGitHubCallback)
 	r.Get("/api/auth/github/result", s.handleGitHubResult)
@@ -139,6 +140,7 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/workspaces/{workspaceID}/runtime-registration-tokens", s.handleCreateRuntimeRegistrationToken)
 	r.Get("/api/workspaces/{workspaceID}/runtime-registration-tokens", s.handleListRuntimeRegistrationTokens)
 	r.Delete("/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}", s.handleRevokeRuntimeRegistrationToken)
+	r.Post("/api/workspaces/{workspaceID}/worker-installations", s.handleCreateWorkerInstallation)
 	r.Get("/api/workspaces/{workspaceID}/runtime-workers", s.handleListRuntimeWorkers)
 	r.Post("/api/workspaces/{workspaceID}/runtime-tasks", s.handleCreateRuntimeTask)
 	r.Get("/api/workspaces/{workspaceID}/runtime-tasks", s.handleListRuntimeTasks)
@@ -224,6 +226,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"workspaceCollaboration":      true,
 		},
 	})
+}
+
+func (s *Server) handleWorkerInstallScript(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, workerInstallScript)
 }
 
 func (s *Server) handleGitHubStart(w http.ResponseWriter, r *http.Request) {
@@ -1375,6 +1383,53 @@ func (s *Server) handleRevokeRuntimeRegistrationToken(w http.ResponseWriter, r *
 	writeJSON(w, http.StatusOK, token)
 }
 
+func (s *Server) handleCreateWorkerInstallation(w http.ResponseWriter, r *http.Request) {
+	user, workspaces, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateWorkerInstallationInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	workspace, found := workspaceByID(workspaces, workspaceID)
+	if !found {
+		writeStoreError(w, ErrNotFound)
+		return
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = defaultWorkerInstallationName(workspace)
+	}
+	expiresInHours := input.ExpiresInHours
+	if expiresInHours <= 0 {
+		expiresInHours = 1
+	}
+	tokenResult, err := s.store.CreateRuntimeRegistrationToken(r.Context(), user.ID, workspaceID, CreateRuntimeRegistrationTokenInput{
+		Name:           name,
+		ExpiresInHours: expiresInHours,
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	serverURL := publicServerURL(r)
+	mode := runtimeModeForWorkspace(workspace)
+	installScriptURL := serverURL + "/install/worker"
+	result := WorkerInstallationResult{
+		InstallCommand:   buildWorkerInstallCommand(installScriptURL, serverURL, tokenResult.Token, mode, name),
+		InstallScriptURL: installScriptURL,
+		ServerURL:        serverURL,
+		RuntimeMode:      mode,
+		WorkerName:       name,
+		CredentialPrefix: tokenResult.RegistrationToken.TokenPrefix,
+		ExpiresAt:        tokenResult.RegistrationToken.ExpiresAt,
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
 func (s *Server) handleListRuntimeWorkers(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.authenticate(w, r)
 	if !ok {
@@ -1664,6 +1719,64 @@ func bearerToken(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+}
+
+func workspaceByID(workspaces []Workspace, workspaceID string) (Workspace, bool) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	for _, workspace := range workspaces {
+		if workspace.ID == workspaceID {
+			return workspace, true
+		}
+	}
+	return Workspace{}, false
+}
+
+func runtimeModeForWorkspace(workspace Workspace) string {
+	if workspace.Kind == "personal" {
+		return "personal"
+	}
+	return "team"
+}
+
+func defaultWorkerInstallationName(workspace Workspace) string {
+	slug := strings.TrimSpace(workspace.Slug)
+	if slug == "" {
+		slug = workspaceSlug(workspace.Name, workspace.ID)
+	}
+	return "worker-" + slug
+}
+
+func publicServerURL(r *http.Request) string {
+	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if proto == "" {
+		if r.TLS != nil {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = strings.TrimSpace(r.Host)
+	}
+	if host == "" {
+		host = "127.0.0.1:8787"
+	}
+	return strings.TrimRight(proto+"://"+host, "/")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func buildWorkerInstallCommand(installScriptURL, serverURL, token, mode, workerName string) string {
+	env := []string{
+		"MSPACE_SERVER_URL=" + shellQuote(serverURL),
+		"MSPACE_RUNTIME_TOKEN=" + shellQuote(token),
+		"MSPACE_WORKER_MODE=" + shellQuote(mode),
+		"MSPACE_WORKER_NAME=" + shellQuote(workerName),
+	}
+	return strings.Join(env, " ") + " bash -c \"$(curl -fsSL " + shellQuote(installScriptURL) + ")\""
 }
 
 func contentDispositionInline(filename string) string {

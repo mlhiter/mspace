@@ -10,6 +10,7 @@ import {
 	Circle,
 	Copy,
 	Edit3,
+	Download,
 	GitCommit,
 	GitPullRequest,
 	KeyRound,
@@ -18,7 +19,6 @@ import {
 	ShieldCheck,
 	StickyNote,
 	UsersRound,
-	Plus,
 	RefreshCw,
 	Save,
 	ServerCog,
@@ -30,13 +30,11 @@ import {
 } from "lucide-react";
 import {
 	controlPlaneApi,
-	getControlPlaneBaseUrl,
 	queryKeys,
-	type CreateRuntimeRegistrationTokenInput,
+	type CreateWorkerInstallationInput,
 	type CreateWorkspaceInvitationInput,
 	type IssueListItem,
 	type RuntimeRegistrationToken,
-	type RuntimeRegistrationTokenResult,
 	type RuntimeTask,
 	type RuntimeTaskListResult,
 	type RuntimeWorker,
@@ -45,6 +43,7 @@ import {
 	type WorkspaceInvitationResult,
 	type WorkspaceMember,
 	type UpdateWorkspaceSettingsInput,
+	type WorkerInstallationResult,
 } from "@mspace/core";
 import {
 	Button,
@@ -80,9 +79,9 @@ const defaultSettingsForm: UpdateWorkspaceSettingsInput = {
 	autoDeployTestEnvironment: false,
 };
 
-const defaultTokenForm: CreateRuntimeRegistrationTokenInput = {
+const defaultWorkerInstallationForm: CreateWorkerInstallationInput = {
 	name: translate("workspaceSettings.modal.workerNamePlaceholder"),
-	expiresInHours: 24,
+	expiresInHours: 1,
 };
 
 const defaultInvitationForm: CreateWorkspaceInvitationInput = {
@@ -115,7 +114,6 @@ export function WorkspaceSettingsPage() {
 	const queryClient = useQueryClient();
 	const auth = useMspaceAuth();
 	const workspaceID = auth.workspace?.id || "";
-	const desktopServerBaseUrl = getControlPlaneBaseUrl();
 	const isSignedIn = auth.status === "signed-in" && auth.token !== "";
 	const isTeamWorkspace = auth.workspace?.kind === "team";
 	const runtimeEnabled = isSignedIn && workspaceID !== "";
@@ -180,12 +178,10 @@ export function WorkspaceSettingsPage() {
 	const [invitationModalOpen, setInvitationModalOpen] = useState(false);
 	const [invitationForm, setInvitationForm] = useState<CreateWorkspaceInvitationInput>(defaultInvitationForm);
 	const [createdInvitation, setCreatedInvitation] = useState<WorkspaceInvitationResult | null>(null);
-	const [tokenModalOpen, setTokenModalOpen] = useState(false);
-	const [tokenForm, setTokenForm] = useState<CreateRuntimeRegistrationTokenInput>(defaultTokenForm);
-	const [createdToken, setCreatedToken] = useState<RuntimeRegistrationTokenResult | null>(null);
+	const [workerInstallModalOpen, setWorkerInstallModalOpen] = useState(false);
+	const [workerInstallationForm, setWorkerInstallationForm] = useState<CreateWorkerInstallationInput>(defaultWorkerInstallationForm);
+	const [createdWorkerInstallation, setCreatedWorkerInstallation] = useState<WorkerInstallationResult | null>(null);
 	const [copyState, setCopyState] = useState("");
-	const [dockerWorkerStatus, setDockerWorkerStatus] = useState("");
-	const [dockerWorkerError, setDockerWorkerError] = useState("");
 
 	useEffect(() => {
 		if (!settingsQuery.data) return;
@@ -247,44 +243,17 @@ export function WorkspaceSettingsPage() {
 			await queryClient.invalidateQueries({ queryKey: queryKeys.workspaceInvitations(workspaceID, auth.token) });
 		},
 	});
-	const createToken = useMutation({
-		mutationFn: (input: CreateRuntimeRegistrationTokenInput) =>
-			controlPlaneApi.createRuntimeRegistrationToken(auth.token, workspaceID, input),
+	const createWorkerInstallation = useMutation({
+		mutationFn: (input: CreateWorkerInstallationInput) =>
+			controlPlaneApi.createWorkerInstallation(auth.token, workspaceID, input),
 		onSuccess: async (result) => {
-			setCreatedToken(result);
-			setTokenModalOpen(false);
-			setTokenForm(defaultTokenForm);
-			await queryClient.invalidateQueries({ queryKey: queryKeys.runtimeRegistrationTokens(workspaceID, auth.token) });
-		},
-	});
-	const startDockerWorker = useMutation({
-		mutationFn: async () => {
-			if (!window.mspaceDesktop?.startDockerWorker) {
-				throw new Error(t("workspaceSettings.dockerWorkerUnavailable"));
-			}
-			return window.mspaceDesktop.startDockerWorker({
-				authToken: auth.token,
-				workspaceId: workspaceID,
-				mode: defaultRuntimeMode,
-				serverUrl: desktopServerBaseUrl === "http://127.0.0.1:8787" ? "http://host.docker.internal:8787" : desktopServerBaseUrl,
-				codex: true,
-				workerName: `local-docker-${defaultRuntimeMode}-worker`,
-			});
-		},
-		onMutate: () => {
-			setDockerWorkerError("");
-			setDockerWorkerStatus(t("workspaceSettings.startingDockerWorker"));
-		},
-		onSuccess: async (result) => {
-			setDockerWorkerStatus(t("workspaceSettings.dockerWorkerStarting", { name: result.containerName }));
+			setCreatedWorkerInstallation(result);
+			setWorkerInstallModalOpen(false);
+			setWorkerInstallationForm(defaultWorkerInstallationForm);
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: queryKeys.runtimeRegistrationTokens(workspaceID, auth.token) }),
 				queryClient.invalidateQueries({ queryKey: queryKeys.runtimeWorkers(workspaceID, auth.token) }),
 			]);
-		},
-		onError: (error) => {
-			setDockerWorkerStatus("");
-			setDockerWorkerError(error instanceof Error ? error.message : t("workspaceSettings.dockerWorkerCouldNotStart"));
 		},
 	});
 	const revokeToken = useMutation({
@@ -327,8 +296,7 @@ export function WorkspaceSettingsPage() {
 	const members = membersQuery.data || [];
 	const invitations = invitationsQuery.data || [];
 	const canManageWorkspace = auth.workspace?.role === "owner" || auth.workspace?.role === "admin";
-	const canStartLocalWorker = runtimeEnabled && canManageWorkspace && Boolean(window.mspaceDesktop?.startDockerWorker);
-	const canManageRuntimeCredentials = runtimeEnabled && canManageWorkspace;
+	const canConnectWorker = runtimeEnabled && canManageWorkspace;
 	const onlineWorkerCount = workers.filter((worker) => worker.status === "online").length;
 	const queuedTaskCount = tasksPage.statusCounts?.queued || 0;
 	const runtimeError = isTeamWorkspace
@@ -343,11 +311,6 @@ export function WorkspaceSettingsPage() {
 		void Promise.all(refreshes);
 	}
 
-	function startLocalDockerWorker() {
-		if (!canStartLocalWorker || startDockerWorker.isPending) return;
-		startDockerWorker.mutate();
-	}
-
 	function submitInvitation(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
 		if (!runtimeEnabled || !isTeamWorkspace || !canManageWorkspace) return;
@@ -358,12 +321,12 @@ export function WorkspaceSettingsPage() {
 		});
 	}
 
-	function submitToken(event: FormEvent<HTMLFormElement>) {
+	function submitWorkerInstallation(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!canManageRuntimeCredentials) return;
-		createToken.mutate({
-			name: tokenForm.name.trim() || defaultTokenForm.name,
-			expiresInHours: tokenForm.expiresInHours,
+		if (!canConnectWorker) return;
+		createWorkerInstallation.mutate({
+			name: workerInstallationForm.name.trim() || defaultWorkerInstallationForm.name,
+			expiresInHours: workerInstallationForm.expiresInHours,
 		});
 	}
 
@@ -377,20 +340,10 @@ export function WorkspaceSettingsPage() {
 		});
 	}
 
-	async function copyCreatedToken() {
-		if (!createdToken?.token) return;
+	async function copyWorkerInstallCommand() {
+		if (!createdWorkerInstallation?.installCommand) return;
 		try {
-			await navigator.clipboard.writeText(createdToken.token);
-			setCopyState(t("workspaceSettings.copied"));
-		} catch {
-			setCopyState(t("workspaceSettings.copyFailed"));
-		}
-	}
-
-	async function copyDockerWorkerCommand() {
-		if (!createdToken?.token) return;
-		try {
-			await navigator.clipboard.writeText(buildDockerWorkerCommand(createdToken.token, defaultRuntimeMode));
+			await navigator.clipboard.writeText(createdWorkerInstallation.installCommand);
 			setCopyState(t("workspaceSettings.commandCopied"));
 		} catch {
 			setCopyState(t("workspaceSettings.copyFailed"));
@@ -436,8 +389,7 @@ export function WorkspaceSettingsPage() {
 				{runtimeError ? <Notice tone="danger">{runtimeError.message}</Notice> : null}
 				{createInvitation.error ? <Notice tone="danger">{createInvitation.error.message}</Notice> : null}
 				{revokeInvitation.error ? <Notice tone="danger">{revokeInvitation.error.message}</Notice> : null}
-				{dockerWorkerError ? <Notice tone="danger">{dockerWorkerError}</Notice> : null}
-				{dockerWorkerStatus ? <Notice>{t("workspaceSettings.workerListUpdateNotice", { status: dockerWorkerStatus })}</Notice> : null}
+				{createWorkerInstallation.error ? <Notice tone="danger">{createWorkerInstallation.error.message}</Notice> : null}
 
 				{isTeamWorkspace ? (
 					<SettingsSection
@@ -622,28 +574,24 @@ export function WorkspaceSettingsPage() {
 							/>
 							<SettingsRow
 								icon={ServerCog}
-								title={t("workspaceSettings.section.localDockerWorker")}
-								description={t("workspaceSettings.section.localDockerWorkerDescription")}
+								title={t("workspaceSettings.section.connectWorker")}
+								description={t("workspaceSettings.section.connectWorkerDescription")}
 								control={
 									<Button
 										type="button"
 										variant="secondary"
 										size="sm"
-										disabled={!canStartLocalWorker || startDockerWorker.isPending}
-										onClick={startLocalDockerWorker}
+										disabled={!canConnectWorker}
+										onClick={() => setWorkerInstallModalOpen(true)}
 									>
-										<SquareTerminal data-icon />
-										{startDockerWorker.isPending ? t("workspaceSettings.section.starting") : t("workspaceSettings.section.startWorker")}
+										<Download data-icon />
+										{t("workspaceSettings.section.connectEnvironment")}
 									</Button>
 								}
 							/>
 							{!canManageWorkspace ? (
 								<div className="border-t border-[color:var(--line)] px-4 py-3">
 									<Notice>{t("workspaceSettings.notice.workerPermission")}</Notice>
-								</div>
-							) : !window.mspaceDesktop?.startDockerWorker ? (
-								<div className="border-t border-[color:var(--line)] px-4 py-3">
-									<Notice>{t("workspaceSettings.notice.desktopStartup")}</Notice>
 								</div>
 							) : null}
 						</div>
@@ -659,12 +607,6 @@ export function WorkspaceSettingsPage() {
 				<RuntimePanel
 					title={t("workspaceSettings.section.advancedCredentials")}
 					description={t("workspaceSettings.section.advancedCredentialsDescription")}
-					actions={
-						<Button type="button" variant="secondary" size="sm" disabled={!canManageRuntimeCredentials} onClick={() => setTokenModalOpen(true)}>
-							<Plus data-icon />
-							{t("workspaceSettings.section.createCredential")}
-						</Button>
-					}
 				>
 					<RegistrationTokenList
 						tokens={tokens}
@@ -809,83 +751,75 @@ export function WorkspaceSettingsPage() {
 				</Modal>
 			) : null}
 
-			{tokenModalOpen ? (
-				<Modal title={t("workspaceSettings.modal.tokenTitle")} description={t("workspaceSettings.modal.tokenDescription")} onClose={() => setTokenModalOpen(false)}>
-					<form className="grid gap-4" onSubmit={submitToken}>
-						{createToken.error ? <Notice tone="danger">{createToken.error.message}</Notice> : null}
+			{workerInstallModalOpen ? (
+				<Modal title={t("workspaceSettings.modal.workerInstallTitle")} description={t("workspaceSettings.modal.workerInstallDescription")} onClose={() => setWorkerInstallModalOpen(false)}>
+					<form className="grid gap-4" onSubmit={submitWorkerInstallation}>
+						{createWorkerInstallation.error ? <Notice tone="danger">{createWorkerInstallation.error.message}</Notice> : null}
 						<Field label={t("workspaceSettings.modal.name")} hint={t("workspaceSettings.modal.tokenNameHint")}>
 							<Input
-								value={tokenForm.name}
-								onChange={(event) => setTokenForm({ ...tokenForm, name: event.target.value })}
+								value={workerInstallationForm.name}
+								onChange={(event) => setWorkerInstallationForm({ ...workerInstallationForm, name: event.target.value })}
 								placeholder={t("workspaceSettings.modal.workerNamePlaceholder")}
 							/>
 						</Field>
 						<Field label={t("workspaceSettings.modal.expires")}>
 							<Select
-								value={String(tokenForm.expiresInHours)}
-								onValueChange={(value) => setTokenForm({ ...tokenForm, expiresInHours: Number(value) })}
+								value={String(workerInstallationForm.expiresInHours)}
+								onValueChange={(value) => setWorkerInstallationForm({ ...workerInstallationForm, expiresInHours: Number(value) })}
 							>
 								<SelectTrigger>
-									<SelectValue placeholder={t("workspaceSettings.modal.tokenExpiry")} />
+									<SelectValue placeholder={t("workspaceSettings.modal.joinCodeExpiry")} />
 								</SelectTrigger>
 								<SelectContent>
 									<SelectItem value="1">{t("workspaceSettings.modal.hours", { count: 1, suffix: "" })}</SelectItem>
 									<SelectItem value="12">{t("workspaceSettings.modal.hours", { count: 12, suffix: "s" })}</SelectItem>
 									<SelectItem value="24">{t("workspaceSettings.modal.hours", { count: 24, suffix: "s" })}</SelectItem>
-									<SelectItem value="168">{t("workspaceSettings.modal.days", { count: 7 })}</SelectItem>
-									<SelectItem value="720">{t("workspaceSettings.modal.days", { count: 30 })}</SelectItem>
 								</SelectContent>
 							</Select>
 						</Field>
 						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
-							<Button type="button" variant="secondary" onClick={() => setTokenModalOpen(false)}>
+							<Button type="button" variant="secondary" onClick={() => setWorkerInstallModalOpen(false)}>
 								{t("common.cancel")}
 							</Button>
-							<Button type="submit" disabled={!canManageRuntimeCredentials || createToken.isPending}>
-								<KeyRound data-icon />
-								{createToken.isPending ? t("common.creating") : t("workspaceSettings.section.createCredential")}
+							<Button type="submit" disabled={!canConnectWorker || createWorkerInstallation.isPending}>
+								<Download data-icon />
+								{createWorkerInstallation.isPending ? t("common.creating") : t("workspaceSettings.modal.createInstallCommand")}
 							</Button>
 						</div>
 					</form>
 				</Modal>
 			) : null}
 
-			{createdToken ? (
-				<Modal title={t("workspaceSettings.modal.credentialCreatedTitle")} description={t("workspaceSettings.modal.credentialCreatedDescription")} onClose={() => {
-					setCreatedToken(null);
+			{createdWorkerInstallation ? (
+				<Modal title={t("workspaceSettings.modal.workerInstallCreatedTitle")} description={t("workspaceSettings.modal.workerInstallCreatedDescription")} onClose={() => {
+					setCreatedWorkerInstallation(null);
 					setCopyState("");
 				}}>
 					<div className="grid gap-4">
 						<div className="text-[12px] leading-5 text-[color:var(--muted)]">
-							{t("workspaceSettings.modal.prefixExpires", { prefix: createdToken.registrationToken.tokenPrefix })}{" "}
-							<RelativeTime value={createdToken.registrationToken.expiresAt} />.
+							{t("workspaceSettings.modal.installSummary", {
+								name: createdWorkerInstallation.workerName,
+								mode: createdWorkerInstallation.runtimeMode,
+								prefix: createdWorkerInstallation.credentialPrefix,
+							})}{" "}
+							<RelativeTime value={createdWorkerInstallation.expiresAt} />.
 						</div>
 						<div className="grid gap-2">
-							<div className="text-[12px] font-medium leading-5 text-[color:var(--muted)]">{t("workspaceSettings.modal.setupCommand")}</div>
+							<div className="text-[12px] font-medium leading-5 text-[color:var(--muted)]">{t("workspaceSettings.modal.installCommand")}</div>
 							<div className="overflow-auto rounded-[9px] bg-[color:var(--code-bg)] px-3 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)]">
-								{buildDockerWorkerCommand(createdToken.token, defaultRuntimeMode)}
+								{createdWorkerInstallation.installCommand}
 							</div>
 							<div className="text-[12px] leading-5 text-[color:var(--muted)]">
-								{t("workspaceSettings.modal.dryRunWorkerDescription")}
+								{t("workspaceSettings.modal.installCommandDescription")}
 							</div>
 						</div>
-						<details className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
-							<summary className="cursor-pointer text-[12px] font-medium leading-5 text-[color:var(--muted)]">{t("workspaceSettings.modal.showRawCredential")}</summary>
-							<div className="mt-2 rounded-[7px] bg-[color:var(--code-bg)] px-3 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)]">
-								{createdToken.token}
-							</div>
-						</details>
 						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
-							<Button type="button" variant="secondary" onClick={copyCreatedToken}>
-								<Copy data-icon />
-								{copyState || t("workspaceSettings.modal.copyRawCredential")}
-							</Button>
-							<Button type="button" onClick={copyDockerWorkerCommand}>
+							<Button type="button" onClick={copyWorkerInstallCommand}>
 								<SquareTerminal data-icon />
-								{t("workspaceSettings.modal.copyCommand")}
+								{copyState || t("workspaceSettings.modal.copyInstallCommand")}
 							</Button>
 							<Button type="button" variant="secondary" onClick={() => {
-								setCreatedToken(null);
+								setCreatedWorkerInstallation(null);
 								setCopyState("");
 							}}>
 								{t("workspaceSettings.modal.done")}
@@ -1815,11 +1749,6 @@ function buildInviteLink(token: string) {
 	const hash = `#/invite/${encodeURIComponent(token)}`;
 	if (typeof window === "undefined") return hash;
 	return `${window.location.origin}${window.location.pathname}${hash}`;
-}
-
-function buildDockerWorkerCommand(token: string, mode: "personal" | "team") {
-	const escapedToken = token.replaceAll("'", "'\\''");
-	return `MSPACE_RUNTIME_TOKEN='${escapedToken}' MSPACE_WORKER_MODE='${mode}' scripts/run-server-worker-dev.sh`;
 }
 
 function Modal(props: { title: string; description: string; onClose: () => void; children: ReactNode }) {

@@ -89,6 +89,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `GET` | `/api/auth/me` | Return the current mspace user, workspaces, auth identity provider/login, and admin status for a bearer token. |
 | `GET` | `/api/workspaces` | List the authenticated user's workspaces. |
 | `POST` | `/api/workspaces` | Create an explicit team workspace for the authenticated user. |
+| `PUT` | `/api/workspaces/{workspaceID}` | Update team workspace identity fields: name, mark, and description. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/members` | List workspace members with role and display identity. |
 | `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time `msi_...` workspace invitation link. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/invitations` | List recent workspace invitations without raw tokens. Owner/admin only. |
@@ -137,6 +138,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/probe` | Refresh preview reachability state for the issue test environment. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Store or update the issue PR handoff from captured source evidence. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the server-owned issue handoff record. |
+| `POST` | `/api/workspaces/{workspaceID}/worker-installations` | Create a short-lived worker environment install command. Owner/admin only. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived worker registration credential. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration credential metadata without raw token values. Owner/admin only. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration credential. Owner/admin only. |
@@ -168,6 +170,8 @@ Workspace Settings exposes the first UI-testable collaboration loop. Owners and 
 ## Runtime Worker Registry
 
 Agent-session creation is guarded by worker liveness. The server checks that the requested `runtimeMode` matches the workspace kind and that a matching online worker with Codex capability and a fresh heartbeat exists before creating the session and runtime task; otherwise it returns HTTP `409` with `no active codex worker`. UI clients should preflight `/runtime-workers` before saving a trigger comment. Desktop personal mode can auto-start the host-local personal worker, while team workspaces require an explicitly connected team worker.
+
+Normal team worker setup should use Workspace Settings `Connect environment`, backed by `POST /api/workspaces/{workspaceID}/worker-installations`. The response contains a one-time install command that embeds a short-lived bootstrap credential and starts the Docker-backed worker in the target environment. The raw `msw_...` registration credential endpoints remain for Electron's automatic personal worker lifecycle and API-level recovery/debugging, but they are no longer the main product setup path.
 
 Runtime registration credentials use the `msw_` prefix and are returned only once. The server stores a hash and prefix, then workers use the credential to register, heartbeat, claim eligible tasks, and report task status.
 

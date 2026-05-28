@@ -915,6 +915,21 @@ type RuntimeRegistrationTokenResult struct {
 	RegistrationToken RuntimeRegistrationToken `json:"registrationToken"`
 }
 
+type CreateWorkerInstallationInput struct {
+	Name           string `json:"name"`
+	ExpiresInHours int    `json:"expiresInHours"`
+}
+
+type WorkerInstallationResult struct {
+	InstallCommand   string `json:"installCommand"`
+	InstallScriptURL string `json:"installScriptUrl"`
+	ServerURL        string `json:"serverUrl"`
+	RuntimeMode      string `json:"runtimeMode"`
+	WorkerName       string `json:"workerName"`
+	CredentialPrefix string `json:"credentialPrefix"`
+	ExpiresAt        string `json:"expiresAt"`
+}
+
 type RuntimeRegistration struct {
 	TokenID     string
 	WorkspaceID string

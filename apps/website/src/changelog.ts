@@ -8,6 +8,20 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-05-27",
+    title: "Worker environment install flow",
+    summary:
+      "mspace moved team worker setup from manual credential handling to a self-host install command that connects the target environment to the server queue.",
+    items: [
+      "Added a server endpoint that creates a short-lived worker install command for workspace owners and admins.",
+      "Added a `/install/worker` script route that starts the Docker-backed Codex worker on the target environment.",
+      "Changed Workspace Settings to lead with `Connect environment` instead of manual token creation.",
+      "Added team workspace identity editing from Workspace Settings for owners and admins, covering name, selectable mark, and description.",
+      "Kept worker credential rows as audit history while hiding raw bootstrap credentials from the normal product path.",
+      "Updated runtime docs so self-hosted workers use the install-command flow and raw `msw_...` tokens remain a debug/recovery path.",
+    ],
+  },
+  {
+    date: "2026-05-27",
     title: "Clearer workspace runtime settings",
     summary:
       "mspace made Workspace Settings explain worker credentials and runtime tasks in product language instead of exposing only low-level protocol records.",

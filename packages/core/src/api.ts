@@ -17,6 +17,7 @@ import type {
   CreatePullRequestInput,
   CreateRuntimeRegistrationTokenInput,
   CreateRuntimeTaskInput,
+  CreateWorkerInstallationInput,
   CreateWorkspaceInput,
   CreateWorkspaceInvitationInput,
   CreateWorkspaceResult,
@@ -61,6 +62,7 @@ import type {
   WorkspaceInvitationResult,
   WorkspaceMember,
   AcceptWorkspaceInvitationResult,
+  WorkerInstallationResult,
 } from "./types";
 
 export const AUTH_TOKEN_STORAGE_KEY = "mspace.authToken";
@@ -342,6 +344,12 @@ export const controlPlaneApi = {
 		requestControlPlane<RuntimeRegistrationToken>(`/api/workspaces/${workspaceId}/runtime-registration-tokens/${tokenId}`, {
 			method: "DELETE",
 			headers: authHeaders(token),
+		}),
+	createWorkerInstallation: (token: string, workspaceId: string, input: CreateWorkerInstallationInput) =>
+		requestControlPlane<WorkerInstallationResult>(`/api/workspaces/${workspaceId}/worker-installations`, {
+			method: "POST",
+			headers: authHeaders(token),
+			body: JSON.stringify(input),
 		}),
 	listRuntimeWorkers: (token: string, workspaceId: string) =>
 		requestControlPlane<RuntimeWorker[]>(`/api/workspaces/${workspaceId}/runtime-workers`, {

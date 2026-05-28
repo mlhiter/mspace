@@ -1671,6 +1671,100 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	}
 }
 
+func TestCreateWorkerInstallationReturnsInstallCommand(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "worker-install-owner",
+		Login:          "worker-install-owner",
+		Name:           "Worker Install Owner",
+		Email:          "worker-install-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	teamWorkspace, _, err := store.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Install Team", Kind: "team"})
+	if err != nil {
+		t.Fatalf("create team workspace: %v", err)
+	}
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+teamWorkspace.ID+"/worker-installations", strings.NewReader(`{"name":"edge-worker","expiresInHours":1}`))
+	req.Host = "mspace.example.com"
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create worker installation status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var result WorkerInstallationResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatalf("parse worker installation: %v", err)
+	}
+	if result.RuntimeMode != "team" || result.WorkerName != "edge-worker" {
+		t.Fatalf("unexpected install metadata: %+v", result)
+	}
+	if result.ServerURL != "https://mspace.example.com" || result.InstallScriptURL != "https://mspace.example.com/install/worker" {
+		t.Fatalf("unexpected install URLs: %+v", result)
+	}
+	for _, fragment := range []string{
+		"MSPACE_SERVER_URL='https://mspace.example.com'",
+		"MSPACE_RUNTIME_TOKEN='msw_",
+		"MSPACE_WORKER_MODE='team'",
+		"MSPACE_WORKER_NAME='edge-worker'",
+		"curl -fsSL 'https://mspace.example.com/install/worker'",
+	} {
+		if !strings.Contains(result.InstallCommand, fragment) {
+			t.Fatalf("install command missing %q: %s", fragment, result.InstallCommand)
+		}
+	}
+	if result.CredentialPrefix == "" || result.ExpiresAt == "" {
+		t.Fatalf("expected credential metadata: %+v", result)
+	}
+
+	tokens, err := store.ListRuntimeRegistrationTokens(context.Background(), user.ID, teamWorkspace.ID)
+	if err != nil {
+		t.Fatalf("list runtime tokens: %v", err)
+	}
+	if len(tokens) != 1 || tokens[0].Name != "edge-worker" || tokens[0].TokenPrefix != result.CredentialPrefix {
+		t.Fatalf("unexpected installation credential: %+v", tokens)
+	}
+
+	personalRecorder := httptest.NewRecorder()
+	personalReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaces[0].ID+"/worker-installations", strings.NewReader(`{}`))
+	personalReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(personalRecorder, personalReq)
+	if personalRecorder.Code != http.StatusCreated {
+		t.Fatalf("create personal worker installation status=%d body=%s", personalRecorder.Code, personalRecorder.Body.String())
+	}
+	var personalResult WorkerInstallationResult
+	if err := json.Unmarshal(personalRecorder.Body.Bytes(), &personalResult); err != nil {
+		t.Fatalf("parse personal worker installation: %v", err)
+	}
+	if personalResult.RuntimeMode != "personal" || !strings.Contains(personalResult.InstallCommand, "MSPACE_WORKER_MODE='personal'") {
+		t.Fatalf("unexpected personal installation result: %+v", personalResult)
+	}
+}
+
+func TestWorkerInstallScriptRoute(t *testing.T) {
+	server := NewServer(Config{}, NewMemoryStore(), fakeGitHubClient{})
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/install/worker", nil)
+	server.Routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("install script status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "docker run -d") || !strings.Contains(recorder.Body.String(), "MSPACE_RUNTIME_TOKEN") {
+		t.Fatalf("unexpected install script: %s", recorder.Body.String())
+	}
+}
+
 func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{

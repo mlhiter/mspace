@@ -60,6 +60,7 @@ The desktop owns native shell behavior, local UI state, file pickers, and openin
 | `GET` | `/api/auth/me` | Return the current user, workspaces, auth identity provider/login, and `isServerAdmin` for a bearer token. |
 | `GET` | `/api/workspaces` | List the authenticated user's workspaces. |
 | `POST` | `/api/workspaces` | Create a team workspace. Server admins only. |
+| `PUT` | `/api/workspaces/{workspaceID}` | Update team workspace identity fields: name, mark, and description. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/members` | List workspace members. |
 | `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time `msi_...` invitation link. |
 | `GET` | `/api/workspaces/{workspaceID}/invitations` | List invitations without raw tokens. |
@@ -91,7 +92,7 @@ Both endpoints return the normal auth shape:
   "token": "msp_...",
   "expiresAt": "2026-05-20T12:00:00Z",
   "user": { "id": "...", "name": "Local Admin" },
-  "workspaces": [{ "id": "...", "kind": "personal", "role": "owner" }],
+  "workspaces": [{ "id": "...", "kind": "personal", "role": "owner", "icon": "", "description": "" }],
   "identity": { "provider": "password", "login": "local-admin" },
   "isServerAdmin": true
 }
@@ -246,6 +247,8 @@ curl -H "Authorization: Bearer <msp-token>" \
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/install/worker` | Return the self-host worker install script used by generated install commands. |
+| `POST` | `/api/workspaces/{workspaceID}/worker-installations` | Create a short-lived worker environment install command. Owner/admin only. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived worker registration token. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration token metadata without raw token values. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. |
@@ -262,6 +265,17 @@ curl -H "Authorization: Bearer <msp-token>" \
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/logs` | Append a log line to a claimed/running task. |
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/status` | Move a claimed task to `running`, `completed`, `failed`, or `cancelled`. |
 
+Create a worker install command:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/worker-installations" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"build-vm-worker","expiresInHours":1}'
+```
+
+The response includes `installCommand`, `runtimeMode`, `workerName`, `credentialPrefix`, and `expiresAt`. Product UI should show the install command and hide the raw bootstrap credential. The target environment needs Docker plus Codex `auth.json` and `config.toml`; after running the command, the worker appears in `/runtime-workers` after its first heartbeat.
+
 Queue a protocol smoke task from API/debug tooling:
 
 ```bash
@@ -271,7 +285,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/runtime-tasks" \
   -d '{"kind":"protocol_smoke","runtimeMode":"team","requiredCapabilities":{"protocolSmoke":true},"payload":{"source":"curl"}}'
 ```
 
-The server rejects runtime worker registration and runtime task creation when the submitted mode does not match the workspace kind. A token minted in a personal workspace can only register a personal worker, and a token minted in a team workspace can only register a team worker. Manual runtime task requests follow the same rule: `runtimeMode:"personal"` for personal workspaces and `runtimeMode:"team"` for team workspaces.
+The server rejects runtime worker registration and runtime task creation when the submitted mode does not match the workspace kind. An install command or token minted in a personal workspace can only register a personal worker, and one minted in a team workspace can only register a team worker. Manual runtime task requests follow the same rule: `runtimeMode:"personal"` for personal workspaces and `runtimeMode:"team"` for team workspaces.
 
 Desktop personal workers use the same token endpoints, but the user normally never sees the raw credential. Electron creates a 12-hour personal worker credential, writes it to an Electron user-data token file, renews it before expiry, and revokes the replaced credential after a short grace period. The worker supports `MSPACE_RUNTIME_TOKEN_FILE` and rereads that file for runtime API calls, so token renewal is designed to be invisible to personal users.
 
