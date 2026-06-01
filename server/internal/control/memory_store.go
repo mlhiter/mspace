@@ -2918,10 +2918,10 @@ func (s *MemoryStore) ListRuntimeTasksPage(_ Context, userID, workspaceID string
 		}
 	}
 	sort.Slice(tasks, func(i, j int) bool {
-		if tasks[i].CreatedAt == tasks[j].CreatedAt {
+		if compareTimestampStrings(tasks[i].CreatedAt, tasks[j].CreatedAt) == 0 {
 			return tasks[i].ID > tasks[j].ID
 		}
-		return tasks[i].CreatedAt > tasks[j].CreatedAt
+		return compareTimestampStrings(tasks[i].CreatedAt, tasks[j].CreatedAt) > 0
 	})
 	total := len(tasks)
 	start := options.Offset
@@ -2954,6 +2954,27 @@ func normalizeRuntimeTaskListOptions(options RuntimeTaskListOptions) RuntimeTask
 	return options
 }
 
+func compareTimestampStrings(left, right string) int {
+	leftTime, leftErr := time.Parse(time.RFC3339Nano, left)
+	rightTime, rightErr := time.Parse(time.RFC3339Nano, right)
+	if leftErr == nil && rightErr == nil {
+		if leftTime.Before(rightTime) {
+			return -1
+		}
+		if leftTime.After(rightTime) {
+			return 1
+		}
+		return 0
+	}
+	if left < right {
+		return -1
+	}
+	if left > right {
+		return 1
+	}
+	return 0
+}
+
 func (s *MemoryStore) ListRuntimeTaskEvents(_ Context, userID, workspaceID, taskID string) ([]RuntimeTaskEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2974,10 +2995,10 @@ func (s *MemoryStore) ListRuntimeTaskEvents(_ Context, userID, workspaceID, task
 		}
 	}
 	sort.Slice(events, func(i, j int) bool {
-		if events[i].CreatedAt == events[j].CreatedAt {
+		if compareTimestampStrings(events[i].CreatedAt, events[j].CreatedAt) == 0 {
 			return events[i].ID < events[j].ID
 		}
-		return events[i].CreatedAt < events[j].CreatedAt
+		return compareTimestampStrings(events[i].CreatedAt, events[j].CreatedAt) < 0
 	})
 	return events, nil
 }
@@ -3002,10 +3023,10 @@ func (s *MemoryStore) ListRuntimeTaskLogs(_ Context, userID, workspaceID, taskID
 		}
 	}
 	sort.Slice(logs, func(i, j int) bool {
-		if logs[i].CreatedAt == logs[j].CreatedAt {
+		if compareTimestampStrings(logs[i].CreatedAt, logs[j].CreatedAt) == 0 {
 			return logs[i].ID < logs[j].ID
 		}
-		return logs[i].CreatedAt < logs[j].CreatedAt
+		return compareTimestampStrings(logs[i].CreatedAt, logs[j].CreatedAt) < 0
 	})
 	return logs, nil
 }
