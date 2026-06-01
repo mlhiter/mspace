@@ -679,6 +679,60 @@ func (s *PostgresStore) RevokeWorkspaceInvitation(ctx Context, userID, workspace
 	return invitation, err
 }
 
+func (s *PostgresStore) PreviewWorkspaceInvitation(ctx Context, token string) (WorkspaceInvitationPreview, error) {
+	dbctx := asContext(ctx)
+	token = strings.TrimSpace(token)
+	if token == "" || !strings.HasPrefix(token, "msi_") {
+		return WorkspaceInvitationPreview{}, ErrNotFound
+	}
+	row := s.pool.QueryRow(dbctx, `
+		SELECT
+			w.name,
+			wi.role,
+			COALESCE(u.name, ''),
+			COALESCE(u.avatar_url, ''),
+			COALESCE(inviter_identity.login, ''),
+			wi.expires_at,
+			wi.revoked,
+			wi.accepted_at
+		FROM workspace_invitations wi
+		JOIN workspaces w ON w.id = wi.workspace_id
+		LEFT JOIN users u ON u.id = wi.invited_by_user_id
+		LEFT JOIN LATERAL (
+			SELECT ui.login
+			FROM user_identities ui
+			WHERE ui.user_id = wi.invited_by_user_id
+			ORDER BY CASE WHEN ui.provider = 'password' THEN 0 WHEN ui.provider = 'github' THEN 1 ELSE 2 END, ui.created_at ASC
+			LIMIT 1
+		) inviter_identity ON true
+		WHERE wi.token_hash = $1
+	`, tokenHash(token))
+
+	var preview WorkspaceInvitationPreview
+	var expiresAt time.Time
+	var revoked bool
+	var acceptedAt *time.Time
+	if err := row.Scan(
+		&preview.WorkspaceName,
+		&preview.Role,
+		&preview.InvitedByName,
+		&preview.InvitedByAvatarURL,
+		&preview.InvitedByLogin,
+		&expiresAt,
+		&revoked,
+		&acceptedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return WorkspaceInvitationPreview{}, ErrNotFound
+		}
+		return WorkspaceInvitationPreview{}, err
+	}
+	preview.InvitedByName = firstNonEmpty(preview.InvitedByName, preview.InvitedByLogin)
+	preview.ExpiresAt = expiresAt.UTC().Format(time.RFC3339)
+	preview.Status = workspaceInvitationPreviewStatus(revoked, acceptedAt != nil, expiresAt)
+	return preview, nil
+}
+
 func (s *PostgresStore) AcceptWorkspaceInvitation(ctx Context, userID string, input AcceptWorkspaceInvitationInput) (AcceptWorkspaceInvitationResult, error) {
 	dbctx := asContext(ctx)
 	userID = strings.TrimSpace(userID)
@@ -2525,6 +2579,19 @@ func normalizeCreateWorkspaceInvitationInput(input CreateWorkspaceInvitationInpu
 		return CreateWorkspaceInvitationInput{}, errors.New("expiresInHours must be 2160 or less")
 	}
 	return input, nil
+}
+
+func workspaceInvitationPreviewStatus(revoked, accepted bool, expiresAt time.Time) string {
+	if revoked {
+		return "revoked"
+	}
+	if accepted {
+		return "accepted"
+	}
+	if time.Now().UTC().After(expiresAt.UTC()) {
+		return "expired"
+	}
+	return "pending"
 }
 
 func normalizeCreateWorkspaceInput(input CreateWorkspaceInput) (CreateWorkspaceInput, error) {

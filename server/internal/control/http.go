@@ -86,6 +86,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/workspaces", s.handleWorkspaces)
 	r.Post("/api/workspaces", s.handleCreateWorkspace)
 	r.Put("/api/workspaces/{workspaceID}", s.handleUpdateWorkspace)
+	r.Get("/api/workspace-invitations/preview", s.handlePreviewWorkspaceInvitation)
 	r.Post("/api/workspace-invitations/accept", s.handleAcceptWorkspaceInvitation)
 	r.Get("/api/workspaces/{workspaceID}/members", s.handleListWorkspaceMembers)
 	r.Post("/api/workspaces/{workspaceID}/invitations", s.handleCreateWorkspaceInvitation)
@@ -218,6 +219,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"workspaceInboxIssueGrouping": true,
 			"teamWorkspaceCreation":       true,
 			"workspaceInvitations":        true,
+			"workspaceInvitationPreview":  true,
 			"workspaceKinds":              true,
 			"githubAuth":                  s.githubAuthConfigured(),
 			"passwordAuth":                true,
@@ -526,6 +528,16 @@ func (s *Server) handleRevokeWorkspaceInvitation(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, invitation)
+}
+
+func (s *Server) handlePreviewWorkspaceInvitation(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	preview, err := s.store.PreviewWorkspaceInvitation(r.Context(), token)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
 }
 
 func (s *Server) handleAcceptWorkspaceInvitation(w http.ResponseWriter, r *http.Request) {

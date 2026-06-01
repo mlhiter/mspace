@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: server-owned runtime surfaces, updated 2026-05-27
+> Status: server-owned runtime surfaces, updated 2026-06-01
 
 ## Current Implementation Snapshot
 
@@ -13,7 +13,7 @@ The repository contains a runnable desktop MVP with server-owned product and run
 - Go server control plane in `server/`, built with chi. Team/shared deployments use PostgreSQL through `pgx`; packaged personal desktop mode can use a server-owned SQLite snapshot store.
 - Go runtime worker in `worker/`, registered to workspaces with `msw_...` tokens.
 - Local username/password auth creates a personal workspace by default and works without GitHub access. Default local personal sign-in opens on account creation and hides GitHub. GitHub sign-in remains an optional external identity provider for explicitly configured team servers, from a saved Team server URL or `MSPACE_SERVER_URL`, when `/health` reports `capabilities.githubAuth: true`. Auth responses include `identity.provider` and `identity.login`, so the desktop can show local accounts and GitHub accounts without guessing from `user.email`. Personal and team workspaces both use the server store; team/shared deployments use Postgres, while packaged personal desktop mode can stay local on SQLite.
-- Team collaboration features require an explicit team workspace created from the workspace menu.
+- Team collaboration features require an explicit team workspace created from the workspace menu. Team access is through one-time join links rather than email-targeted invitations, with a safe unauthenticated preview for signed-out recipients and desktop deep links that carry the invited team server context.
 - The desktop uses `MSPACE_SERVER_URL`, then a saved Team server URL, then the local bundled/dev server when needed. It renders server state and does not own product truth or runtime persistence.
 
 The control plane owns:
@@ -98,7 +98,7 @@ Do not add a renderer-owned product database or local sidecar API. The local SQL
 Main server-owned state groups:
 
 - Identity: `users`, `user_password_credentials`, `user_identities`, `auth_sessions`, `oauth_states`, `oauth_results`. `/api/auth/me` and auth result payloads expose a lightweight `identity` object derived from `user_identities` for UI display and admin-login matching.
-- Workspaces: `workspaces`, `workspace_members`, `workspace_invitations`.
+- Workspaces: `workspaces`, `workspace_members`, `workspace_invitations`. Invitation tokens are stored as server-side secrets and surfaced to users only as one-time join links. The signed-out preview API returns safe metadata such as workspace name, role, inviter display fields, expiry, and status; it does not expose member lists, raw internal ids, or token debug fields.
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
 - Runtime surfaces: `workspace_settings`, `agent_profiles`, `clusters`, `issue_test_environments`, `issue_handoffs`.
@@ -121,6 +121,7 @@ Desktop routes:
 - `/clusters`
 - `/projects`
 - `/settings`
+- `/invite/:token`
 - `/sessions/:sessionId`
 
 Server route groups:
@@ -203,6 +204,8 @@ Workspace Settings is accessed from the workspace identity menu. It owns:
 The runtime task table is an operations/readability surface, not a generic task creation form. Rows should lead with the user-facing task purpose, show the linked Issue title when an issue exists, link agent-session tasks back to the relevant Issue Detail session, and leave protocol kind, capabilities, payload, result, events, and logs in expanded details. Manual protocol-smoke task creation remains available through the API for debugging, but the normal Workspace Settings UI should not ask users to create raw runtime tasks.
 
 Normal worker setup should not ask users to create or copy raw `msw_...` credentials. The product path is `Connect worker environment`, which returns a one-time install command for the target server, VM, DevBox, or Docker-capable host. The command embeds the short-lived bootstrap credential once, starts the Docker-backed worker, and leaves subsequent liveness and capability inspection to the Workers list. Raw credential endpoints stay available for Electron's automatic personal worker lifecycle and API-level recovery/debugging.
+
+Team invitation setup follows the same user-centered rule. Workspace Settings creates a one-time `mspace://invite/<token>?server=<team-server-url>` join link and places the copy action beside the link. Recipients see inviter, role, and workspace context before authentication, then the app accepts the invitation after login or registration and switches directly into the invited team workspace. Normal UI should not show join codes, invitation ids, token prefixes, or require users to choose the server when the link already carries that state.
 
 Open account registration creates a personal workspace and a personal runtime boundary. Only server-admin logins configured by `MSPACE_SERVER_ADMIN_LOGINS` or `MSPACE_BOOTSTRAP_ADMIN_LOGIN` can create team workspaces. Team server runners are reachable only through membership in a team workspace, and runtime worker/task mode must match the workspace kind.
 

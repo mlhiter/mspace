@@ -920,6 +920,16 @@ export interface WorkspaceInvitation {
   updatedAt: string;
 }
 
+export interface WorkspaceInvitationPreview {
+  workspaceName: string;
+  role: string;
+  invitedByName: string;
+  invitedByAvatarUrl: string;
+  invitedByLogin: string;
+  expiresAt: string;
+  status: "pending" | "accepted" | "expired" | "revoked";
+}
+
 export interface CreateWorkspaceInvitationInput {
   email?: string;
   role: "member" | "admin";
@@ -987,6 +997,9 @@ export interface MspaceDesktopAPI {
   selectKubeconfigFiles?: () => Promise<string[]>;
   openExternal?: (url: string) => Promise<void>;
   openPath?: (path: string) => Promise<string>;
+  getPendingInviteToken?: () => Promise<string>;
+  setPendingInviteToken?: (token: string) => Promise<string>;
+  onInviteToken?: (callback: (token: string) => void) => () => void;
   startDockerWorker?: (input: {
     authToken: string;
     workspaceId: string;

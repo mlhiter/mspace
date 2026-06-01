@@ -608,6 +608,34 @@ func (s *MemoryStore) ListWorkspaceInvitations(_ Context, userID, workspaceID st
 	return invitations, nil
 }
 
+func (s *MemoryStore) PreviewWorkspaceInvitation(_ Context, token string) (WorkspaceInvitationPreview, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	token = strings.TrimSpace(token)
+	if token == "" || !strings.HasPrefix(token, "msi_") {
+		return WorkspaceInvitationPreview{}, ErrNotFound
+	}
+	invitation, ok := s.workspaceInvitations[tokenHash(token)]
+	if !ok {
+		return WorkspaceInvitationPreview{}, ErrNotFound
+	}
+	expiresAt, err := time.Parse(time.RFC3339, invitation.Record.ExpiresAt)
+	if err != nil {
+		return WorkspaceInvitationPreview{}, err
+	}
+	inviter := s.users[strings.TrimSpace(invitation.Record.InvitedByUserID)]
+	return WorkspaceInvitationPreview{
+		WorkspaceName:      invitation.Record.WorkspaceName,
+		Role:               invitation.Record.Role,
+		InvitedByName:      firstNonEmpty(inviter.Name, s.identityLoginForUser(invitation.Record.InvitedByUserID)),
+		InvitedByAvatarURL: inviter.AvatarURL,
+		InvitedByLogin:     s.identityLoginForUser(invitation.Record.InvitedByUserID),
+		ExpiresAt:          invitation.Record.ExpiresAt,
+		Status:             workspaceInvitationPreviewStatus(invitation.Record.Revoked, invitation.Record.AcceptedAt != "", expiresAt),
+	}, nil
+}
+
 func (s *MemoryStore) RevokeWorkspaceInvitation(_ Context, userID, workspaceID, invitationID string) (WorkspaceInvitation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

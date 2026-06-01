@@ -88,7 +88,7 @@ Auth responses expose the selected identity as `identity.provider` plus `identit
 
 Future GitHub repository automation should use GitHub App installation tokens stored and rotated by the control plane. Do not build long-lived repository automation on personal GitHub OAuth tokens stored by desktop or workers.
 
-Open registration creates a personal workspace only. Server admin status is a control-plane flag derived from configured auth logins: `MSPACE_SERVER_ADMIN_LOGINS` plus `MSPACE_BOOTSTRAP_ADMIN_LOGIN`. Matching uses the local password login or GitHub login, not email, because password auth does not verify email ownership. Only server admins can create team workspaces; ordinary registered users can join a team workspace only through an owner/admin invitation.
+Open registration creates a personal workspace only. Server admin status is a control-plane flag derived from configured auth logins: `MSPACE_SERVER_ADMIN_LOGINS` plus `MSPACE_BOOTSTRAP_ADMIN_LOGIN`. Matching uses the local password login or GitHub login, not email, because password auth does not verify email ownership. Only server admins can create team workspaces; ordinary registered users can join a team workspace only through an owner/admin invitation. Team invitations are one-time join links, not email-bound invitations.
 
 ## Implemented API Slice
 
@@ -96,7 +96,7 @@ The server module provides:
 
 - local password auth, GitHub auth, and mspace session endpoints: `/api/auth/password/register`, `/api/auth/password/login`, `/api/auth/github/start`, `/api/auth/github/callback`, `/api/auth/github/result`, `/api/auth/me`;
 - workspace listing and creation: `/api/workspaces`;
-- team access: members, invitations, and invite acceptance;
+- team access: members, safe unauthenticated invitation previews, one-time join links, and invite acceptance;
 - Inbox events and per-user receipts;
 - workspace projects and project runbooks;
 - issue labels, issues, child tasks, comments, comment edits, and comment reactions;

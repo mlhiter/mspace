@@ -1,6 +1,6 @@
 # mspace Runbook
 
-> Status: server-owned local MVP operations guide, updated 2026-05-25
+> Status: server-owned local MVP operations guide, updated 2026-06-01
 
 ## Local Data
 
@@ -154,6 +154,31 @@ MSPACE_SERVER_URL=http://127.0.0.1:8787 pnpm dev:desktop
 ```
 
 That explicit source makes the desktop use the configured-team-server sign-in path, so GitHub can appear when `/health` reports `capabilities.githubAuth: true`.
+
+## Workspace Invitations
+
+Team workspace owners and admins create one-time join links from Workspace Settings. The normal link format is:
+
+```text
+mspace://invite/<token>?server=<team-server-url>
+```
+
+The `server` value is operationally important: when the link is opened from Feishu, WeChat, a browser, or another app, Electron switches to that team server before calling the preview or accept APIs. If the recipient is not signed in, the invite route shows only safe preview data, lets them sign in or create a local account, accepts the invitation after authentication, and opens the invited team workspace directly.
+
+Unauthenticated preview smoke check:
+
+```bash
+curl "$MSPACE_SERVER_BASE/api/workspace-invitations/preview?token=msi_..."
+```
+
+If preview returns `404`, check these before changing UI code:
+
+- the link's `server` query points at the deployed team server that created the invite;
+- the backend image is updated and `/health` reports `workspaceInvitationPreview: true`;
+- the token has the expected `msi_...` shape and was created on the same server;
+- the desktop did not fall back to the default local personal server before handling the link.
+
+If preview succeeds but returns `accepted`, `revoked`, or `expired`, the route is healthy and the invitation is no longer usable. Create a new join link from Workspace Settings instead.
 
 ## Environment Variables
 

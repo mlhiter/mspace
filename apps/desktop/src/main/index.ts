@@ -25,6 +25,7 @@ let mainWindow: BrowserWindow | null = null;
 let projectFolderPickerRegistered = false;
 let kubeconfigFilePickerRegistered = false;
 let openHandlersRegistered = false;
+let inviteHandlersRegistered = false;
 let dockerWorkerHandlersRegistered = false;
 let serverConfigHandlersRegistered = false;
 let personalWorkerHandlersRegistered = false;
@@ -44,6 +45,8 @@ const PERSONAL_WORKER_TOKEN_HOURS = 12;
 const PERSONAL_WORKER_TOKEN_RENEWAL_BUFFER_MS = 15 * 60 * 1000;
 const PERSONAL_WORKER_TOKEN_RETRY_MS = 60 * 1000;
 const PERSONAL_WORKER_OLD_TOKEN_REVOKE_DELAY_MS = 30 * 1000;
+const DEEP_LINK_PROTOCOL = "mspace";
+let pendingInviteToken = "";
 
 type StartDockerWorkerInput = {
   authToken?: string;
@@ -178,6 +181,60 @@ function registerOpenHandlers(): void {
     const target = existsSync(trimmed) ? trimmed : candidate;
     return shell.openPath(target);
   });
+}
+
+function extractInviteToken(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("msi_")) return raw;
+  try {
+    const parsed = new URL(raw);
+    const candidates = [
+      parsed.hostname,
+      parsed.pathname.split("/").filter(Boolean).at(-1) || "",
+      parsed.searchParams.get("token") || "",
+    ];
+    return candidates.find((candidate) => candidate.startsWith("msi_")) || "";
+  } catch {
+    return "";
+  }
+}
+
+function sendInviteTokenToRenderer(token: string): void {
+  const normalized = extractInviteToken(token);
+  if (!normalized) return;
+  pendingInviteToken = String(token || "").trim() || normalized;
+  if (!mainWindow) return;
+  mainWindow.webContents.send("mspace:invite-token", pendingInviteToken);
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+}
+
+function registerInviteHandlers(): void {
+  if (inviteHandlersRegistered) return;
+  inviteHandlersRegistered = true;
+
+  ipcMain.handle("mspace:get-pending-invite-token", async () => pendingInviteToken);
+  ipcMain.handle("mspace:set-pending-invite-token", async (_event, token: string) => {
+    pendingInviteToken = extractInviteToken(token);
+    return pendingInviteToken;
+  });
+}
+
+function registerDeepLinkProtocol(): void {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(DEEP_LINK_PROTOCOL, process.execPath, [process.argv[1]]);
+    return;
+  }
+  app.setAsDefaultProtocolClient(DEEP_LINK_PROTOCOL);
+}
+
+function handleDeepLinkArguments(argv: string[]): void {
+  for (const arg of argv) {
+    if (String(arg).startsWith(`${DEEP_LINK_PROTOCOL}://`)) {
+      sendInviteTokenToRenderer(arg);
+    }
+  }
 }
 
 function registerServerConfigHandlers(): void {
@@ -583,6 +640,11 @@ function createWindow(iconPath = resolveBrandIconPath()): void {
   };
 
   mainWindow = new BrowserWindow(options);
+  mainWindow.webContents.once("did-finish-load", () => {
+    if (pendingInviteToken) {
+      mainWindow?.webContents.send("mspace:invite-token", pendingInviteToken);
+    }
+  });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
@@ -596,38 +658,59 @@ function createWindow(iconPath = resolveBrandIconPath()): void {
   }
 }
 
-app.whenReady().then(async () => {
-  registerServerConfigHandlers();
-  registerProjectFolderPicker();
-  registerKubeconfigFilePicker();
-  registerOpenHandlers();
-  registerDockerWorkerHandlers();
-  registerPersonalWorkerHandlers();
-  try {
-    await ensureServerStarted();
-  } catch (error) {
-    console.error("[server] failed to start", error);
-  }
-  const brandIconPath = resolveBrandIconPath();
-  if (brandIconPath) app.dock?.setIcon(brandIconPath);
-  createWindow(brandIconPath);
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow(resolveBrandIconPath());
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", (_event, argv) => {
+    handleDeepLinkArguments(argv);
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
   });
-});
 
-app.on("window-all-closed", async () => {
-  if (process.platform !== "darwin") {
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    sendInviteTokenToRenderer(url);
+  });
+
+  registerDeepLinkProtocol();
+  handleDeepLinkArguments(process.argv);
+
+  app.whenReady().then(async () => {
+    registerServerConfigHandlers();
+    registerProjectFolderPicker();
+    registerKubeconfigFilePicker();
+    registerOpenHandlers();
+    registerInviteHandlers();
+    registerDockerWorkerHandlers();
+    registerPersonalWorkerHandlers();
+    try {
+      await ensureServerStarted();
+    } catch (error) {
+      console.error("[server] failed to start", error);
+    }
+    const brandIconPath = resolveBrandIconPath();
+    if (brandIconPath) app.dock?.setIcon(brandIconPath);
+    createWindow(brandIconPath);
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow(resolveBrandIconPath());
+    });
+  });
+
+  app.on("window-all-closed", async () => {
+    if (process.platform !== "darwin") {
+      await stopPersonalWorker();
+      await stopDockerWorker();
+      await stopServer();
+      app.quit();
+    }
+  });
+
+  app.on("before-quit", async () => {
     await stopPersonalWorker();
     await stopDockerWorker();
     await stopServer();
-    app.quit();
-  }
-});
-
-app.on("before-quit", async () => {
-  await stopPersonalWorker();
-  await stopDockerWorker();
-  await stopServer();
-});
+  });
+}

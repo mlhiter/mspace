@@ -56,7 +56,7 @@ Production deployment uses the root `vercel.json`:
 ## Features
 
 - Electron desktop app with Inbox, Issues, Agents, Clusters, Projects, Workspace Settings, Issue Detail, and Session Detail screens.
-- Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, mspace session tokens, personal/team workspaces, workspace membership, invitations, Inbox receipts, projects, runbooks, issues, comments, reactions, labels, runtime worker registration, agent profiles, clusters, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
+- Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, mspace session tokens, personal/team workspaces, workspace membership, one-time team join links with safe signed-out previews, Inbox receipts, projects, runbooks, issues, comments, reactions, labels, runtime worker registration, agent profiles, clusters, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
 - Runtime worker daemon in `worker/` that registers with `msw_...`, heartbeats, claims matching server tasks, prepares its own repo cache/workdir, runs `codex app-server --listen stdio://`, streams logs, captures source metadata, and reports task results.
 - Codex execution belongs to runtime workers. The server image does not install Codex or mount Codex credentials.
 - Workspace Settings for team access, worker environment installation, worker liveness, issue-linked runtime tasks, task events, task logs, and workspace automation.
@@ -148,7 +148,7 @@ The packaged desktop app includes bundled `mspace-server` and `mspace-worker` bi
 
 ### First workflow
 
-1. Sign in with a local account, or use GitHub OAuth when it is configured, then select the personal or team workspace.
+1. Sign in with a local account, or use GitHub OAuth when it is configured, then select the personal or team workspace. For team access from an invitation, open the join link; the desktop switches to the invited team server, shows a safe preview, lets you sign in or create an account if needed, accepts the invitation, and opens the invited workspace.
 2. Create an issue in the Issues tab with a document-style note.
 3. Attach or create a project before agent execution, PR handoff, project runbook access, or test environments.
 4. Create/import a cluster config in Clusters if the issue needs a Kubernetes test environment.
@@ -168,6 +168,7 @@ Desktop team server selection:
 - The sign-in screen keeps remote control-plane setup behind a collapsed Team server entry for deployed customer or team environments. Explicit team server launches start in login mode.
 - Saved server URLs are stored in the Electron user-data profile for this device and reused on the next launch.
 - `MSPACE_SERVER_URL` still works as a launch-time override and takes precedence over the saved UI value. When it is set, the Team server entry opens in a locked state for that launch.
+- Team invitation links carry the server context in `mspace://invite/<token>?server=<team-server-url>`. When a recipient opens the link, the desktop checks that server before previewing or accepting the invitation, so users do not have to paste a server URL or invitation code manually.
 - GitHub sign-in appears only for an explicitly configured team server, either a saved Team server URL or `MSPACE_SERVER_URL`, when that server reports `capabilities.githubAuth: true` from `/health`. For local OAuth debugging against `127.0.0.1:8787`, launch with `MSPACE_SERVER_URL=http://127.0.0.1:8787 pnpm dev:desktop` so the desktop treats the server as configured instead of default local personal mode.
 
 Runtime variables:

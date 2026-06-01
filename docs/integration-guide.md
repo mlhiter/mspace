@@ -1,6 +1,6 @@
 # mspace API Integration Guide
 
-> Status: server-owned local MVP API guide, updated 2026-05-27
+> Status: server-owned local MVP API guide, updated 2026-06-01
 
 This guide covers the current server control-plane API used by the desktop and workers. The control plane normally runs on `http://127.0.0.1:8787`.
 
@@ -21,7 +21,7 @@ The desktop chooses its server in this order:
 2. A saved Team server URL from Electron user data.
 3. The local bundled/dev server on `127.0.0.1:8787`.
 
-Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 1`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, and `runtimeTaskQueue`. `capabilities.githubAuth` is optional behavior metadata. GitHub login is shown only when the desktop is using an explicitly configured team server, from either `MSPACE_SERVER_URL` or a saved Team server URL, and that server reports `capabilities.githubAuth: true`. The default local personal server stays local-account-only and starts on account creation.
+Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 1`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceInvitationPreview`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, and `runtimeTaskQueue`. `capabilities.githubAuth` is optional behavior metadata. GitHub login is shown only when the desktop is using an explicitly configured team server, from either `MSPACE_SERVER_URL` or a saved Team server URL, and that server reports `capabilities.githubAuth: true`. The default local personal server stays local-account-only and starts on account creation.
 
 Workspace endpoints require:
 
@@ -65,6 +65,7 @@ The desktop owns native shell behavior, local UI state, file pickers, and openin
 | `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time `msi_...` invitation link. |
 | `GET` | `/api/workspaces/{workspaceID}/invitations` | List invitations without raw tokens. |
 | `DELETE` | `/api/workspaces/{workspaceID}/invitations/{invitationID}` | Revoke an invitation. |
+| `GET` | `/api/workspace-invitations/preview?token=msi_...` | Preview a join link without authentication. |
 | `POST` | `/api/workspace-invitations/accept` | Accept an invitation. |
 
 Local password auth is the default path for restricted or offline environments. GitHub OAuth values are optional and only needed when the deployment can reach GitHub.
@@ -105,6 +106,56 @@ Usernames are normalized to lowercase and must use letters, numbers, dots, under
 Open registration intentionally creates only a personal workspace. Server admin status is matched by configured auth login, not display name or email, because local password email is not verified. Configure `MSPACE_SERVER_ADMIN_LOGINS` with local password logins or GitHub logins allowed to create team workspaces. For deployed environments, `MSPACE_BOOTSTRAP_ADMIN_LOGIN` and `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` can create the first local admin account during server startup; the server leaves an existing account password unchanged.
 
 Only server admins can call `POST /api/workspaces` to create a team workspace. Other registered users can use their personal workspace and personal runner, then join a team workspace only after a team owner/admin creates an `msi_...` invitation.
+
+Create a one-time team join link:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/invitations" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"role":"member","expiresInHours":72}'
+```
+
+The response includes the raw `msi_...` token for the creator session and a desktop link shaped like:
+
+```text
+mspace://invite/<token>?server=<team-server-url>
+```
+
+Workspace Settings should present the link as the user-facing artifact and keep ids, token prefixes, and join codes out of normal UI. The `server` query value lets Electron switch to the invited team server before previewing or accepting the invitation.
+
+Preview the invitation before authentication:
+
+```bash
+curl "$MSPACE_SERVER_BASE/api/workspace-invitations/preview?token=msi_..."
+```
+
+Preview responses intentionally contain only safe information:
+
+```json
+{
+  "workspaceName": "Admin Team",
+  "role": "member",
+  "invitedByName": "Admin",
+  "invitedByAvatarUrl": "",
+  "invitedByLogin": "admin",
+  "expiresAt": "2026-06-04T12:00:00Z",
+  "status": "pending"
+}
+```
+
+They must not include workspace members, internal user ids, invitation ids, token prefixes, or other debug metadata. Preview can return `pending`, `accepted`, `revoked`, or `expired`. A preview `404` means the token is unknown to the server being queried or the backend does not expose the preview route; check the deep-link server value and deployed backend version first.
+
+Accept the invitation after password registration, password login, or GitHub OAuth returns a normal `msp_...` session:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspace-invitations/accept" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"msi_..."}'
+```
+
+Successful acceptance returns the joined workspace. Desktop clients should select that workspace immediately and continue into the app instead of showing a second invitation confirmation after the user already saw the signed-out preview.
 
 ## Product APIs
 

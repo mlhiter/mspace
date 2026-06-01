@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   createHashHistory,
@@ -37,6 +37,7 @@ import {
   setStoredAuthIdentity,
   type AuthMeResult,
   type CreateWorkspaceInput,
+  type WorkspaceInvitationPreview,
 } from "@mspace/core";
 import { AppShell, Button, Field, Input, Notice, type ShellSearchItem } from "@mspace/ui";
 import { initializeMspaceI18n, t, useMspaceTranslation } from "@mspace/i18n";
@@ -77,6 +78,7 @@ const expectedServerCapabilities = [
   "workspaceInboxIssueGrouping",
   "teamWorkspaceCreation",
   "workspaceInvitations",
+  "workspaceInvitationPreview",
   "workspaceKinds",
   "workspaceCollaboration",
   "runtimeWorkerRegistration",
@@ -116,6 +118,47 @@ function defaultPasswordAuthMode(source: ServerBaseUrlSource): PasswordAuthMode 
   return isConfiguredTeamServer(source) ? "login" : "register";
 }
 
+function normalizeInviteToken(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("msi_")) return raw;
+  try {
+    const parsed = new URL(raw);
+    const candidates = [
+      parsed.hostname,
+      parsed.pathname.split("/").filter(Boolean).at(-1) || "",
+      parsed.searchParams.get("token") || "",
+    ];
+    return candidates.find((candidate) => candidate.startsWith("msi_")) || "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeInviteServer(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    const server = parsed.searchParams.get("server") || parsed.searchParams.get("serverUrl") || "";
+    if (!server) return "";
+    const serverUrl = new URL(server);
+    if (serverUrl.protocol !== "http:" && serverUrl.protocol !== "https:") return "";
+    return serverUrl.origin.replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function inviteHashForToken(token: string): string {
+  return `#/invite/${encodeURIComponent(token)}`;
+}
+
+function inviteTokenFromHash(hash: string): string {
+  const match = hash.match(/#\/invite\/([^/?#]+)/);
+  return normalizeInviteToken(match?.[1] ? decodeURIComponent(match[1]) : "");
+}
+
 function RootShell() {
   const { t } = useMspaceTranslation();
   const initialServerBaseUrl = getControlPlaneBaseUrl();
@@ -135,8 +178,21 @@ function RootShell() {
   const [passwordAuthLogin, setPasswordAuthLogin] = useState("");
   const [passwordAuthPassword, setPasswordAuthPassword] = useState("");
   const [passwordAuthName, setPasswordAuthName] = useState("");
+  const [pendingInviteToken, setPendingInviteToken] = useState("");
+  const [acceptedInviteToken, setAcceptedInviteToken] = useState("");
+  const [inviteAcceptError, setInviteAcceptError] = useState("");
   const [teamWorkspaceModalOpen, setTeamWorkspaceModalOpen] = useState(false);
   const [teamWorkspaceName, setTeamWorkspaceName] = useState("");
+  const authTokenRef = useRef(authToken);
+  const serverBaseUrlRef = useRef(serverBaseUrl);
+
+  useEffect(() => {
+    authTokenRef.current = authToken;
+  }, [authToken]);
+
+  useEffect(() => {
+    serverBaseUrlRef.current = serverBaseUrl;
+  }, [serverBaseUrl]);
 
   function clearAuthState() {
     void window.mspaceDesktop?.stopPersonalWorker?.().catch((error) => {
@@ -149,6 +205,47 @@ function RootShell() {
     setSelectedWorkspaceId("");
     setPendingAuthState("");
     void queryClient.clear();
+  }
+
+  function updatePendingInviteToken(token: string, options?: { navigate?: boolean }) {
+    const normalized = normalizeInviteToken(token);
+    const inviteServer = normalizeInviteServer(token);
+    setAcceptedInviteToken("");
+    setInviteAcceptError("");
+    void window.mspaceDesktop?.setPendingInviteToken?.(normalized);
+    if (!normalized) {
+      setPendingInviteToken("");
+      return;
+    }
+
+    if (inviteServer && inviteServer !== serverBaseUrlRef.current) {
+      void (async () => {
+        try {
+          const result = await window.mspaceDesktop?.setServerBaseUrl?.(inviteServer);
+          applyServerConfig(result || { baseUrl: inviteServer, source: "user", locked: false });
+          setPendingInviteToken(normalized);
+        } catch (error) {
+          setInviteAcceptError(error instanceof Error ? error.message : t("auth.invitePreviewError"));
+          setPendingInviteToken(normalized);
+        }
+      })();
+      return;
+    }
+
+    const shouldNavigate = options?.navigate ?? authTokenRef.current !== "";
+    if (shouldNavigate) {
+      setPendingInviteToken("");
+      const inviteHash = inviteHashForToken(normalized);
+      if (window.location.hash !== inviteHash) {
+        window.location.hash = inviteHash;
+      }
+      return;
+    }
+
+    setPendingInviteToken(normalized);
+    if (inviteTokenFromHash(window.location.hash) === normalized) {
+      window.location.hash = "#/inbox";
+    }
   }
 
   function applyServerConfig(config: { baseUrl: string; source: ServerBaseUrlSource; locked: boolean }) {
@@ -184,6 +281,46 @@ function RootShell() {
     retry: false,
     refetchOnWindowFocus: false,
   });
+  const invitePreviewQuery = useQuery({
+    queryKey: ["workspace-invitation-preview", serverBaseUrl, pendingInviteToken],
+    queryFn: () => controlPlaneApi.previewWorkspaceInvitation(pendingInviteToken),
+    enabled: pendingInviteToken !== "" && authToken === "" && serverHealthQuery.isSuccess,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+  const acceptInviteMutation = useMutation({
+    mutationFn: (input: { authToken: string; inviteToken: string }) =>
+      controlPlaneApi.acceptWorkspaceInvitation(input.authToken, input.inviteToken),
+    onSuccess: async (result, input) => {
+      const authMeKey = queryKeys.authMe(input.authToken);
+      setAcceptedInviteToken(input.inviteToken);
+      setPendingInviteToken("");
+      setInviteAcceptError("");
+      void window.mspaceDesktop?.setPendingInviteToken?.("");
+      queryClient.setQueriesData<AuthMeResult | undefined>({ queryKey: authMeKey }, (current) => {
+        if (!current) return current;
+        const hasAcceptedWorkspace = result.workspaces.some((workspace) => workspace.id === result.workspace.id);
+        return {
+          ...current,
+          workspaces: hasAcceptedWorkspace ? result.workspaces : [result.workspace, ...result.workspaces],
+        };
+      });
+      window.localStorage.setItem(SELECTED_WORKSPACE_STORAGE_KEY, result.workspace.id);
+      setSelectedWorkspaceId(result.workspace.id);
+      await queryClient.invalidateQueries({ queryKey: authMeKey });
+      window.localStorage.setItem(SELECTED_WORKSPACE_STORAGE_KEY, result.workspace.id);
+      setSelectedWorkspaceId(result.workspace.id);
+      window.location.hash = "#/inbox";
+    },
+    onError: (error, input) => {
+      setPendingInviteToken("");
+      setInviteAcceptError(error instanceof Error ? error.message : t("auth.acceptInviteFailed"));
+      void window.mspaceDesktop?.setPendingInviteToken?.("");
+      if (input.inviteToken) {
+        window.location.hash = inviteHashForToken(input.inviteToken);
+      }
+    },
+  });
   const signInMutation = useMutation({
     mutationFn: controlPlaneApi.startGitHubLogin,
     onSuccess: async (result) => {
@@ -208,11 +345,16 @@ function RootShell() {
     setStoredAuthIdentity(result.user);
     setAuthToken(result.token);
     const firstWorkspaceId = result.workspaces[0]?.id || "";
-    if (firstWorkspaceId) {
+    const inviteToken = pendingInviteToken && acceptedInviteToken !== pendingInviteToken ? pendingInviteToken : "";
+    if (firstWorkspaceId && !inviteToken) {
       window.localStorage.setItem(SELECTED_WORKSPACE_STORAGE_KEY, firstWorkspaceId);
       setSelectedWorkspaceId(firstWorkspaceId);
     }
     setPendingAuthState("");
+    if (inviteToken) {
+      window.location.hash = "#/inbox";
+      acceptInviteMutation.mutate({ authToken: result.token, inviteToken });
+    }
   }
 
   const passwordAuthMutation = useMutation({
@@ -237,6 +379,27 @@ function RootShell() {
     if (!pollQuery.data || pollQuery.data.pending) return;
     applyAuthResult(pollQuery.data);
   }, [pollQuery.data]);
+
+  useEffect(() => {
+    let disposed = false;
+    void window.mspaceDesktop?.getPendingInviteToken?.().then((token) => {
+      if (!disposed && token) updatePendingInviteToken(token, { navigate: authTokenRef.current !== "" });
+    });
+    const unsubscribe = window.mspaceDesktop?.onInviteToken?.((token) => {
+      updatePendingInviteToken(token, { navigate: authTokenRef.current !== "" });
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const token = inviteTokenFromHash(window.location.hash);
+    if (token && token !== pendingInviteToken) {
+      updatePendingInviteToken(token, { navigate: authToken !== "" });
+    }
+  }, [authToken, pendingInviteToken]);
 
   useEffect(() => {
     if (meQuery.data?.user) {
@@ -385,10 +548,11 @@ function RootShell() {
   const authError = passwordAuthMutation.error || signInMutation.error || pollQuery.error || (authToken !== "" ? meQuery.error : null);
   const configuredTeamServer = isConfiguredTeamServer(serverBaseUrlSource);
   const githubAuthAvailable = configuredTeamServer && serverSupportsGitHubAuth(serverHealthQuery.data);
+  const inviteAccepting = pendingInviteToken !== "" && acceptInviteMutation.isPending;
   const accountStatus =
-    authToken && meQuery.data
+    authToken && meQuery.data && !inviteAccepting
       ? "signed-in"
-      : pendingAuthState || signInMutation.isPending
+      : inviteAccepting || pendingAuthState || signInMutation.isPending
         ? "loading"
         : authError
           ? "error"
@@ -396,6 +560,22 @@ function RootShell() {
   const inboxUnreadCount = useMemo(() => {
     return (inboxQuery.data || []).length;
   }, [inboxQuery.data]);
+  const invitePreview = invitePreviewQuery.data;
+  const invitePreviewError =
+    serverHealthQuery.error instanceof Error
+      ? serverHealthQuery.error.message
+      : invitePreviewQuery.error instanceof Error
+        ? invitePreviewQuery.error.message
+        : "";
+  const inviteAuthPrompt = pendingInviteToken
+    ? {
+        token: pendingInviteToken,
+        preview: invitePreview,
+        error: invitePreviewError,
+        accepting: acceptInviteMutation.isPending,
+        acceptError: inviteAcceptError,
+      }
+    : undefined;
   const searchItems = useMemo<ShellSearchItem[]>(() => {
     const issueItems: ShellSearchItem[] = (issuesQuery.data || []).map((issue) => ({
       id: `issue:${issue.id}`,
@@ -540,6 +720,7 @@ function RootShell() {
           onTestServerUrl={() => void handleTestServerUrl()}
           onSaveServerUrl={() => void handleSaveServerUrl()}
           onResetServerUrl={() => void handleResetServerUrl()}
+          invite={inviteAuthPrompt}
         />
       ) : null}
       {teamWorkspaceModalOpen ? (
@@ -605,6 +786,13 @@ function AuthRequiredOverlay(props: {
   onTestServerUrl: () => void;
   onSaveServerUrl: () => void;
   onResetServerUrl: () => void;
+  invite?: {
+    token: string;
+    preview?: WorkspaceInvitationPreview;
+    error: string;
+    accepting: boolean;
+    acceptError: string;
+  };
 }) {
   const busy = props.status === "loading" || props.isBusy;
   const { t } = useMspaceTranslation();
@@ -635,14 +823,33 @@ function AuthRequiredOverlay(props: {
           </span>
           <div className="min-w-0">
             <h1 className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">
-              {props.configuredTeamServer ? t("auth.teamServerTitle") : t("auth.localAccountTitle")}
+              {props.invite?.preview?.workspaceName
+                ? t("auth.inviteTitle", { workspace: props.invite.preview.workspaceName })
+                : props.configuredTeamServer
+                  ? t("auth.teamServerTitle")
+                  : t("auth.localAccountTitle")}
             </h1>
             <p className="mt-1 text-[13px] leading-5 text-[color:var(--muted)]">
-              {props.configuredTeamServer ? t("auth.teamServerDescription") : t("auth.localAccountDescription")}
+              {props.invite
+                ? t("auth.inviteDescription")
+                : props.configuredTeamServer
+                  ? t("auth.teamServerDescription")
+                  : t("auth.localAccountDescription")}
             </p>
           </div>
         </div>
         {props.error ? <div className="mt-4"><Notice tone="danger">{props.error}</Notice></div> : null}
+        {props.invite?.accepting ? (
+          <div className="mt-4 inline-flex items-center gap-2 text-[12px] font-medium leading-5 text-[color:var(--muted-strong)]">
+            <LoaderCircle data-icon className="animate-spin" />
+            {t("auth.acceptingInvite")}
+          </div>
+        ) : null}
+        {props.invite?.error || props.invite?.acceptError ? (
+          <div className="mt-4">
+            <Notice tone="danger">{props.invite.acceptError || props.invite.error || t("auth.invitePreviewError")}</Notice>
+          </div>
+        ) : null}
         <div className="mt-5 grid grid-cols-2 rounded-[8px] bg-[color:var(--block)] p-1 shadow-[inset_0_0_0_1px_var(--line)]">
           {(["login", "register"] as const).map((mode) => (
             <button

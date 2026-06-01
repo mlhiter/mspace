@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-05-27
+> Status: local MVP implementation snapshot, updated 2026-06-01
 
 ## IA Goal
 
@@ -77,6 +77,7 @@ Current implemented desktop routes:
 /clusters
 /projects
 /settings
+/invite/:token
 /sessions/:sessionId
 ```
 
@@ -87,7 +88,7 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. The workspace menu owns workspace switching, team workspace creation, language switching, and the entry into Workspace Settings. Workspace Settings owns workspace automation, team-only access controls, and runtime worker/queue controls for the selected workspace. Session detail remains deep-linked from issue work.
+The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. The workspace menu owns workspace switching, team workspace creation, language switching, and the entry into Workspace Settings. Workspace Settings owns workspace automation, team-only access controls, and runtime worker/queue controls for the selected workspace. The invite route is a deep-link entry that resolves the target team server, shows safe invitation context, handles login or registration, accepts the invite, and lands in the invited workspace. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
@@ -406,6 +407,8 @@ Workspace Settings owns workspace automation, team access, and runtime worker po
 - lets team workspace owners/admins edit the current team workspace name, mark, and description from the identity section;
 - keeps source commit capture always on for issue review and deploy continuation;
 - shows team workspace creation only to server admins, while ordinary registered users stay in personal workspaces until invited;
+- lets team owners/admins create and revoke one-time join links, with the copy action beside the link and no email field, join code, invitation id, or token debug text in the normal UI;
+- routes signed-out invite recipients through a safe preview plus login or registration, then accepts the invite and opens the invited workspace without showing another confirmation screen;
 - connects worker environments through owner/admin-only one-time install commands, keeps runtime mode fixed to the current workspace kind, and leaves raw runtime credential creation to API/debug paths;
 - separates active worker credentials from expired or replaced credential history, with desktop personal-worker credentials labeled as automatic;
 - shows runtime tasks as issue-linked operational rows with Task, Issue, Status, Worker, Updated, and Action columns;

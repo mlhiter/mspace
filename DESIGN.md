@@ -16,6 +16,8 @@ Scope boundary: these rules govern the desktop product shell and shared app UI. 
 - Operationally quiet: prioritize legibility, scan speed, and stable layout over decorative expression.
 - Evidence attached: logs, diffs, branch state, and Kubernetes status should support the issue story.
 - Worker-backed, K8s-aware: UI copy should make the selected runtime worker and validation namespace explicit.
+- User-centered disclosure: show what the user needs to decide, trust, or do next. Do not expose raw tokens, ids, protocol statuses, internal timestamps, or implementation labels when the user only needs the product meaning.
+- Automatic over manual: if the product can infer or carry a value from a link, session, workspace, server health, or selected issue, do not make the user paste, choose, or configure it.
 - Compact but not cramped: dense rows are good; tiny hit areas and ambiguous icons are not.
 - No marketing shell inside the product: no hero sections, decorative dashboards, abstract AI claims, or generic landing-page composition in desktop routes.
 

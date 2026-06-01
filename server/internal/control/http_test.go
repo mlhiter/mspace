@@ -68,6 +68,9 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	if payload.Capabilities["workspaceInvitations"] != true {
 		t.Fatalf("expected workspace invitations capability, got %+v", payload.Capabilities)
 	}
+	if payload.Capabilities["workspaceInvitationPreview"] != true {
+		t.Fatalf("expected workspace invitation preview capability, got %+v", payload.Capabilities)
+	}
 	if payload.Capabilities["workspaceKinds"] != true {
 		t.Fatalf("expected workspace kinds capability, got %+v", payload.Capabilities)
 	}
@@ -702,6 +705,20 @@ func TestWorkspaceInvitationFlow(t *testing.T) {
 		t.Fatalf("unexpected invitations: %+v", invitations)
 	}
 
+	previewRecorder := httptest.NewRecorder()
+	previewReq := httptest.NewRequest(http.MethodGet, "/api/workspace-invitations/preview?token="+inviteResult.Token, nil)
+	router.ServeHTTP(previewRecorder, previewReq)
+	if previewRecorder.Code != http.StatusOK {
+		t.Fatalf("preview invitation status=%d body=%s", previewRecorder.Code, previewRecorder.Body.String())
+	}
+	var preview WorkspaceInvitationPreview
+	if err := json.Unmarshal(previewRecorder.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("parse invitation preview: %v", err)
+	}
+	if preview.WorkspaceName != "Owner Team" || preview.Role != "member" || preview.Status != "pending" || preview.InvitedByName != owner.Name {
+		t.Fatalf("unexpected invitation preview: %+v", preview)
+	}
+
 	acceptRecorder := httptest.NewRecorder()
 	acceptReq := httptest.NewRequest(http.MethodPost, "/api/workspace-invitations/accept", strings.NewReader(`{"token":"`+inviteResult.Token+`"}`))
 	acceptReq.Header.Set("Authorization", "Bearer "+memberToken)
@@ -763,6 +780,19 @@ func TestWorkspaceInvitationFlow(t *testing.T) {
 	router.ServeHTTP(reuseRecorder, reuseReq)
 	if reuseRecorder.Code != http.StatusNotFound {
 		t.Fatalf("accepted invitation should not be reusable, status=%d body=%s", reuseRecorder.Code, reuseRecorder.Body.String())
+	}
+
+	acceptedPreviewRecorder := httptest.NewRecorder()
+	acceptedPreviewReq := httptest.NewRequest(http.MethodGet, "/api/workspace-invitations/preview?token="+inviteResult.Token, nil)
+	router.ServeHTTP(acceptedPreviewRecorder, acceptedPreviewReq)
+	if acceptedPreviewRecorder.Code != http.StatusOK {
+		t.Fatalf("accepted preview status=%d body=%s", acceptedPreviewRecorder.Code, acceptedPreviewRecorder.Body.String())
+	}
+	if err := json.Unmarshal(acceptedPreviewRecorder.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("parse accepted invitation preview: %v", err)
+	}
+	if preview.Status != "accepted" {
+		t.Fatalf("expected accepted preview, got %+v", preview)
 	}
 }
 

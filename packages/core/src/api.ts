@@ -59,6 +59,7 @@ import type {
   UpdateWorkspaceSettingsInput,
   WorkspaceSettings,
   WorkspaceInvitation,
+  WorkspaceInvitationPreview,
   WorkspaceInvitationResult,
   WorkspaceMember,
   AcceptWorkspaceInvitationResult,
@@ -303,6 +304,8 @@ export const controlPlaneApi = {
       method: "DELETE",
       headers: authHeaders(token),
     }),
+  previewWorkspaceInvitation: (inviteToken: string) =>
+    requestControlPlane<WorkspaceInvitationPreview>(`/api/workspace-invitations/preview?token=${encodeURIComponent(inviteToken)}`),
   acceptWorkspaceInvitation: (token: string, inviteToken: string) =>
     requestControlPlane<AcceptWorkspaceInvitationResult>("/api/workspace-invitations/accept", {
       method: "POST",

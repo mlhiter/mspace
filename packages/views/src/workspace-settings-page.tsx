@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import {
 	controlPlaneApi,
+	getControlPlaneBaseUrl,
 	queryKeys,
 	type CreateWorkerInstallationInput,
 	type CreateWorkspaceInvitationInput,
@@ -85,7 +86,6 @@ const defaultWorkerInstallationForm: CreateWorkerInstallationInput = {
 };
 
 const defaultInvitationForm: CreateWorkspaceInvitationInput = {
-	email: "",
 	role: "member",
 	expiresInHours: 168,
 };
@@ -315,7 +315,6 @@ export function WorkspaceSettingsPage() {
 		event.preventDefault();
 		if (!runtimeEnabled || !isTeamWorkspace || !canManageWorkspace) return;
 		createInvitation.mutate({
-			email: invitationForm.email?.trim() || "",
 			role: invitationForm.role,
 			expiresInHours: invitationForm.expiresInHours,
 		});
@@ -666,14 +665,6 @@ export function WorkspaceSettingsPage() {
 				<Modal title={t("workspaceSettings.modal.inviteTitle")} description={t("workspaceSettings.modal.inviteDescription")} onClose={() => setInvitationModalOpen(false)}>
 					<form className="grid gap-4" onSubmit={submitInvitation}>
 						{createInvitation.error ? <Notice tone="danger">{createInvitation.error.message}</Notice> : null}
-						<Field label={t("workspaceSettings.modal.email")} hint={t("workspaceSettings.modal.emailHint")}>
-							<Input
-								type="email"
-								value={invitationForm.email || ""}
-								onChange={(event) => setInvitationForm({ ...invitationForm, email: event.target.value })}
-								placeholder="teammate@example.com"
-							/>
-						</Field>
 						<div className="grid gap-3 md:grid-cols-2">
 							<Field label={t("workspaceSettings.modal.role")}>
 								<Select
@@ -724,28 +715,26 @@ export function WorkspaceSettingsPage() {
 					setCreatedInvitation(null);
 					setCopyState("");
 				}}>
-					<div className="grid gap-4">
-						<div className="rounded-[9px] bg-[color:var(--code-bg)] px-3 py-3 font-mono text-[12px] leading-6 text-[color:var(--code-text)]">
-							{buildInviteLink(createdInvitation.token)}
+					<div className="grid min-w-0 gap-3">
+						<div className="flex min-w-0 max-w-full overflow-hidden rounded-[9px] bg-[color:var(--block)] shadow-[inset_0_0_0_1px_var(--line)]">
+							<div className="min-w-0 flex-1 whitespace-pre-wrap break-all px-3 py-3 font-mono text-[12px] leading-6 text-[color:var(--muted-strong)]">
+								{buildInviteLink(createdInvitation.token)}
+							</div>
+							<Button
+								type="button"
+								variant="ghost"
+								className="h-auto min-w-[88px] self-stretch rounded-none border-l border-[color:var(--line)] px-3 text-[12px] text-[color:var(--text)] hover:bg-[color:var(--hover)]"
+								onClick={copyCreatedInvitationLink}
+							>
+								<Copy data-icon />
+								{copyState || t("workspaceSettings.modal.copyInviteLinkShort")}
+							</Button>
 						</div>
 						<div className="text-[12px] leading-5 text-[color:var(--muted)]">
 							{t("workspaceSettings.modal.inviteSummary", {
 								role: createdInvitation.invitation.role,
-								email: createdInvitation.invitation.email || t("workspaceSettings.modal.anySignedInTeammate"),
 							})}{" "}
 							<RelativeTime value={createdInvitation.invitation.expiresAt} />.
-						</div>
-						<div className="flex justify-end gap-2 border-t border-[color:var(--line)] pt-4">
-							<Button type="button" variant="secondary" onClick={copyCreatedInvitationLink}>
-								<Copy data-icon />
-								{copyState || t("workspaceSettings.modal.copyInviteLink")}
-							</Button>
-							<Button type="button" onClick={() => {
-								setCreatedInvitation(null);
-								setCopyState("");
-							}}>
-								{t("workspaceSettings.modal.done")}
-							</Button>
 						</div>
 					</div>
 				</Modal>
@@ -1027,7 +1016,7 @@ function MemberList(props: { members: WorkspaceMember[]; loading: boolean; curre
 			<TableHeader columns="grid-cols-[minmax(190px,1.1fr)_150px_minmax(190px,1fr)_150px]">
 				<span>{t("workspaceSettings.list.member")}</span>
 				<span>{t("workspaceSettings.list.role")}</span>
-				<span>{t("workspaceSettings.list.github")}</span>
+				<span>{t("workspaceSettings.list.account")}</span>
 				<span>{t("workspaceSettings.list.joined")}</span>
 			</TableHeader>
 			<div className="divide-y divide-[color:var(--line)]">
@@ -1040,7 +1029,7 @@ function MemberList(props: { members: WorkspaceMember[]; loading: boolean; curre
 									{member.name || member.email || t("workspaceSettings.list.mspaceUser")}
 									{member.userId === props.currentUserID ? <span className="ml-1 text-[12px] font-normal text-[color:var(--muted)]">({t("workspaceSettings.list.you")})</span> : null}
 								</div>
-								<div className="truncate text-[12px] leading-5 text-[color:var(--muted)]">{member.email || t("workspaceSettings.list.noPublicEmail")}</div>
+								<div className="truncate text-[12px] leading-5 text-[color:var(--muted)]">{member.identityLogin || member.email || t("workspaceSettings.list.noPublicEmail")}</div>
 							</div>
 						</div>
 						<RolePill role={member.role} />
@@ -1088,8 +1077,7 @@ function InvitationList(props: {
 					return (
 						<div key={invitation.id} className="grid grid-cols-[minmax(190px,1fr)_120px_150px_130px_96px] items-center gap-4 px-4 py-3 text-[13px]">
 							<div className="min-w-0">
-								<div className="truncate font-medium text-[color:var(--text)]">{invitation.email || t("workspaceSettings.list.openInviteLink")}</div>
-								<InlineMeta icon={MailPlus}>{t("workspaceSettings.list.prefix")} {invitation.tokenPrefix}</InlineMeta>
+								<div className="truncate font-medium text-[color:var(--text)]">{t("workspaceSettings.list.openInviteLink")}</div>
 							</div>
 							<RolePill role={invitation.role} />
 							<span className="text-[12px] text-[color:var(--muted)]"><RelativeTime value={invitation.expiresAt} /></span>
@@ -1099,7 +1087,7 @@ function InvitationList(props: {
 									type="button"
 									variant="ghost"
 									size="icon"
-									aria-label={t("workspaceSettings.list.revokeInvite", { name: invitation.email || invitation.tokenPrefix })}
+									aria-label={t("workspaceSettings.list.revokeInvite", { name: t("workspaceSettings.list.openInviteLink") })}
 									disabled={props.disabled || status !== "pending"}
 									onClick={() => props.onRevoke(invitation.id)}
 								>
@@ -1746,9 +1734,9 @@ function activeInvitationCount(invitations: WorkspaceInvitation[]) {
 }
 
 function buildInviteLink(token: string) {
-	const hash = `#/invite/${encodeURIComponent(token)}`;
-	if (typeof window === "undefined") return hash;
-	return `${window.location.origin}${window.location.pathname}${hash}`;
+	const server = typeof window === "undefined" ? "" : getControlPlaneBaseUrl();
+	const serverQuery = server ? `?server=${encodeURIComponent(server)}` : "";
+	return `mspace://invite/${encodeURIComponent(token)}${serverQuery}`;
 }
 
 function Modal(props: { title: string; description: string; onClose: () => void; children: ReactNode }) {
@@ -1756,7 +1744,7 @@ function Modal(props: { title: string; description: string; onClose: () => void;
 
 	return (
 		<div className="fixed inset-0 z-50 grid place-items-center bg-black/20 px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="workspace-settings-modal-title">
-			<div className="w-full max-w-[640px] rounded-[12px] bg-[color:var(--paper)] shadow-[0_24px_80px_rgba(0,0,0,0.18),inset_0_0_0_1px_var(--line)]">
+			<div className="w-full max-w-[640px] min-w-0 overflow-hidden rounded-[12px] bg-[color:var(--paper)] shadow-[0_24px_80px_rgba(0,0,0,0.18),inset_0_0_0_1px_var(--line)]">
 				<div className="flex items-start justify-between gap-4 border-b border-[color:var(--line)] px-5 py-4">
 					<div className="min-w-0">
 						<h2 id="workspace-settings-modal-title" className="text-[17px] font-semibold leading-6 text-[color:var(--text)]">{props.title}</h2>

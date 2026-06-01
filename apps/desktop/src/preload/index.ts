@@ -35,6 +35,13 @@ const desktopAPI = {
   selectKubeconfigFiles: () => ipcRenderer.invoke("mspace:select-kubeconfig-files") as Promise<string[]>,
   openExternal: (url: string) => ipcRenderer.invoke("mspace:open-external", url) as Promise<void>,
   openPath: (path: string) => ipcRenderer.invoke("mspace:open-path", path) as Promise<string>,
+  getPendingInviteToken: () => ipcRenderer.invoke("mspace:get-pending-invite-token") as Promise<string>,
+  setPendingInviteToken: (token: string) => ipcRenderer.invoke("mspace:set-pending-invite-token", token) as Promise<string>,
+  onInviteToken: (callback: (token: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, token: string) => callback(token);
+    ipcRenderer.on("mspace:invite-token", listener);
+    return () => ipcRenderer.removeListener("mspace:invite-token", listener);
+  },
   startDockerWorker: (input: {
     authToken: string;
     workspaceId: string;

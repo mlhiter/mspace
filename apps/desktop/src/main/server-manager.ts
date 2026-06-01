@@ -12,6 +12,7 @@ const EXPECTED_SERVER_CAPABILITIES = [
   "workspaceInboxIssueGrouping",
   "teamWorkspaceCreation",
   "workspaceInvitations",
+  "workspaceInvitationPreview",
   "workspaceKinds",
   "workspaceCollaboration",
   "runtimeWorkerRegistration",

@@ -558,7 +558,7 @@ function WorkspaceMenu(props: {
       {open ? (
         <div
           role="menu"
-          className="absolute left-0 top-[calc(100%+7px)] z-30 w-[232px] overflow-hidden rounded-[10px] bg-[color:var(--paper)] p-1 shadow-[0_16px_36px_rgba(0,0,0,0.12),inset_0_0_0_1px_var(--line)]"
+          className="absolute left-0 top-[calc(100%+7px)] z-30 w-[252px] max-w-[calc(100vw-24px)] overflow-hidden rounded-[10px] bg-[color:var(--paper)] p-1 shadow-[0_16px_36px_rgba(0,0,0,0.12),inset_0_0_0_1px_var(--line)]"
         >
           <div className="flex min-w-0 items-center gap-2 rounded-[8px] px-2 py-2">
             <WorkspaceMark
@@ -588,7 +588,7 @@ function WorkspaceMenu(props: {
                       role="menuitemradio"
                       aria-checked={selected}
                       className={cn(
-                        "group flex min-h-9 w-full items-center gap-2 rounded-[7px] px-1.5 py-1 text-left text-[12px] font-medium transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99] [&_[data-icon]]:size-3.5",
+                        "group grid min-h-9 w-full grid-cols-[24px_minmax(0,1fr)_16px] items-center gap-2 rounded-[7px] px-1.5 py-1 text-left text-[12px] font-medium transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] active:scale-[0.99] [&_[data-icon]]:size-3.5",
                         selected ? "bg-[color:var(--selection)] text-[color:var(--text)]" : "text-[color:var(--muted-strong)]",
                       )}
                       onClick={() => {
@@ -597,13 +597,15 @@ function WorkspaceMenu(props: {
                       }}
                     >
                       <WorkspaceMark name={workspace.name} icon={workspace.icon} size="xs" />
-                      <span className="min-w-0 flex-1">
+                      <span className="min-w-0 overflow-hidden">
                         <span className="block truncate">{workspace.name}</span>
                         <span className="block truncate text-[11px] font-normal leading-4 text-[color:var(--muted)]">
                           {workspace.description?.trim() || `${workspaceKindLabelFor(workspace.kind)} · ${workspaceRoleLabelFor(workspace.role)}`}
                         </span>
                       </span>
-                      {selected ? <CheckCircle2 data-icon className="shrink-0 text-[color:var(--success)]" /> : null}
+                      <span className="grid size-4 place-items-center">
+                        {selected ? <CheckCircle2 data-icon className="text-[color:var(--success)]" /> : null}
+                      </span>
                     </button>
                   );
                 })}

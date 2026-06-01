@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-05-28",
+    title: "Deep-link team invites",
+    summary:
+      "mspace made private-deployment team invitations work with local username/password accounts instead of pretending every teammate has a verified email address.",
+    items: [
+      "Changed Workspace Settings from email-style invites to one-time join links.",
+      "Added a safe unauthenticated invite preview that exposes only workspace name, role, inviter display fields, expiry, and status.",
+      "Registered the desktop `mspace://invite/<token>?server=<team-server-url>` protocol so invite links can open the app directly and keep the team server context.",
+      "Made signed-out invite recipients create or sign into a local account before the app automatically accepts the invite and switches to the team workspace.",
+    ],
+  },
+  {
     date: "2026-05-27",
     title: "Worker environment install flow",
     summary:

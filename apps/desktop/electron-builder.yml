@@ -3,6 +3,11 @@ productName: mspace
 copyright: Copyright © 2026 mspace
 asar: true
 
+protocols:
+  - name: mspace invite links
+    schemes:
+      - mspace
+
 directories:
   output: dist
   buildResources: build

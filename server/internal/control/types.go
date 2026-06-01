@@ -117,6 +117,16 @@ type WorkspaceInvitation struct {
 	UpdatedAt        string `json:"updatedAt"`
 }
 
+type WorkspaceInvitationPreview struct {
+	WorkspaceName      string `json:"workspaceName"`
+	Role               string `json:"role"`
+	InvitedByName      string `json:"invitedByName"`
+	InvitedByAvatarURL string `json:"invitedByAvatarUrl"`
+	InvitedByLogin     string `json:"invitedByLogin"`
+	ExpiresAt          string `json:"expiresAt"`
+	Status             string `json:"status"`
+}
+
 type CreateWorkspaceInvitationInput struct {
 	Email          string `json:"email"`
 	Role           string `json:"role"`
@@ -1109,6 +1119,7 @@ type Store interface {
 	CreateWorkspaceInvitation(ctx Context, userID, workspaceID string, input CreateWorkspaceInvitationInput) (WorkspaceInvitationResult, error)
 	ListWorkspaceInvitations(ctx Context, userID, workspaceID string) ([]WorkspaceInvitation, error)
 	RevokeWorkspaceInvitation(ctx Context, userID, workspaceID, invitationID string) (WorkspaceInvitation, error)
+	PreviewWorkspaceInvitation(ctx Context, token string) (WorkspaceInvitationPreview, error)
 	AcceptWorkspaceInvitation(ctx Context, userID string, input AcceptWorkspaceInvitationInput) (AcceptWorkspaceInvitationResult, error)
 	ListInbox(ctx Context, userID, workspaceID string) ([]InboxEntry, error)
 	CreateIssueEvent(ctx Context, requesterUserID string, input CreateIssueEventInput) (IssueEvent, error)

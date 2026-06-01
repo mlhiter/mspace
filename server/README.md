@@ -94,6 +94,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `POST` | `/api/workspaces/{workspaceID}/invitations` | Create a one-time `msi_...` workspace invitation link. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/invitations` | List recent workspace invitations without raw tokens. Owner/admin only. |
 | `DELETE` | `/api/workspaces/{workspaceID}/invitations/{invitationID}` | Revoke a workspace invitation. Owner/admin only. |
+| `GET` | `/api/workspace-invitations/preview?token=msi_...` | Preview a join link without authentication. Returns workspace name, role, inviter display fields, expiry, and status only. |
 | `POST` | `/api/workspace-invitations/accept` | Accept a workspace invitation as the current authenticated user. |
 | `GET` | `/api/workspaces/{workspaceID}/inbox` | List unread workspace issue-event receipts for the authenticated user. |
 | `POST` | `/api/workspaces/{workspaceID}/issue-events` | Append a reviewable issue event and create per-user receipts. |
@@ -165,7 +166,7 @@ Issue `project_id` is optional in the control plane. A user can capture a worksp
 
 ## Workspace Invitations
 
-Workspace Settings exposes the first UI-testable collaboration loop. Owners and admins can create one-time `msi_...` invite links, copy the link, inspect pending/accepted/revoked invitations, and revoke unused invitations. A signed-in teammate opens the invite route, accepts it through the UI, and then sees the shared workspace in the workspace switcher. The accepted member can inspect shared members, Inbox receipts, workers, and issue-linked runtime tasks according to their workspace role.
+Workspace Settings exposes the first UI-testable collaboration loop. Owners and admins create one-time join links, copy a `mspace://invite/<token>?server=<team-server-url>` deep link, inspect pending/accepted/revoked invitations, and revoke unused invitations. A teammate can open the deep link in the desktop app; if the app is pointed at a different server, it switches to the invited team server before showing the safe preview. If they are not signed in, the app previews only safe invite metadata, lets them create or sign into a local mspace account, then accepts the invite automatically and switches into the team workspace. Invitations are not email-bound because local password accounts do not have verified canonical email addresses.
 
 ## Runtime Worker Registry
 

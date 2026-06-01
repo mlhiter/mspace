@@ -97,6 +97,8 @@ The product should stay narrow:
 - Do not fork Multica; use it as a structural reference only.
 - Keep docs current when product decisions change.
 - Keep `apps/website/src/changelog.ts` current when a task ships meaningful product, engineering, documentation, or website progress.
+- Product UI must stay user-centered: show the user-facing meaning, decision, and next useful action; hide raw implementation details, tokens, ids, protocol states, and debug-only metadata unless the user is explicitly debugging or operating an admin surface.
+- Do not ask users to operate things they do not care about. If the system can carry state from a link, session, server capability, or workspace context, do that automatically instead of exposing an input, code, or configuration knob.
 - Preserve the quiet Notion-like workspace style: document-first, low-contrast paper surfaces, compact rows, restrained icon buttons, and no decorative dashboard or marketing layout.
 - Visible product copy in desktop, UI, and view packages should be locale-aware through `@mspace/i18n` when it belongs to the shell or main workflows.
 - Treat `DESIGN.md` as the first reference for UI style, tokens, component rules, and visual guardrails.
