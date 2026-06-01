@@ -105,6 +105,8 @@ Usernames are normalized to lowercase and must use letters, numbers, dots, under
 
 Open registration intentionally creates only a personal workspace. Server admin status is matched by configured auth login, not display name or email, because local password email is not verified. Configure `MSPACE_SERVER_ADMIN_LOGINS` with local password logins or GitHub logins allowed to create team workspaces. For deployed environments, `MSPACE_BOOTSTRAP_ADMIN_LOGIN` and `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` can create the first local admin account during server startup; the server leaves an existing account password unchanged.
 
+Helm fixed-worker installs may also set `MSPACE_BOOTSTRAP_TEAM_WORKSPACE_NAME` and `MSPACE_BOOTSTRAP_RUNTIME_TOKEN` during server startup. When both are present, the server creates or finds the named team workspace owned by the bootstrap admin and registers the supplied `msw_...` token for that workspace. The Helm chart uses this to make one install create the admin-owned team workspace and connect the fixed worker without asking an operator to copy a runtime token from the UI.
+
 Only server admins can call `POST /api/workspaces` to create a team workspace. Other registered users can use their personal workspace and personal runner, then join a team workspace only after a team owner/admin creates an `msi_...` invitation.
 
 Create a one-time team join link:
@@ -326,6 +328,8 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/worker-installat
 ```
 
 The response includes `installCommand`, `runtimeMode`, `workerName`, `credentialPrefix`, and `expiresAt`. Product UI should show the install command and hide the raw bootstrap credential. The target environment needs Docker plus Codex `auth.json` and `config.toml`; after running the command, the worker appears in `/runtime-workers` after its first heartbeat.
+
+For Kubernetes-hosted fixed workers managed by the Helm chart, use `bootstrap.teamWorkspace.enabled=true` instead of the UI install command. Helm creates or reuses a release Secret entry named `MSPACE_RUNTIME_TOKEN`, passes it to the server as `MSPACE_BOOTSTRAP_RUNTIME_TOKEN`, and mounts the same value into the worker as its runtime registration credential. The operator still creates the worker Codex home Secret separately; that Secret must include `auth.json` plus `config.toml` and is mounted only by the worker.
 
 Queue a protocol smoke task from API/debug tooling:
 

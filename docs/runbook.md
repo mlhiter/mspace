@@ -117,7 +117,7 @@ deploy/scripts/build-images.sh
 helm upgrade --install mspace deploy/helm/mspace -n mspace-system -f /tmp/mspace-values.yaml
 ```
 
-See `docs/kubernetes-deployment.md` for the customer install shape: server first, then connect the workspace-scoped worker environment.
+See `docs/kubernetes-deployment.md` for the customer install shape. The default fixed-worker path now sets `bootstrap.teamWorkspace.enabled=true` so Helm installs the server and worker together: the chart creates or preserves one `MSPACE_RUNTIME_TOKEN`, server startup registers it against the admin-owned default team workspace, and the worker registers with that same token. Before installing, create `mspace-codex-home` with a worker-scoped `auth.json` and `deploy/codex/worker-config.toml` or an untracked private-provider variant.
 
 ## Website
 
@@ -199,6 +199,10 @@ If preview succeeds but returns `accepted`, `revoked`, or `expired`, the route i
 | `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` | Server | empty | Required with `MSPACE_BOOTSTRAP_ADMIN_LOGIN`; used only when the bootstrap account does not already exist. |
 | `MSPACE_BOOTSTRAP_ADMIN_NAME` | Server | login | Optional display name for the bootstrap admin account. |
 | `MSPACE_BOOTSTRAP_ADMIN_EMAIL` | Server | empty | Optional display email stored on the bootstrap identity. It is not used for admin matching. |
+| `MSPACE_BOOTSTRAP_TEAM_WORKSPACE_NAME` | Server | empty | Optional team workspace name to create or find during server startup. Used by Helm fixed-worker bootstrap. |
+| `MSPACE_BOOTSTRAP_RUNTIME_TOKEN` | Server | empty | Optional `msw_...` token to register against the bootstrap team workspace. Must be set with `MSPACE_BOOTSTRAP_TEAM_WORKSPACE_NAME`. |
+| `MSPACE_BOOTSTRAP_RUNTIME_TOKEN_NAME` | Server | `Helm fixed worker` | Metadata name for the bootstrap runtime registration token. |
+| `MSPACE_BOOTSTRAP_RUNTIME_TOKEN_TTL_HOURS` | Server | `2160` | Runtime token TTL in hours for the bootstrap fixed worker. The server and chart cap this at 90 days. |
 | `MSPACE_RUNTIME_TOKEN` | Worker | none | Internal runtime bootstrap credential with `msw_` prefix. |
 | `MSPACE_WORKER_NAME` | Worker | host-derived | Stable worker name shown in Workspace Settings. |
 | `MSPACE_WORKER_MODE` | Worker | `team` | Runtime mode reported to the server; `team` or `personal`. |

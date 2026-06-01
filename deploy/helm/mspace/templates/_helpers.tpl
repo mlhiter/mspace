@@ -61,6 +61,19 @@ MSPACE_RUNTIME_TOKEN
 {{- end -}}
 {{- end -}}
 
+{{- define "mspace.runtimeTokenValue" -}}
+{{- if .Values.secrets.runtimeToken -}}
+{{- .Values.secrets.runtimeToken -}}
+{{- else -}}
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (include "mspace.secretName" .) -}}
+{{- if and $existingSecret $existingSecret.data (index $existingSecret.data "MSPACE_RUNTIME_TOKEN") -}}
+{{- index $existingSecret.data "MSPACE_RUNTIME_TOKEN" | b64dec -}}
+{{- else -}}
+{{- printf "msw_%s" (randAlphaNum 64 | lower) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "mspace.codexHomeSecretName" -}}
 {{- if .Values.codexHome.existingSecret -}}
 {{- .Values.codexHome.existingSecret -}}
@@ -119,6 +132,32 @@ MSPACE_RUNTIME_TOKEN
 {{- end -}}
 {{- if not .Values.codexHome.configKey -}}
 {{- fail "worker.enabled=true requires codexHome.configKey, usually config.toml" -}}
+{{- end -}}
+{{- if and (not .Values.bootstrap.teamWorkspace.enabled) (not .Values.secrets.runtimeTokenExistingSecret) (not .Values.secrets.runtimeToken) -}}
+{{- fail "worker.enabled=true requires bootstrap.teamWorkspace.enabled=true or an explicit runtime token Secret/value" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "mspace.validateRuntimeTokenValue" -}}
+{{- if and .Values.secrets.runtimeToken (not (hasPrefix "msw_" .Values.secrets.runtimeToken)) -}}
+{{- fail "secrets.runtimeToken must start with msw_" -}}
+{{- end -}}
+{{- if and .Values.secrets.runtimeToken (lt (len (trimPrefix "msw_" .Values.secrets.runtimeToken)) 32) -}}
+{{- fail "secrets.runtimeToken must contain at least 32 characters after msw_" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "mspace.validateBootstrapTeamWorkspace" -}}
+{{- if .Values.bootstrap.teamWorkspace.enabled -}}
+{{- if and (not .Values.secrets.existingSecret) (not .Values.secrets.bootstrapAdminLogin) -}}
+{{- fail "bootstrap.teamWorkspace.enabled=true requires secrets.bootstrapAdminLogin or secrets.existingSecret" -}}
+{{- end -}}
+{{- if and (not .Values.secrets.existingSecret) (not .Values.secrets.bootstrapAdminPassword) -}}
+{{- fail "bootstrap.teamWorkspace.enabled=true requires secrets.bootstrapAdminPassword or secrets.existingSecret" -}}
+{{- end -}}
+{{- if or (lt (int .Values.bootstrap.runtimeToken.expiresInHours) 1) (gt (int .Values.bootstrap.runtimeToken.expiresInHours) 2160) -}}
+{{- fail "bootstrap.runtimeToken.expiresInHours must be between 1 and 2160" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

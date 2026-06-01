@@ -13,8 +13,14 @@ secrets:
   bootstrapAdminPassword: "replace-with-a-long-random-password"
   bootstrapAdminName: "Admin"
   bootstrapAdminEmail: "admin@example.com"
-  # kubectl -n mspace-system create secret generic mspace-runtime-token --from-literal=MSPACE_RUNTIME_TOKEN=msw_...
-  runtimeTokenExistingSecret: mspace-runtime-token
+
+bootstrap:
+  teamWorkspace:
+    enabled: true
+    name: Customer Team
+  runtimeToken:
+    name: Helm fixed worker
+    expiresInHours: 2160
 
 server:
   image:
@@ -31,15 +37,15 @@ server:
     tls: []
 
 worker:
-  enabled: false
+  enabled: true
   image:
     repository: crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-worker-codex
     tag: replace-me
 
 codexHome:
   # kubectl -n mspace-system create secret generic mspace-codex-home \
-  #   --from-file=auth.json=$CODEX_HOME/auth.json \
-  #   --from-file=config.toml=$CODEX_HOME/config.toml
+  #   --from-file=auth.json=/path/to/worker-codex-home/auth.json \
+  #   --from-file=config.toml=deploy/codex/worker-config.toml
   existingSecret: mspace-codex-home
   configKey: config.toml
 

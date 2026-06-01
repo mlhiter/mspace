@@ -28,6 +28,14 @@ secrets:
   runtimeTokenExistingSecret: ""
   runtimeTokenExistingSecretKey: MSPACE_RUNTIME_TOKEN
 
+bootstrap:
+  teamWorkspace:
+    enabled: false
+    name: Customer Team
+  runtimeToken:
+    name: Helm fixed worker
+    expiresInHours: 2160
+
 codexHome:
   existingSecret: ""
   authKey: auth.json

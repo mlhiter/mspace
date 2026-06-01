@@ -943,6 +943,59 @@ func (s *MemoryStore) CreateRuntimeRegistrationToken(_ Context, userID, workspac
 	return RuntimeRegistrationTokenResult{Token: token, RegistrationToken: record}, nil
 }
 
+func (s *MemoryStore) EnsureRuntimeRegistrationToken(_ Context, userID, workspaceID string, input EnsureRuntimeRegistrationTokenInput) (RuntimeRegistrationToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return RuntimeRegistrationToken{}, ErrNotFound
+		}
+		return RuntimeRegistrationToken{}, ErrForbidden
+	}
+	token := strings.TrimSpace(input.Token)
+	if err := validateRuntimeRegistrationToken(token); err != nil {
+		return RuntimeRegistrationToken{}, err
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = "Runtime worker token"
+	}
+	expiresInHours := input.ExpiresInHours
+	if expiresInHours <= 0 {
+		expiresInHours = 24
+	}
+	if expiresInHours > 24*90 {
+		return RuntimeRegistrationToken{}, fmt.Errorf("expiresInHours must be 2160 or less")
+	}
+	now := time.Now().UTC()
+	hash := tokenHash(token)
+	if existing, ok := s.runtimeTokens[hash]; ok {
+		if existing.Record.WorkspaceID != strings.TrimSpace(workspaceID) {
+			return RuntimeRegistrationToken{}, ErrConflict
+		}
+		existing.Record.Name = name
+		existing.Record.TokenPrefix = tokenPrefix(token)
+		existing.Record.ExpiresAt = now.Add(time.Duration(expiresInHours) * time.Hour).Format(time.RFC3339)
+		existing.Record.UpdatedAt = now.Format(time.RFC3339)
+		s.runtimeTokens[hash] = existing
+		return existing.Record, nil
+	}
+	s.nextID++
+	record := RuntimeRegistrationToken{
+		ID:          fmt.Sprintf("runtime-token-%04d", s.nextID),
+		WorkspaceID: strings.TrimSpace(workspaceID),
+		Name:        name,
+		TokenPrefix: tokenPrefix(token),
+		ExpiresAt:   now.Add(time.Duration(expiresInHours) * time.Hour).Format(time.RFC3339),
+		Revoked:     false,
+		CreatedAt:   now.Format(time.RFC3339),
+		UpdatedAt:   now.Format(time.RFC3339),
+	}
+	s.runtimeTokens[hash] = memoryRuntimeRegistrationToken{TokenHash: hash, Record: record}
+	return record, nil
+}
+
 func (s *MemoryStore) ListRuntimeRegistrationTokens(_ Context, userID, workspaceID string) ([]RuntimeRegistrationToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

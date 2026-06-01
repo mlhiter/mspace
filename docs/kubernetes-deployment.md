@@ -70,11 +70,13 @@ Worker Codex home:
 
 ```bash
 kubectl -n mspace-system create secret generic mspace-codex-home \
-  --from-file=auth.json="${CODEX_HOME:-$HOME/.codex}/auth.json" \
-  --from-file=config.toml="${CODEX_HOME:-$HOME/.codex}/config.toml"
+  --from-file=auth.json=/path/to/worker-codex-home/auth.json \
+  --from-file=config.toml=deploy/codex/worker-config.toml
 ```
 
-`config.toml` is required for API-based Codex auth/configuration. Do not deploy the worker with only `auth.json`; the chart fails rendering when `worker.enabled=true` without a configured Codex home Secret and both key names.
+`config.toml` is required for API-based Codex auth/configuration. Use the repository-owned `deploy/codex/worker-config.toml` for Kubernetes workers instead of copying a full laptop `~/.codex/config.toml`; local project paths, MCP servers, desktop plugins, notify hooks, and shell environment settings should stay out of the cluster. Do not deploy the worker with only `auth.json`; the chart fails rendering when `worker.enabled=true` without a configured Codex home Secret and both key names.
+
+If the worker must use a private model provider, copy `deploy/codex/worker-config.toml` to a local untracked file, append the private `[model_providers.*]` block and matching `model_provider`, then create the Secret from that local file. Do not commit private provider URLs or credentials.
 
 Customer kubeconfig:
 
@@ -85,7 +87,7 @@ kubectl -n mspace-system create secret generic mspace-customer-kubeconfig \
 
 If the image registry is private, create an image pull secret and reference it from `imagePullSecrets`.
 
-## Install Server First
+## Install Server And Fixed Worker
 
 Use the example values as a starting point:
 
@@ -100,11 +102,16 @@ Set:
 - optional `secrets.githubRedirectUri`
 - `secrets.serverAdminLogins` as a comma-separated list of local password logins or GitHub logins that may create team workspaces
 - `secrets.bootstrapAdminLogin` and `secrets.bootstrapAdminPassword` for the default local admin account
+- `bootstrap.teamWorkspace.enabled=true` and `bootstrap.teamWorkspace.name` for the default customer team workspace owned by the bootstrap admin
 - `server.image.tag`
+- `worker.image.tag`
 - `server.ingress.hosts[0].host`
+- `codexHome.existingSecret=mspace-codex-home`
 - optional storage classes
 
-Keep `worker.enabled=false` and `buildkit.enabled=false` for the first install because runtime tokens are workspace-scoped and must be created after sign-in. `codexHome.*` may already be set in the values file, but it is only mounted by the worker StatefulSet.
+With `bootstrap.teamWorkspace.enabled=true`, Helm creates one `msw_...` runtime token in the release Secret, the server registers that token against the default team workspace during bootstrap, and the fixed worker StatefulSet uses the same token to register back to the server. This keeps the server Codex-free: Helm only passes mspace runtime registration data to the server, while Codex auth/config stays in the worker-mounted `mspace-codex-home` Secret.
+
+Keep `buildkit.enabled=false` for the first worker registration unless the customer cluster accepts rootless BuildKit's `Unconfined` seccomp profile.
 
 Install:
 
@@ -128,20 +135,20 @@ Open the desktop app with:
 MSPACE_SERVER_URL=https://mspace.example.com pnpm dev:desktop
 ```
 
-Sign in with the bootstrap local admin account, or with a GitHub identity listed in `secrets.serverAdminLogins`, then create or select the customer team workspace. Ordinary self-registered accounts can use only their personal workspace and local personal runner until invited into this team workspace.
+Sign in with the bootstrap local admin account. The customer team workspace already exists and is owned by that admin. Ordinary self-registered accounts can use only their personal workspace and local personal runner until invited into this team workspace.
 
 For a self-hosted worker on a customer server, VM, DevBox, or Docker-capable host, open Workspace Settings, choose `Connect environment`, copy the generated install command, and run it in that target environment. The command embeds a short-lived workspace bootstrap credential once and starts the Docker-backed Codex worker. The raw `msw_...` token API remains available for recovery/debugging, but it is not the normal customer setup path.
 
-For the Helm-managed fixed Worker StatefulSet path, create a runtime registration token through the API or an internal admin/debug flow and put it in a Kubernetes Secret. Do not put the token directly in Helm values:
+For custom/recovery Helm-managed fixed Worker StatefulSet installs, you may still create a runtime registration token through the API or an internal admin/debug flow and put it in a Kubernetes Secret instead of using `bootstrap.teamWorkspace.enabled`:
 
 ```bash
 kubectl -n mspace-system create secret generic mspace-runtime-token \
   --from-literal=MSPACE_RUNTIME_TOKEN='msw_...'
 ```
 
-## Enable Worker
+## Custom Runtime Token Path
 
-Set these values:
+If you use the custom `mspace-runtime-token` Secret path above, set these values:
 
 ```yaml
 secrets:
@@ -158,7 +165,9 @@ worker:
   enabled: true
 ```
 
-Keep BuildKit off for the first worker registration unless the customer cluster accepts rootless BuildKit's `Unconfined` seccomp profile:
+## Optional BuildKit
+
+Keep BuildKit off unless the customer cluster accepts rootless BuildKit's `Unconfined` seccomp profile:
 
 ```yaml
 buildkit:
@@ -176,7 +185,7 @@ buildkit:
   enabled: true
 ```
 
-Upgrade:
+Upgrade if you changed values after the first install:
 
 ```bash
 helm upgrade mspace deploy/helm/mspace \
@@ -262,7 +271,7 @@ helm -n mspace-system rollback mspace <revision>
 ## Current Limits
 
 - Runtime execution is a fixed Kubernetes-hosted worker, not one Pod per session.
-- Worker token creation is two-stage because tokens are workspace-scoped.
+- The default Helm path bootstraps exactly one admin-owned team workspace and fixed worker token for the release. Additional workspaces still need their own external worker install command or explicit runtime token path.
 - The mounted kubeconfig is the current deployment credential boundary.
 - Codex credentials/config are mounted only into the worker. The server image and server Deployment are Codex-free.
 - Server-owned GitHub App PR execution is not part of this deployment package.

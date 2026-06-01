@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -1698,6 +1699,51 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	router.ServeHTTP(rejectedHeartbeatRecorder, rejectedHeartbeatReq)
 	if rejectedHeartbeatRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked token heartbeat should be unauthorized, status=%d body=%s", rejectedHeartbeatRecorder.Code, rejectedHeartbeatRecorder.Body.String())
+	}
+}
+
+func TestEnsureRuntimeRegistrationTokenDoesNotReviveRevokedToken(t *testing.T) {
+	store := NewMemoryStore()
+	user, _, _, err := store.EnsureBootstrapAdmin(context.Background(), PasswordAuthInput{
+		Login:    "runtime-owner",
+		Name:     "Runtime Owner",
+		Password: "correct-password",
+	})
+	if err != nil {
+		t.Fatalf("ensure bootstrap admin: %v", err)
+	}
+	workspace, workspaces, err := store.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Runtime Team", Kind: "team"})
+	if err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	if len(workspaces) != 2 || workspace.ID == "" {
+		t.Fatalf("unexpected workspaces: workspace=%+v workspaces=%+v", workspace, workspaces)
+	}
+	runtimeToken := "msw_testrevokedruntime0000000000000000000000000000000000000000000000000000"
+	record, err := store.EnsureRuntimeRegistrationToken(context.Background(), user.ID, workspace.ID, EnsureRuntimeRegistrationTokenInput{
+		Token:          runtimeToken,
+		Name:           "Helm fixed worker",
+		ExpiresInHours: 24,
+	})
+	if err != nil {
+		t.Fatalf("ensure runtime token: %v", err)
+	}
+	if _, err := store.RevokeRuntimeRegistrationToken(context.Background(), user.ID, workspace.ID, record.ID); err != nil {
+		t.Fatalf("revoke runtime token: %v", err)
+	}
+	record, err = store.EnsureRuntimeRegistrationToken(context.Background(), user.ID, workspace.ID, EnsureRuntimeRegistrationTokenInput{
+		Token:          runtimeToken,
+		Name:           "Helm fixed worker",
+		ExpiresInHours: 48,
+	})
+	if err != nil {
+		t.Fatalf("ensure revoked runtime token: %v", err)
+	}
+	if !record.Revoked {
+		t.Fatalf("expected ensure to preserve revoked state, got %+v", record)
+	}
+	if _, err := store.AuthenticateRuntimeRegistrationToken(context.Background(), runtimeToken); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked runtime token should not authenticate, got %v", err)
 	}
 }
 

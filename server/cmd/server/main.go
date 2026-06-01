@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,18 +59,22 @@ func main() {
 
 func loadConfig() control.Config {
 	return control.Config{
-		Addr:                   envDefault("MSPACE_SERVER_ADDR", "127.0.0.1:8787"),
-		DatabaseURL:            strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		StoreMode:              strings.TrimSpace(os.Getenv("MSPACE_STORE")),
-		SQLitePath:             strings.TrimSpace(os.Getenv("MSPACE_SQLITE_PATH")),
-		GitHubClientID:         strings.TrimSpace(os.Getenv("MSPACE_GITHUB_CLIENT_ID")),
-		GitHubClientSecret:     strings.TrimSpace(os.Getenv("MSPACE_GITHUB_CLIENT_SECRET")),
-		GitHubRedirectURI:      strings.TrimSpace(os.Getenv("MSPACE_GITHUB_REDIRECT_URI")),
-		ServerAdminLogins:      envList("MSPACE_SERVER_ADMIN_LOGINS"),
-		BootstrapAdminLogin:    strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_LOGIN")),
-		BootstrapAdminPassword: strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_PASSWORD")),
-		BootstrapAdminName:     strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_NAME")),
-		BootstrapAdminEmail:    strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_EMAIL")),
+		Addr:                       envDefault("MSPACE_SERVER_ADDR", "127.0.0.1:8787"),
+		DatabaseURL:                strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		StoreMode:                  strings.TrimSpace(os.Getenv("MSPACE_STORE")),
+		SQLitePath:                 strings.TrimSpace(os.Getenv("MSPACE_SQLITE_PATH")),
+		GitHubClientID:             strings.TrimSpace(os.Getenv("MSPACE_GITHUB_CLIENT_ID")),
+		GitHubClientSecret:         strings.TrimSpace(os.Getenv("MSPACE_GITHUB_CLIENT_SECRET")),
+		GitHubRedirectURI:          strings.TrimSpace(os.Getenv("MSPACE_GITHUB_REDIRECT_URI")),
+		ServerAdminLogins:          envList("MSPACE_SERVER_ADMIN_LOGINS"),
+		BootstrapAdminLogin:        strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_LOGIN")),
+		BootstrapAdminPassword:     strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_PASSWORD")),
+		BootstrapAdminName:         strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_NAME")),
+		BootstrapAdminEmail:        strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_ADMIN_EMAIL")),
+		BootstrapTeamWorkspaceName: strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_TEAM_WORKSPACE_NAME")),
+		BootstrapRuntimeToken:      strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_RUNTIME_TOKEN")),
+		BootstrapRuntimeTokenName:  strings.TrimSpace(os.Getenv("MSPACE_BOOTSTRAP_RUNTIME_TOKEN_NAME")),
+		BootstrapRuntimeTokenTTL:   envDurationHours("MSPACE_BOOTSTRAP_RUNTIME_TOKEN_TTL_HOURS", 24*90),
 	}
 }
 
@@ -133,17 +138,22 @@ func defaultSQLitePath() string {
 func ensureBootstrapAdmin(ctx context.Context, store control.Store, cfg control.Config) error {
 	login := strings.TrimSpace(cfg.BootstrapAdminLogin)
 	password := strings.TrimSpace(cfg.BootstrapAdminPassword)
-	if login == "" && password == "" {
+	teamWorkspaceName := strings.TrimSpace(cfg.BootstrapTeamWorkspaceName)
+	runtimeToken := strings.TrimSpace(cfg.BootstrapRuntimeToken)
+	if login == "" && password == "" && teamWorkspaceName == "" && runtimeToken == "" {
 		return nil
 	}
 	if login == "" || password == "" {
 		return fmt.Errorf("MSPACE_BOOTSTRAP_ADMIN_LOGIN and MSPACE_BOOTSTRAP_ADMIN_PASSWORD must be set together")
 	}
+	if (teamWorkspaceName == "") != (runtimeToken == "") {
+		return fmt.Errorf("MSPACE_BOOTSTRAP_TEAM_WORKSPACE_NAME and MSPACE_BOOTSTRAP_RUNTIME_TOKEN must be set together")
+	}
 	name := strings.TrimSpace(cfg.BootstrapAdminName)
 	if name == "" {
 		name = login
 	}
-	user, _, created, err := store.EnsureBootstrapAdmin(ctx, control.PasswordAuthInput{
+	user, workspaces, created, err := store.EnsureBootstrapAdmin(ctx, control.PasswordAuthInput{
 		Login:    login,
 		Name:     name,
 		Email:    cfg.BootstrapAdminEmail,
@@ -157,7 +167,54 @@ func ensureBootstrapAdmin(ctx context.Context, store control.Store, cfg control.
 	} else {
 		slog.Info("bootstrap admin already exists", "login", login, "userID", user.ID)
 	}
+	if teamWorkspaceName == "" {
+		return nil
+	}
+
+	workspace := findBootstrapTeamWorkspace(workspaces, teamWorkspaceName)
+	if workspace.ID == "" {
+		createdWorkspace, refreshed, err := store.CreateWorkspace(ctx, user.ID, control.CreateWorkspaceInput{
+			Name: teamWorkspaceName,
+			Kind: "team",
+		})
+		if err != nil {
+			return fmt.Errorf("create bootstrap team workspace: %w", err)
+		}
+		workspace = createdWorkspace
+		workspaces = refreshed
+		slog.Info("created bootstrap team workspace", "name", workspace.Name, "workspaceID", workspace.ID, "ownerUserID", user.ID)
+	} else {
+		slog.Info("bootstrap team workspace already exists", "name", workspace.Name, "workspaceID", workspace.ID, "ownerUserID", user.ID)
+	}
+
+	tokenName := strings.TrimSpace(cfg.BootstrapRuntimeTokenName)
+	if tokenName == "" {
+		tokenName = "Helm fixed worker"
+	}
+	expiresInHours := int(cfg.BootstrapRuntimeTokenTTL / time.Hour)
+	if expiresInHours <= 0 {
+		expiresInHours = 24 * 90
+	}
+	token, err := store.EnsureRuntimeRegistrationToken(ctx, user.ID, workspace.ID, control.EnsureRuntimeRegistrationTokenInput{
+		Token:          runtimeToken,
+		Name:           tokenName,
+		ExpiresInHours: expiresInHours,
+	})
+	if err != nil {
+		return fmt.Errorf("ensure bootstrap runtime token: %w", err)
+	}
+	slog.Info("ensured bootstrap runtime token", "workspaceID", workspace.ID, "tokenID", token.ID, "tokenPrefix", token.TokenPrefix)
 	return nil
+}
+
+func findBootstrapTeamWorkspace(workspaces []control.Workspace, name string) control.Workspace {
+	name = strings.TrimSpace(name)
+	for _, workspace := range workspaces {
+		if workspace.Kind == "team" && strings.EqualFold(strings.TrimSpace(workspace.Name), name) {
+			return workspace
+		}
+	}
+	return control.Workspace{}
 }
 
 func envDefault(key, fallback string) string {
@@ -181,6 +238,18 @@ func envList(key string) []string {
 		}
 	}
 	return items
+}
+
+func envDurationHours(key string, fallbackHours int) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return time.Duration(fallbackHours) * time.Hour
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return time.Duration(fallbackHours) * time.Hour
+	}
+	return time.Duration(parsed) * time.Hour
 }
 
 func loadLocalEnv() {

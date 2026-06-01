@@ -1,4 +1,6 @@
 apiVersion: apps/v1
+{{- include "mspace.validateRuntimeTokenValue" . }}
+{{- include "mspace.validateBootstrapTeamWorkspace" . }}
 kind: Deployment
 metadata:
   name: {{ include "mspace.fullname" . }}-server
@@ -40,11 +42,26 @@ spec:
                 name: {{ include "mspace.fullname" . }}-config
             - secretRef:
                 name: {{ include "mspace.secretName" . }}
-          {{- with .Values.server.env }}
+          {{- if or .Values.bootstrap.teamWorkspace.enabled .Values.server.env }}
           env:
+            {{- if .Values.bootstrap.teamWorkspace.enabled }}
+            - name: MSPACE_BOOTSTRAP_TEAM_WORKSPACE_NAME
+              value: {{ .Values.bootstrap.teamWorkspace.name | quote }}
+            - name: MSPACE_BOOTSTRAP_RUNTIME_TOKEN_NAME
+              value: {{ .Values.bootstrap.runtimeToken.name | quote }}
+            - name: MSPACE_BOOTSTRAP_RUNTIME_TOKEN_TTL_HOURS
+              value: {{ .Values.bootstrap.runtimeToken.expiresInHours | quote }}
+            - name: MSPACE_BOOTSTRAP_RUNTIME_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mspace.runtimeTokenSecretName" . }}
+                  key: {{ include "mspace.runtimeTokenSecretKey" . }}
+            {{- end }}
+            {{- with .Values.server.env }}
             {{- range $key, $value := . }}
             - name: {{ $key }}
               value: {{ $value | quote }}
+            {{- end }}
             {{- end }}
           {{- end }}
           ports:

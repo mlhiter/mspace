@@ -16,21 +16,25 @@ var (
 )
 
 type Config struct {
-	Addr                   string
-	DatabaseURL            string
-	StoreMode              string
-	SQLitePath             string
-	GitHubClientID         string
-	GitHubClientSecret     string
-	GitHubRedirectURI      string
-	ServerAdminLogins      []string
-	BootstrapAdminLogin    string
-	BootstrapAdminPassword string
-	BootstrapAdminName     string
-	BootstrapAdminEmail    string
-	SessionTTL             time.Duration
-	OAuthStateTTL          time.Duration
-	AllowMemoryStore       bool
+	Addr                       string
+	DatabaseURL                string
+	StoreMode                  string
+	SQLitePath                 string
+	GitHubClientID             string
+	GitHubClientSecret         string
+	GitHubRedirectURI          string
+	ServerAdminLogins          []string
+	BootstrapAdminLogin        string
+	BootstrapAdminPassword     string
+	BootstrapAdminName         string
+	BootstrapAdminEmail        string
+	BootstrapTeamWorkspaceName string
+	BootstrapRuntimeToken      string
+	BootstrapRuntimeTokenName  string
+	BootstrapRuntimeTokenTTL   time.Duration
+	SessionTTL                 time.Duration
+	OAuthStateTTL              time.Duration
+	AllowMemoryStore           bool
 }
 
 func (c Config) withDefaults() Config {
@@ -920,6 +924,12 @@ type CreateRuntimeRegistrationTokenInput struct {
 	ExpiresInHours int    `json:"expiresInHours"`
 }
 
+type EnsureRuntimeRegistrationTokenInput struct {
+	Token          string
+	Name           string
+	ExpiresInHours int
+}
+
 type RuntimeRegistrationTokenResult struct {
 	Token             string                   `json:"token"`
 	RegistrationToken RuntimeRegistrationToken `json:"registrationToken"`
@@ -1168,6 +1178,7 @@ type Store interface {
 	SetCommentReaction(ctx Context, user User, workspaceID, issueID, commentID, reaction string) error
 	DeleteCommentReaction(ctx Context, userID, workspaceID, issueID, commentID, reaction string) error
 	CreateRuntimeRegistrationToken(ctx Context, userID, workspaceID string, input CreateRuntimeRegistrationTokenInput) (RuntimeRegistrationTokenResult, error)
+	EnsureRuntimeRegistrationToken(ctx Context, userID, workspaceID string, input EnsureRuntimeRegistrationTokenInput) (RuntimeRegistrationToken, error)
 	ListRuntimeRegistrationTokens(ctx Context, userID, workspaceID string) ([]RuntimeRegistrationToken, error)
 	RevokeRuntimeRegistrationToken(ctx Context, userID, workspaceID, tokenID string) (RuntimeRegistrationToken, error)
 	AuthenticateRuntimeRegistrationToken(ctx Context, token string) (RuntimeRegistration, error)

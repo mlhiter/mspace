@@ -120,7 +120,7 @@ pnpm run server
 
 Personal desktop workspaces start a host-local Codex worker automatically before an agent mention is submitted. The desktop creates a short-lived `msw_...` credential, stores it in an Electron user-data token file, renews it before expiry, and revokes the previous credential after the worker has had time to pick up the replacement. Workspace Settings labels these desktop-managed credentials as automatic and keeps expired or replaced credentials in audit history so renewals do not look like duplicate manual tokens.
 
-Team workspaces connect external worker environments from Workspace Settings with a one-time install command. Run that command on the server, VM, DevBox, or other Docker-capable environment that should claim agent tasks; the worker registers itself and appears online after its first heartbeat. The raw `msw_...` token flow is still available through the API for development and recovery, but it is not the product setup path.
+Team workspaces normally connect external worker environments from Workspace Settings with a one-time install command. Run that command on the server, VM, DevBox, or other Docker-capable environment that should claim agent tasks; the worker registers itself and appears online after its first heartbeat. Customer Helm installs can also enable `bootstrap.teamWorkspace.enabled=true` to create an admin-owned default team workspace and register the chart-managed fixed worker during server startup. The raw `msw_...` token flow is still available through the API for development and recovery, but it is not the product setup path.
 
 Manual worker debugging:
 
@@ -136,7 +136,7 @@ scripts/run-server-worker-dev.sh
 scripts/run-server-worker-codex-dev.sh
 ```
 
-For customer Kubernetes deployment, use the Helm chart and runbook under `deploy/helm/mspace` and `docs/kubernetes-deployment.md`.
+For customer Kubernetes deployment, use the Helm chart and runbook under `deploy/helm/mspace` and `docs/kubernetes-deployment.md`. The fixed-worker path expects the operator to create the worker Codex home Secret first, using a worker-scoped `auth.json` plus the repository-owned `deploy/codex/worker-config.toml` or an untracked private-provider variant.
 
 Build a macOS desktop package for internal dogfood:
 
@@ -193,6 +193,10 @@ Runtime variables:
 | `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` | none | Required with `MSPACE_BOOTSTRAP_ADMIN_LOGIN`; the server does not reset an existing account password. |
 | `MSPACE_BOOTSTRAP_ADMIN_NAME` | login | Optional display name for the bootstrap admin account. |
 | `MSPACE_BOOTSTRAP_ADMIN_EMAIL` | none | Optional bootstrap identity email; not used for admin matching. |
+| `MSPACE_BOOTSTRAP_TEAM_WORKSPACE_NAME` | none | Optional team workspace name to create during server startup for Helm fixed-worker installs. Requires `MSPACE_BOOTSTRAP_RUNTIME_TOKEN`. |
+| `MSPACE_BOOTSTRAP_RUNTIME_TOKEN` | none | Optional pre-created `msw_...` token that the server registers against the bootstrap team workspace. Helm sets this from the release Secret when `bootstrap.teamWorkspace.enabled=true`. |
+| `MSPACE_BOOTSTRAP_RUNTIME_TOKEN_NAME` | `Helm fixed worker` | Display name for the bootstrap runtime token metadata. |
+| `MSPACE_BOOTSTRAP_RUNTIME_TOKEN_TTL_HOURS` | `2160` | Runtime token TTL in hours for the bootstrap fixed worker, capped at 90 days. |
 | `MSPACE_RUNTIME_TOKEN` | none | `msw_...` runtime worker registration token used by `pnpm worker`. |
 | `MSPACE_WORKER_NAME` | host-derived | Stable worker name shown in Workspace Settings. |
 | `MSPACE_WORKER_MODE` | `team` | Runtime mode reported to the server by install commands and worker scripts; `team` or `personal`. |

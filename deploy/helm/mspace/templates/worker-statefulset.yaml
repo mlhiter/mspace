@@ -1,5 +1,7 @@
 {{- if .Values.worker.enabled }}
 {{- include "mspace.validateWorkerCodexHome" . }}
+{{- include "mspace.validateRuntimeTokenValue" . }}
+{{- include "mspace.validateBootstrapTeamWorkspace" . }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

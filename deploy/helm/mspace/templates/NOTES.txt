@@ -5,7 +5,13 @@ Server health:
   curl http://127.0.0.1:8787/health
 
 Worker registration:
+{{- if and .Values.worker.enabled .Values.bootstrap.teamWorkspace.enabled }}
+  Bootstrap team workspace "{{ .Values.bootstrap.teamWorkspace.name }}" is enabled. The server registers the Helm-managed runtime token for that workspace, and the worker reads the same token from secret {{ include "mspace.runtimeTokenSecretName" . }} key {{ include "mspace.runtimeTokenSecretKey" . }}.
+{{- else if .Values.worker.enabled }}
   The worker requires a runtime token with the msw_ prefix in secret {{ include "mspace.runtimeTokenSecretName" . }} key {{ include "mspace.runtimeTokenSecretKey" . }}.
+{{- else }}
+  Worker is disabled. Enable worker.enabled after configuring Codex home and either bootstrap.teamWorkspace.enabled or a runtime token secret.
+{{- end }}
 
 Kubeconfig path for cluster records:
 {{- if .Values.kubeconfig.existingSecret }}

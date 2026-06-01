@@ -1087,6 +1087,52 @@ func (s *PostgresStore) CreateRuntimeRegistrationToken(ctx Context, userID, work
 	return RuntimeRegistrationTokenResult{Token: token, RegistrationToken: record}, nil
 }
 
+func (s *PostgresStore) EnsureRuntimeRegistrationToken(ctx Context, userID, workspaceID string, input EnsureRuntimeRegistrationTokenInput) (RuntimeRegistrationToken, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	token := strings.TrimSpace(input.Token)
+	if err := validateRuntimeRegistrationToken(token); err != nil {
+		return RuntimeRegistrationToken{}, err
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = "Runtime worker token"
+	}
+	expiresInHours := input.ExpiresInHours
+	if expiresInHours <= 0 {
+		expiresInHours = 24
+	}
+	if expiresInHours > 24*90 {
+		return RuntimeRegistrationToken{}, errors.New("expiresInHours must be 2160 or less")
+	}
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {
+		return RuntimeRegistrationToken{}, err
+	}
+
+	expiresAt := time.Now().UTC().Add(time.Duration(expiresInHours) * time.Hour)
+	row := s.pool.QueryRow(dbctx, `
+		INSERT INTO runtime_registration_tokens (workspace_id, name, token_hash, token_prefix, created_by_user_id, expires_at, revoked, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, false, now())
+		ON CONFLICT (token_hash) DO UPDATE SET
+			name = EXCLUDED.name,
+			token_prefix = EXCLUDED.token_prefix,
+			created_by_user_id = EXCLUDED.created_by_user_id,
+			expires_at = EXCLUDED.expires_at,
+			updated_at = now()
+		WHERE runtime_registration_tokens.workspace_id = EXCLUDED.workspace_id
+		RETURNING id::text, workspace_id::text, name, token_prefix, expires_at, last_used_at, revoked, created_at, updated_at
+	`, workspaceID, name, tokenHash(token), tokenPrefix(token), userID, expiresAt)
+	record, err := scanRuntimeRegistrationToken(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RuntimeRegistrationToken{}, ErrConflict
+		}
+		return RuntimeRegistrationToken{}, err
+	}
+	return record, nil
+}
+
 func (s *PostgresStore) ListRuntimeRegistrationTokens(ctx Context, userID, workspaceID string) ([]RuntimeRegistrationToken, error) {
 	dbctx := asContext(ctx)
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, userID, "owner", "admin"); err != nil {

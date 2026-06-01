@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-06-01",
+    title: "One-step Helm worker bootstrap",
+    summary:
+      "mspace made customer Helm installs create a default team workspace and register the fixed Kubernetes worker without asking operators to copy a runtime token from the UI.",
+    items: [
+      "Added server bootstrap support for creating an admin-owned team workspace and registering a Helm-managed `msw_...` runtime token.",
+      "Updated the Helm chart so the server and worker share the same runtime token Secret while Codex auth/config remains worker-only.",
+      "Added a sanitized Kubernetes worker `config.toml` template so operators do not copy laptop-local Codex settings into the cluster.",
+      "Updated Kubernetes deployment docs to make the fixed worker path a one-step install after the operator prepares worker Codex auth.",
+    ],
+  },
+  {
     date: "2026-05-28",
     title: "Deep-link team invites",
     summary:

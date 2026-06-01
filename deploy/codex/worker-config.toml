@@ -1,0 +1,32 @@
+# Codex configuration for Kubernetes-hosted mspace workers.
+#
+# This file is safe to keep in the repository because it does not contain
+# Codex auth material or private provider endpoints. Create auth.json
+# separately with a worker-scoped key.
+# Do not copy a developer laptop's full ~/.codex/config.toml into the cluster:
+# local project paths, MCP servers, desktop plugins, notify hooks, and shell
+# environment settings do not belong in the worker runtime.
+
+model = "gpt-5.5"
+review_model = "gpt-5.4"
+model_reasoning_effort = "xhigh"
+disable_response_storage = true
+network_access = "enabled"
+personality = "pragmatic"
+
+[features]
+multi_agent = true
+prevent_idle_sleep = true
+js_repl = false
+memories = true
+external_migration = true
+shell_tool = true
+unified_exec = true
+shell_snapshot = true
+apply_patch_freeform = true
+goals = true
+collaboration_modes = true
+chronicle = true
+
+[projects."/var/lib/mspace-worker"]
+trust_level = "trusted"

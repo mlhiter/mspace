@@ -43,6 +43,17 @@ func newRuntimeRegistrationToken() (string, error) {
 	return "msw_" + value, nil
 }
 
+func validateRuntimeRegistrationToken(token string) error {
+	token = strings.TrimSpace(token)
+	if !strings.HasPrefix(token, "msw_") {
+		return fmt.Errorf("runtime token must start with msw_")
+	}
+	if len(strings.TrimPrefix(token, "msw_")) < 32 {
+		return fmt.Errorf("runtime token must contain at least 32 characters after msw_")
+	}
+	return nil
+}
+
 func newWorkspaceInvitationToken() (string, error) {
 	value, err := randomHex(32)
 	if err != nil {
