@@ -40,6 +40,13 @@ type memoryStoreSnapshot struct {
 	Watchers             map[string]map[string]bool                   `json:"watchers"`
 	Projects             map[string]Project                           `json:"projects"`
 	ProjectRunbooks      map[string]ProjectRunbook                    `json:"projectRunbooks"`
+	TestCases            map[string]TestCase                          `json:"testCases"`
+	TestCaseRevisions    map[string]TestCaseRevision                  `json:"testCaseRevisions"`
+	TestCaseProposals    map[string]TestCaseProposal                  `json:"testCaseProposals"`
+	TestPlans            map[string]TestPlan                          `json:"testPlans"`
+	TestPlanCases        map[string]TestPlanCase                      `json:"testPlanCases"`
+	TestRuns             map[string]TestRun                           `json:"testRuns"`
+	TestRunItems         map[string]TestRunItem                       `json:"testRunItems"`
 	Issues               map[string]Issue                             `json:"issues"`
 	Comments             map[string]Comment                           `json:"comments"`
 	CommentReactions     map[string]map[string]CommentReactionSummary `json:"commentReactions"`
@@ -177,6 +184,13 @@ func (s *MemoryStore) snapshotJSON() ([]byte, error) {
 		Watchers:             copyMap(s.watchers),
 		Projects:             copyMap(s.projects),
 		ProjectRunbooks:      copyMap(s.projectRunbooks),
+		TestCases:            copyMap(s.testCases),
+		TestCaseRevisions:    copyMap(s.testCaseRevisions),
+		TestCaseProposals:    copyMap(s.testCaseProposals),
+		TestPlans:            copyMap(s.testPlans),
+		TestPlanCases:        copyMap(s.testPlanCases),
+		TestRuns:             copyMap(s.testRuns),
+		TestRunItems:         copyMap(s.testRunItems),
 		Issues:               copyMap(s.issues),
 		Comments:             copyMap(s.comments),
 		CommentReactions:     copyMap(s.commentReactions),
@@ -217,6 +231,13 @@ func (s *MemoryStore) restoreSnapshot(snapshot memoryStoreSnapshot) {
 	s.watchers = ensureMap(snapshot.Watchers)
 	s.projects = ensureMap(snapshot.Projects)
 	s.projectRunbooks = ensureMap(snapshot.ProjectRunbooks)
+	s.testCases = ensureMap(snapshot.TestCases)
+	s.testCaseRevisions = ensureMap(snapshot.TestCaseRevisions)
+	s.testCaseProposals = ensureMap(snapshot.TestCaseProposals)
+	s.testPlans = ensureMap(snapshot.TestPlans)
+	s.testPlanCases = ensureMap(snapshot.TestPlanCases)
+	s.testRuns = ensureMap(snapshot.TestRuns)
+	s.testRunItems = ensureMap(snapshot.TestRunItems)
 	s.issues = ensureMap(snapshot.Issues)
 	s.comments = ensureMap(snapshot.Comments)
 	s.commentReactions = ensureMap(snapshot.CommentReactions)

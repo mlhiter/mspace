@@ -33,6 +33,7 @@ type Server struct {
 const serverProtocolVersion = 1
 const maxIssueAttachmentBytes = 10 << 20
 const maxPasswordAuthBodyBytes = 4 << 10
+const maxTestCaseImportBodyBytes = 300 << 10
 const defaultRuntimeTaskListLimit = 10
 const maxRuntimeTaskListLimit = 100
 
@@ -102,6 +103,26 @@ func (s *Server) Routes() http.Handler {
 	r.Delete("/api/workspaces/{workspaceID}/projects/{projectID}", s.handleDeleteProject)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleGetProjectRunbook)
 	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleUpdateProjectRunbook)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases", s.handleListProjectTestCases)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import", s.handleImportProjectTestCases)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize", s.handleOptimizeProjectTestCases)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate", s.handleGenerateProjectTestCases)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases", s.handleCreateProjectTestCase)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals", s.handleListProjectTestCaseProposals)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/apply", s.handleApplyProjectTestCaseProposal)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/reject", s.handleRejectProjectTestCaseProposal)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-plans", s.handleListProjectTestPlans)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-plans", s.handleCreateProjectTestPlan)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}", s.handleGetProjectTestPlan)
+	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}", s.handleUpdateProjectTestPlan)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs", s.handleStartProjectTestRun)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}", s.handleGetProjectTestRun)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry", s.handleRetryProjectTestRun)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/accept", s.handleAcceptProjectTestRun)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block", s.handleBlockProjectTestRun)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}", s.handleGetProjectTestCase)
+	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}", s.handleUpdateProjectTestCase)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}/revisions", s.handleListProjectTestCaseRevisions)
 	r.Get("/api/workspaces/{workspaceID}/issue-label-definitions", s.handleListIssueLabelDefinitions)
 	r.Get("/api/workspaces/{workspaceID}/workspace/settings", s.handleGetWorkspaceSettings)
 	r.Put("/api/workspaces/{workspaceID}/workspace/settings", s.handleUpdateWorkspaceSettings)
@@ -223,6 +244,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"workspaceKinds":              true,
 			"githubAuth":                  s.githubAuthConfigured(),
 			"passwordAuth":                true,
+			"testCaseLibrary":             true,
+			"testCaseWorkflow":            true,
 			"runtimeWorkerRegistration":   true,
 			"runtimeTaskQueue":            true,
 			"workspaceCollaboration":      true,
@@ -719,6 +742,421 @@ func (s *Server) handleUpdateProjectRunbook(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, runbook)
+}
+
+func (s *Server) handleListProjectTestCases(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	options := TestCaseListOptions{
+		Status: strings.TrimSpace(r.URL.Query().Get("status")),
+		Query:  strings.TrimSpace(r.URL.Query().Get("q")),
+	}
+	testCases, err := s.store.ListProjectTestCases(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), options)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, testCases)
+}
+
+func (s *Server) handleCreateProjectTestCase(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := TestCaseInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	testCase, err := s.store.CreateProjectTestCase(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, testCase)
+}
+
+func (s *Server) handleImportProjectTestCases(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ImportTestCasesInput{}
+	body := http.MaxBytesReader(w, r.Body, maxTestCaseImportBodyBytes)
+	if err := json.NewDecoder(body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.store.ImportProjectTestCases(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (s *Server) handleOptimizeProjectTestCases(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := OptimizeTestCasesInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
+	cases := []TestCase{}
+	for _, caseID := range uniqueStrings(input.CaseIDs) {
+		testCase, err := s.store.GetProjectTestCase(r.Context(), user.ID, workspaceID, projectID, caseID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		cases = append(cases, testCase)
+	}
+	if len(cases) == 0 {
+		writeError(w, http.StatusBadRequest, errors.New("caseIds are required"))
+		return
+	}
+	projects, err := s.store.ListProjects(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	project, ok := projectByID(projects, projectID)
+	if !ok {
+		writeStoreError(w, ErrNotFound)
+		return
+	}
+	issueID, err := s.store.CreateIssue(r.Context(), user, workspaceID, CreateIssueInput{
+		ProjectID: projectID,
+		Title:     "Optimize test cases",
+		Body:      buildTestCaseOptimizationIssueBody(project, cases, input.Prompt),
+		LabelKeys: []string{"type:test"},
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	session, err := s.store.CreateAgentSession(r.Context(), user.ID, workspaceID, issueID, CreateAgentSessionInput{
+		Provider:     "codex",
+		AgentProfile: normalizeAgentProfile(input.AgentProfile),
+		RuntimeMode:  strings.ToLower(strings.TrimSpace(input.RuntimeMode)),
+		Command:      buildTestCaseOptimizationIssueBody(project, cases, input.Prompt),
+		Automation:   testCaseOptimizationAutomation,
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, TestCaseAgentSessionResult{IssueID: issueID, Session: session})
+}
+
+func (s *Server) handleGenerateProjectTestCases(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := GenerateTestCasesInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
+	projects, err := s.store.ListProjects(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	project, ok := projectByID(projects, projectID)
+	if !ok {
+		writeStoreError(w, ErrNotFound)
+		return
+	}
+	body := buildTestCaseGenerationIssueBody(project, input)
+	issueID, err := s.store.CreateIssue(r.Context(), user, workspaceID, CreateIssueInput{
+		ProjectID: projectID,
+		Title:     "Generate functional test cases",
+		Body:      body,
+		LabelKeys: []string{"type:test"},
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	session, err := s.store.CreateAgentSession(r.Context(), user.ID, workspaceID, issueID, CreateAgentSessionInput{
+		Provider:     "codex",
+		AgentProfile: normalizeAgentProfile(input.AgentProfile),
+		RuntimeMode:  strings.ToLower(strings.TrimSpace(input.RuntimeMode)),
+		Command:      body,
+		Automation:   testCaseGenerationAutomation,
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, TestCaseAgentSessionResult{IssueID: issueID, Session: session})
+}
+
+func (s *Server) handleListProjectTestCaseProposals(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	proposals, err := s.store.ListProjectTestCaseProposals(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), TestCaseProposalListOptions{
+		Status: strings.TrimSpace(r.URL.Query().Get("status")),
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, proposals)
+}
+
+func (s *Server) handleApplyProjectTestCaseProposal(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ReviewTestCaseProposalInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.store.ApplyProjectTestCaseProposal(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "proposalID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleRejectProjectTestCaseProposal(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ReviewTestCaseProposalInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	proposal, err := s.store.RejectProjectTestCaseProposal(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "proposalID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, proposal)
+}
+
+func (s *Server) handleListProjectTestPlans(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	plans, err := s.store.ListProjectTestPlans(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), TestPlanListOptions{
+		Status: strings.TrimSpace(r.URL.Query().Get("status")),
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, plans)
+}
+
+func (s *Server) handleCreateProjectTestPlan(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := TestPlanInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.CreateProjectTestPlan(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, detail)
+}
+
+func (s *Server) handleGetProjectTestPlan(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	detail, err := s.store.GetProjectTestPlan(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "planID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleUpdateProjectTestPlan(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := TestPlanInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.UpdateProjectTestPlan(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "planID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleStartProjectTestRun(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateTestRunInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.StartProjectTestRun(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "planID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, detail)
+}
+
+func (s *Server) handleGetProjectTestRun(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	detail, err := s.store.GetProjectTestRun(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "runID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleRetryProjectTestRun(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := RetryTestRunInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.RetryProjectTestRun(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "runID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAcceptProjectTestRun(w http.ResponseWriter, r *http.Request) {
+	s.handleReviewProjectTestRun(w, r, true)
+}
+
+func (s *Server) handleBlockProjectTestRun(w http.ResponseWriter, r *http.Request) {
+	s.handleReviewProjectTestRun(w, r, false)
+}
+
+func (s *Server) handleReviewProjectTestRun(w http.ResponseWriter, r *http.Request, accepted bool) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ReviewTestRunInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
+	runID := strings.TrimSpace(chi.URLParam(r, "runID"))
+	var (
+		run TestRun
+		err error
+	)
+	if accepted {
+		run, err = s.store.AcceptProjectTestRun(r.Context(), user.ID, workspaceID, projectID, runID, input)
+	} else {
+		run, err = s.store.BlockProjectTestRun(r.Context(), user.ID, workspaceID, projectID, runID, input)
+	}
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
+}
+
+func projectByID(projects []Project, projectID string) (Project, bool) {
+	projectID = strings.TrimSpace(projectID)
+	for _, project := range projects {
+		if project.ID == projectID {
+			return project, true
+		}
+	}
+	return Project{}, false
+}
+
+func (s *Server) handleGetProjectTestCase(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	testCase, err := s.store.GetProjectTestCase(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "caseID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, testCase)
+}
+
+func (s *Server) handleUpdateProjectTestCase(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := TestCaseInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	testCase, err := s.store.UpdateProjectTestCase(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "caseID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, testCase)
+}
+
+func (s *Server) handleListProjectTestCaseRevisions(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	revisions, err := s.store.ListProjectTestCaseRevisions(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "caseID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, revisions)
 }
 
 func (s *Server) handleListIssueLabelDefinitions(w http.ResponseWriter, r *http.Request) {

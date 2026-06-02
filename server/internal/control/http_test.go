@@ -87,6 +87,12 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	if payload.Capabilities["runtimeTaskQueue"] != true {
 		t.Fatalf("expected runtime task queue capability, got %+v", payload.Capabilities)
 	}
+	if payload.Capabilities["testCaseLibrary"] != true {
+		t.Fatalf("expected test case library capability, got %+v", payload.Capabilities)
+	}
+	if payload.Capabilities["testCaseWorkflow"] != true {
+		t.Fatalf("expected test case workflow capability, got %+v", payload.Capabilities)
+	}
 }
 
 func TestHealthReportsGitHubAuthCapability(t *testing.T) {
@@ -1451,6 +1457,335 @@ func TestIssueTypeTriageStoreTransitions(t *testing.T) {
 	}
 }
 
+func TestProjectTestCasesHTTPFlow(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "test-case-user",
+		Login:          "test-case-user",
+		Name:           "Test Case User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "mspace")
+
+	createRecorder := httptest.NewRecorder()
+	createBody := `{
+		"title":"Local password login succeeds",
+		"area":"auth",
+		"priority":"p1",
+		"status":"ready",
+		"preconditions":"A local account exists.",
+		"steps":[{"action":"Open the sign-in form"},{"action":"Submit a valid username and password","expected":"The workspace opens."}],
+		"expectedResult":"The user lands in the selected workspace.",
+		"environmentRequirements":"Personal desktop server is running.",
+		"tags":["auth","smoke"]
+	}`
+	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases", strings.NewReader(createBody))
+	createReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createRecorder, createReq)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create test case status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created TestCase
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("parse created test case: %v", err)
+	}
+	if created.ProjectID != project.ID || created.Status != "ready" || created.QualityScore < 80 {
+		t.Fatalf("unexpected created test case: %+v", created)
+	}
+
+	importRecorder := httptest.NewRecorder()
+	importReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/import", strings.NewReader(`{"format":"markdown","content":"- Invalid password shows an error\n- User can reset password from the login page"}`))
+	importReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(importRecorder, importReq)
+	if importRecorder.Code != http.StatusCreated {
+		t.Fatalf("import test cases status=%d body=%s", importRecorder.Code, importRecorder.Body.String())
+	}
+	var imported ImportTestCasesResult
+	if err := json.Unmarshal(importRecorder.Body.Bytes(), &imported); err != nil {
+		t.Fatalf("parse imported test cases: %v", err)
+	}
+	if len(imported.Created) != 2 || imported.Created[0].Source != "import" {
+		t.Fatalf("unexpected import result: %+v", imported)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases?status=ready", nil)
+	listReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(listRecorder, listReq)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list test cases status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var listed []TestCase
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("parse listed test cases: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != created.ID {
+		t.Fatalf("expected only ready created case, got %+v", listed)
+	}
+
+	updateRecorder := httptest.NewRecorder()
+	updateBody := `{
+		"title":"Local password login succeeds with saved workspace",
+		"area":"auth",
+		"priority":"p0",
+		"status":"ready",
+		"preconditions":"A local account exists and the personal server is reachable.",
+		"steps":[{"action":"Open the sign-in form"},{"action":"Submit a valid username and password","expected":"The workspace opens."}],
+		"expectedResult":"The selected workspace opens without showing the account creation screen.",
+		"environmentRequirements":"Personal desktop server is running.",
+		"tags":["auth","smoke"]
+	}`
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/"+created.ID, strings.NewReader(updateBody))
+	updateReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(updateRecorder, updateReq)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("update test case status=%d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	var updated TestCase
+	if err := json.Unmarshal(updateRecorder.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("parse updated test case: %v", err)
+	}
+	if updated.Priority != "p0" || updated.Title == created.Title {
+		t.Fatalf("unexpected updated test case: %+v", updated)
+	}
+
+	revisionsRecorder := httptest.NewRecorder()
+	revisionsReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/"+created.ID+"/revisions", nil)
+	revisionsReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(revisionsRecorder, revisionsReq)
+	if revisionsRecorder.Code != http.StatusOK {
+		t.Fatalf("list revisions status=%d body=%s", revisionsRecorder.Code, revisionsRecorder.Body.String())
+	}
+	var revisions []TestCaseRevision
+	if err := json.Unmarshal(revisionsRecorder.Body.Bytes(), &revisions); err != nil {
+		t.Fatalf("parse revisions: %v", err)
+	}
+	if len(revisions) != 2 || revisions[0].RevisionNumber != 2 || revisions[1].RevisionNumber != 1 {
+		t.Fatalf("expected two descending revisions, got %+v", revisions)
+	}
+}
+
+func TestProjectTestCasesAreProjectScoped(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "test-case-scope-user",
+		Login:          "test-case-scope-user",
+		Name:           "Test Case Scope User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	firstProject := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "first")
+	secondProject := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "second")
+
+	createRecorder := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+firstProject.ID+"/test-cases", strings.NewReader(`{"title":"Scoped case","steps":[{"action":"Run scoped case"}],"expectedResult":"It stays scoped."}`))
+	createReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createRecorder, createReq)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create test case status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created TestCase
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("parse created test case: %v", err)
+	}
+
+	wrongProjectRecorder := httptest.NewRecorder()
+	wrongProjectReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+secondProject.ID+"/test-cases/"+created.ID, nil)
+	wrongProjectReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(wrongProjectRecorder, wrongProjectReq)
+	if wrongProjectRecorder.Code != http.StatusNotFound {
+		t.Fatalf("expected not found across projects, status=%d body=%s", wrongProjectRecorder.Code, wrongProjectRecorder.Body.String())
+	}
+}
+
+func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "test-module-user",
+		Login:          "test-module-user",
+		Name:           "Test Module User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "test-module")
+	tokenResult, worker := registerTestRuntimeWorker(t, router, sessionToken, workspaceID)
+
+	existingCase := createProjectTestCaseViaHTTP(t, router, sessionToken, workspaceID, project.ID, `{
+		"title":"Password login opens the workspace",
+		"area":"auth",
+		"priority":"p1",
+		"status":"ready",
+		"preconditions":"A local account exists.",
+		"steps":[{"action":"Open the sign-in form","expected":"The password form is visible."},{"action":"Submit valid credentials","expected":"The workspace opens."}],
+		"expectedResult":"The selected workspace opens.",
+		"environmentRequirements":"Personal desktop server is running.",
+		"tags":["auth"]
+	}`)
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Title:     "Optimize test module cases",
+		Body:      "Ask Codex to refine and generate functional cases.",
+	})
+	if err != nil {
+		t.Fatalf("create optimization issue: %v", err)
+	}
+	session, err := store.CreateAgentSession(context.Background(), user.ID, workspaceID, issueID, CreateAgentSessionInput{
+		Provider:     "codex",
+		AgentProfile: "codex",
+		RuntimeMode:  "personal",
+		Command:      "Write test-case-proposals.json.",
+		Automation:   testCaseOptimizationAutomation,
+	})
+	if err != nil {
+		t.Fatalf("create optimization session: %v", err)
+	}
+	proposalResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testCaseProposals":{"summary":"proposal batch","proposals":[
+		{"type":"create","title":"Invalid generated proposal","proposedCase":{"title":"","steps":[],"expectedResult":""}},
+		{"type":"create","title":"Valid generated logout case","proposedCase":{"title":"Logout returns to sign-in","area":"auth","priority":"p1","status":"ready","preconditions":"A signed-in user is in the workspace.","steps":[{"action":"Open the account menu","expected":"Logout is available."},{"action":"Click logout","expected":"The sign-in form appears."}],"expectedResult":"The signed-out user sees the sign-in form.","environmentRequirements":"Personal desktop server is running.","tags":["auth","regression"]}},
+		{"type":"update","caseId":%q,"title":"Refine password login case","proposedCase":{"title":"Password login opens the last selected workspace","area":"auth","priority":"p0","status":"ready","preconditions":"A local account exists and a workspace was previously selected.","steps":[{"action":"Open the sign-in form","expected":"The password form is visible."},{"action":"Submit valid credentials","expected":"The previous workspace opens."}],"expectedResult":"The selected workspace opens without returning to account creation.","environmentRequirements":"Personal desktop server is running.","tags":["auth","smoke"]}}
+	]}}}`, existingCase.ID)
+	completedOptimizationTask, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, proposalResult)
+	if err != nil {
+		t.Fatalf("complete proposal task: %v", err)
+	}
+	if completedOptimizationTask.SessionID != session.ID {
+		t.Fatalf("expected optimization session %s, got task %+v", session.ID, completedOptimizationTask)
+	}
+
+	proposals := listProjectTestCaseProposalsViaHTTP(t, router, sessionToken, workspaceID, project.ID)
+	if len(proposals) != 3 {
+		t.Fatalf("expected three proposals, got %+v", proposals)
+	}
+	invalidProposal := findTestCaseProposal(t, proposals, "Invalid generated proposal")
+	if invalidProposal.Status != "invalid" || len(invalidProposal.ValidationErrors) == 0 {
+		t.Fatalf("expected invalid proposal with validation errors, got %+v", invalidProposal)
+	}
+	applyInvalidRecorder := httptest.NewRecorder()
+	applyInvalidReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-case-proposals/"+invalidProposal.ID+"/apply", strings.NewReader(`{"note":"try invalid"}`))
+	applyInvalidReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(applyInvalidRecorder, applyInvalidReq)
+	if applyInvalidRecorder.Code != http.StatusConflict {
+		t.Fatalf("expected invalid proposal apply conflict, status=%d body=%s", applyInvalidRecorder.Code, applyInvalidRecorder.Body.String())
+	}
+
+	createProposal := findTestCaseProposal(t, proposals, "Valid generated logout case")
+	createdFromProposal := applyProjectTestCaseProposalViaHTTP(t, router, sessionToken, workspaceID, project.ID, createProposal.ID, "accept generated case")
+	if createdFromProposal.Proposal.Status != "applied" || createdFromProposal.TestCase == nil || createdFromProposal.TestCase.Status != "ready" {
+		t.Fatalf("unexpected applied create proposal result: %+v", createdFromProposal)
+	}
+	updateProposal := findTestCaseProposal(t, proposals, "Refine password login case")
+	updatedFromProposal := applyProjectTestCaseProposalViaHTTP(t, router, sessionToken, workspaceID, project.ID, updateProposal.ID, "accept refinement")
+	if updatedFromProposal.Proposal.Status != "applied" || updatedFromProposal.TestCase == nil || updatedFromProposal.TestCase.ID != existingCase.ID || updatedFromProposal.TestCase.Priority != "p0" {
+		t.Fatalf("unexpected applied update proposal result: %+v", updatedFromProposal)
+	}
+	revisions := listProjectTestCaseRevisionsViaHTTP(t, router, sessionToken, workspaceID, project.ID, existingCase.ID)
+	if len(revisions) != 2 || revisions[0].RevisionNumber != 2 {
+		t.Fatalf("expected update proposal to create a second revision, got %+v", revisions)
+	}
+
+	plan := createProjectTestPlanViaHTTP(t, router, sessionToken, workspaceID, project.ID, fmt.Sprintf(`{
+		"title":"rc4 functional test plan",
+		"description":"Functional regression for auth.",
+		"status":"ready",
+		"targetType":"branch",
+		"targetValue":"release/rc4",
+		"environment":"personal desktop",
+		"caseIds":[%q,%q]
+	}`, existingCase.ID, createdFromProposal.TestCase.ID))
+	if plan.Plan.Status != "ready" || plan.Plan.CaseCount != 2 || len(plan.Cases) != 2 {
+		t.Fatalf("unexpected created plan: %+v", plan)
+	}
+
+	run := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":1}`)
+	if run.Run.Status != "running" || run.Run.TotalCount != 2 || run.Run.ParentIssueID == "" || len(run.Items) != 2 {
+		t.Fatalf("unexpected started run: %+v", run)
+	}
+	parentIssue, err := store.GetIssue(context.Background(), user.ID, workspaceID, run.Run.ParentIssueID)
+	if err != nil {
+		t.Fatalf("get run parent issue: %v", err)
+	}
+	if parentIssue.Issue.Title != "Test run: rc4 functional test plan" {
+		t.Fatalf("unexpected parent issue: %+v", parentIssue.Issue)
+	}
+	for _, item := range run.Items {
+		if item.Status != "running" || item.ExecutionIssueID == "" || item.AgentSessionID == "" {
+			t.Fatalf("expected running item with execution issue and session, got %+v", item)
+		}
+		childIssue, err := store.GetIssue(context.Background(), user.ID, workspaceID, item.ExecutionIssueID)
+		if err != nil {
+			t.Fatalf("get child issue: %v", err)
+		}
+		if childIssue.Issue.ParentIssueID != run.Run.ParentIssueID {
+			t.Fatalf("expected child issue under parent %s, got %+v", run.Run.ParentIssueID, childIssue.Issue)
+		}
+		if _, err := store.GetSession(context.Background(), user.ID, workspaceID, item.AgentSessionID); err != nil {
+			t.Fatalf("get item agent session: %v", err)
+		}
+	}
+
+	firstItem := run.Items[0]
+	secondItem := run.Items[1]
+	firstResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"passed","actualResult":"Passed in Codex.","evidence":{"commands":["pnpm test"]}}]}}}`, run.Run.ID, firstItem.TestCaseID)
+	if _, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, firstResult); err != nil {
+		t.Fatalf("complete first result task: %v", err)
+	}
+	partialRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, run.Run.ID)
+	if partialRun.Run.Status != "running" || partialRun.Run.PassedCount != 1 || partialRun.Run.FailedCount != 0 {
+		t.Fatalf("unexpected partial run counts: %+v", partialRun.Run)
+	}
+	secondResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"failed","actualResult":"The logout button did not return to sign-in.","failureSummary":"Logout stayed on workspace.","evidence":{"screenshot":"logout-failed.png"}}]}}}`, run.Run.ID, secondItem.TestCaseID)
+	if _, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, secondResult); err != nil {
+		t.Fatalf("complete second result task: %v", err)
+	}
+	completedRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, run.Run.ID)
+	if completedRun.Run.Status != "needs_acceptance" || completedRun.Run.PassedCount != 1 || completedRun.Run.FailedCount != 1 || completedRun.Run.CompletedAt == "" {
+		t.Fatalf("expected completed run to need acceptance, got %+v", completedRun.Run)
+	}
+	failedItem := findTestRunItem(t, completedRun.Items, secondItem.TestCaseID)
+	if failedItem.Status != "failed" || failedItem.FailureSummary != "Logout stayed on workspace." || !strings.Contains(string(failedItem.Evidence), "logout-failed.png") {
+		t.Fatalf("unexpected failed item: %+v", failedItem)
+	}
+
+	acceptedRun := reviewProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, run.Run.ID, "accept", "Accepted with known follow-up.")
+	if acceptedRun.Status != "accepted" || acceptedRun.AcceptanceStatus != "accepted" || acceptedRun.AcceptanceNote != "Accepted with known follow-up." {
+		t.Fatalf("unexpected accepted run: %+v", acceptedRun)
+	}
+	blockedRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	blockedReview := reviewProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, blockedRun.Run.ID, "block", "Blocked by release environment.")
+	if blockedReview.Status != "blocked" || blockedReview.AcceptanceStatus != "blocked" || blockedReview.AcceptanceNote != "Blocked by release environment." {
+		t.Fatalf("unexpected blocked run: %+v", blockedReview)
+	}
+}
+
 func TestIssueTypeTriageRuntimeTaskResultAppliesLabel(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
@@ -2585,6 +2920,173 @@ func registerTestRuntimeWorker(t *testing.T, router http.Handler, sessionToken, 
 		t.Fatalf("parse worker: %v", err)
 	}
 	return tokenResult, worker
+}
+
+func createTestProjectViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, name string) Project {
+	t.Helper()
+	body := fmt.Sprintf(`{"name":%q,"sourceType":"local","repoPath":%q,"defaultBranch":"main"}`, name, "/tmp/"+name)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create project status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var project Project
+	if err := json.Unmarshal(recorder.Body.Bytes(), &project); err != nil {
+		t.Fatalf("parse project: %v", err)
+	}
+	return project
+}
+
+func createProjectTestCaseViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, body string) TestCase {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-cases", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create test case status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var testCase TestCase
+	if err := json.Unmarshal(recorder.Body.Bytes(), &testCase); err != nil {
+		t.Fatalf("parse test case: %v", err)
+	}
+	return testCase
+}
+
+func listProjectTestCaseProposalsViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID string) []TestCaseProposal {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-case-proposals", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list proposals status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var proposals []TestCaseProposal
+	if err := json.Unmarshal(recorder.Body.Bytes(), &proposals); err != nil {
+		t.Fatalf("parse proposals: %v", err)
+	}
+	return proposals
+}
+
+func findTestCaseProposal(t *testing.T, proposals []TestCaseProposal, title string) TestCaseProposal {
+	t.Helper()
+	for _, proposal := range proposals {
+		if proposal.Title == title {
+			return proposal
+		}
+	}
+	t.Fatalf("proposal %q not found in %+v", title, proposals)
+	return TestCaseProposal{}
+}
+
+func applyProjectTestCaseProposalViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, proposalID, note string) ApplyTestCaseProposalResult {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-case-proposals/"+proposalID+"/apply", strings.NewReader(fmt.Sprintf(`{"note":%q}`, note)))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("apply proposal status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var result ApplyTestCaseProposalResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatalf("parse proposal apply result: %v", err)
+	}
+	return result
+}
+
+func listProjectTestCaseRevisionsViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, caseID string) []TestCaseRevision {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-cases/"+caseID+"/revisions", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list revisions status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var revisions []TestCaseRevision
+	if err := json.Unmarshal(recorder.Body.Bytes(), &revisions); err != nil {
+		t.Fatalf("parse revisions: %v", err)
+	}
+	return revisions
+}
+
+func createProjectTestPlanViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, body string) TestPlanDetail {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-plans", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create test plan status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var detail TestPlanDetail
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("parse test plan: %v", err)
+	}
+	return detail
+}
+
+func startProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, planID, body string) TestRunDetail {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-plans/"+planID+"/runs", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("start test run status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var detail TestRunDetail
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("parse test run: %v", err)
+	}
+	return detail
+}
+
+func getProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, runID string) TestRunDetail {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-runs/"+runID, nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("get test run status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var detail TestRunDetail
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("parse test run detail: %v", err)
+	}
+	return detail
+}
+
+func reviewProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, runID, action, note string) TestRun {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-runs/"+runID+"/"+action, strings.NewReader(fmt.Sprintf(`{"note":%q}`, note)))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("%s test run status=%d body=%s", action, recorder.Code, recorder.Body.String())
+	}
+	var run TestRun
+	if err := json.Unmarshal(recorder.Body.Bytes(), &run); err != nil {
+		t.Fatalf("parse reviewed test run: %v", err)
+	}
+	return run
+}
+
+func findTestRunItem(t *testing.T, items []TestRunItem, caseID string) TestRunItem {
+	t.Helper()
+	for _, item := range items {
+		if item.TestCaseID == caseID {
+			return item
+		}
+	}
+	t.Fatalf("test run item for case %s not found in %+v", caseID, items)
+	return TestRunItem{}
 }
 
 func claimAndCompleteTask(t *testing.T, router http.Handler, token, workerID, completionPayload string) (RuntimeTask, error) {

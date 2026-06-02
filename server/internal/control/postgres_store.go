@@ -2560,6 +2560,7 @@ func normalizeCreateAgentSessionInput(input CreateAgentSessionInput) CreateAgent
 	input.SourceCommitSHA = strings.TrimSpace(input.SourceCommitSHA)
 	input.TriggerCommentID = strings.TrimSpace(input.TriggerCommentID)
 	input.Automation = strings.TrimSpace(input.Automation)
+	input.TestRunID = strings.TrimSpace(input.TestRunID)
 	return input
 }
 

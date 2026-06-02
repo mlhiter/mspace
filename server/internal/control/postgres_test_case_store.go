@@ -1,0 +1,1679 @@
+package control
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func (s *PostgresStore) ListProjectTestCases(ctx Context, userID, workspaceID, projectID string, options TestCaseListOptions) ([]TestCase, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	if err := ensureProjectInWorkspace(dbctx, s.pool, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	status := strings.ToLower(strings.TrimSpace(options.Status))
+	query := strings.ToLower(strings.TrimSpace(options.Query))
+	rows, err := s.pool.Query(dbctx, `
+		SELECT
+			id::text,
+			workspace_id::text,
+			project_id::text,
+			title,
+			type,
+			area,
+			priority,
+			status,
+			source,
+			preconditions,
+			steps,
+			expected_result,
+			environment_requirements,
+			dependencies,
+			tags,
+			quality_score,
+			quality_findings,
+			COALESCE(created_by_user_id::text, ''),
+			created_at,
+			updated_at
+		FROM test_cases
+		WHERE workspace_id = $1
+			AND project_id = $2
+			AND ($3 = '' OR status = $3)
+			AND ($4 = '' OR lower(title || ' ' || area || ' ' || tags::text) LIKE '%' || $4 || '%')
+		ORDER BY updated_at DESC, created_at DESC
+	`, workspaceID, projectID, status, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	cases := []TestCase{}
+	for rows.Next() {
+		testCase, err := scanTestCase(rows)
+		if err != nil {
+			return nil, err
+		}
+		cases = append(cases, testCase)
+	}
+	return cases, rows.Err()
+}
+
+func (s *PostgresStore) CreateProjectTestCase(ctx Context, userID, workspaceID, projectID string, input TestCaseInput) (TestCase, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	normalized, score, findings, err := normalizeTestCaseInput(input, defaultTestCaseSource)
+	if err != nil {
+		return TestCase{}, err
+	}
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return TestCase{}, err
+	}
+	if err := ensureProjectInWorkspace(dbctx, s.pool, workspaceID, projectID); err != nil {
+		return TestCase{}, err
+	}
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return TestCase{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	testCase, err := insertProjectTestCase(dbctx, tx, workspaceID, projectID, userID, normalized, score, findings)
+	if err != nil {
+		return TestCase{}, err
+	}
+	if err := insertProjectTestCaseRevision(dbctx, tx, testCase, userID); err != nil {
+		return TestCase{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return TestCase{}, err
+	}
+	return testCase, nil
+}
+
+func (s *PostgresStore) ImportProjectTestCases(ctx Context, userID, workspaceID, projectID string, input ImportTestCasesInput) (ImportTestCasesResult, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	inputs, skipped, err := parseImportedTestCases(input)
+	if err != nil {
+		return ImportTestCasesResult{}, err
+	}
+	if len(inputs) == 0 {
+		return ImportTestCasesResult{}, errors.New("content cannot be empty")
+	}
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return ImportTestCasesResult{}, err
+	}
+	if err := ensureProjectInWorkspace(dbctx, s.pool, workspaceID, projectID); err != nil {
+		return ImportTestCasesResult{}, err
+	}
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return ImportTestCasesResult{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	result := ImportTestCasesResult{Created: []TestCase{}, Skipped: skipped}
+	for _, imported := range inputs {
+		normalized, score, findings, err := normalizeTestCaseInput(imported, defaultImportedCaseSource)
+		if err != nil {
+			result.Skipped = append(result.Skipped, TestCaseImportSkip{Reason: err.Error(), Content: imported.Title})
+			continue
+		}
+		normalized.Source = defaultImportedCaseSource
+		testCase, err := insertProjectTestCase(dbctx, tx, workspaceID, projectID, userID, normalized, score, findings)
+		if err != nil {
+			return ImportTestCasesResult{}, err
+		}
+		if err := insertProjectTestCaseRevision(dbctx, tx, testCase, userID); err != nil {
+			return ImportTestCasesResult{}, err
+		}
+		result.Created = append(result.Created, testCase)
+	}
+	if len(result.Created) == 0 {
+		return ImportTestCasesResult{}, errors.New("content cannot be empty")
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return ImportTestCasesResult{}, err
+	}
+	return result, nil
+}
+
+func (s *PostgresStore) GetProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string) (TestCase, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	caseID = strings.TrimSpace(caseID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return TestCase{}, err
+	}
+	row := s.pool.QueryRow(dbctx, testCaseSelectQuery(`
+		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+	`), workspaceID, projectID, caseID)
+	testCase, err := scanTestCase(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TestCase{}, ErrNotFound
+	}
+	return testCase, err
+}
+
+func (s *PostgresStore) UpdateProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string, input TestCaseInput) (TestCase, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	caseID = strings.TrimSpace(caseID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return TestCase{}, err
+	}
+	existing, err := loadProjectTestCase(dbctx, s.pool, workspaceID, projectID, caseID)
+	if err != nil {
+		return TestCase{}, err
+	}
+	if input.Source == "" {
+		input.Source = existing.Source
+	}
+	normalized, score, findings, err := normalizeTestCaseInput(input, existing.Source)
+	if err != nil {
+		return TestCase{}, err
+	}
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return TestCase{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	updated, err := updateProjectTestCase(dbctx, tx, workspaceID, projectID, caseID, normalized, score, findings)
+	if err != nil {
+		return TestCase{}, err
+	}
+	if err := insertProjectTestCaseRevision(dbctx, tx, updated, userID); err != nil {
+		return TestCase{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return TestCase{}, err
+	}
+	return updated, nil
+}
+
+func (s *PostgresStore) ListProjectTestCaseRevisions(ctx Context, userID, workspaceID, projectID, caseID string) ([]TestCaseRevision, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	caseID = strings.TrimSpace(caseID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	if _, err := loadProjectTestCase(dbctx, s.pool, workspaceID, projectID, caseID); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT
+			id::text,
+			workspace_id::text,
+			project_id::text,
+			case_id::text,
+			COALESCE(author_user_id::text, ''),
+			revision_number,
+			snapshot,
+			created_at
+		FROM test_case_revisions
+		WHERE workspace_id = $1 AND project_id = $2 AND case_id = $3
+		ORDER BY revision_number DESC
+	`, workspaceID, projectID, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	revisions := []TestCaseRevision{}
+	for rows.Next() {
+		revision, err := scanTestCaseRevision(rows)
+		if err != nil {
+			return nil, err
+		}
+		revisions = append(revisions, revision)
+	}
+	return revisions, rows.Err()
+}
+
+func (s *PostgresStore) ListProjectTestCaseProposals(ctx Context, userID, workspaceID, projectID string, options TestCaseProposalListOptions) ([]TestCaseProposal, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	if err := ensureProjectInWorkspace(dbctx, s.pool, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	status := normalizeProposalStatus(options.Status)
+	if strings.TrimSpace(options.Status) != "" && status == "" {
+		return nil, errors.New("status must be pending, applied, rejected, or invalid")
+	}
+	rows, err := s.pool.Query(dbctx, testCaseProposalSelectQuery(`
+		WHERE p.workspace_id = $1
+			AND p.project_id = $2
+			AND ($3 = '' OR p.status = $3)
+		ORDER BY p.updated_at DESC, p.created_at DESC
+	`), workspaceID, projectID, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	proposals := []TestCaseProposal{}
+	for rows.Next() {
+		proposal, err := scanTestCaseProposal(rows)
+		if err != nil {
+			return nil, err
+		}
+		proposals = append(proposals, proposal)
+	}
+	return proposals, rows.Err()
+}
+
+func (s *PostgresStore) ApplyProjectTestCaseProposal(ctx Context, userID, workspaceID, projectID, proposalID string, input ReviewTestCaseProposalInput) (ApplyTestCaseProposalResult, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	proposalID = strings.TrimSpace(proposalID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return ApplyTestCaseProposalResult{}, err
+	}
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return ApplyTestCaseProposalResult{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	proposal, err := loadTestCaseProposal(dbctx, tx, workspaceID, projectID, proposalID)
+	if err != nil {
+		return ApplyTestCaseProposalResult{}, err
+	}
+	if proposal.Status != "pending" {
+		return ApplyTestCaseProposalResult{}, ErrConflict
+	}
+	if len(proposal.ValidationErrors) > 0 {
+		return ApplyTestCaseProposalResult{}, errors.New("proposal has validation errors")
+	}
+	var applied *TestCase
+	switch proposal.ProposalType {
+	case "create":
+		next := proposal.ProposedCase
+		next.Source = "codex_generated"
+		if next.Status == "" {
+			next.Status = "needs_review"
+		}
+		normalized, score, findings, err := normalizeTestCaseInput(next, "codex_generated")
+		if err != nil {
+			return ApplyTestCaseProposalResult{}, err
+		}
+		testCase, err := insertProjectTestCase(dbctx, tx, workspaceID, projectID, userID, normalized, score, findings)
+		if err != nil {
+			return ApplyTestCaseProposalResult{}, err
+		}
+		if err := insertProjectTestCaseRevision(dbctx, tx, testCase, userID); err != nil {
+			return ApplyTestCaseProposalResult{}, err
+		}
+		applied = cloneTestCasePointer(testCase)
+		proposal.AppliedCaseID = testCase.ID
+	case "update", "archive":
+		existing, err := loadProjectTestCase(dbctx, tx, workspaceID, projectID, proposal.TargetCaseID)
+		if err != nil {
+			return ApplyTestCaseProposalResult{}, err
+		}
+		next := proposal.ProposedCase
+		if proposal.ProposalType == "archive" {
+			next = testCaseToInput(existing)
+			next.Status = "archived"
+		}
+		next.Source = "codex_refined"
+		normalized, score, findings, err := normalizeTestCaseInput(next, "codex_refined")
+		if err != nil {
+			return ApplyTestCaseProposalResult{}, err
+		}
+		updated, err := updateProjectTestCase(dbctx, tx, workspaceID, projectID, existing.ID, normalized, score, findings)
+		if err != nil {
+			return ApplyTestCaseProposalResult{}, err
+		}
+		if err := insertProjectTestCaseRevision(dbctx, tx, updated, userID); err != nil {
+			return ApplyTestCaseProposalResult{}, err
+		}
+		applied = cloneTestCasePointer(updated)
+		proposal.AppliedCaseID = updated.ID
+	default:
+		return ApplyTestCaseProposalResult{}, errors.New("proposal type must be create, update, or archive")
+	}
+	reviewed, err := reviewTestCaseProposalRecord(dbctx, tx, workspaceID, projectID, proposal.ID, "applied", userID, proposal.AppliedCaseID, input.Note)
+	if err != nil {
+		return ApplyTestCaseProposalResult{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return ApplyTestCaseProposalResult{}, err
+	}
+	return ApplyTestCaseProposalResult{Proposal: reviewed, TestCase: applied}, nil
+}
+
+func (s *PostgresStore) RejectProjectTestCaseProposal(ctx Context, userID, workspaceID, projectID, proposalID string, input ReviewTestCaseProposalInput) (TestCaseProposal, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	proposalID = strings.TrimSpace(proposalID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return TestCaseProposal{}, err
+	}
+	proposal, err := loadTestCaseProposal(dbctx, s.pool, workspaceID, projectID, proposalID)
+	if err != nil {
+		return TestCaseProposal{}, err
+	}
+	if proposal.Status != "pending" && proposal.Status != "invalid" {
+		return TestCaseProposal{}, ErrConflict
+	}
+	return reviewTestCaseProposalRecord(dbctx, s.pool, workspaceID, projectID, proposalID, "rejected", userID, "", input.Note)
+}
+
+func (s *PostgresStore) ListProjectTestPlans(ctx Context, userID, workspaceID, projectID string, options TestPlanListOptions) ([]TestPlan, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	if err := ensureProjectInWorkspace(dbctx, s.pool, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	status := strings.ToLower(strings.TrimSpace(options.Status))
+	if status != "" && status != "draft" && status != "ready" && status != "archived" {
+		return nil, errors.New("status must be draft, ready, or archived")
+	}
+	rows, err := s.pool.Query(dbctx, testPlanSelectQuery(`
+		WHERE p.workspace_id = $1 AND p.project_id = $2 AND ($3 = '' OR p.status = $3)
+		ORDER BY p.updated_at DESC, p.created_at DESC
+	`), workspaceID, projectID, status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	plans := []TestPlan{}
+	for rows.Next() {
+		plan, err := scanTestPlan(rows)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, plan)
+	}
+	return plans, rows.Err()
+}
+
+func (s *PostgresStore) CreateProjectTestPlan(ctx Context, userID, workspaceID, projectID string, input TestPlanInput) (TestPlanDetail, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return TestPlanDetail{}, err
+	}
+	if err := ensureProjectInWorkspace(dbctx, s.pool, workspaceID, projectID); err != nil {
+		return TestPlanDetail{}, err
+	}
+	normalized, err := normalizeTestPlanInput(input)
+	if err != nil {
+		return TestPlanDetail{}, err
+	}
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return TestPlanDetail{}, err
+	}
+	defer tx.Rollback(dbctx)
+	if err := ensureReadyTestCasesForPlan(dbctx, tx, workspaceID, projectID, normalized.CaseIDs); err != nil {
+		return TestPlanDetail{}, err
+	}
+	plan, err := insertTestPlanRecord(dbctx, tx, workspaceID, projectID, userID, normalized)
+	if err != nil {
+		return TestPlanDetail{}, err
+	}
+	if err := replaceTestPlanCaseRecords(dbctx, tx, plan, normalized.CaseIDs); err != nil {
+		return TestPlanDetail{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return TestPlanDetail{}, err
+	}
+	return s.GetProjectTestPlan(ctx, userID, workspaceID, projectID, plan.ID)
+}
+
+func (s *PostgresStore) GetProjectTestPlan(ctx Context, userID, workspaceID, projectID, planID string) (TestPlanDetail, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	planID = strings.TrimSpace(planID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return TestPlanDetail{}, err
+	}
+	plan, err := loadTestPlan(dbctx, s.pool, workspaceID, projectID, planID)
+	if err != nil {
+		return TestPlanDetail{}, err
+	}
+	cases, err := listTestPlanCases(dbctx, s.pool, workspaceID, projectID, planID)
+	if err != nil {
+		return TestPlanDetail{}, err
+	}
+	runs, err := listTestRunsForPlan(dbctx, s.pool, workspaceID, projectID, planID)
+	if err != nil {
+		return TestPlanDetail{}, err
+	}
+	return TestPlanDetail{Plan: plan, Cases: cases, Runs: runs}, nil
+}
+
+func (s *PostgresStore) UpdateProjectTestPlan(ctx Context, userID, workspaceID, projectID, planID string, input TestPlanInput) (TestPlanDetail, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	planID = strings.TrimSpace(planID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return TestPlanDetail{}, err
+	}
+	normalized, err := normalizeTestPlanInput(input)
+	if err != nil {
+		return TestPlanDetail{}, err
+	}
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return TestPlanDetail{}, err
+	}
+	defer tx.Rollback(dbctx)
+	if _, err := loadTestPlan(dbctx, tx, workspaceID, projectID, planID); err != nil {
+		return TestPlanDetail{}, err
+	}
+	if err := ensureReadyTestCasesForPlan(dbctx, tx, workspaceID, projectID, normalized.CaseIDs); err != nil {
+		return TestPlanDetail{}, err
+	}
+	if _, err := updateTestPlanRecord(dbctx, tx, workspaceID, projectID, planID, normalized); err != nil {
+		return TestPlanDetail{}, err
+	}
+	if err := replaceTestPlanCaseRecords(dbctx, tx, TestPlan{ID: planID, WorkspaceID: workspaceID, ProjectID: projectID}, normalized.CaseIDs); err != nil {
+		return TestPlanDetail{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return TestPlanDetail{}, err
+	}
+	return s.GetProjectTestPlan(ctx, userID, workspaceID, projectID, planID)
+}
+
+func (s *PostgresStore) StartProjectTestRun(ctx Context, user User, workspaceID, projectID, planID string, input CreateTestRunInput) (TestRunDetail, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	planID = strings.TrimSpace(planID)
+	workspace, err := loadWorkspaceForUser(dbctx, s.pool, workspaceID, user.ID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	plan, err := loadTestPlan(dbctx, s.pool, workspaceID, projectID, planID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	normalized, err := normalizeCreateTestRunInput(input, plan)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if normalized.RuntimeMode == "" {
+		normalized.RuntimeMode = workspace.Kind
+	}
+	if normalized.RuntimeMode != workspace.Kind {
+		return TestRunDetail{}, ErrForbidden
+	}
+	hasActiveWorker, err := s.hasActiveCodexWorker(dbctx, workspaceID, normalized.RuntimeMode)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if !hasActiveWorker {
+		return TestRunDetail{}, ErrNoActiveCodexWorker
+	}
+	planCases, err := listTestPlanCaseSnapshots(dbctx, s.pool, workspaceID, projectID, planID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if len(planCases) == 0 {
+		return TestRunDetail{}, errors.New("plan has no test cases")
+	}
+	run := TestRun{
+		ID:               "",
+		WorkspaceID:      workspaceID,
+		ProjectID:        projectID,
+		PlanID:           planID,
+		Status:           "running",
+		TargetType:       normalized.TargetType,
+		TargetValue:      normalized.TargetValue,
+		Environment:      normalized.Environment,
+		TotalCount:       len(planCases),
+		AcceptanceStatus: "pending",
+		CreatedByUserID:  user.ID,
+	}
+	parentIssueID, err := s.CreateIssue(ctx, user, workspaceID, CreateIssueInput{
+		ProjectID: projectID,
+		Title:     "Test run: " + plan.Title,
+		Body:      buildTestRunParentIssueBody(plan, run),
+		LabelKeys: []string{"type:test"},
+	})
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	defer tx.Rollback(dbctx)
+	run, err = insertTestRunRecord(dbctx, tx, run, parentIssueID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if err := insertTestRunItems(dbctx, tx, run, planCases); err != nil {
+		return TestRunDetail{}, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return TestRunDetail{}, err
+	}
+	if err := s.startPostgresTestRunExecutionSessions(ctx, user.ID, run, normalized); err != nil {
+		return TestRunDetail{}, err
+	}
+	return s.GetProjectTestRun(ctx, user.ID, workspaceID, projectID, run.ID)
+}
+
+func (s *PostgresStore) GetProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string) (TestRunDetail, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	runID = strings.TrimSpace(runID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return TestRunDetail{}, err
+	}
+	run, err := loadTestRun(dbctx, s.pool, workspaceID, projectID, runID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	plan, err := loadTestPlan(dbctx, s.pool, workspaceID, projectID, run.PlanID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	items, err := listTestRunItems(dbctx, s.pool, workspaceID, projectID, runID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	run.TotalCount = len(items)
+	run.PassedCount, run.FailedCount, run.BlockedCount, run.SkippedCount = testRunCounts(items)
+	return TestRunDetail{Run: run, Plan: plan, Items: items}, nil
+}
+
+func (s *PostgresStore) RetryProjectTestRun(ctx Context, user User, workspaceID, projectID, runID string, input RetryTestRunInput) (TestRunDetail, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	runID = strings.TrimSpace(runID)
+	workspace, err := loadWorkspaceForUser(dbctx, s.pool, workspaceID, user.ID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	run, err := loadTestRun(dbctx, s.pool, workspaceID, projectID, runID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	normalized := normalizeRetryTestRunInput(input)
+	if normalized.RuntimeMode == "" {
+		normalized.RuntimeMode = workspace.Kind
+	}
+	if normalized.RuntimeMode != workspace.Kind {
+		return TestRunDetail{}, ErrForbidden
+	}
+	hasActiveWorker, err := s.hasActiveCodexWorker(dbctx, workspaceID, normalized.RuntimeMode)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if !hasActiveWorker {
+		return TestRunDetail{}, ErrNoActiveCodexWorker
+	}
+	if err := resetTestRunItemsForRetry(dbctx, s.pool, workspaceID, projectID, runID, normalized.ItemIDs); err != nil {
+		return TestRunDetail{}, err
+	}
+	if _, err := s.pool.Exec(dbctx, `
+		UPDATE test_runs
+		SET status = 'running', acceptance_status = 'pending', acceptance_note = '', updated_at = now()
+		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+	`, workspaceID, projectID, runID); err != nil {
+		return TestRunDetail{}, err
+	}
+	if err := s.startPostgresTestRunExecutionSessions(ctx, user.ID, run, CreateTestRunInput{AgentProfile: normalized.AgentProfile, RuntimeMode: normalized.RuntimeMode, BatchSize: defaultTestRunBatchSize}); err != nil {
+		return TestRunDetail{}, err
+	}
+	return s.GetProjectTestRun(ctx, user.ID, workspaceID, projectID, runID)
+}
+
+func (s *PostgresStore) AcceptProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string, input ReviewTestRunInput) (TestRun, error) {
+	return reviewTestRunRecord(asContext(ctx), s.pool, userID, workspaceID, projectID, runID, "accepted", input.Note)
+}
+
+func (s *PostgresStore) BlockProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string, input ReviewTestRunInput) (TestRun, error) {
+	return reviewTestRunRecord(asContext(ctx), s.pool, userID, workspaceID, projectID, runID, "blocked", input.Note)
+}
+
+func ensureProjectInWorkspace(ctx context.Context, q queryer, workspaceID, projectID string) error {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return errors.New("projectId is required")
+	}
+	var exists bool
+	if err := q.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM projects WHERE workspace_id = $1 AND id = $2)
+	`, strings.TrimSpace(workspaceID), projectID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func insertProjectTestCase(ctx context.Context, q queryer, workspaceID, projectID, userID string, input TestCaseInput, score int, findings []TestCaseQualityFinding) (TestCase, error) {
+	steps, err := encodeJSON(input.Steps)
+	if err != nil {
+		return TestCase{}, err
+	}
+	dependencies, err := encodeJSON(input.Dependencies)
+	if err != nil {
+		return TestCase{}, err
+	}
+	tags, err := encodeJSON(input.Tags)
+	if err != nil {
+		return TestCase{}, err
+	}
+	qualityFindings, err := encodeJSON(findings)
+	if err != nil {
+		return TestCase{}, err
+	}
+	row := q.QueryRow(ctx, `
+		WITH inserted AS (
+			INSERT INTO test_cases (
+				workspace_id,
+				project_id,
+				title,
+				type,
+				area,
+				priority,
+				status,
+				source,
+				preconditions,
+				steps,
+				expected_result,
+				environment_requirements,
+				dependencies,
+				tags,
+				quality_score,
+				quality_findings,
+				created_by_user_id
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13::jsonb, $14::jsonb, $15, $16::jsonb, NULLIF($17, '')::uuid)
+			RETURNING *
+		)
+		SELECT `+testCaseSelectColumns()+` FROM inserted
+	`, workspaceID, projectID, input.Title, input.Type, input.Area, input.Priority, input.Status, input.Source, input.Preconditions, steps, input.ExpectedResult, input.EnvironmentRequirements, dependencies, tags, score, qualityFindings, userID)
+	return scanTestCase(row)
+}
+
+func updateProjectTestCase(ctx context.Context, q queryer, workspaceID, projectID, caseID string, input TestCaseInput, score int, findings []TestCaseQualityFinding) (TestCase, error) {
+	steps, err := encodeJSON(input.Steps)
+	if err != nil {
+		return TestCase{}, err
+	}
+	dependencies, err := encodeJSON(input.Dependencies)
+	if err != nil {
+		return TestCase{}, err
+	}
+	tags, err := encodeJSON(input.Tags)
+	if err != nil {
+		return TestCase{}, err
+	}
+	qualityFindings, err := encodeJSON(findings)
+	if err != nil {
+		return TestCase{}, err
+	}
+	row := q.QueryRow(ctx, `
+		WITH updated AS (
+			UPDATE test_cases
+			SET title = $4,
+				type = $5,
+				area = $6,
+				priority = $7,
+				status = $8,
+				source = $9,
+				preconditions = $10,
+				steps = $11::jsonb,
+				expected_result = $12,
+				environment_requirements = $13,
+				dependencies = $14::jsonb,
+				tags = $15::jsonb,
+				quality_score = $16,
+				quality_findings = $17::jsonb,
+				updated_at = now()
+			WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+			RETURNING *
+		)
+		SELECT `+testCaseSelectColumns()+` FROM updated
+	`, workspaceID, projectID, caseID, input.Title, input.Type, input.Area, input.Priority, input.Status, input.Source, input.Preconditions, steps, input.ExpectedResult, input.EnvironmentRequirements, dependencies, tags, score, qualityFindings)
+	testCase, err := scanTestCase(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TestCase{}, ErrNotFound
+	}
+	return testCase, err
+}
+
+func loadProjectTestCase(ctx context.Context, q queryer, workspaceID, projectID, caseID string) (TestCase, error) {
+	row := q.QueryRow(ctx, testCaseSelectQuery(`
+		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+	`), workspaceID, projectID, caseID)
+	testCase, err := scanTestCase(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TestCase{}, ErrNotFound
+	}
+	return testCase, err
+}
+
+func insertProjectTestCaseRevision(ctx context.Context, q queryer, testCase TestCase, userID string) error {
+	snapshot, err := encodeJSON(testCaseSnapshot(testCase))
+	if err != nil {
+		return err
+	}
+	_, err = q.Exec(ctx, `
+		INSERT INTO test_case_revisions (
+			workspace_id,
+			project_id,
+			case_id,
+			author_user_id,
+			revision_number,
+			snapshot
+		)
+		SELECT $1, $2, $3, NULLIF($4, '')::uuid, COALESCE(MAX(revision_number), 0) + 1, $5::jsonb
+		FROM test_case_revisions
+		WHERE workspace_id = $1 AND project_id = $2 AND case_id = $3
+	`, testCase.WorkspaceID, testCase.ProjectID, testCase.ID, userID, snapshot)
+	return err
+}
+
+func testCaseSelectQuery(whereClause string) string {
+	return `SELECT ` + testCaseSelectColumns() + `
+		FROM test_cases
+	` + whereClause
+}
+
+func testCaseSelectColumns() string {
+	return `
+			id::text,
+			workspace_id::text,
+			project_id::text,
+			title,
+			type,
+			area,
+			priority,
+			status,
+			source,
+			preconditions,
+			steps,
+			expected_result,
+			environment_requirements,
+			dependencies,
+			tags,
+			quality_score,
+			quality_findings,
+			COALESCE(created_by_user_id::text, ''),
+			created_at,
+			updated_at
+	`
+}
+
+func testCaseSelectColumnsForAlias(alias string) string {
+	alias = strings.TrimSpace(alias)
+	if alias == "" {
+		return testCaseSelectColumns()
+	}
+	return fmt.Sprintf(`
+			%s.id::text,
+			%s.workspace_id::text,
+			%s.project_id::text,
+			%s.title,
+			%s.type,
+			%s.area,
+			%s.priority,
+			%s.status,
+			%s.source,
+			%s.preconditions,
+			%s.steps,
+			%s.expected_result,
+			%s.environment_requirements,
+			%s.dependencies,
+			%s.tags,
+			%s.quality_score,
+			%s.quality_findings,
+			COALESCE(%s.created_by_user_id::text, ''),
+			%s.created_at,
+			%s.updated_at
+	`, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias, alias)
+}
+
+func scanTestCase(row scanner) (TestCase, error) {
+	var testCase TestCase
+	var stepsBytes, dependenciesBytes, tagsBytes, qualityFindingsBytes []byte
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&testCase.ID,
+		&testCase.WorkspaceID,
+		&testCase.ProjectID,
+		&testCase.Title,
+		&testCase.Type,
+		&testCase.Area,
+		&testCase.Priority,
+		&testCase.Status,
+		&testCase.Source,
+		&testCase.Preconditions,
+		&stepsBytes,
+		&testCase.ExpectedResult,
+		&testCase.EnvironmentRequirements,
+		&dependenciesBytes,
+		&tagsBytes,
+		&testCase.QualityScore,
+		&qualityFindingsBytes,
+		&testCase.CreatedByUserID,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return TestCase{}, err
+	}
+	testCase.Steps = decodeTestCaseSteps(stepsBytes)
+	testCase.Dependencies = decodeStringSlice(dependenciesBytes)
+	testCase.Tags = decodeStringSlice(tagsBytes)
+	testCase.QualityFindings = decodeQualityFindings(qualityFindingsBytes)
+	testCase.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	testCase.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return testCase, nil
+}
+
+func scanTestCaseRevision(row scanner) (TestCaseRevision, error) {
+	var revision TestCaseRevision
+	var snapshotBytes []byte
+	var createdAt time.Time
+	var authorUserID sql.NullString
+	if err := row.Scan(
+		&revision.ID,
+		&revision.WorkspaceID,
+		&revision.ProjectID,
+		&revision.TestCaseID,
+		&authorUserID,
+		&revision.RevisionNumber,
+		&snapshotBytes,
+		&createdAt,
+	); err != nil {
+		return TestCaseRevision{}, err
+	}
+	if authorUserID.Valid {
+		revision.AuthorUserID = authorUserID.String
+	}
+	revision.Snapshot = decodeTestCaseSnapshot(snapshotBytes)
+	revision.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	return revision, nil
+}
+
+func testCaseProposalSelectQuery(whereClause string) string {
+	return `SELECT
+			p.id::text,
+			p.workspace_id::text,
+			p.project_id::text,
+			COALESCE(p.source_issue_id::text, ''),
+			p.source_session_id,
+			COALESCE(p.target_case_id::text, ''),
+			p.proposal_type,
+			p.status,
+			p.title,
+			p.summary,
+			p.rationale,
+			COALESCE(p.current_case, 'null'::jsonb),
+			p.proposed_case,
+			p.quality_score,
+			p.quality_findings,
+			p.validation_errors,
+			COALESCE(p.created_by_user_id::text, ''),
+			COALESCE(p.reviewed_by_user_id::text, ''),
+			COALESCE(p.applied_case_id::text, ''),
+			p.review_note,
+			p.reviewed_at,
+			p.created_at,
+			p.updated_at
+		FROM test_case_proposals p
+	` + whereClause
+}
+
+func scanTestCaseProposal(row scanner) (TestCaseProposal, error) {
+	var proposal TestCaseProposal
+	var currentCaseBytes, proposedCaseBytes, findingsBytes, validationErrorsBytes []byte
+	var reviewedAt sql.NullTime
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&proposal.ID,
+		&proposal.WorkspaceID,
+		&proposal.ProjectID,
+		&proposal.SourceIssueID,
+		&proposal.SourceSessionID,
+		&proposal.TargetCaseID,
+		&proposal.ProposalType,
+		&proposal.Status,
+		&proposal.Title,
+		&proposal.Summary,
+		&proposal.Rationale,
+		&currentCaseBytes,
+		&proposedCaseBytes,
+		&proposal.QualityScore,
+		&findingsBytes,
+		&validationErrorsBytes,
+		&proposal.CreatedByUserID,
+		&proposal.ReviewedByUserID,
+		&proposal.AppliedCaseID,
+		&proposal.ReviewNote,
+		&reviewedAt,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return TestCaseProposal{}, err
+	}
+	current := decodeTestCaseSnapshot(currentCaseBytes)
+	if current.ID != "" {
+		proposal.CurrentCase = &current
+	}
+	proposal.ProposedCase = decodeTestCaseInput(proposedCaseBytes)
+	proposal.QualityFindings = decodeQualityFindings(findingsBytes)
+	proposal.ValidationErrors = decodeStringSlice(validationErrorsBytes)
+	if reviewedAt.Valid {
+		proposal.ReviewedAt = reviewedAt.Time.UTC().Format(time.RFC3339)
+	}
+	proposal.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	proposal.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return proposal, nil
+}
+
+func loadTestCaseProposal(ctx context.Context, q queryer, workspaceID, projectID, proposalID string) (TestCaseProposal, error) {
+	row := q.QueryRow(ctx, testCaseProposalSelectQuery(`
+		WHERE p.workspace_id = $1 AND p.project_id = $2 AND p.id = $3
+	`), strings.TrimSpace(workspaceID), strings.TrimSpace(projectID), strings.TrimSpace(proposalID))
+	proposal, err := scanTestCaseProposal(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TestCaseProposal{}, ErrNotFound
+	}
+	return proposal, err
+}
+
+func insertTestCaseProposalRecord(ctx context.Context, q queryer, proposal TestCaseProposal) (TestCaseProposal, error) {
+	currentCase, err := encodeJSON(proposal.CurrentCase)
+	if err != nil {
+		return TestCaseProposal{}, err
+	}
+	proposedCase, err := encodeJSON(copyTestCaseInput(proposal.ProposedCase))
+	if err != nil {
+		return TestCaseProposal{}, err
+	}
+	findings, err := encodeJSON(proposal.QualityFindings)
+	if err != nil {
+		return TestCaseProposal{}, err
+	}
+	validationErrors, err := encodeJSON(proposal.ValidationErrors)
+	if err != nil {
+		return TestCaseProposal{}, err
+	}
+	var proposalID string
+	err = q.QueryRow(ctx, `
+		INSERT INTO test_case_proposals (
+			workspace_id,
+			project_id,
+			source_issue_id,
+			source_session_id,
+			target_case_id,
+			proposal_type,
+			status,
+			title,
+			summary,
+			rationale,
+			current_case,
+			proposed_case,
+			quality_score,
+			quality_findings,
+			validation_errors,
+			created_by_user_id
+		)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, NULLIF($5, '')::uuid, $6, $7, $8, $9, $10, NULLIF($11::jsonb, 'null'::jsonb), $12::jsonb, $13, $14::jsonb, $15::jsonb, NULLIF($16, '')::uuid)
+		RETURNING id::text
+	`, proposal.WorkspaceID, proposal.ProjectID, proposal.SourceIssueID, proposal.SourceSessionID, proposal.TargetCaseID, proposal.ProposalType, proposal.Status, proposal.Title, proposal.Summary, proposal.Rationale, currentCase, proposedCase, proposal.QualityScore, findings, validationErrors, proposal.CreatedByUserID).Scan(&proposalID)
+	if err != nil {
+		return TestCaseProposal{}, err
+	}
+	return loadTestCaseProposal(ctx, q, proposal.WorkspaceID, proposal.ProjectID, proposalID)
+}
+
+func reviewTestCaseProposalRecord(ctx context.Context, q queryer, workspaceID, projectID, proposalID, status, userID, appliedCaseID, note string) (TestCaseProposal, error) {
+	tag, err := q.Exec(ctx, `
+		UPDATE test_case_proposals
+		SET status = $4,
+			reviewed_by_user_id = NULLIF($5, '')::uuid,
+			applied_case_id = NULLIF($6, '')::uuid,
+			review_note = $7,
+			reviewed_at = now(),
+			updated_at = now()
+		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(projectID), strings.TrimSpace(proposalID), status, strings.TrimSpace(userID), strings.TrimSpace(appliedCaseID), normalizeReviewNote(note))
+	if err != nil {
+		return TestCaseProposal{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return TestCaseProposal{}, ErrNotFound
+	}
+	return loadTestCaseProposal(ctx, q, workspaceID, projectID, proposalID)
+}
+
+func testPlanSelectQuery(whereClause string) string {
+	return `SELECT
+			p.id::text,
+			p.workspace_id::text,
+			p.project_id::text,
+			p.title,
+			p.description,
+			p.status,
+			p.target_type,
+			p.target_value,
+			p.environment,
+			(
+				SELECT count(*)
+				FROM test_plan_cases pc
+				WHERE pc.plan_id = p.id
+			)::int,
+			COALESCE(p.created_by_user_id::text, ''),
+			p.created_at,
+			p.updated_at
+		FROM test_plans p
+	` + whereClause
+}
+
+func scanTestPlan(row scanner) (TestPlan, error) {
+	var plan TestPlan
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&plan.ID,
+		&plan.WorkspaceID,
+		&plan.ProjectID,
+		&plan.Title,
+		&plan.Description,
+		&plan.Status,
+		&plan.TargetType,
+		&plan.TargetValue,
+		&plan.Environment,
+		&plan.CaseCount,
+		&plan.CreatedByUserID,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return TestPlan{}, err
+	}
+	plan.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	plan.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return plan, nil
+}
+
+func loadTestPlan(ctx context.Context, q queryer, workspaceID, projectID, planID string) (TestPlan, error) {
+	row := q.QueryRow(ctx, testPlanSelectQuery(`
+		WHERE p.workspace_id = $1 AND p.project_id = $2 AND p.id = $3
+	`), strings.TrimSpace(workspaceID), strings.TrimSpace(projectID), strings.TrimSpace(planID))
+	plan, err := scanTestPlan(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TestPlan{}, ErrNotFound
+	}
+	return plan, err
+}
+
+func insertTestPlanRecord(ctx context.Context, q queryer, workspaceID, projectID, userID string, input TestPlanInput) (TestPlan, error) {
+	var planID string
+	if err := q.QueryRow(ctx, `
+		INSERT INTO test_plans (workspace_id, project_id, title, description, status, target_type, target_value, environment, created_by_user_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, '')::uuid)
+		RETURNING id::text
+	`, workspaceID, projectID, input.Title, input.Description, input.Status, input.TargetType, input.TargetValue, input.Environment, userID).Scan(&planID); err != nil {
+		return TestPlan{}, err
+	}
+	return loadTestPlan(ctx, q, workspaceID, projectID, planID)
+}
+
+func updateTestPlanRecord(ctx context.Context, q queryer, workspaceID, projectID, planID string, input TestPlanInput) (TestPlan, error) {
+	tag, err := q.Exec(ctx, `
+		UPDATE test_plans
+		SET title = $4,
+			description = $5,
+			status = $6,
+			target_type = $7,
+			target_value = $8,
+			environment = $9,
+			updated_at = now()
+		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+	`, workspaceID, projectID, planID, input.Title, input.Description, input.Status, input.TargetType, input.TargetValue, input.Environment)
+	if err != nil {
+		return TestPlan{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return TestPlan{}, ErrNotFound
+	}
+	return loadTestPlan(ctx, q, workspaceID, projectID, planID)
+}
+
+func ensureReadyTestCasesForPlan(ctx context.Context, q queryer, workspaceID, projectID string, caseIDs []string) error {
+	for _, caseID := range caseIDs {
+		testCase, err := loadProjectTestCase(ctx, q, workspaceID, projectID, caseID)
+		if err != nil {
+			return err
+		}
+		if testCase.Status != "ready" {
+			return errors.New("test plan can only include ready test cases")
+		}
+	}
+	return nil
+}
+
+func replaceTestPlanCaseRecords(ctx context.Context, q queryer, plan TestPlan, caseIDs []string) error {
+	if _, err := q.Exec(ctx, `DELETE FROM test_plan_cases WHERE workspace_id = $1 AND project_id = $2 AND plan_id = $3`, plan.WorkspaceID, plan.ProjectID, plan.ID); err != nil {
+		return err
+	}
+	for index, caseID := range caseIDs {
+		if _, err := q.Exec(ctx, `
+			INSERT INTO test_plan_cases (workspace_id, project_id, plan_id, case_id, sort_order)
+			VALUES ($1, $2, $3, $4, $5)
+		`, plan.WorkspaceID, plan.ProjectID, plan.ID, strings.TrimSpace(caseID), index+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func listTestPlanCases(ctx context.Context, q queryer, workspaceID, projectID, planID string) ([]TestPlanCase, error) {
+	rows, err := q.Query(ctx, `
+		SELECT
+			pc.id::text,
+			pc.workspace_id::text,
+			pc.project_id::text,
+			pc.plan_id::text,
+			pc.case_id::text,
+			pc.sort_order,
+			`+testCaseSelectColumnsForAlias("tc")+`
+		FROM test_plan_cases pc
+		JOIN test_cases tc ON tc.id = pc.case_id
+		WHERE pc.workspace_id = $1 AND pc.project_id = $2 AND pc.plan_id = $3
+		ORDER BY pc.sort_order ASC, pc.created_at ASC
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(projectID), strings.TrimSpace(planID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cases := []TestPlanCase{}
+	for rows.Next() {
+		planCase, err := scanTestPlanCase(rows)
+		if err != nil {
+			return nil, err
+		}
+		cases = append(cases, planCase)
+	}
+	return cases, rows.Err()
+}
+
+func scanTestPlanCase(row scanner) (TestPlanCase, error) {
+	var planCase TestPlanCase
+	if err := scanTestPlanCaseInto(row, &planCase); err != nil {
+		return TestPlanCase{}, err
+	}
+	return planCase, nil
+}
+
+func scanTestPlanCaseInto(row scanner, planCase *TestPlanCase) error {
+	var stepsBytes, dependenciesBytes, tagsBytes, qualityFindingsBytes []byte
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&planCase.ID,
+		&planCase.WorkspaceID,
+		&planCase.ProjectID,
+		&planCase.PlanID,
+		&planCase.TestCaseID,
+		&planCase.SortOrder,
+		&planCase.TestCase.ID,
+		&planCase.TestCase.WorkspaceID,
+		&planCase.TestCase.ProjectID,
+		&planCase.TestCase.Title,
+		&planCase.TestCase.Type,
+		&planCase.TestCase.Area,
+		&planCase.TestCase.Priority,
+		&planCase.TestCase.Status,
+		&planCase.TestCase.Source,
+		&planCase.TestCase.Preconditions,
+		&stepsBytes,
+		&planCase.TestCase.ExpectedResult,
+		&planCase.TestCase.EnvironmentRequirements,
+		&dependenciesBytes,
+		&tagsBytes,
+		&planCase.TestCase.QualityScore,
+		&qualityFindingsBytes,
+		&planCase.TestCase.CreatedByUserID,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return err
+	}
+	planCase.TestCase.Steps = decodeTestCaseSteps(stepsBytes)
+	planCase.TestCase.Dependencies = decodeStringSlice(dependenciesBytes)
+	planCase.TestCase.Tags = decodeStringSlice(tagsBytes)
+	planCase.TestCase.QualityFindings = decodeQualityFindings(qualityFindingsBytes)
+	planCase.TestCase.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	planCase.TestCase.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return nil
+}
+
+func listTestPlanCaseSnapshots(ctx context.Context, q queryer, workspaceID, projectID, planID string) ([]TestCase, error) {
+	planCases, err := listTestPlanCases(ctx, q, workspaceID, projectID, planID)
+	if err != nil {
+		return nil, err
+	}
+	cases := make([]TestCase, 0, len(planCases))
+	for _, planCase := range planCases {
+		cases = append(cases, testCaseSnapshot(planCase.TestCase))
+	}
+	return cases, nil
+}
+
+func listTestRunsForPlan(ctx context.Context, q queryer, workspaceID, projectID, planID string) ([]TestRun, error) {
+	rows, err := q.Query(ctx, testRunSelectQuery(`
+		WHERE r.workspace_id = $1 AND r.project_id = $2 AND r.plan_id = $3
+		ORDER BY r.updated_at DESC, r.created_at DESC
+	`), strings.TrimSpace(workspaceID), strings.TrimSpace(projectID), strings.TrimSpace(planID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	runs := []TestRun{}
+	for rows.Next() {
+		run, err := scanTestRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
+}
+
+func testRunSelectQuery(whereClause string) string {
+	return `SELECT
+			r.id::text,
+			r.workspace_id::text,
+			r.project_id::text,
+			r.plan_id::text,
+			COALESCE(r.parent_issue_id::text, ''),
+			r.status,
+			r.target_type,
+			r.target_value,
+			r.environment,
+			r.total_count,
+			r.passed_count,
+			r.failed_count,
+			r.blocked_count,
+			r.skipped_count,
+			r.acceptance_status,
+			r.acceptance_note,
+			COALESCE(r.created_by_user_id::text, ''),
+			COALESCE(r.accepted_by_user_id::text, ''),
+			r.completed_at,
+			r.accepted_at,
+			r.created_at,
+			r.updated_at
+		FROM test_runs r
+	` + whereClause
+}
+
+func scanTestRun(row scanner) (TestRun, error) {
+	var run TestRun
+	var completedAt, acceptedAt sql.NullTime
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&run.ID,
+		&run.WorkspaceID,
+		&run.ProjectID,
+		&run.PlanID,
+		&run.ParentIssueID,
+		&run.Status,
+		&run.TargetType,
+		&run.TargetValue,
+		&run.Environment,
+		&run.TotalCount,
+		&run.PassedCount,
+		&run.FailedCount,
+		&run.BlockedCount,
+		&run.SkippedCount,
+		&run.AcceptanceStatus,
+		&run.AcceptanceNote,
+		&run.CreatedByUserID,
+		&run.AcceptedByUserID,
+		&completedAt,
+		&acceptedAt,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return TestRun{}, err
+	}
+	if completedAt.Valid {
+		run.CompletedAt = completedAt.Time.UTC().Format(time.RFC3339)
+	}
+	if acceptedAt.Valid {
+		run.AcceptedAt = acceptedAt.Time.UTC().Format(time.RFC3339)
+	}
+	run.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	run.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return run, nil
+}
+
+func loadTestRun(ctx context.Context, q queryer, workspaceID, projectID, runID string) (TestRun, error) {
+	row := q.QueryRow(ctx, testRunSelectQuery(`
+		WHERE r.workspace_id = $1 AND r.project_id = $2 AND r.id = $3
+	`), strings.TrimSpace(workspaceID), strings.TrimSpace(projectID), strings.TrimSpace(runID))
+	run, err := scanTestRun(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TestRun{}, ErrNotFound
+	}
+	return run, err
+}
+
+func insertTestRunRecord(ctx context.Context, q queryer, run TestRun, parentIssueID string) (TestRun, error) {
+	var runID string
+	if err := q.QueryRow(ctx, `
+		INSERT INTO test_runs (
+			workspace_id,
+			project_id,
+			plan_id,
+			parent_issue_id,
+			status,
+			target_type,
+			target_value,
+			environment,
+			total_count,
+			acceptance_status,
+			created_by_user_id
+		)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, NULLIF($11, '')::uuid)
+		RETURNING id::text
+	`, run.WorkspaceID, run.ProjectID, run.PlanID, parentIssueID, run.Status, run.TargetType, run.TargetValue, run.Environment, run.TotalCount, run.AcceptanceStatus, run.CreatedByUserID).Scan(&runID); err != nil {
+		return TestRun{}, err
+	}
+	return loadTestRun(ctx, q, run.WorkspaceID, run.ProjectID, runID)
+}
+
+func insertTestRunItems(ctx context.Context, q queryer, run TestRun, cases []TestCase) error {
+	for _, testCase := range cases {
+		if _, err := q.Exec(ctx, `
+			INSERT INTO test_run_items (workspace_id, project_id, run_id, case_id, status, evidence)
+			VALUES ($1, $2, $3, $4, 'queued', '{}'::jsonb)
+			ON CONFLICT(run_id, case_id) DO NOTHING
+		`, run.WorkspaceID, run.ProjectID, run.ID, testCase.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func listTestRunItems(ctx context.Context, q queryer, workspaceID, projectID, runID string) ([]TestRunItem, error) {
+	rows, err := q.Query(ctx, `
+		SELECT
+			i.id::text,
+			i.workspace_id::text,
+			i.project_id::text,
+			i.run_id::text,
+			i.case_id::text,
+			COALESCE(i.execution_issue_id::text, ''),
+			i.agent_session_id,
+			i.status,
+			i.actual_result,
+			i.failure_summary,
+			i.evidence,
+			i.created_at,
+			i.updated_at,
+			`+testCaseSelectColumnsForAlias("tc")+`
+		FROM test_run_items i
+		JOIN test_cases tc ON tc.id = i.case_id
+		WHERE i.workspace_id = $1 AND i.project_id = $2 AND i.run_id = $3
+		ORDER BY i.created_at ASC, i.id ASC
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(projectID), strings.TrimSpace(runID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TestRunItem{}
+	for rows.Next() {
+		item, err := scanTestRunItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func scanTestRunItem(row scanner) (TestRunItem, error) {
+	var item TestRunItem
+	var evidenceBytes []byte
+	var itemCreatedAt, itemUpdatedAt time.Time
+	var stepsBytes, dependenciesBytes, tagsBytes, qualityFindingsBytes []byte
+	var caseCreatedAt, caseUpdatedAt time.Time
+	if err := row.Scan(
+		&item.ID,
+		&item.WorkspaceID,
+		&item.ProjectID,
+		&item.RunID,
+		&item.TestCaseID,
+		&item.ExecutionIssueID,
+		&item.AgentSessionID,
+		&item.Status,
+		&item.ActualResult,
+		&item.FailureSummary,
+		&evidenceBytes,
+		&itemCreatedAt,
+		&itemUpdatedAt,
+		&item.TestCase.ID,
+		&item.TestCase.WorkspaceID,
+		&item.TestCase.ProjectID,
+		&item.TestCase.Title,
+		&item.TestCase.Type,
+		&item.TestCase.Area,
+		&item.TestCase.Priority,
+		&item.TestCase.Status,
+		&item.TestCase.Source,
+		&item.TestCase.Preconditions,
+		&stepsBytes,
+		&item.TestCase.ExpectedResult,
+		&item.TestCase.EnvironmentRequirements,
+		&dependenciesBytes,
+		&tagsBytes,
+		&item.TestCase.QualityScore,
+		&qualityFindingsBytes,
+		&item.TestCase.CreatedByUserID,
+		&caseCreatedAt,
+		&caseUpdatedAt,
+	); err != nil {
+		return TestRunItem{}, err
+	}
+	item.Evidence = copyRawMessage(json.RawMessage(evidenceBytes))
+	if len(item.Evidence) == 0 {
+		item.Evidence = json.RawMessage(`{}`)
+	}
+	item.CreatedAt = itemCreatedAt.UTC().Format(time.RFC3339)
+	item.UpdatedAt = itemUpdatedAt.UTC().Format(time.RFC3339)
+	item.TestCase.Steps = decodeTestCaseSteps(stepsBytes)
+	item.TestCase.Dependencies = decodeStringSlice(dependenciesBytes)
+	item.TestCase.Tags = decodeStringSlice(tagsBytes)
+	item.TestCase.QualityFindings = decodeQualityFindings(qualityFindingsBytes)
+	item.TestCase.CreatedAt = caseCreatedAt.UTC().Format(time.RFC3339)
+	item.TestCase.UpdatedAt = caseUpdatedAt.UTC().Format(time.RFC3339)
+	return item, nil
+}
+
+func resetTestRunItemsForRetry(ctx context.Context, q queryer, workspaceID, projectID, runID string, itemIDs []string) error {
+	if len(itemIDs) == 0 {
+		_, err := q.Exec(ctx, `
+			UPDATE test_run_items
+			SET status = 'queued',
+				actual_result = '',
+				failure_summary = '',
+				evidence = '{}'::jsonb,
+				agent_session_id = '',
+				updated_at = now()
+			WHERE workspace_id = $1
+				AND project_id = $2
+				AND run_id = $3
+				AND status IN ('failed', 'blocked')
+		`, workspaceID, projectID, runID)
+		return err
+	}
+	for _, itemID := range itemIDs {
+		tag, err := q.Exec(ctx, `
+			UPDATE test_run_items
+			SET status = 'queued',
+				actual_result = '',
+				failure_summary = '',
+				evidence = '{}'::jsonb,
+				agent_session_id = '',
+				updated_at = now()
+			WHERE workspace_id = $1
+				AND project_id = $2
+				AND run_id = $3
+				AND (id::text = $4 OR case_id::text = $4)
+		`, workspaceID, projectID, runID, strings.TrimSpace(itemID))
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+	}
+	return nil
+}
+
+func reviewTestRunRecord(ctx context.Context, q queryer, userID, workspaceID, projectID, runID, status, note string) (TestRun, error) {
+	tag, err := q.Exec(ctx, `
+		UPDATE test_runs
+		SET status = $4,
+			acceptance_status = $4,
+			acceptance_note = $5,
+			accepted_by_user_id = NULLIF($6, '')::uuid,
+			accepted_at = now(),
+			updated_at = now()
+		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(projectID), strings.TrimSpace(runID), status, normalizeReviewNote(note), strings.TrimSpace(userID))
+	if err != nil {
+		return TestRun{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return TestRun{}, ErrNotFound
+	}
+	return loadTestRun(ctx, q, workspaceID, projectID, runID)
+}
+
+func updateTestRunCounts(ctx context.Context, q queryer, workspaceID, projectID, runID string) error {
+	items, err := listTestRunItems(ctx, q, workspaceID, projectID, runID)
+	if err != nil {
+		return err
+	}
+	passed, failed, blocked, skipped := testRunCounts(items)
+	runStatus := "running"
+	finalCount := passed + failed + blocked + skipped
+	markCompleted := false
+	if len(items) > 0 && finalCount >= len(items) {
+		runStatus = "needs_acceptance"
+		markCompleted = true
+	}
+	_, err = q.Exec(ctx, `
+		UPDATE test_runs
+		SET status = $4,
+			total_count = $5,
+			passed_count = $6,
+			failed_count = $7,
+			blocked_count = $8,
+			skipped_count = $9,
+			completed_at = CASE WHEN $10 THEN now() ELSE completed_at END,
+			updated_at = now()
+		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+	`, workspaceID, projectID, runID, runStatus, len(items), passed, failed, blocked, skipped, markCompleted)
+	return err
+}
+
+func (s *PostgresStore) startPostgresTestRunExecutionSessions(ctx Context, userID string, run TestRun, input CreateTestRunInput) error {
+	dbctx := asContext(ctx)
+	items, err := listTestRunItems(dbctx, s.pool, run.WorkspaceID, run.ProjectID, run.ID)
+	if err != nil {
+		return err
+	}
+	plan, err := loadTestPlan(dbctx, s.pool, run.WorkspaceID, run.ProjectID, run.PlanID)
+	if err != nil {
+		return err
+	}
+	queued := []TestRunItem{}
+	for _, item := range items {
+		if item.Status == "queued" {
+			queued = append(queued, item)
+		}
+	}
+	for start := 0; start < len(queued); start += input.BatchSize {
+		end := start + input.BatchSize
+		if end > len(queued) {
+			end = len(queued)
+		}
+		batch := queued[start:end]
+		cases := make([]TestCase, 0, len(batch))
+		for _, item := range batch {
+			cases = append(cases, item.TestCase)
+		}
+		body := buildTestRunExecutionIssueBody(run, cases)
+		child, err := s.CreateIssueTask(ctx, userID, run.WorkspaceID, run.ParentIssueID, IssueTaskInput{
+			Title: fmt.Sprintf("Execute %s batch %d", plan.Title, start/input.BatchSize+1),
+			Body:  body,
+		})
+		if err != nil {
+			return err
+		}
+		session, err := s.CreateAgentSession(ctx, userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
+			Provider:     "codex",
+			AgentProfile: input.AgentProfile,
+			RuntimeMode:  input.RuntimeMode,
+			Command:      body,
+			Automation:   testRunExecutionAutomation,
+			TestRunID:    run.ID,
+		})
+		if err != nil {
+			return err
+		}
+		for _, item := range batch {
+			if _, err := s.pool.Exec(dbctx, `
+				UPDATE test_run_items
+				SET execution_issue_id = $4,
+					agent_session_id = $5,
+					status = 'running',
+					updated_at = now()
+				WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+			`, run.WorkspaceID, run.ProjectID, item.ID, child.ID, session.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

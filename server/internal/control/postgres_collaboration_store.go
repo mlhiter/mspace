@@ -1551,6 +1551,7 @@ func runtimeTaskToAgentSession(task RuntimeTask) (AgentSession, error) {
 		TriggerCommentID string `json:"triggerCommentId"`
 		ArtifactDir      string `json:"artifactDir"`
 		Automation       string `json:"automation"`
+		TestRunID        string `json:"testRunId"`
 	}
 	_ = json.Unmarshal(task.Payload, &payload)
 
@@ -1646,6 +1647,7 @@ func buildAgentSessionPayload(sessionID string, issue Issue, project Project, ru
 		"sourceCommitSha":  input.SourceCommitSHA,
 		"triggerCommentId": input.TriggerCommentID,
 		"automation":       input.Automation,
+		"testRunId":        input.TestRunID,
 		"contextMarkdown":  buildAgentSessionContext(issue, project, runbook, comments, labels, childIssues, input),
 		"artifactDir":      "",
 		"repository": map[string]string{

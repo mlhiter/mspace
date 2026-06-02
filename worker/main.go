@@ -29,6 +29,8 @@ const codexProtocolLineLimit = 16 * 1024 * 1024
 const branchNameArtifactName = "branch-name.json"
 const testEnvironmentArtifactName = "test-environment.json"
 const reviewEvidenceArtifactName = "review-evidence.json"
+const testCaseProposalsArtifactName = "test-case-proposals.json"
+const testResultArtifactName = "test-result.json"
 
 var branchSlugUnsafePattern = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -170,16 +172,18 @@ type repositorySpec struct {
 }
 
 type agentSessionResult struct {
-	ThreadID        string                       `json:"threadId"`
-	TurnID          string                       `json:"turnId"`
-	Status          string                       `json:"status"`
-	CompletedAt     string                       `json:"completedAt"`
-	DryRun          bool                         `json:"dryRun"`
-	Workdir         string                       `json:"workdir"`
-	ArtifactDir     string                       `json:"artifactDir"`
-	Source          agentSessionSource           `json:"source"`
-	TestEnvironment *agentSessionTestEnvironment `json:"testEnvironment,omitempty"`
-	ReviewEvidence  *reviewEvidenceArtifact      `json:"reviewEvidence,omitempty"`
+	ThreadID          string                       `json:"threadId"`
+	TurnID            string                       `json:"turnId"`
+	Status            string                       `json:"status"`
+	CompletedAt       string                       `json:"completedAt"`
+	DryRun            bool                         `json:"dryRun"`
+	Workdir           string                       `json:"workdir"`
+	ArtifactDir       string                       `json:"artifactDir"`
+	Source            agentSessionSource           `json:"source"`
+	TestEnvironment   *agentSessionTestEnvironment `json:"testEnvironment,omitempty"`
+	ReviewEvidence    *reviewEvidenceArtifact      `json:"reviewEvidence,omitempty"`
+	TestCaseProposals *testCaseProposalsArtifact   `json:"testCaseProposals,omitempty"`
+	TestResult        *testResultArtifact          `json:"testResult,omitempty"`
 }
 
 type agentSessionSource struct {
@@ -239,6 +243,34 @@ type reviewEvidenceResult struct {
 	Status  string `json:"status"`
 	Summary string `json:"summary"`
 	Details string `json:"details"`
+}
+
+type testCaseProposalsArtifact struct {
+	Proposals []testCaseProposalArtifactItem `json:"proposals"`
+	Summary   string                         `json:"summary"`
+}
+
+type testCaseProposalArtifactItem struct {
+	Type         string          `json:"type"`
+	CaseID       string          `json:"caseId"`
+	Title        string          `json:"title"`
+	Summary      string          `json:"summary"`
+	Rationale    string          `json:"rationale"`
+	ProposedCase json.RawMessage `json:"proposedCase"`
+}
+
+type testResultArtifact struct {
+	RunID   string                   `json:"runId"`
+	Items   []testResultArtifactItem `json:"items"`
+	Summary string                   `json:"summary"`
+}
+
+type testResultArtifactItem struct {
+	CaseID         string          `json:"caseId"`
+	Status         string          `json:"status"`
+	ActualResult   string          `json:"actualResult"`
+	FailureSummary string          `json:"failureSummary"`
+	Evidence       json.RawMessage `json:"evidence"`
 }
 
 type codexAppServerClient struct {
@@ -1082,6 +1114,12 @@ func (result *agentSessionResult) attachArtifacts(payload agentSessionPayload) {
 	if artifact, ok := readReviewEvidenceArtifact(payload); ok {
 		result.ReviewEvidence = &artifact
 	}
+	if artifact, ok := readTestCaseProposalsArtifact(payload); ok {
+		result.TestCaseProposals = &artifact
+	}
+	if artifact, ok := readTestResultArtifact(payload); ok {
+		result.TestResult = &artifact
+	}
 }
 
 func startCodexAppServer(codexPath string, payload agentSessionPayload) (*codexAppServerClient, error) {
@@ -1739,6 +1777,38 @@ func readReviewEvidenceArtifact(payload agentSessionPayload) (reviewEvidenceArti
 		Risks:            parseReviewStringListValue(raw.Risks),
 		FollowUps:        parseReviewStringListValue(raw.FollowUps),
 	}, true
+}
+
+func readTestCaseProposalsArtifact(payload agentSessionPayload) (testCaseProposalsArtifact, bool) {
+	path := artifactPath(payload, testCaseProposalsArtifactName)
+	if path == "" {
+		return testCaseProposalsArtifact{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return testCaseProposalsArtifact{}, false
+	}
+	var artifact testCaseProposalsArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil || len(artifact.Proposals) == 0 {
+		return testCaseProposalsArtifact{}, false
+	}
+	return artifact, true
+}
+
+func readTestResultArtifact(payload agentSessionPayload) (testResultArtifact, bool) {
+	path := artifactPath(payload, testResultArtifactName)
+	if path == "" {
+		return testResultArtifact{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return testResultArtifact{}, false
+	}
+	var artifact testResultArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil || len(artifact.Items) == 0 {
+		return testResultArtifact{}, false
+	}
+	return artifact, true
 }
 
 func normalizeSemanticBranchArtifact(artifact branchNameArtifact) (string, error) {

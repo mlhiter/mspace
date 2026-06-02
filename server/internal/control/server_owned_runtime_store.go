@@ -1964,6 +1964,16 @@ func (s *PostgresStore) reconcileAgentSessionRuntimeResult(ctx context.Context, 
 			return err
 		}
 	}
+	if task.Status == "completed" && artifacts.TestCaseProposals != nil {
+		if err := s.storeTestCaseProposalArtifacts(ctx, q, task, *artifacts.TestCaseProposals); err != nil {
+			return err
+		}
+	}
+	if task.Status == "completed" && artifacts.TestResult != nil {
+		if err := s.reconcileTestResultArtifact(ctx, q, task, *artifacts.TestResult); err != nil {
+			return err
+		}
+	}
 	if task.Status == "failed" || task.Status == "cancelled" {
 		if err := s.storeRuntimeSessionFailure(ctx, q, task, session); err != nil {
 			return err

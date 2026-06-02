@@ -270,6 +270,257 @@ type ProjectRunbookInput struct {
 	Status  string `json:"status"`
 }
 
+type TestCaseStep struct {
+	Action   string `json:"action"`
+	Expected string `json:"expected"`
+}
+
+type TestCaseQualityFinding struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type TestCase struct {
+	ID                      string                   `json:"id"`
+	WorkspaceID             string                   `json:"workspaceId"`
+	ProjectID               string                   `json:"projectId"`
+	Title                   string                   `json:"title"`
+	Type                    string                   `json:"type"`
+	Area                    string                   `json:"area"`
+	Priority                string                   `json:"priority"`
+	Status                  string                   `json:"status"`
+	Source                  string                   `json:"source"`
+	Preconditions           string                   `json:"preconditions"`
+	Steps                   []TestCaseStep           `json:"steps"`
+	ExpectedResult          string                   `json:"expectedResult"`
+	EnvironmentRequirements string                   `json:"environmentRequirements"`
+	Dependencies            []string                 `json:"dependencies"`
+	Tags                    []string                 `json:"tags"`
+	QualityScore            int                      `json:"qualityScore"`
+	QualityFindings         []TestCaseQualityFinding `json:"qualityFindings"`
+	CreatedByUserID         string                   `json:"createdByUserId"`
+	CreatedAt               string                   `json:"createdAt"`
+	UpdatedAt               string                   `json:"updatedAt"`
+}
+
+type TestCaseRevision struct {
+	ID             string   `json:"id"`
+	WorkspaceID    string   `json:"workspaceId"`
+	ProjectID      string   `json:"projectId"`
+	TestCaseID     string   `json:"testCaseId"`
+	AuthorUserID   string   `json:"authorUserId"`
+	RevisionNumber int      `json:"revisionNumber"`
+	Snapshot       TestCase `json:"snapshot"`
+	CreatedAt      string   `json:"createdAt"`
+}
+
+type TestCaseInput struct {
+	Title                   string         `json:"title"`
+	Type                    string         `json:"type"`
+	Area                    string         `json:"area"`
+	Priority                string         `json:"priority"`
+	Status                  string         `json:"status"`
+	Source                  string         `json:"source"`
+	Preconditions           string         `json:"preconditions"`
+	Steps                   []TestCaseStep `json:"steps"`
+	ExpectedResult          string         `json:"expectedResult"`
+	EnvironmentRequirements string         `json:"environmentRequirements"`
+	Dependencies            []string       `json:"dependencies"`
+	Tags                    []string       `json:"tags"`
+}
+
+type TestCaseListOptions struct {
+	Status string `json:"status"`
+	Query  string `json:"query"`
+}
+
+type ImportTestCasesInput struct {
+	Format  string `json:"format"`
+	Content string `json:"content"`
+}
+
+type TestCaseImportSkip struct {
+	Line    int    `json:"line"`
+	Reason  string `json:"reason"`
+	Content string `json:"content"`
+}
+
+type ImportTestCasesResult struct {
+	Created []TestCase           `json:"created"`
+	Skipped []TestCaseImportSkip `json:"skipped"`
+}
+
+type OptimizeTestCasesInput struct {
+	CaseIDs      []string `json:"caseIds"`
+	Prompt       string   `json:"prompt"`
+	AgentProfile string   `json:"agentProfile"`
+	RuntimeMode  string   `json:"runtimeMode"`
+}
+
+type GenerateTestCasesInput struct {
+	Prompt       string `json:"prompt"`
+	Area         string `json:"area"`
+	AgentProfile string `json:"agentProfile"`
+	RuntimeMode  string `json:"runtimeMode"`
+}
+
+type TestCaseAgentSessionResult struct {
+	IssueID string       `json:"issueId"`
+	Session AgentSession `json:"session"`
+}
+
+type TestCaseProposal struct {
+	ID               string                   `json:"id"`
+	WorkspaceID      string                   `json:"workspaceId"`
+	ProjectID        string                   `json:"projectId"`
+	SourceIssueID    string                   `json:"sourceIssueId"`
+	SourceSessionID  string                   `json:"sourceSessionId"`
+	TargetCaseID     string                   `json:"targetCaseId"`
+	ProposalType     string                   `json:"proposalType"`
+	Status           string                   `json:"status"`
+	Title            string                   `json:"title"`
+	Summary          string                   `json:"summary"`
+	Rationale        string                   `json:"rationale"`
+	CurrentCase      *TestCase                `json:"currentCase,omitempty"`
+	ProposedCase     TestCaseInput            `json:"proposedCase"`
+	QualityScore     int                      `json:"qualityScore"`
+	QualityFindings  []TestCaseQualityFinding `json:"qualityFindings"`
+	ValidationErrors []string                 `json:"validationErrors"`
+	CreatedByUserID  string                   `json:"createdByUserId"`
+	ReviewedByUserID string                   `json:"reviewedByUserId"`
+	AppliedCaseID    string                   `json:"appliedCaseId"`
+	ReviewNote       string                   `json:"reviewNote"`
+	ReviewedAt       string                   `json:"reviewedAt"`
+	CreatedAt        string                   `json:"createdAt"`
+	UpdatedAt        string                   `json:"updatedAt"`
+}
+
+type TestCaseProposalListOptions struct {
+	Status string `json:"status"`
+}
+
+type ReviewTestCaseProposalInput struct {
+	Note string `json:"note"`
+}
+
+type ApplyTestCaseProposalResult struct {
+	Proposal TestCaseProposal `json:"proposal"`
+	TestCase *TestCase        `json:"testCase,omitempty"`
+}
+
+type TestPlan struct {
+	ID              string `json:"id"`
+	WorkspaceID     string `json:"workspaceId"`
+	ProjectID       string `json:"projectId"`
+	Title           string `json:"title"`
+	Description     string `json:"description"`
+	Status          string `json:"status"`
+	TargetType      string `json:"targetType"`
+	TargetValue     string `json:"targetValue"`
+	Environment     string `json:"environment"`
+	CaseCount       int    `json:"caseCount"`
+	CreatedByUserID string `json:"createdByUserId"`
+	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt"`
+}
+
+type TestPlanCase struct {
+	ID          string   `json:"id"`
+	WorkspaceID string   `json:"workspaceId"`
+	ProjectID   string   `json:"projectId"`
+	PlanID      string   `json:"planId"`
+	TestCaseID  string   `json:"testCaseId"`
+	SortOrder   int      `json:"sortOrder"`
+	TestCase    TestCase `json:"testCase"`
+}
+
+type TestPlanDetail struct {
+	Plan  TestPlan       `json:"plan"`
+	Cases []TestPlanCase `json:"cases"`
+	Runs  []TestRun      `json:"runs"`
+}
+
+type TestPlanInput struct {
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Status      string   `json:"status"`
+	TargetType  string   `json:"targetType"`
+	TargetValue string   `json:"targetValue"`
+	Environment string   `json:"environment"`
+	CaseIDs     []string `json:"caseIds"`
+}
+
+type TestPlanListOptions struct {
+	Status string `json:"status"`
+}
+
+type TestRun struct {
+	ID               string `json:"id"`
+	WorkspaceID      string `json:"workspaceId"`
+	ProjectID        string `json:"projectId"`
+	PlanID           string `json:"planId"`
+	ParentIssueID    string `json:"parentIssueId"`
+	Status           string `json:"status"`
+	TargetType       string `json:"targetType"`
+	TargetValue      string `json:"targetValue"`
+	Environment      string `json:"environment"`
+	TotalCount       int    `json:"totalCount"`
+	PassedCount      int    `json:"passedCount"`
+	FailedCount      int    `json:"failedCount"`
+	BlockedCount     int    `json:"blockedCount"`
+	SkippedCount     int    `json:"skippedCount"`
+	AcceptanceStatus string `json:"acceptanceStatus"`
+	AcceptanceNote   string `json:"acceptanceNote"`
+	CreatedByUserID  string `json:"createdByUserId"`
+	AcceptedByUserID string `json:"acceptedByUserId"`
+	CompletedAt      string `json:"completedAt"`
+	AcceptedAt       string `json:"acceptedAt"`
+	CreatedAt        string `json:"createdAt"`
+	UpdatedAt        string `json:"updatedAt"`
+}
+
+type TestRunItem struct {
+	ID               string          `json:"id"`
+	WorkspaceID      string          `json:"workspaceId"`
+	ProjectID        string          `json:"projectId"`
+	RunID            string          `json:"runId"`
+	TestCaseID       string          `json:"testCaseId"`
+	ExecutionIssueID string          `json:"executionIssueId"`
+	AgentSessionID   string          `json:"agentSessionId"`
+	Status           string          `json:"status"`
+	ActualResult     string          `json:"actualResult"`
+	FailureSummary   string          `json:"failureSummary"`
+	Evidence         json.RawMessage `json:"evidence"`
+	TestCase         TestCase        `json:"testCase"`
+	CreatedAt        string          `json:"createdAt"`
+	UpdatedAt        string          `json:"updatedAt"`
+}
+
+type TestRunDetail struct {
+	Run   TestRun       `json:"run"`
+	Plan  TestPlan      `json:"plan"`
+	Items []TestRunItem `json:"items"`
+}
+
+type CreateTestRunInput struct {
+	TargetType   string `json:"targetType"`
+	TargetValue  string `json:"targetValue"`
+	Environment  string `json:"environment"`
+	AgentProfile string `json:"agentProfile"`
+	RuntimeMode  string `json:"runtimeMode"`
+	BatchSize    int    `json:"batchSize"`
+}
+
+type ReviewTestRunInput struct {
+	Note string `json:"note"`
+}
+
+type RetryTestRunInput struct {
+	ItemIDs      []string `json:"itemIds"`
+	AgentProfile string   `json:"agentProfile"`
+	RuntimeMode  string   `json:"runtimeMode"`
+}
+
 type Issue struct {
 	ID             string `json:"id"`
 	WorkspaceID    string `json:"workspaceId"`
@@ -557,8 +808,10 @@ type SessionReviewEvidence struct {
 }
 
 type RuntimeTaskArtifactResult struct {
-	TestEnvironment *RuntimeTaskTestEnvironmentArtifact `json:"testEnvironment,omitempty"`
-	ReviewEvidence  *SessionReviewEvidenceArtifact      `json:"reviewEvidence,omitempty"`
+	TestEnvironment   *RuntimeTaskTestEnvironmentArtifact `json:"testEnvironment,omitempty"`
+	ReviewEvidence    *SessionReviewEvidenceArtifact      `json:"reviewEvidence,omitempty"`
+	TestCaseProposals *TestCaseProposalArtifact           `json:"testCaseProposals,omitempty"`
+	TestResult        *TestResultArtifact                 `json:"testResult,omitempty"`
 }
 
 type RuntimeTaskTestEnvironmentArtifact struct {
@@ -575,6 +828,34 @@ type SessionReviewEvidenceArtifact struct {
 	DeploymentResult ReviewEvidenceResult    `json:"deploymentResult"`
 	Risks            []string                `json:"risks"`
 	FollowUps        []string                `json:"followUps"`
+}
+
+type TestCaseProposalArtifact struct {
+	Proposals []TestCaseProposalArtifactItem `json:"proposals"`
+	Summary   string                         `json:"summary"`
+}
+
+type TestCaseProposalArtifactItem struct {
+	Type         string        `json:"type"`
+	CaseID       string        `json:"caseId"`
+	Title        string        `json:"title"`
+	Summary      string        `json:"summary"`
+	Rationale    string        `json:"rationale"`
+	ProposedCase TestCaseInput `json:"proposedCase"`
+}
+
+type TestResultArtifact struct {
+	RunID   string                   `json:"runId"`
+	Items   []TestResultArtifactItem `json:"items"`
+	Summary string                   `json:"summary"`
+}
+
+type TestResultArtifactItem struct {
+	CaseID         string          `json:"caseId"`
+	Status         string          `json:"status"`
+	ActualResult   string          `json:"actualResult"`
+	FailureSummary string          `json:"failureSummary"`
+	Evidence       json.RawMessage `json:"evidence"`
 }
 
 type IssueHandoffCommit struct {
@@ -748,6 +1029,7 @@ type CreateAgentSessionInput struct {
 	SourceCommitSHA  string `json:"sourceCommitSha"`
 	TriggerCommentID string `json:"triggerCommentId"`
 	Automation       string `json:"automation"`
+	TestRunID        string `json:"testRunId"`
 }
 
 type CreateIssueInput struct {
@@ -1141,6 +1423,24 @@ type Store interface {
 	DeleteProject(ctx Context, userID, workspaceID, projectID string) error
 	GetProjectRunbook(ctx Context, userID, workspaceID, projectID string) (ProjectRunbook, error)
 	UpdateProjectRunbook(ctx Context, userID, workspaceID, projectID string, input ProjectRunbookInput) (ProjectRunbook, error)
+	ListProjectTestCases(ctx Context, userID, workspaceID, projectID string, options TestCaseListOptions) ([]TestCase, error)
+	CreateProjectTestCase(ctx Context, userID, workspaceID, projectID string, input TestCaseInput) (TestCase, error)
+	ImportProjectTestCases(ctx Context, userID, workspaceID, projectID string, input ImportTestCasesInput) (ImportTestCasesResult, error)
+	GetProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string) (TestCase, error)
+	UpdateProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string, input TestCaseInput) (TestCase, error)
+	ListProjectTestCaseRevisions(ctx Context, userID, workspaceID, projectID, caseID string) ([]TestCaseRevision, error)
+	ListProjectTestCaseProposals(ctx Context, userID, workspaceID, projectID string, options TestCaseProposalListOptions) ([]TestCaseProposal, error)
+	ApplyProjectTestCaseProposal(ctx Context, userID, workspaceID, projectID, proposalID string, input ReviewTestCaseProposalInput) (ApplyTestCaseProposalResult, error)
+	RejectProjectTestCaseProposal(ctx Context, userID, workspaceID, projectID, proposalID string, input ReviewTestCaseProposalInput) (TestCaseProposal, error)
+	ListProjectTestPlans(ctx Context, userID, workspaceID, projectID string, options TestPlanListOptions) ([]TestPlan, error)
+	CreateProjectTestPlan(ctx Context, userID, workspaceID, projectID string, input TestPlanInput) (TestPlanDetail, error)
+	GetProjectTestPlan(ctx Context, userID, workspaceID, projectID, planID string) (TestPlanDetail, error)
+	UpdateProjectTestPlan(ctx Context, userID, workspaceID, projectID, planID string, input TestPlanInput) (TestPlanDetail, error)
+	StartProjectTestRun(ctx Context, user User, workspaceID, projectID, planID string, input CreateTestRunInput) (TestRunDetail, error)
+	GetProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string) (TestRunDetail, error)
+	RetryProjectTestRun(ctx Context, user User, workspaceID, projectID, runID string, input RetryTestRunInput) (TestRunDetail, error)
+	AcceptProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string, input ReviewTestRunInput) (TestRun, error)
+	BlockProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string, input ReviewTestRunInput) (TestRun, error)
 	ListIssueLabelDefinitions(ctx Context, userID, workspaceID string) ([]IssueLabelDefinition, error)
 	GetWorkspaceSettings(ctx Context, userID, workspaceID string) (WorkspaceSettings, error)
 	UpdateWorkspaceSettings(ctx Context, userID, workspaceID string, input WorkspaceSettingsInput) (WorkspaceSettings, error)
