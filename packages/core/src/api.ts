@@ -17,11 +17,13 @@ import type {
   CreatePullRequestInput,
   CreateRuntimeRegistrationTokenInput,
   CreateRuntimeTaskInput,
+  CreateTestRunInput,
   CreateWorkerInstallationInput,
   CreateWorkspaceInput,
   CreateWorkspaceInvitationInput,
   CreateWorkspaceResult,
   CreateWorkspaceIssueEventInput,
+  GenerateTestCasesInput,
   Issue,
   IssueAttachment,
   IssueDetail,
@@ -33,10 +35,16 @@ import type {
   IssueTestEnvironmentResources,
   KubeconfigDiscoveryResult,
   KubeconfigImportResult,
+  ImportTestCasesInput,
+  ImportTestCasesResult,
   MspaceUser,
+  OptimizeTestCasesInput,
   PasswordAuthInput,
   Project,
   ProjectRunbook,
+  ApplyTestCaseProposalResult,
+  ReviewTestCaseProposalInput,
+  ReviewTestRunInput,
   RuntimeRegistrationToken,
   RuntimeRegistrationTokenResult,
   RuntimeTask,
@@ -48,6 +56,17 @@ import type {
   StartTestDeployInput,
   SuggestIssueTitleInput,
   SuggestIssueTitleResult,
+  TestCase,
+  TestCaseAgentSessionResult,
+  TestCaseInput,
+  TestCaseProposal,
+  TestCaseRevision,
+  TestPlan,
+  TestPlanDetail,
+  TestPlanInput,
+  TestRun,
+  TestRunDetail,
+  RetryTestRunInput,
   WorkspaceInboxItem,
   UpdateCommentInput,
   UpdateIssueLabelsInput,
@@ -99,6 +118,20 @@ export const queryKeys = {
   workspaceProjects: (workspaceId: string, token: string) => ["workspace-projects", workspaceId, token] as const,
   workspaceProjectRunbook: (workspaceId: string, projectId: string, token: string) =>
     ["workspace-project-runbook", workspaceId, projectId, token] as const,
+  projectTestCases: (workspaceId: string, projectId: string, token: string, status = "", query = "") =>
+    ["project-test-cases", workspaceId, projectId, token, status, query] as const,
+  projectTestCase: (workspaceId: string, projectId: string, caseId: string, token: string) =>
+    ["project-test-case", workspaceId, projectId, caseId, token] as const,
+  projectTestCaseRevisions: (workspaceId: string, projectId: string, caseId: string, token: string) =>
+    ["project-test-case-revisions", workspaceId, projectId, caseId, token] as const,
+  projectTestCaseProposals: (workspaceId: string, projectId: string, token: string, status = "") =>
+    ["project-test-case-proposals", workspaceId, projectId, token, status] as const,
+  projectTestPlans: (workspaceId: string, projectId: string, token: string, status = "") =>
+    ["project-test-plans", workspaceId, projectId, token, status] as const,
+  projectTestPlan: (workspaceId: string, projectId: string, planId: string, token: string) =>
+    ["project-test-plan", workspaceId, projectId, planId, token] as const,
+  projectTestRun: (workspaceId: string, projectId: string, runId: string, token: string) =>
+    ["project-test-run", workspaceId, projectId, runId, token] as const,
   workspaceSettings: (workspaceId: string, token: string) => ["workspace-settings", workspaceId, token] as const,
   clusters: (workspaceId: string, token: string) => ["clusters", workspaceId, token] as const,
   issueResources: (workspaceId: string, issueId: string, token: string) =>
@@ -418,6 +451,137 @@ export const controlPlaneApi = {
 			headers: authHeaders(token),
 			body: JSON.stringify(input),
 		}),
+  listProjectTestCases: (token: string, workspaceId: string, projectId: string, input: { status?: string; query?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (input.status) params.set("status", input.status);
+    if (input.query) params.set("q", input.query);
+    const query = params.toString();
+    return requestControlPlane<TestCase[]>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases${query ? `?${query}` : ""}`, {
+      headers: authHeaders(token),
+    });
+  },
+  createProjectTestCase: (token: string, workspaceId: string, projectId: string, input: TestCaseInput) =>
+    requestControlPlane<TestCase>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  importProjectTestCases: (token: string, workspaceId: string, projectId: string, input: ImportTestCasesInput) =>
+    requestControlPlane<ImportTestCasesResult>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/import`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  optimizeProjectTestCases: (token: string, workspaceId: string, projectId: string, input: OptimizeTestCasesInput) =>
+    requestControlPlane<TestCaseAgentSessionResult>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/optimize`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  generateProjectTestCases: (token: string, workspaceId: string, projectId: string, input: GenerateTestCasesInput) =>
+    requestControlPlane<TestCaseAgentSessionResult>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/generate`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  getProjectTestCase: (token: string, workspaceId: string, projectId: string, caseId: string) =>
+    requestControlPlane<TestCase>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/${caseId}`, {
+      headers: authHeaders(token),
+    }),
+  updateProjectTestCase: (token: string, workspaceId: string, projectId: string, caseId: string, input: TestCaseInput) =>
+    requestControlPlane<TestCase>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/${caseId}`, {
+      method: "PUT",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  listProjectTestCaseRevisions: (token: string, workspaceId: string, projectId: string, caseId: string) =>
+    requestControlPlane<TestCaseRevision[]>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/${caseId}/revisions`, {
+      headers: authHeaders(token),
+    }),
+  listProjectTestCaseProposals: (token: string, workspaceId: string, projectId: string, input: { status?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (input.status) params.set("status", input.status);
+    const query = params.toString();
+    return requestControlPlane<TestCaseProposal[]>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-case-proposals${query ? `?${query}` : ""}`, {
+      headers: authHeaders(token),
+    });
+  },
+  applyProjectTestCaseProposal: (
+    token: string,
+    workspaceId: string,
+    projectId: string,
+    proposalId: string,
+    input: ReviewTestCaseProposalInput = {},
+  ) =>
+    requestControlPlane<ApplyTestCaseProposalResult>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-case-proposals/${proposalId}/apply`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  rejectProjectTestCaseProposal: (
+    token: string,
+    workspaceId: string,
+    projectId: string,
+    proposalId: string,
+    input: ReviewTestCaseProposalInput = {},
+  ) =>
+    requestControlPlane<TestCaseProposal>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-case-proposals/${proposalId}/reject`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  listProjectTestPlans: (token: string, workspaceId: string, projectId: string, input: { status?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (input.status) params.set("status", input.status);
+    const query = params.toString();
+    return requestControlPlane<TestPlan[]>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-plans${query ? `?${query}` : ""}`, {
+      headers: authHeaders(token),
+    });
+  },
+  createProjectTestPlan: (token: string, workspaceId: string, projectId: string, input: TestPlanInput) =>
+    requestControlPlane<TestPlanDetail>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-plans`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  getProjectTestPlan: (token: string, workspaceId: string, projectId: string, planId: string) =>
+    requestControlPlane<TestPlanDetail>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-plans/${planId}`, {
+      headers: authHeaders(token),
+    }),
+  updateProjectTestPlan: (token: string, workspaceId: string, projectId: string, planId: string, input: TestPlanInput) =>
+    requestControlPlane<TestPlanDetail>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-plans/${planId}`, {
+      method: "PUT",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  startProjectTestRun: (token: string, workspaceId: string, projectId: string, planId: string, input: CreateTestRunInput = {}) =>
+    requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-plans/${planId}/runs`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  getProjectTestRun: (token: string, workspaceId: string, projectId: string, runId: string) =>
+    requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-runs/${runId}`, {
+      headers: authHeaders(token),
+    }),
+  retryProjectTestRun: (token: string, workspaceId: string, projectId: string, runId: string, input: RetryTestRunInput = {}) =>
+    requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-runs/${runId}/retry`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  acceptProjectTestRun: (token: string, workspaceId: string, projectId: string, runId: string, input: ReviewTestRunInput = {}) =>
+    requestControlPlane<TestRun>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-runs/${runId}/accept`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  blockProjectTestRun: (token: string, workspaceId: string, projectId: string, runId: string, input: ReviewTestRunInput = {}) =>
+    requestControlPlane<TestRun>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-runs/${runId}/block`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
 	listIssueLabelDefinitions: (token: string, workspaceId: string) =>
 		requestControlPlane<IssueLabelDefinition[]>(`/api/workspaces/${workspaceId}/issue-label-definitions`, {
 			headers: authHeaders(token),

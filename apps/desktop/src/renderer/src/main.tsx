@@ -24,6 +24,7 @@ import {
   MspaceAuthProvider,
   ProjectsPage,
   SessionDetailPage,
+  TestsPage,
   WorkspaceSettingsPage,
   WorkspaceInvitePage,
 } from "@mspace/views";
@@ -83,6 +84,8 @@ const expectedServerCapabilities = [
   "workspaceCollaboration",
   "runtimeWorkerRegistration",
   "runtimeTaskQueue",
+  "testCaseLibrary",
+  "testCaseWorkflow",
 ] as const;
 
 type ServerHealthPayload = {
@@ -1040,6 +1043,12 @@ const issuesRoute = createRoute({
   component: IssuesPage,
 });
 
+const testsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tests",
+  component: TestsPage,
+});
+
 const issueDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/issues/$issueId",
@@ -1104,6 +1113,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   inboxRoute,
   issuesRoute,
+  testsRoute,
   issueCommitDetailRoute,
   issueEvidenceSnapshotsRoute,
   issueEvidenceHistoryRoute,

@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ClipboardCheck,
   Circle,
   CircleAlert,
   Clock3,
@@ -139,6 +140,7 @@ export { Textarea as ShadcnTextarea } from "./components/ui/textarea";
 const sidebarItems = [
   { to: "/inbox", labelKey: "navigation.inbox", icon: Inbox },
   { to: "/issues", labelKey: "navigation.issues", icon: MessageSquareText },
+  { to: "/tests", labelKey: "navigation.tests", icon: ClipboardCheck },
   { to: "/agents", labelKey: "navigation.agents", icon: Bot },
   { to: "/clusters", labelKey: "navigation.clusters", icon: Cloud },
   { to: "/projects", labelKey: "navigation.projects", icon: FolderKanban },

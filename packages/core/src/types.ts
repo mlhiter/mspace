@@ -40,6 +40,248 @@ export interface ProjectRunbook {
   updatedAt: string;
 }
 
+export interface TestCaseStep {
+  action: string;
+  expected?: string;
+}
+
+export interface TestCaseQualityFinding {
+  code: string;
+  message: string;
+}
+
+export type TestCaseStatus = "draft" | "needs_review" | "ready" | "archived" | string;
+export type TestCaseType = "functional" | string;
+export type TestCaseSource = "manual" | "import" | "codex_generated" | "codex_refined" | string;
+
+export interface TestCase {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  title: string;
+  type: TestCaseType;
+  area: string;
+  priority: string;
+  status: TestCaseStatus;
+  source: TestCaseSource;
+  preconditions: string;
+  steps: TestCaseStep[];
+  expectedResult: string;
+  environmentRequirements: string;
+  dependencies: string[];
+  tags: string[];
+  qualityScore: number;
+  qualityFindings: TestCaseQualityFinding[];
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestCaseRevision {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  testCaseId: string;
+  authorUserId: string;
+  revisionNumber: number;
+  snapshot: TestCase;
+  createdAt: string;
+}
+
+export interface TestCaseInput {
+  title: string;
+  type?: TestCaseType;
+  area?: string;
+  priority?: string;
+  status?: TestCaseStatus;
+  source?: TestCaseSource;
+  preconditions?: string;
+  steps?: TestCaseStep[];
+  expectedResult?: string;
+  environmentRequirements?: string;
+  dependencies?: string[];
+  tags?: string[];
+}
+
+export interface ImportTestCasesInput {
+  format?: "markdown" | "text" | "csv" | string;
+  content: string;
+}
+
+export interface TestCaseImportSkip {
+  line?: number;
+  reason: string;
+  content: string;
+}
+
+export interface ImportTestCasesResult {
+  created: TestCase[];
+  skipped: TestCaseImportSkip[];
+}
+
+export interface OptimizeTestCasesInput {
+  caseIds: string[];
+  prompt?: string;
+  agentProfile?: string;
+  runtimeMode?: string;
+}
+
+export interface GenerateTestCasesInput {
+  prompt?: string;
+  area?: string;
+  agentProfile?: string;
+  runtimeMode?: string;
+}
+
+export interface TestCaseAgentSessionResult {
+  issueId: string;
+  session: AgentSession;
+}
+
+export interface TestCaseProposal {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  sourceIssueId: string;
+  sourceSessionId: string;
+  targetCaseId: string;
+  proposalType: "create" | "update" | "archive" | string;
+  status: "pending" | "applied" | "rejected" | "invalid" | string;
+  title: string;
+  summary: string;
+  rationale: string;
+  currentCase?: TestCase;
+  proposedCase: TestCaseInput;
+  qualityScore: number;
+  qualityFindings: TestCaseQualityFinding[];
+  validationErrors: string[];
+  createdByUserId: string;
+  reviewedByUserId: string;
+  appliedCaseId: string;
+  reviewNote: string;
+  reviewedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApplyTestCaseProposalResult {
+  proposal: TestCaseProposal;
+  testCase?: TestCase;
+}
+
+export interface ReviewTestCaseProposalInput {
+  note?: string;
+}
+
+export interface TestPlan {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  title: string;
+  description: string;
+  status: "draft" | "ready" | "archived" | string;
+  targetType: string;
+  targetValue: string;
+  environment: string;
+  caseCount: number;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestPlanCase {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  planId: string;
+  testCaseId: string;
+  sortOrder: number;
+  testCase: TestCase;
+}
+
+export interface TestPlanDetail {
+  plan: TestPlan;
+  cases: TestPlanCase[];
+  runs: TestRun[];
+}
+
+export interface TestPlanInput {
+  title: string;
+  description?: string;
+  status?: string;
+  targetType?: string;
+  targetValue?: string;
+  environment?: string;
+  caseIds: string[];
+}
+
+export interface TestRun {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  planId: string;
+  parentIssueId: string;
+  status: string;
+  targetType: string;
+  targetValue: string;
+  environment: string;
+  totalCount: number;
+  passedCount: number;
+  failedCount: number;
+  blockedCount: number;
+  skippedCount: number;
+  acceptanceStatus: string;
+  acceptanceNote: string;
+  createdByUserId: string;
+  acceptedByUserId: string;
+  completedAt: string;
+  acceptedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestRunItem {
+  id: string;
+  workspaceId: string;
+  projectId: string;
+  runId: string;
+  testCaseId: string;
+  executionIssueId: string;
+  agentSessionId: string;
+  status: string;
+  actualResult: string;
+  failureSummary: string;
+  evidence: Record<string, unknown>;
+  testCase: TestCase;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestRunDetail {
+  run: TestRun;
+  plan: TestPlan;
+  items: TestRunItem[];
+}
+
+export interface CreateTestRunInput {
+  targetType?: string;
+  targetValue?: string;
+  environment?: string;
+  agentProfile?: string;
+  runtimeMode?: string;
+  batchSize?: number;
+}
+
+export interface RetryTestRunInput {
+  itemIds?: string[];
+  agentProfile?: string;
+  runtimeMode?: string;
+}
+
+export interface ReviewTestRunInput {
+  note?: string;
+}
+
 export interface Cluster {
   id: string;
   name: string;
