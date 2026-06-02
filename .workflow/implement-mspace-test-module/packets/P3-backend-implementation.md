@@ -15,4 +15,3 @@ Completed locally by main agent.
 - Added Postgres migration `016_test_cases.sql`.
 - Added Postgres store methods and HTTP routes under project-scoped paths.
 - Added health capability `testCaseLibrary`.
-

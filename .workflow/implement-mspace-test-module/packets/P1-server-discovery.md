@@ -14,4 +14,3 @@ Completed by explorer subagent. Accepted findings:
 - SQLite persistence needs snapshot fields because SQLite wraps MemoryStore snapshots.
 - Postgres needs a new migration and store methods.
 - Phase 1 must stay independent of Codex, workers, plans, and runs.
-

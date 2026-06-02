@@ -13,4 +13,3 @@ Completed locally by main agent.
 - Added Tests sidebar navigation item.
 - Added `TestsPage` with project selection, search/status filter, import panel, create/edit form, quality findings, and revisions.
 - Added English and Simplified Chinese i18n keys.
-

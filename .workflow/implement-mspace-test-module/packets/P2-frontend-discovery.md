@@ -14,4 +14,3 @@ Completed by explorer subagent. Accepted findings:
 - Add a sidebar item after Issues in `packages/ui/src/index.tsx`.
 - Extend `packages/core/src/types.ts` and `packages/core/src/api.ts`.
 - Add visible copy through `@mspace/i18n` in both English and Simplified Chinese.
-

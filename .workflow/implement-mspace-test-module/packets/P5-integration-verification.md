@@ -14,4 +14,3 @@ Completed locally by main agent.
 - `pnpm test:server` passed.
 - `git diff --check` passed.
 - Workflow verifier was rerun after adding packet/result artifacts.
-
