@@ -1,7 +1,7 @@
 # mspace Test Module Product And Implementation Plan
 
-> Status: product and implementation plan draft  
-> Date: 2026-06-01  
+> Status: product and implementation plan draft
+> Date: 2026-06-01
 
 ## Conclusion
 

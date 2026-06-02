@@ -1,0 +1,28 @@
+{
+  "title": "Implement mspace test module",
+  "slug": "implement-mspace-test-module",
+  "created_at": "2026-06-01T13:13:11+00:00",
+  "status": "complete",
+  "approval": {
+    "required": false,
+    "granted": true,
+    "notes": "Local Phase 1 implementation only; no external writes or live database operations."
+  },
+  "packets": [
+    {"id": "P1", "status": "completed", "owner": "explorer", "description": "Server/store/API discovery"},
+    {"id": "P2", "status": "completed", "owner": "explorer", "description": "Frontend/core/i18n discovery"},
+    {"id": "P3", "status": "completed", "owner": "main", "description": "Backend implementation"},
+    {"id": "P4", "status": "completed", "owner": "main", "description": "Frontend implementation"},
+    {"id": "P5", "status": "completed", "owner": "main", "description": "Integration and verification"}
+  ],
+  "verification": {
+    "status": "passed",
+    "checks": [
+      {"command": "go test ./internal/control", "status": "passed"},
+      {"command": "pnpm typecheck", "status": "passed"},
+      {"command": "pnpm --filter @mspace/desktop build", "status": "passed"},
+      {"command": "pnpm test:server", "status": "passed"},
+      {"command": "git diff --check", "status": "passed"}
+    ]
+  }
+}
