@@ -188,7 +188,7 @@ Recommended fields:
 
 ### Test Run
 
-One plan can have multiple runs.
+A test run is the durable execution record. It can come from a formal test plan, a selected set of ready cases, a failed/blocked retry, or a later incremental scope.
 
 Typical rounds:
 
@@ -199,8 +199,9 @@ Typical rounds:
 
 A Test Run stores:
 
+- source: `ad_hoc`, `plan`, `retry`, or `incremental`;
 - round number;
-- linked Test Plan;
+- linked Test Plan when the source is plan-based;
 - linked parent Issue;
 - linked environment snapshot;
 - status;
@@ -687,6 +688,8 @@ POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-plans
 GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}
 PUT    /api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs
+GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-runs
+POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-runs
 GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/accept

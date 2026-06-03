@@ -20,8 +20,10 @@ import {
 } from "lucide-react";
 import {
   controlPlaneApi,
+  getControlPlaneBaseUrl,
   queryKeys,
   type Project,
+  type RuntimeWorker,
   type TestCase,
   type TestCaseInput,
   type TestCaseProposal,
@@ -158,6 +160,79 @@ function TestsLoadingRows(props: { label: string }) {
           <div className="hidden h-6 rounded-[4px] bg-[color:var(--block)] md:block" />
         </div>
       ))}
+    </div>
+  );
+}
+
+type WorkflowStageState = "ready" | "blocked" | "active" | "waiting";
+
+function workflowStageValue(state: WorkflowStageState) {
+  if (state === "active") return "running";
+  if (state === "blocked") return "blocked";
+  if (state === "waiting") return "needs_review";
+  return "completed";
+}
+
+function WorkflowStageButton(props: {
+  index: number;
+  icon: LucideIcon;
+  title: string;
+  count: string;
+  status: WorkflowStageState;
+  statusLabel: string;
+  body: string;
+  dependency: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  const Icon = props.icon;
+  return (
+    <button
+      type="button"
+      onClick={props.onClick}
+      className={cn(
+        "grid min-h-[164px] gap-3 rounded-[10px] bg-[color:var(--paper)] p-4 text-left shadow-[inset_0_0_0_1px_var(--line)] transition-colors hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)]",
+        props.active ? "bg-[color:var(--selection)] shadow-[inset_0_0_0_1px_var(--text)]" : "",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="grid size-6 shrink-0 place-items-center rounded-full bg-[color:var(--block)] text-[11px] font-semibold tabular-nums text-[color:var(--muted-strong)]">
+            {props.index}
+          </span>
+          <Icon data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
+          <span className="truncate text-[13px] font-semibold text-[color:var(--text)]">{props.title}</span>
+        </div>
+        <span className="shrink-0 text-[12px] font-medium tabular-nums text-[color:var(--muted)]">{props.count}</span>
+      </div>
+      <StatusBadge value={workflowStageValue(props.status)} valueLabel={props.statusLabel} className="w-fit" />
+      <p className="text-pretty text-[12px] leading-5 text-[color:var(--muted)]">{props.body}</p>
+      <p className="mt-auto border-t border-[color:var(--line)] pt-2 text-[11px] leading-4 text-[color:var(--faint)]">{props.dependency}</p>
+    </button>
+  );
+}
+
+function StageIntro(props: {
+  icon: LucideIcon;
+  title: string;
+  body: string;
+  meta?: string;
+  children?: ReactNode;
+}) {
+  const Icon = props.icon;
+  return (
+    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[color:var(--line)] p-4">
+      <div className="flex min-w-0 gap-3">
+        <div className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[color:var(--block)] text-[color:var(--muted)]">
+          <Icon data-icon className="size-4" />
+        </div>
+        <div className="min-w-0">
+          <h2 className="text-[15px] font-semibold leading-6 text-[color:var(--text)]">{props.title}</h2>
+          <p className="mt-1 max-w-[72ch] text-pretty text-[12px] leading-5 text-[color:var(--muted)]">{props.body}</p>
+          {props.meta ? <p className="mt-1 text-[12px] text-[color:var(--faint)]">{props.meta}</p> : null}
+        </div>
+      </div>
+      {props.children ? <div className="flex flex-wrap items-center gap-2">{props.children}</div> : null}
     </div>
   );
 }
@@ -433,6 +508,30 @@ function executabilityIssueLabel(count: number, t: ReturnType<typeof useMspaceTr
   return t("tests.executableIssueCount", { count });
 }
 
+function hasCodexCapability(worker: RuntimeWorker) {
+  return worker.capabilities?.codex === true;
+}
+
+function isFreshWorkerHeartbeat(value: string) {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= 45_000;
+}
+
+function activeCodexWorker(workers: RuntimeWorker[], workspaceId: string, runtimeMode: string) {
+  return workers.find(
+    (worker) =>
+      worker.workspaceId === workspaceId &&
+      worker.mode === runtimeMode &&
+      worker.status === "online" &&
+      hasCodexCapability(worker) &&
+      isFreshWorkerHeartbeat(worker.lastSeenAt),
+  );
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function useWorkspaceProjects() {
   const auth = useMspaceAuth();
   const workspaceId = auth.workspace?.id || "";
@@ -453,6 +552,56 @@ function useWorkspaceProjects() {
   };
 }
 
+function useTestsWorkerReadiness(
+  auth: ReturnType<typeof useMspaceAuth>,
+  workspaceId: string,
+  onStatus?: (message: string) => void,
+) {
+  const { t } = useMspaceTranslation();
+  const queryClient = useQueryClient();
+  const runtimeMode = auth.workspace?.kind === "team" ? "team" : "personal";
+  const runtimeWorkersQueryKey = queryKeys.runtimeWorkers(workspaceId, auth.token);
+  const workerUnavailableText =
+    runtimeMode === "personal"
+      ? t("tests.personalWorkerUnavailable")
+      : t("tests.teamWorkerUnavailable");
+  const workerStartingText = t("tests.personalWorkerStarting");
+
+  return useMemo(
+    () => ({
+      runtimeMode,
+      ensureReady: async () => {
+        const workers = await queryClient.fetchQuery({
+          queryKey: runtimeWorkersQueryKey,
+          queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
+          staleTime: 0,
+        });
+        if (activeCodexWorker(workers, workspaceId, runtimeMode)) return;
+        if (runtimeMode !== "personal" || !window.mspaceDesktop?.ensurePersonalWorker) {
+          throw new Error(workerUnavailableText);
+        }
+        onStatus?.(t("tests.startingPersonalWorker"));
+        await window.mspaceDesktop.ensurePersonalWorker({
+          authToken: auth.token,
+          workspaceId,
+          serverUrl: getControlPlaneBaseUrl(),
+        });
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          await sleep(1_000);
+          const refreshed = await queryClient.fetchQuery({
+            queryKey: runtimeWorkersQueryKey,
+            queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
+            staleTime: 0,
+          });
+          if (activeCodexWorker(refreshed, workspaceId, runtimeMode)) return;
+        }
+        throw new Error(workerStartingText);
+      },
+    }),
+    [auth.token, onStatus, queryClient, runtimeMode, runtimeWorkersQueryKey, t, workerStartingText, workerUnavailableText, workspaceId],
+  );
+}
+
 function projectFromSearch(projects: Project[], searchProjectId?: string): Project | undefined {
   return projects.find((project) => project.id === searchProjectId) || projects[0];
 }
@@ -468,6 +617,7 @@ export function TestsPage() {
   const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState("");
   const [createCaseOpen, setCreateCaseOpen] = useState(false);
+  const [createPlanOpen, setCreatePlanOpen] = useState(false);
   const [caseForm, setCaseForm] = useState<CaseForm>(emptyCaseForm);
   const [planForm, setPlanForm] = useState<PlanForm>(emptyPlanForm);
   const [query, setQuery] = useState("");
@@ -481,6 +631,7 @@ export function TestsPage() {
   const [importFileError, setImportFileError] = useState("");
   const [importSummary, setImportSummary] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const workerReadiness = useTestsWorkerReadiness(auth, workspaceId, setActionMessage);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) || projects[0];
   const effectiveProjectId = selectedProject?.id || "";
@@ -503,6 +654,10 @@ export function TestsPage() {
     auth.token,
     planStatusFilter === "all" ? "" : planStatusFilter,
   );
+  const allCasesQueryKey = queryKeys.projectTestCases(workspaceId, effectiveProjectId, auth.token);
+  const allProposalsQueryKey = queryKeys.projectTestCaseProposals(workspaceId, effectiveProjectId, auth.token);
+  const allPlansQueryKey = queryKeys.projectTestPlans(workspaceId, effectiveProjectId, auth.token);
+  const allRunsQueryKey = queryKeys.projectTestRuns(workspaceId, effectiveProjectId, auth.token);
 
   const casesQuery = useQuery({
     queryKey: casesQueryKey,
@@ -511,6 +666,12 @@ export function TestsPage() {
         status: statusFilter === "all" ? "" : statusFilter,
         query,
       }),
+    enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
+  });
+
+  const allCasesQuery = useQuery({
+    queryKey: allCasesQueryKey,
+    queryFn: () => controlPlaneApi.listProjectTestCases(auth.token, workspaceId, effectiveProjectId),
     enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
   });
 
@@ -523,6 +684,12 @@ export function TestsPage() {
     enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
   });
 
+  const allProposalsQuery = useQuery({
+    queryKey: allProposalsQueryKey,
+    queryFn: () => controlPlaneApi.listProjectTestCaseProposals(auth.token, workspaceId, effectiveProjectId),
+    enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
+  });
+
   const plansQuery = useQuery({
     queryKey: plansQueryKey,
     queryFn: () =>
@@ -532,19 +699,41 @@ export function TestsPage() {
     enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
   });
 
+  const allPlansQuery = useQuery({
+    queryKey: allPlansQueryKey,
+    queryFn: () => controlPlaneApi.listProjectTestPlans(auth.token, workspaceId, effectiveProjectId),
+    enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
+  });
+
   const selectedPlanQuery = useQuery({
     queryKey: queryKeys.projectTestPlan(workspaceId, effectiveProjectId, selectedPlanId || "__none", auth.token),
     queryFn: () => controlPlaneApi.getProjectTestPlan(auth.token, workspaceId, effectiveProjectId, selectedPlanId),
     enabled: serverWorkspaceReady && Boolean(effectiveProjectId && selectedPlanId),
   });
 
+  const allRunsQuery = useQuery({
+    queryKey: allRunsQueryKey,
+    queryFn: () => controlPlaneApi.listProjectTestRuns(auth.token, workspaceId, effectiveProjectId),
+    enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
+  });
+
   const cases = useMemo(() => (casesQuery.data || []).filter((testCase) => testCaseMatchesQuery(testCase, query)), [casesQuery.data, query]);
-  const readyCases = useMemo(() => (casesQuery.data || []).filter((testCase) => testCase.status === "ready"), [casesQuery.data]);
+  const allCases = allCasesQuery.data || casesQuery.data || [];
+  const allProposals = allProposalsQuery.data || proposalsQuery.data || [];
+  const allPlans = allPlansQuery.data || plansQuery.data || [];
+  const allRuns = allRunsQuery.data || [];
+  const readyCases = useMemo(() => allCases.filter((testCase) => testCase.status === "ready"), [allCases]);
+  const readyCaseIdSet = useMemo(() => new Set(readyCases.map((testCase) => testCase.id)), [readyCases]);
+  const selectedReadyCaseIds = useMemo(() => selectedCaseIds.filter((caseId) => readyCaseIdSet.has(caseId)), [readyCaseIdSet, selectedCaseIds]);
+  const pendingProposals = useMemo(() => allProposals.filter((proposal) => proposal.status === "pending"), [allProposals]);
+  const readyPlans = useMemo(() => allPlans.filter((plan) => plan.status === "ready"), [allPlans]);
   const proposals = proposalsQuery.data || [];
   const plans = plansQuery.data || [];
   const selectedPlan = selectedPlanQuery.data?.plan || plans.find((plan) => plan.id === selectedPlanId);
   const selectedPlanDetail = selectedPlanQuery.data;
+  const latestRun = useMemo(() => [...allRuns].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0], [allRuns]);
   const canCreateCase = Boolean(effectiveProjectId && caseForm.title.trim());
+  const canCreatePlan = Boolean(effectiveProjectId && planForm.title.trim() && selectedCaseIds.length > 0);
   const isExcelImport = importFormat === "xlsx";
   const canImportCases = isExcelImport ? Boolean(importFile) : Boolean(importContent.trim());
 
@@ -553,6 +742,10 @@ export function TestsPage() {
       queryClient.invalidateQueries({ queryKey: casesQueryKey }),
       queryClient.invalidateQueries({ queryKey: proposalQueryKey }),
       queryClient.invalidateQueries({ queryKey: plansQueryKey }),
+      queryClient.invalidateQueries({ queryKey: allCasesQueryKey }),
+      queryClient.invalidateQueries({ queryKey: allProposalsQueryKey }),
+      queryClient.invalidateQueries({ queryKey: allPlansQueryKey }),
+      queryClient.invalidateQueries({ queryKey: allRunsQueryKey }),
       selectedPlanId
         ? queryClient.invalidateQueries({ queryKey: queryKeys.projectTestPlan(workspaceId, effectiveProjectId, selectedPlanId, auth.token) })
         : Promise.resolve(),
@@ -597,7 +790,13 @@ export function TestsPage() {
   });
 
   const optimizeCases = useMutation({
-    mutationFn: () => controlPlaneApi.optimizeProjectTestCases(auth.token, workspaceId, effectiveProjectId, { caseIds: selectedCaseIds }),
+    mutationFn: async () => {
+      await workerReadiness.ensureReady();
+      return controlPlaneApi.optimizeProjectTestCases(auth.token, workspaceId, effectiveProjectId, {
+        caseIds: selectedCaseIds,
+        runtimeMode: workerReadiness.runtimeMode,
+      });
+    },
     onSuccess: async (result) => {
       setActionMessage(t("tests.agentSessionQueued", { issueId: result.issueId }));
       await navigate({ to: "/tests", search: testsTabSearch("proposals", effectiveProjectId) });
@@ -606,8 +805,12 @@ export function TestsPage() {
   });
 
   const generateCases = useMutation({
-    mutationFn: () =>
-      controlPlaneApi.generateProjectTestCases(auth.token, workspaceId, effectiveProjectId, {}),
+    mutationFn: async () => {
+      await workerReadiness.ensureReady();
+      return controlPlaneApi.generateProjectTestCases(auth.token, workspaceId, effectiveProjectId, {
+        runtimeMode: workerReadiness.runtimeMode,
+      });
+    },
     onSuccess: async (result) => {
       setActionMessage(t("tests.agentSessionQueued", { issueId: result.issueId }));
       await navigate({ to: "/tests", search: testsTabSearch("proposals", effectiveProjectId) });
@@ -642,26 +845,114 @@ export function TestsPage() {
     onSuccess: async (detail) => {
       setSelectedPlanId(detail.plan.id);
       setPlanForm(emptyPlanForm);
+      setCreatePlanOpen(false);
       setActionMessage(t("tests.planCreated"));
       await navigate({ to: "/tests/plans/$planId", params: { planId: detail.plan.id }, search: testsTabSearch("plans", effectiveProjectId) });
       await invalidateCaseWorkflow();
     },
   });
 
+  const startAdHocRun = useMutation({
+    mutationFn: async () => {
+      if (selectedReadyCaseIds.length === 0) {
+        throw new Error(t("tests.readySelectedRequired"));
+      }
+      await workerReadiness.ensureReady();
+      return controlPlaneApi.startAdHocProjectTestRun(auth.token, workspaceId, effectiveProjectId, {
+        caseIds: selectedReadyCaseIds,
+        runtimeMode: workerReadiness.runtimeMode,
+      });
+    },
+    onSuccess: async (detail) => {
+      setActionMessage(t("tests.adHocRunStarted"));
+      await navigate({ to: "/tests/runs/$runId", params: { runId: detail.run.id }, search: testsTabSearch("runs", effectiveProjectId) });
+      await invalidateCaseWorkflow();
+    },
+  });
+
   const startRun = useMutation({
-    mutationFn: (plan: TestPlan) =>
-      controlPlaneApi.startProjectTestRun(auth.token, workspaceId, effectiveProjectId, plan.id, {
+    mutationFn: async (plan: TestPlan) => {
+      await workerReadiness.ensureReady();
+      return controlPlaneApi.startProjectTestRun(auth.token, workspaceId, effectiveProjectId, plan.id, {
         targetType: plan.targetType,
         targetValue: plan.targetValue,
         environment: plan.environment,
-      }),
+        runtimeMode: workerReadiness.runtimeMode,
+      });
+    },
     onSuccess: async (detail) => {
-      setSelectedPlanId(detail.plan.id);
+      if (detail.plan?.id) {
+        setSelectedPlanId(detail.plan.id);
+      }
       setActionMessage(t("tests.runStarted"));
       await navigate({ to: "/tests/runs/$runId", params: { runId: detail.run.id }, search: testsTabSearch("runs", effectiveProjectId) });
       await invalidateCaseWorkflow();
     },
   });
+
+  const agentActionError = optimizeCases.error || generateCases.error || startAdHocRun.error || startRun.error;
+  const agentActionMessage = agentActionError?.message || actionMessage;
+  const agentActionMessageClass = agentActionError ? "text-[color:var(--danger)]" : "text-[color:var(--muted)]";
+  const workflowStages = useMemo(
+    () => [
+      {
+        key: "cases" as const,
+        icon: ClipboardCheck,
+        count: t("tests.workflow.caseCount", { count: allCases.length }),
+        status: allCases.length > 0 ? ("ready" as const) : ("active" as const),
+        statusLabel: allCases.length > 0 ? t("tests.workflow.caseReady") : t("tests.workflow.caseStart"),
+        body: t("tests.workflow.caseBody"),
+        dependency: allCases.length > 0 ? t("tests.workflow.caseDependencyDone") : t("tests.workflow.caseDependency"),
+      },
+      {
+        key: "proposals" as const,
+        icon: Sparkles,
+        count: t("tests.workflow.suggestionCount", { count: pendingProposals.length }),
+        status: pendingProposals.length > 0 ? ("waiting" as const) : allCases.length > 0 ? ("ready" as const) : ("blocked" as const),
+        statusLabel:
+          pendingProposals.length > 0
+            ? t("tests.workflow.suggestionWaiting")
+            : allCases.length > 0
+              ? t("tests.workflow.suggestionReady")
+              : t("tests.workflow.blocked"),
+        body: t("tests.workflow.suggestionBody"),
+        dependency: allCases.length > 0 ? t("tests.workflow.suggestionDependencyDone") : t("tests.workflow.suggestionDependency"),
+      },
+      {
+        key: "plans" as const,
+        icon: ListChecks,
+        count: t("tests.workflow.planCount", { count: allPlans.length }),
+        status: readyCases.length > 0 ? ("ready" as const) : ("blocked" as const),
+        statusLabel: readyCases.length > 0 ? t("tests.workflow.planReady") : t("tests.workflow.blocked"),
+        body: t("tests.workflow.planBody"),
+        dependency: readyCases.length > 0 ? t("tests.workflow.planDependencyDone", { count: readyCases.length }) : t("tests.workflow.planDependency"),
+      },
+      {
+        key: "runs" as const,
+        icon: Play,
+        count: latestRun ? t("tests.workflow.runLatest", { status: t(`tests.runStatusValue.${latestRun.status}`, { defaultValue: latestRun.status }) }) : t("tests.workflow.runCountEmpty"),
+        status: latestRun?.status === "running" || latestRun?.status === "queued" ? ("active" as const) : readyCases.length > 0 ? ("ready" as const) : ("blocked" as const),
+        statusLabel:
+          latestRun?.status === "running" || latestRun?.status === "queued"
+            ? t("tests.workflow.runActive")
+            : readyCases.length > 0
+              ? t("tests.workflow.runReady")
+              : t("tests.workflow.blocked"),
+        body: t("tests.workflow.runBody"),
+        dependency: readyCases.length > 0 ? t("tests.workflow.runDependencyDone", { count: readyCases.length }) : t("tests.workflow.runDependency"),
+      },
+    ],
+    [allCases.length, allPlans.length, latestRun, pendingProposals.length, readyCases.length, t],
+  );
+  const activeStage = workflowStages.find((stage) => stage.key === activeTab) || workflowStages[0];
+  const workflowNextAction =
+    pendingProposals.length > 0
+      ? t("tests.workflow.nextReview", { count: pendingProposals.length })
+      : readyCases.length > 0
+        ? t("tests.workflow.nextRunOrPlan", { count: readyCases.length })
+          : allCases.length > 0
+            ? t("tests.workflow.nextOptimize")
+            : t("tests.workflow.nextCases");
 
   useEffect(() => {
     if (search.project && projects.some((project) => project.id === search.project)) {
@@ -674,8 +965,8 @@ export function TestsPage() {
   }, [projects, search.project, selectedProjectId]);
 
   useEffect(() => {
-    setSelectedCaseIds((current) => current.filter((caseId) => (casesQuery.data || []).some((testCase) => testCase.id === caseId)));
-  }, [casesQuery.data]);
+    setSelectedCaseIds((current) => current.filter((caseId) => allCases.some((testCase) => testCase.id === caseId)));
+  }, [allCases]);
 
   useEffect(() => {
     if (!selectedPlanId && plans[0]) {
@@ -707,6 +998,17 @@ export function TestsPage() {
   function closeCreateCaseDialog() {
     setCreateCaseOpen(false);
     createCase.reset();
+  }
+
+  function openCreatePlanDialog() {
+    setPlanForm(emptyPlanForm);
+    setCreatePlanOpen(true);
+    createPlan.reset();
+  }
+
+  function closeCreatePlanDialog() {
+    setCreatePlanOpen(false);
+    createPlan.reset();
   }
 
   function closeImportDialog() {
@@ -758,9 +1060,10 @@ export function TestsPage() {
         <CollectionEmptyState title={t("tests.noProjectTitle")} body={t("tests.noProjectBody")} />
       ) : (
         <div className="grid gap-4">
-          <section className="rounded-[10px] bg-[color:var(--surface)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
-            <div className="flex flex-wrap items-center gap-2">
+          <section className="grid gap-4 rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-[220px] flex-1">
+                <div className="mb-2 text-[12px] font-medium text-[color:var(--muted)]">{t("tests.project")}</div>
                 <Select
                   value={effectiveProjectId}
                   onValueChange={(value) => {
@@ -783,27 +1086,40 @@ export function TestsPage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="flex flex-wrap gap-1 rounded-[8px] bg-[color:var(--paper)] p-1 shadow-[inset_0_0_0_1px_var(--line)]">
-                {tabs.map((tab) => (
-                  <Button
-                    key={tab}
-                    type="button"
-                    size="sm"
-                    variant={activeTab === tab ? "secondary" : "ghost"}
-                    onClick={() => void navigate({ to: "/tests", search: testsTabSearch(tab, effectiveProjectId) })}
-                    className="h-7 px-2 text-[12px]"
-                  >
-                    {t(`tests.tabs.${tab}`)}
-                  </Button>
-                ))}
+              <div className="max-w-[520px] text-left sm:text-right">
+                <div className="text-[13px] font-semibold text-[color:var(--text)]">{t("tests.workflow.title")}</div>
+                <p className="mt-1 text-pretty text-[12px] leading-5 text-[color:var(--muted)]">{workflowNextAction}</p>
               </div>
-              {actionMessage ? <span className="text-[12px] text-[color:var(--muted)]">{actionMessage}</span> : null}
+            </div>
+            {actionMessage ? <p className="text-[12px] text-[color:var(--muted)]">{actionMessage}</p> : null}
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {workflowStages.map((stage, index) => (
+                <WorkflowStageButton
+                  key={stage.key}
+                  index={index + 1}
+                  icon={stage.icon}
+                  title={t(`tests.tabs.${stage.key}`)}
+                  count={stage.count}
+                  status={stage.status}
+                  statusLabel={stage.statusLabel}
+                  body={stage.body}
+                  dependency={stage.dependency}
+                  active={activeTab === stage.key}
+                  onClick={() => void navigate({ to: "/tests", search: testsTabSearch(stage.key, effectiveProjectId) })}
+                />
+              ))}
             </div>
           </section>
 
           {activeTab === "cases" ? (
             <div className="grid min-h-[620px] gap-5">
               <section className="min-w-0 rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+                <StageIntro
+                  icon={activeStage.icon}
+                  title={t("tests.stage.casesTitle")}
+                  body={t("tests.stage.casesBody")}
+                  meta={activeStage.dependency}
+                />
                 <div className="flex flex-wrap items-center gap-2 border-b border-[color:var(--line)] p-3">
                   <div className="relative min-w-[220px] flex-1">
                     <Search data-icon className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[color:var(--faint)]" />
@@ -835,11 +1151,20 @@ export function TestsPage() {
                     <Sparkles data-icon />
                     {optimizeCases.isPending ? t("tests.optimizing") : t("tests.optimize")}
                   </Button>
+                  <Button type="button" variant="secondary" onClick={() => startAdHocRun.mutate()} disabled={selectedReadyCaseIds.length === 0 || startAdHocRun.isPending}>
+                    <Play data-icon />
+                    {startAdHocRun.isPending ? t("tests.startingAdHocRun") : t("tests.runSelected")}
+                  </Button>
                   <Button type="button" onClick={openCreateCaseDialog} disabled={!effectiveProjectId}>
                     <Plus data-icon />
                     {t("tests.newCase")}
                   </Button>
                 </div>
+                {agentActionMessage ? (
+                  <p className={cn("border-b border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-2 text-[12px]", agentActionMessageClass)}>
+                    {agentActionMessage}
+                  </p>
+                ) : null}
 
                 <div className="flex items-center justify-between border-b border-[color:var(--line)] px-4 py-2 text-[12px] text-[color:var(--muted)]">
                   <span>{t("tests.selectedSummary", { selected: selectedCaseIds.length, total: cases.length })}</span>
@@ -941,6 +1266,21 @@ export function TestsPage() {
           {activeTab === "proposals" ? (
             <div className="grid gap-5">
               <section className="min-w-0 rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+                <StageIntro
+                  icon={activeStage.icon}
+                  title={t("tests.stage.proposalsTitle")}
+                  body={t("tests.stage.proposalsBody")}
+                  meta={activeStage.dependency}
+                >
+                  <Button type="button" variant="secondary" onClick={() => optimizeCases.mutate()} disabled={selectedCaseIds.length === 0 || optimizeCases.isPending}>
+                    <Sparkles data-icon />
+                    {optimizeCases.isPending ? t("tests.optimizing") : t("tests.optimizeSelected")}
+                  </Button>
+                  <Button type="button" onClick={() => generateCases.mutate()} disabled={generateCases.isPending || !effectiveProjectId}>
+                    <Sparkles data-icon />
+                    {generateCases.isPending ? t("tests.generating") : t("tests.generate")}
+                  </Button>
+                </StageIntro>
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[color:var(--line)] p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Select value={proposalStatusFilter} onValueChange={setProposalStatusFilter}>
@@ -956,19 +1296,16 @@ export function TestsPage() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <Button type="button" variant="secondary" onClick={() => optimizeCases.mutate()} disabled={selectedCaseIds.length === 0 || optimizeCases.isPending}>
-                      <Sparkles data-icon />
-                      {optimizeCases.isPending ? t("tests.optimizing") : t("tests.optimizeSelected")}
-                    </Button>
-                    <Button type="button" onClick={() => generateCases.mutate()} disabled={generateCases.isPending || !effectiveProjectId}>
-                      <Sparkles data-icon />
-                      {generateCases.isPending ? t("tests.generating") : t("tests.generate")}
-                    </Button>
                   </div>
                   <span className="text-[12px] text-[color:var(--muted)]">
                     {t("tests.selectedSummary", { selected: selectedCaseIds.length, total: casesQuery.data?.length || 0 })}
                   </span>
                 </div>
+                {agentActionMessage ? (
+                  <p className={cn("border-b border-[color:var(--line)] bg-[color:var(--paper)] px-4 py-2 text-[12px]", agentActionMessageClass)}>
+                    {agentActionMessage}
+                  </p>
+                ) : null}
                 <div className="divide-y divide-[color:var(--line)]">
                   {proposalsQuery.isLoading ? (
                     <TestsLoadingRows label={t("tests.loadingProposals")} />
@@ -1036,6 +1373,12 @@ export function TestsPage() {
           {activeTab === "plans" ? (
             <div className="grid gap-5">
               <section className="min-w-0 rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+                <StageIntro
+                  icon={activeStage.icon}
+                  title={t("tests.stage.plansTitle")}
+                  body={t("tests.stage.plansBody")}
+                  meta={activeStage.dependency}
+                />
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[color:var(--line)] p-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <Select value={planStatusFilter} onValueChange={setPlanStatusFilter}>
@@ -1051,81 +1394,14 @@ export function TestsPage() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <Button type="button" onClick={() => createPlan.mutate()} disabled={createPlan.isPending || !planForm.title.trim() || selectedCaseIds.length === 0}>
+                    <Button type="button" onClick={openCreatePlanDialog} disabled={!effectiveProjectId}>
                       <Plus data-icon />
-                      {createPlan.isPending ? t("tests.creatingPlan") : t("tests.createPlan")}
+                      {t("tests.createPlan")}
                     </Button>
                   </div>
                   <span className="text-[12px] text-[color:var(--muted)]">
                     {t("tests.selectedSummary", { selected: selectedCaseIds.length, total: readyCases.length })}
                   </span>
-                </div>
-                <div className="border-b border-[color:var(--line)] bg-[color:var(--paper)] p-4">
-                  <div className="grid gap-4">
-                    <div>
-                      <h2 className="text-[13px] font-semibold text-[color:var(--text)]">{t("tests.createPlan")}</h2>
-                      <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">{t("tests.createPlanDescription")}</p>
-                    </div>
-                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,1fr)]">
-                      <Field label={t("tests.planTitle")}>
-                        <Input value={planForm.title} onChange={(event) => setPlanForm((current) => ({ ...current, title: event.target.value }))} placeholder={t("tests.planTitlePlaceholder")} />
-                      </Field>
-                      <Field label={t("tests.targetType")}>
-                        <Select value={planForm.targetType} onValueChange={(value) => setPlanForm((current) => ({ ...current, targetType: value }))}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {targetTypeOptions.map((type) => (
-                              <SelectItem key={type} value={type}>
-                                {t(`tests.targetTypeValue.${type}`)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </Field>
-                      <Field label={t("tests.targetValue")}>
-                        <Input value={planForm.targetValue} onChange={(event) => setPlanForm((current) => ({ ...current, targetValue: event.target.value }))} />
-                      </Field>
-                    </div>
-                    <div className="grid gap-3 lg:grid-cols-2">
-                      <Field label={t("tests.planDescription")}>
-                        <Textarea value={planForm.description} onChange={(event) => setPlanForm((current) => ({ ...current, description: event.target.value }))} className="min-h-20" />
-                      </Field>
-                      <Field label={t("tests.environment")}>
-                        <Textarea value={planForm.environment} onChange={(event) => setPlanForm((current) => ({ ...current, environment: event.target.value }))} className="min-h-20" />
-                      </Field>
-                    </div>
-                    <div className="rounded-[8px] bg-[color:var(--surface)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <span className="text-[13px] font-medium text-[color:var(--muted-strong)]">{t("tests.readyCases")}</span>
-                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={selectReadyCases} disabled={readyCases.length === 0}>
-                          {t("tests.selectReady")}
-                        </Button>
-                      </div>
-                      <div className="grid max-h-52 gap-2 overflow-auto pr-1 md:grid-cols-2">
-                        {readyCases.length === 0 ? (
-                          <p className="text-[12px] text-[color:var(--muted)]">{t("tests.noReadyCases")}</p>
-                        ) : (
-                          readyCases.map((testCase) => (
-                            <label key={testCase.id} className="flex items-start gap-2 text-[12px] leading-5 text-[color:var(--muted)]">
-                              <input
-                                type="checkbox"
-                                className="mt-1 size-4 accent-[color:var(--accent)]"
-                                checked={selectedCaseIds.includes(testCase.id)}
-                                onChange={() => toggleCaseSelection(testCase.id)}
-                              />
-                              <span className="min-w-0">
-                                <span className="block truncate font-medium text-[color:var(--text)]">{testCase.title}</span>
-                                <span>{testCase.area || t("common.unknown")}</span>
-                              </span>
-                            </label>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                    {createPlan.error ? <p className="text-[12px] text-[color:var(--danger)]">{createPlan.error.message}</p> : null}
-                  </div>
                 </div>
                 <div className="divide-y divide-[color:var(--line)]">
                   {plansQuery.isLoading ? (
@@ -1172,34 +1448,48 @@ export function TestsPage() {
           {activeTab === "runs" ? (
             <div className="grid gap-5">
               <section className="min-w-0 rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+                <StageIntro
+                  icon={activeStage.icon}
+                  title={t("tests.stage.runsTitle")}
+                  body={t("tests.stage.runsBody")}
+                  meta={activeStage.dependency}
+                />
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[color:var(--line)] p-3">
                   <div>
                     <h2 className="text-[13px] font-semibold text-[color:var(--text)]">{t("tests.runs")}</h2>
-                    <p className="mt-1 text-[12px] text-[color:var(--muted)]">{selectedPlan?.title || t("tests.selectPlan")}</p>
+                    <p className="mt-1 text-[12px] text-[color:var(--muted)]">{t("tests.runSelectedDescription")}</p>
                   </div>
-                  <Select value={selectedPlanId || "__none"} onValueChange={(value) => setSelectedPlanId(value === "__none" ? "" : value)}>
-                    <SelectTrigger className={cn(toolbarSelectClass, "w-[240px]")} aria-label={t("tests.selectedPlan")}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">{t("tests.selectPlan")}</SelectItem>
-                      {plans.map((plan) => (
-                        <SelectItem key={plan.id} value={plan.id}>
-                          {plan.title}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <Button type="button" variant="secondary" onClick={() => startAdHocRun.mutate()} disabled={selectedReadyCaseIds.length === 0 || startAdHocRun.isPending}>
+                      <Play data-icon />
+                      {startAdHocRun.isPending ? t("tests.startingAdHocRun") : t("tests.runSelected")}
+                    </Button>
+                    <Select value={selectedPlanId || "__none"} onValueChange={(value) => setSelectedPlanId(value === "__none" ? "" : value)}>
+                      <SelectTrigger className={cn(toolbarSelectClass, "w-[240px]")} aria-label={t("tests.selectedPlan")}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none">{t("tests.selectPlan")}</SelectItem>
+                        {plans.map((plan) => (
+                          <SelectItem key={plan.id} value={plan.id}>
+                            {plan.title}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button type="button" onClick={() => selectedPlan && startRun.mutate(selectedPlan)} disabled={!selectedPlan || startRun.isPending}>
+                      <ListChecks data-icon />
+                      {startRun.isPending ? t("tests.startingRun") : t("tests.startRun")}
+                    </Button>
+                  </div>
                 </div>
                 <div className="divide-y divide-[color:var(--line)]">
-                  {selectedPlanQuery.isLoading ? (
-                    <TestsLoadingRows label={t("tests.loadingPlans")} />
-                  ) : !selectedPlanDetail ? (
-                    <TestsPanelState icon={Play} title={t("tests.noRunsTitle")} body={t("tests.noRunsBody")} />
-                  ) : selectedPlanDetail.runs.length === 0 ? (
+                  {allRunsQuery.isLoading ? (
+                    <TestsLoadingRows label={t("tests.loadingRuns")} />
+                  ) : allRuns.length === 0 ? (
                     <TestsPanelState icon={Play} title={t("tests.noRunsTitle")} body={t("tests.noRunsBody")} />
                   ) : (
-                    selectedPlanDetail.runs.map((run) => (
+                    allRuns.map((run) => (
                       <Link
                         key={run.id}
                         to="/tests/runs/$runId"
@@ -1211,6 +1501,7 @@ export function TestsPage() {
                           <div className="flex items-center gap-2">
                             <Play data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
                             <span className="text-[13px] font-medium text-[color:var(--text)]">{t("tests.runShortId", { id: run.id.slice(0, 8) })}</span>
+                            <span className="text-[12px] text-[color:var(--muted)]">{t(`tests.runSourceValue.${run.source || "ad_hoc"}`, { defaultValue: run.source || "ad_hoc" })}</span>
                             <StatusBadge value={run.status} valueLabel={t(`tests.runStatusValue.${run.status}`, { defaultValue: run.status })} />
                           </div>
                           <div className="mt-1 text-[12px] text-[color:var(--muted)]">
@@ -1318,6 +1609,38 @@ export function TestsPage() {
               </form>
             </TestsModal>
           ) : null}
+
+          {createPlanOpen ? (
+            <TestsModal title={t("tests.createPlan")} description={t("tests.createPlanDescription")} onClose={closeCreatePlanDialog} wide>
+              <form
+                className="grid gap-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!canCreatePlan) return;
+                  createPlan.mutate();
+                }}
+              >
+                <PlanFormFields
+                  form={planForm}
+                  onChange={setPlanForm}
+                  readyCases={readyCases}
+                  selectedCaseIds={selectedCaseIds}
+                  onCaseToggle={toggleCaseSelection}
+                  onSelectReadyCases={selectReadyCases}
+                />
+                {createPlan.error ? <p className="text-[12px] text-[color:var(--danger)]">{createPlan.error.message}</p> : null}
+                <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[color:var(--line)] pt-3">
+                  <Button type="button" variant="secondary" onClick={closeCreatePlanDialog}>
+                    {t("common.cancel")}
+                  </Button>
+                  <Button type="submit" disabled={createPlan.isPending || !canCreatePlan}>
+                    <Plus data-icon />
+                    {createPlan.isPending ? t("tests.creatingPlan") : t("tests.createPlan")}
+                  </Button>
+                </div>
+              </form>
+            </TestsModal>
+          ) : null}
         </div>
       )}
     </PageFrame>
@@ -1335,6 +1658,8 @@ export function TestCaseDetailPage() {
   const selectedProject = projectFromSearch(projects, search.project);
   const effectiveProjectId = selectedProject?.id || "";
   const [caseForm, setCaseForm] = useState<CaseForm>(emptyCaseForm);
+  const [actionMessage, setActionMessage] = useState("");
+  const workerReadiness = useTestsWorkerReadiness(auth, workspaceId, setActionMessage);
 
   const caseQuery = useQuery({
     queryKey: queryKeys.projectTestCase(workspaceId, effectiveProjectId, caseId || "__none", auth.token),
@@ -1350,6 +1675,7 @@ export function TestCaseDetailPage() {
   const revisions = revisionsQuery.data || [];
   const revisionTimeline = useMemo(() => buildTestCaseRevisionTimeline(revisions, t), [revisions, t]);
   const canSave = Boolean(effectiveProjectId && caseForm.title.trim());
+  const canRunCase = Boolean(testCase && testCase.status === "ready");
 
   const createCase = useMutation({
     mutationFn: (input: TestCaseInput) => controlPlaneApi.createProjectTestCase(auth.token, workspaceId, effectiveProjectId, input),
@@ -1366,6 +1692,25 @@ export function TestCaseDetailPage() {
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCases(workspaceId, effectiveProjectId, auth.token) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCase(workspaceId, effectiveProjectId, updated.id, auth.token) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCaseRevisions(workspaceId, effectiveProjectId, updated.id, auth.token) }),
+      ]);
+    },
+  });
+  const startCaseRun = useMutation({
+    mutationFn: async () => {
+      if (!testCase || testCase.status !== "ready") {
+        throw new Error(t("tests.readyCaseRequired"));
+      }
+      await workerReadiness.ensureReady();
+      return controlPlaneApi.startAdHocProjectTestRun(auth.token, workspaceId, effectiveProjectId, {
+        caseIds: [testCase.id],
+        runtimeMode: workerReadiness.runtimeMode,
+      });
+    },
+    onSuccess: async (detail) => {
+      setActionMessage(t("tests.adHocRunStarted"));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestRuns(workspaceId, effectiveProjectId, auth.token) }),
+        navigate({ to: "/tests/runs/$runId", params: { runId: detail.run.id }, search: testsTabSearch("runs", effectiveProjectId) }),
       ]);
     },
   });
@@ -1451,11 +1796,25 @@ export function TestCaseDetailPage() {
               </p>
             ) : null}
           </div>
-          <Button type="submit" disabled={!canSave || savePending}>
-            <Save data-icon />
-            {savePending ? t("tests.saving") : isNew ? t("tests.createCase") : t("tests.saveCase")}
-          </Button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {!isNew ? (
+              <Button type="button" variant="secondary" onClick={() => startCaseRun.mutate()} disabled={!canRunCase || startCaseRun.isPending}>
+                <Play data-icon />
+                {startCaseRun.isPending ? t("tests.startingAdHocRun") : t("tests.runCase")}
+              </Button>
+            ) : null}
+            <Button type="submit" disabled={!canSave || savePending}>
+              <Save data-icon />
+              {savePending ? t("tests.saving") : isNew ? t("tests.createCase") : t("tests.saveCase")}
+            </Button>
+          </div>
         </div>
+
+        {startCaseRun.error ? (
+          <p className="text-[12px] text-[color:var(--danger)]">{startCaseRun.error.message}</p>
+        ) : actionMessage ? (
+          <p className="text-[12px] text-[color:var(--muted)]">{actionMessage}</p>
+        ) : null}
 
         <CaseFormFields
           form={caseForm}
@@ -1555,6 +1914,8 @@ export function TestPlanDetailPage() {
   const { auth, workspaceId, serverWorkspaceReady, projectsQuery, projects } = useWorkspaceProjects();
   const selectedProject = projectFromSearch(projects, search.project);
   const effectiveProjectId = selectedProject?.id || "";
+  const [actionMessage, setActionMessage] = useState("");
+  const workerReadiness = useTestsWorkerReadiness(auth, workspaceId, setActionMessage);
   const planQuery = useQuery({
     queryKey: queryKeys.projectTestPlan(workspaceId, effectiveProjectId, planId || "__none", auth.token),
     queryFn: () => controlPlaneApi.getProjectTestPlan(auth.token, workspaceId, effectiveProjectId, planId),
@@ -1562,13 +1923,17 @@ export function TestPlanDetailPage() {
   });
   const detail = planQuery.data;
   const startRun = useMutation({
-    mutationFn: (plan: TestPlan) =>
-      controlPlaneApi.startProjectTestRun(auth.token, workspaceId, effectiveProjectId, plan.id, {
+    mutationFn: async (plan: TestPlan) => {
+      await workerReadiness.ensureReady();
+      return controlPlaneApi.startProjectTestRun(auth.token, workspaceId, effectiveProjectId, plan.id, {
         targetType: plan.targetType,
         targetValue: plan.targetValue,
         environment: plan.environment,
-      }),
+        runtimeMode: workerReadiness.runtimeMode,
+      });
+    },
     onSuccess: async (runDetail) => {
+      setActionMessage(t("tests.runStarted"));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestPlans(workspaceId, effectiveProjectId, auth.token) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestPlan(workspaceId, effectiveProjectId, planId, auth.token) }),
@@ -1605,6 +1970,7 @@ export function TestPlanDetailPage() {
     <TestPlanDetailContent
       detail={detail}
       projectId={effectiveProjectId}
+      actionMessage={actionMessage}
       startRun={startRun}
     />
   );
@@ -1613,10 +1979,11 @@ export function TestPlanDetailPage() {
 function TestPlanDetailContent(props: {
   detail: TestPlanDetail;
   projectId: string;
+  actionMessage: string;
   startRun: ReturnType<typeof useMutation<TestRunDetail, Error, TestPlan>>;
 }) {
   const { t } = useMspaceTranslation();
-  const { detail, projectId, startRun } = props;
+  const { detail, projectId, actionMessage, startRun } = props;
   const { plan } = detail;
 
   return (
@@ -1657,7 +2024,11 @@ function TestPlanDetailContent(props: {
               {plan.environment}
             </pre>
           ) : null}
-          {startRun.error ? <p className="mt-3 text-[12px] text-[color:var(--danger)]">{startRun.error.message}</p> : null}
+          {startRun.error ? (
+            <p className="mt-3 text-[12px] text-[color:var(--danger)]">{startRun.error.message}</p>
+          ) : actionMessage ? (
+            <p className="mt-3 text-[12px] text-[color:var(--muted)]">{actionMessage}</p>
+          ) : null}
         </section>
 
         <section className="rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
@@ -1738,6 +2109,8 @@ export function TestRunDetailPage() {
   const selectedProject = projectFromSearch(projects, search.project);
   const effectiveProjectId = selectedProject?.id || "";
   const [reviewNote, setReviewNote] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
+  const workerReadiness = useTestsWorkerReadiness(auth, workspaceId, setActionMessage);
   const runQuery = useQuery({
     queryKey: queryKeys.projectTestRun(workspaceId, effectiveProjectId, runId || "__none", auth.token),
     queryFn: () => controlPlaneApi.getProjectTestRun(auth.token, workspaceId, effectiveProjectId, runId),
@@ -1747,15 +2120,23 @@ export function TestRunDetailPage() {
   async function invalidateRun() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.projectTestRun(workspaceId, effectiveProjectId, runId, auth.token) }),
-      runQuery.data?.plan.id
+      runQuery.data?.plan?.id
         ? queryClient.invalidateQueries({ queryKey: queryKeys.projectTestPlan(workspaceId, effectiveProjectId, runQuery.data.plan.id, auth.token) })
         : Promise.resolve(),
     ]);
   }
 
   const retryRun = useMutation({
-    mutationFn: () => controlPlaneApi.retryProjectTestRun(auth.token, workspaceId, effectiveProjectId, runId, {}),
-    onSuccess: invalidateRun,
+    mutationFn: async () => {
+      await workerReadiness.ensureReady();
+      return controlPlaneApi.retryProjectTestRun(auth.token, workspaceId, effectiveProjectId, runId, {
+        runtimeMode: workerReadiness.runtimeMode,
+      });
+    },
+    onSuccess: async () => {
+      setActionMessage(t("tests.runRetried"));
+      await invalidateRun();
+    },
   });
   const acceptRun = useMutation({
     mutationFn: () => controlPlaneApi.acceptProjectTestRun(auth.token, workspaceId, effectiveProjectId, runId, { note: reviewNote }),
@@ -1797,15 +2178,18 @@ export function TestRunDetailPage() {
   }
 
   const detail = runQuery.data;
+  const runTitle = detail.plan?.title || t("tests.adHocRun");
 
   return (
     <PageFrame
       title={t("tests.runShortId", { id: detail.run.id.slice(0, 8) })}
-      subtitle={detail.plan.title}
+      subtitle={runTitle}
       breadcrumbs={[
         { label: t("common.mspace"), to: "/inbox" },
         { label: t("tests.title"), to: "/tests", search: testsTabSearch("runs", effectiveProjectId) },
-        { label: detail.plan.title, to: "/tests/plans/$planId", params: { planId: detail.plan.id }, search: testsTabSearch("plans", effectiveProjectId) },
+        ...(detail.plan
+          ? [{ label: detail.plan.title, to: "/tests/plans/$planId" as const, params: { planId: detail.plan.id }, search: testsTabSearch("plans", effectiveProjectId) }]
+          : [{ label: t("tests.adHocRun"), to: "/tests" as const, search: testsTabSearch("runs", effectiveProjectId) }]),
         { label: t("tests.runShortId", { id: detail.run.id.slice(0, 8) }) },
       ]}
       actions={
@@ -1821,7 +2205,7 @@ export function TestRunDetailPage() {
         <section className="rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[color:var(--line)] pb-4">
             <div className="min-w-0">
-              <h2 className="text-[15px] font-semibold text-[color:var(--text)]">{detail.plan.title}</h2>
+              <h2 className="text-[15px] font-semibold text-[color:var(--text)]">{runTitle}</h2>
               <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">
                 {t("tests.runTarget", {
                   type: t(`tests.targetTypeValue.${detail.run.targetType}`, { defaultValue: detail.run.targetType }),
@@ -1860,6 +2244,8 @@ export function TestRunDetailPage() {
           </div>
           {(retryRun.error || acceptRun.error || blockRun.error) ? (
             <p className="mt-3 text-[12px] text-[color:var(--danger)]">{(retryRun.error || acceptRun.error || blockRun.error)?.message}</p>
+          ) : actionMessage ? (
+            <p className="mt-3 text-[12px] text-[color:var(--muted)]">{actionMessage}</p>
           ) : null}
         </section>
 
@@ -2028,6 +2414,90 @@ function CaseFormFields(props: {
       <Field label={t("tests.tags")} hint={t("tests.tagsHint")}>
         <Input value={form.tagsText} onChange={(event) => onChange((current) => ({ ...current, tagsText: event.target.value }))} />
       </Field>
+    </>
+  );
+}
+
+function PlanFormFields(props: {
+  form: PlanForm;
+  onChange: Dispatch<SetStateAction<PlanForm>>;
+  readyCases: TestCase[];
+  selectedCaseIds: string[];
+  onCaseToggle: (caseId: string) => void;
+  onSelectReadyCases: () => void;
+}) {
+  const { t } = useMspaceTranslation();
+  const { form, onChange, readyCases, selectedCaseIds, onCaseToggle, onSelectReadyCases } = props;
+
+  return (
+    <>
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,1fr)]">
+        <Field label={t("tests.planTitle")}>
+          <Input
+            value={form.title}
+            onChange={(event) => onChange((current) => ({ ...current, title: event.target.value }))}
+            placeholder={t("tests.planTitlePlaceholder")}
+          />
+        </Field>
+        <Field label={t("tests.targetType")}>
+          <Select value={form.targetType} onValueChange={(value) => onChange((current) => ({ ...current, targetType: value }))}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {targetTypeOptions.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {t(`tests.targetTypeValue.${type}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label={t("tests.targetValue")}>
+          <Input value={form.targetValue} onChange={(event) => onChange((current) => ({ ...current, targetValue: event.target.value }))} />
+        </Field>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        <Field label={t("tests.planDescription")}>
+          <Textarea value={form.description} onChange={(event) => onChange((current) => ({ ...current, description: event.target.value }))} className="min-h-24" />
+        </Field>
+        <Field label={t("tests.environment")}>
+          <Textarea value={form.environment} onChange={(event) => onChange((current) => ({ ...current, environment: event.target.value }))} className="min-h-24" />
+        </Field>
+      </div>
+      <div className="rounded-[8px] bg-[color:var(--paper)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <span className="block text-[13px] font-medium text-[color:var(--muted-strong)]">{t("tests.readyCases")}</span>
+            <span className="block text-[12px] text-[color:var(--muted)]">
+              {t("tests.selectedSummary", { selected: selectedCaseIds.length, total: readyCases.length })}
+            </span>
+          </div>
+          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={onSelectReadyCases} disabled={readyCases.length === 0}>
+            {t("tests.selectReady")}
+          </Button>
+        </div>
+        <div className="grid max-h-64 gap-2 overflow-auto pr-1 md:grid-cols-2">
+          {readyCases.length === 0 ? (
+            <p className="text-[12px] text-[color:var(--muted)]">{t("tests.noReadyCases")}</p>
+          ) : (
+            readyCases.map((testCase) => (
+              <label key={testCase.id} className="flex min-w-0 items-start gap-2 rounded-[6px] px-1 py-1 text-[12px] leading-5 text-[color:var(--muted)] hover:bg-[color:var(--hover)]">
+                <input
+                  type="checkbox"
+                  className="mt-1 size-4 shrink-0 accent-[color:var(--accent)]"
+                  checked={selectedCaseIds.includes(testCase.id)}
+                  onChange={() => onCaseToggle(testCase.id)}
+                />
+                <span className="min-w-0">
+                  <span className="block truncate font-medium text-[color:var(--text)]">{testCase.title}</span>
+                  <span>{testCase.area || t("common.unknown")}</span>
+                </span>
+              </label>
+            ))
+          )}
+        </div>
+      </div>
     </>
   );
 }

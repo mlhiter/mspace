@@ -1739,6 +1739,66 @@ func TestProjectTestCasesAreProjectScoped(t *testing.T) {
 	}
 }
 
+func TestProjectTestCaseAgentActionsRequireWorkerBeforeCreatingIssues(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "test-module-no-worker-user",
+		Login:          "test-module-no-worker-user",
+		Name:           "Test Module No Worker User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "test-module-no-worker")
+	testCase := createProjectTestCaseViaHTTP(t, router, sessionToken, workspaceID, project.ID, `{
+		"title":"No worker optimization stays visible",
+		"status":"ready",
+		"steps":[{"action":"Click optimize"}],
+		"expectedResult":"The UI shows a worker error."
+	}`)
+
+	optimizeRecorder := httptest.NewRecorder()
+	optimizeReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/optimize", strings.NewReader(`{"caseIds":["`+testCase.ID+`"],"runtimeMode":"personal"}`))
+	optimizeReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(optimizeRecorder, optimizeReq)
+	if optimizeRecorder.Code != http.StatusConflict || !strings.Contains(optimizeRecorder.Body.String(), "no active codex worker") {
+		t.Fatalf("expected optimize no-worker conflict, status=%d body=%s", optimizeRecorder.Code, optimizeRecorder.Body.String())
+	}
+	if issues := listIssuesViaHTTP(t, router, sessionToken, workspaceID); len(issues) != 0 {
+		t.Fatalf("optimize without a worker should not create orphan issues, got %+v", issues)
+	}
+
+	generateRecorder := httptest.NewRecorder()
+	generateReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/generate", strings.NewReader(`{"area":"auth","runtimeMode":"personal"}`))
+	generateReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(generateRecorder, generateReq)
+	if generateRecorder.Code != http.StatusConflict || !strings.Contains(generateRecorder.Body.String(), "no active codex worker") {
+		t.Fatalf("expected generate no-worker conflict, status=%d body=%s", generateRecorder.Code, generateRecorder.Body.String())
+	}
+	if issues := listIssuesViaHTTP(t, router, sessionToken, workspaceID); len(issues) != 0 {
+		t.Fatalf("generate without a worker should not create orphan issues, got %+v", issues)
+	}
+
+	runRecorder := httptest.NewRecorder()
+	runReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-runs", strings.NewReader(`{"caseIds":["`+testCase.ID+`"],"runtimeMode":"personal"}`))
+	runReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(runRecorder, runReq)
+	if runRecorder.Code != http.StatusConflict || !strings.Contains(runRecorder.Body.String(), "no active codex worker") {
+		t.Fatalf("expected direct run no-worker conflict, status=%d body=%s", runRecorder.Code, runRecorder.Body.String())
+	}
+	if issues := listIssuesViaHTTP(t, router, sessionToken, workspaceID); len(issues) != 0 {
+		t.Fatalf("direct run without a worker should not create orphan issues, got %+v", issues)
+	}
+}
+
 func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
@@ -1871,6 +1931,30 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 		if _, err := store.GetSession(context.Background(), user.ID, workspaceID, item.AgentSessionID); err != nil {
 			t.Fatalf("get item agent session: %v", err)
 		}
+	}
+
+	adHocRun := startAdHocProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, fmt.Sprintf(`{"caseIds":[%q],"runtimeMode":"personal","agentProfile":"codex","batchSize":1}`, existingCase.ID))
+	if adHocRun.Run.Status != "running" || adHocRun.Run.Source != "ad_hoc" || adHocRun.Run.PlanID != "" || adHocRun.Plan != nil || adHocRun.Run.TotalCount != 1 || len(adHocRun.Items) != 1 {
+		t.Fatalf("unexpected direct started run: %+v", adHocRun)
+	}
+	adHocIssue, err := store.GetIssue(context.Background(), user.ID, workspaceID, adHocRun.Run.ParentIssueID)
+	if err != nil {
+		t.Fatalf("get direct run parent issue: %v", err)
+	}
+	if adHocIssue.Issue.Title != "Test run: "+adHocRun.Items[0].TestCase.Title {
+		t.Fatalf("unexpected direct run parent issue: %+v", adHocIssue.Issue)
+	}
+	adHocRuns := listProjectTestRunsViaHTTP(t, router, sessionToken, workspaceID, project.ID)
+	if len(adHocRuns) < 2 {
+		t.Fatalf("expected project run list to include plan and direct runs, got %+v", adHocRuns)
+	}
+	adHocResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"passed","actualResult":"Direct case passed.","evidence":{"commands":["pnpm test -- login"]}}]}}}`, adHocRun.Run.ID, existingCase.ID)
+	if _, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, adHocResult); err != nil {
+		t.Fatalf("complete direct run result task: %v", err)
+	}
+	completedAdHocRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, adHocRun.Run.ID)
+	if completedAdHocRun.Run.Status != "needs_acceptance" || completedAdHocRun.Run.PassedCount != 1 || completedAdHocRun.Plan != nil {
+		t.Fatalf("unexpected completed direct run: %+v", completedAdHocRun)
 	}
 
 	firstItem := run.Items[0]
@@ -3060,6 +3144,22 @@ func createTestProjectViaHTTP(t *testing.T, router http.Handler, sessionToken, w
 	return project
 }
 
+func listIssuesViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID string) []IssueListItem {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/issues", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list issues status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var issues []IssueListItem
+	if err := json.Unmarshal(recorder.Body.Bytes(), &issues); err != nil {
+		t.Fatalf("parse issues: %v", err)
+	}
+	return issues
+}
+
 func createProjectTestCaseViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, body string) TestCase {
 	t.Helper()
 	recorder := httptest.NewRecorder()
@@ -3165,6 +3265,38 @@ func startProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken,
 		t.Fatalf("parse test run: %v", err)
 	}
 	return detail
+}
+
+func startAdHocProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, body string) TestRunDetail {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-runs", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("start direct test run status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var detail TestRunDetail
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("parse direct test run: %v", err)
+	}
+	return detail
+}
+
+func listProjectTestRunsViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID string) []TestRun {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-runs", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list test runs status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var runs []TestRun
+	if err := json.Unmarshal(recorder.Body.Bytes(), &runs); err != nil {
+		t.Fatalf("parse test runs: %v", err)
+	}
+	return runs
 }
 
 func getProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, runID string) TestRunDetail {

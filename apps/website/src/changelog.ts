@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-03",
+    title: "Direct selected-case test runs",
+    summary:
+      "mspace made test execution start from selected ready cases without forcing users to create a formal plan first.",
+    items: [
+      "Added project-level test run creation for selected ready cases while keeping plan-based runs for formal release passes.",
+      "Made test runs record their source so selected-case, plan, retry, and later incremental runs can share the same Issue-backed execution model.",
+      "Updated the Tests UI so the Run stage lists project run history directly and offers both selected-case runs and plan runs.",
+      "Kept worker preflight, parent Issues, child execution Issues, agent sessions, `test-result.json` reconciliation, and human acceptance in the same auditable path.",
+    ],
+  },
+  {
+    date: "2026-06-03",
     title: "Readable case revision history",
     summary:
       "mspace made Test Case revision history show what changed instead of listing only version titles.",

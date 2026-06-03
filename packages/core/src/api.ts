@@ -17,6 +17,7 @@ import type {
   CreatePullRequestInput,
   CreateRuntimeRegistrationTokenInput,
   CreateRuntimeTaskInput,
+  CreateAdHocTestRunInput,
   CreateTestRunInput,
   CreateWorkerInstallationInput,
   CreateWorkspaceInput,
@@ -130,6 +131,8 @@ export const queryKeys = {
     ["project-test-plans", workspaceId, projectId, token, status] as const,
   projectTestPlan: (workspaceId: string, projectId: string, planId: string, token: string) =>
     ["project-test-plan", workspaceId, projectId, planId, token] as const,
+  projectTestRuns: (workspaceId: string, projectId: string, token: string, status = "", source = "") =>
+    ["project-test-runs", workspaceId, projectId, token, status, source] as const,
   projectTestRun: (workspaceId: string, projectId: string, runId: string, token: string) =>
     ["project-test-run", workspaceId, projectId, runId, token] as const,
   workspaceSettings: (workspaceId: string, token: string) => ["workspace-settings", workspaceId, token] as const,
@@ -556,6 +559,21 @@ export const controlPlaneApi = {
     }),
   startProjectTestRun: (token: string, workspaceId: string, projectId: string, planId: string, input: CreateTestRunInput = {}) =>
     requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-plans/${planId}/runs`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  listProjectTestRuns: (token: string, workspaceId: string, projectId: string, options: { status?: string; source?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (options.status) params.set("status", options.status);
+    if (options.source) params.set("source", options.source);
+    const query = params.toString();
+    return requestControlPlane<TestRun[]>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-runs${query ? `?${query}` : ""}`, {
+      headers: authHeaders(token),
+    });
+  },
+  startAdHocProjectTestRun: (token: string, workspaceId: string, projectId: string, input: CreateAdHocTestRunInput) =>
+    requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-runs`, {
       method: "POST",
       headers: authHeaders(token),
       body: JSON.stringify(input),

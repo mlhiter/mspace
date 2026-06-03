@@ -268,6 +268,18 @@ func TestSQLiteStorePersistsTestModuleWorkflowSnapshot(t *testing.T) {
 	if len(run.Items) != 2 || run.Run.ParentIssueID == "" {
 		t.Fatalf("unexpected started run: %+v", run)
 	}
+	adHocRun, err := store.StartAdHocProjectTestRun(ctx, user, workspaceID, project.ID, CreateAdHocTestRunInput{
+		CaseIDs:      []string{sourceCase.ID},
+		RuntimeMode:  "personal",
+		AgentProfile: "codex",
+		BatchSize:    1,
+	})
+	if err != nil {
+		t.Fatalf("start direct test run: %v", err)
+	}
+	if adHocRun.Run.PlanID != "" || adHocRun.Run.Source != "ad_hoc" || adHocRun.Plan != nil || len(adHocRun.Items) != 1 {
+		t.Fatalf("unexpected direct started run: %+v", adHocRun)
+	}
 
 	if err := store.Persist(); err != nil {
 		t.Fatalf("persist sqlite store: %v", err)
@@ -320,5 +332,12 @@ func TestSQLiteStorePersistsTestModuleWorkflowSnapshot(t *testing.T) {
 		if item.Status != "running" || item.ExecutionIssueID == "" || item.AgentSessionID == "" {
 			t.Fatalf("expected persisted running run item with issue/session, got %+v", item)
 		}
+	}
+	loadedAdHocRun, err := reopened.GetProjectTestRun(ctx, user.ID, workspaceID, project.ID, adHocRun.Run.ID)
+	if err != nil {
+		t.Fatalf("load persisted direct run: %v", err)
+	}
+	if loadedAdHocRun.Run.PlanID != "" || loadedAdHocRun.Run.Source != "ad_hoc" || loadedAdHocRun.Plan != nil || len(loadedAdHocRun.Items) != 1 {
+		t.Fatalf("unexpected persisted direct run: %+v", loadedAdHocRun)
 	}
 }

@@ -66,7 +66,7 @@ Production deployment uses the root `vercel.json`:
 - Agent mentions from issue comments, with server-side session records, runtime task queueing, profile instructions, trigger-comment tracking, worker logs, status updates, and issue timeline updates.
 - Per-session worker-managed git worktrees, changed file lists, diff previews, commits, and comparison against the project default branch.
 - Project-level Tests workspace with Cases, Case suggestions, Plans, and Runs tabs, dedicated detail pages, modal create/import flows, Markdown/text/CSV/Excel `.xlsx` import, readiness scoring, field-level case revision summaries, and human review before Codex suggestions update canonical cases.
-- Issue-backed test run workflow where test plans create issue-linked run items, workers execute through the existing agent-session path, `test-result.json` is reconciled into run state, and a human accepts or blocks the run result.
+- Issue-backed test run workflow where selected ready cases or formal plans create issue-linked run items, workers execute through the existing agent-session path, `test-result.json` is reconciled into run state, and a human accepts or blocks the run result.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and update the issue test environment record.
 - Opt-in workspace automation that queues the same test deployment flow after a successful source session captures a commit, when the issue and runtime are ready.
@@ -156,7 +156,7 @@ The packaged desktop app includes bundled `mspace-server` and `mspace-worker` bi
 4. In Tests, import or create project cases. Markdown/text imports use one non-empty line per case; CSV and `.xlsx` workbooks use the same column contract: `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags`. Valid case types are `functional`, `ui`, `api`, and `deployment`.
 5. Create/import a cluster config in Clusters if the issue needs a Kubernetes test environment.
 6. For personal desktop workspaces, let mspace start the local worker when you mention an agent. For team workspaces, connect a worker environment from Workspace Settings and run the generated install command in the target environment. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
-7. Mention an enabled agent profile, such as `@codex`, in an issue comment, or start a test run from a ready test plan.
+7. Mention an enabled agent profile, such as `@codex`, in an issue comment, or start a test run from selected ready cases or a formal test plan.
 8. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
 9. Use Commits for source review and PR handoff.
 10. Trigger a manual test deployment from Issue Detail when ready, or enable workspace auto-deploy to queue it after successful source sessions.

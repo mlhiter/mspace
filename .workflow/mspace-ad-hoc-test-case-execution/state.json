@@ -1,0 +1,41 @@
+{
+  "title": "mspace ad hoc test case execution",
+  "slug": "mspace-ad-hoc-test-case-execution",
+  "created_at": "2026-06-03T09:33:15+00:00",
+  "status": "in_progress",
+  "approval": {
+    "required": false,
+    "granted": true,
+    "notes": "User approved implementation with codex-dynamic-workflows; local code edits and verification only."
+  },
+  "packets": [
+    {
+      "id": "backend",
+      "status": "completed",
+      "owner": "main",
+      "objective": "Support test runs from selected cases without requiring a plan."
+    },
+    {
+      "id": "frontend",
+      "status": "completed",
+      "owner": "main plus explorer",
+      "objective": "Expose direct selected-case and single-case execution in UI/API client."
+    },
+    {
+      "id": "docs",
+      "status": "completed",
+      "owner": "main",
+      "objective": "Update durable product/API docs for run sources."
+    },
+    {
+      "id": "verification",
+      "status": "in_progress",
+      "owner": "main",
+      "objective": "Run focused checks and closeout."
+    }
+  ],
+  "verification": {
+    "status": "not_started",
+    "checks": []
+  }
+}

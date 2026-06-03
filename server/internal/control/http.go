@@ -115,6 +115,8 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-plans", s.handleCreateProjectTestPlan)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}", s.handleGetProjectTestPlan)
 	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}", s.handleUpdateProjectTestPlan)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs", s.handleListProjectTestRuns)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs", s.handleStartAdHocProjectTestRun)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs", s.handleStartProjectTestRun)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}", s.handleGetProjectTestRun)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry", s.handleRetryProjectTestRun)
@@ -823,6 +825,11 @@ func (s *Server) handleOptimizeProjectTestCases(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, errors.New("caseIds are required"))
 		return
 	}
+	runtimeMode, err := s.store.EnsureActiveCodexWorker(r.Context(), user.ID, workspaceID, input.RuntimeMode)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
 	projects, err := s.store.ListProjects(r.Context(), user.ID, workspaceID)
 	if err != nil {
 		writeStoreError(w, err)
@@ -846,7 +853,7 @@ func (s *Server) handleOptimizeProjectTestCases(w http.ResponseWriter, r *http.R
 	session, err := s.store.CreateAgentSession(r.Context(), user.ID, workspaceID, issueID, CreateAgentSessionInput{
 		Provider:     "codex",
 		AgentProfile: normalizeAgentProfile(input.AgentProfile),
-		RuntimeMode:  strings.ToLower(strings.TrimSpace(input.RuntimeMode)),
+		RuntimeMode:  runtimeMode,
 		Command:      buildTestCaseOptimizationIssueBody(project, cases, input.Prompt),
 		Automation:   testCaseOptimizationAutomation,
 	})
@@ -879,6 +886,11 @@ func (s *Server) handleGenerateProjectTestCases(w http.ResponseWriter, r *http.R
 		writeStoreError(w, ErrNotFound)
 		return
 	}
+	runtimeMode, err := s.store.EnsureActiveCodexWorker(r.Context(), user.ID, workspaceID, input.RuntimeMode)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
 	body := buildTestCaseGenerationIssueBody(project, input)
 	issueID, err := s.store.CreateIssue(r.Context(), user, workspaceID, CreateIssueInput{
 		ProjectID: projectID,
@@ -893,7 +905,7 @@ func (s *Server) handleGenerateProjectTestCases(w http.ResponseWriter, r *http.R
 	session, err := s.store.CreateAgentSession(r.Context(), user.ID, workspaceID, issueID, CreateAgentSessionInput{
 		Provider:     "codex",
 		AgentProfile: normalizeAgentProfile(input.AgentProfile),
-		RuntimeMode:  strings.ToLower(strings.TrimSpace(input.RuntimeMode)),
+		RuntimeMode:  runtimeMode,
 		Command:      body,
 		Automation:   testCaseGenerationAutomation,
 	})
@@ -1030,6 +1042,41 @@ func (s *Server) handleStartProjectTestRun(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	detail, err := s.store.StartProjectTestRun(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "planID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, detail)
+}
+
+func (s *Server) handleListProjectTestRuns(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	options := TestRunListOptions{
+		Status: strings.TrimSpace(r.URL.Query().Get("status")),
+		Source: strings.TrimSpace(r.URL.Query().Get("source")),
+	}
+	runs, err := s.store.ListProjectTestRuns(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), options)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, runs)
+}
+
+func (s *Server) handleStartAdHocProjectTestRun(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateAdHocTestRunInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.StartAdHocProjectTestRun(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), input)
 	if err != nil {
 		writeStoreError(w, err)
 		return

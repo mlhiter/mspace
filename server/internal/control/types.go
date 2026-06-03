@@ -472,11 +472,17 @@ type TestPlanListOptions struct {
 	Status string `json:"status"`
 }
 
+type TestRunListOptions struct {
+	Status string `json:"status"`
+	Source string `json:"source"`
+}
+
 type TestRun struct {
 	ID               string `json:"id"`
 	WorkspaceID      string `json:"workspaceId"`
 	ProjectID        string `json:"projectId"`
 	PlanID           string `json:"planId"`
+	Source           string `json:"source"`
 	ParentIssueID    string `json:"parentIssueId"`
 	Status           string `json:"status"`
 	TargetType       string `json:"targetType"`
@@ -516,7 +522,7 @@ type TestRunItem struct {
 
 type TestRunDetail struct {
 	Run   TestRun       `json:"run"`
-	Plan  TestPlan      `json:"plan"`
+	Plan  *TestPlan     `json:"plan,omitempty"`
 	Items []TestRunItem `json:"items"`
 }
 
@@ -527,6 +533,16 @@ type CreateTestRunInput struct {
 	AgentProfile string `json:"agentProfile"`
 	RuntimeMode  string `json:"runtimeMode"`
 	BatchSize    int    `json:"batchSize"`
+}
+
+type CreateAdHocTestRunInput struct {
+	CaseIDs      []string `json:"caseIds"`
+	TargetType   string   `json:"targetType"`
+	TargetValue  string   `json:"targetValue"`
+	Environment  string   `json:"environment"`
+	AgentProfile string   `json:"agentProfile"`
+	RuntimeMode  string   `json:"runtimeMode"`
+	BatchSize    int      `json:"batchSize"`
 }
 
 type ReviewTestRunInput struct {
@@ -1444,6 +1460,7 @@ type Store interface {
 	ListProjectTestCases(ctx Context, userID, workspaceID, projectID string, options TestCaseListOptions) ([]TestCase, error)
 	CreateProjectTestCase(ctx Context, userID, workspaceID, projectID string, input TestCaseInput) (TestCase, error)
 	ImportProjectTestCases(ctx Context, userID, workspaceID, projectID string, input ImportTestCasesInput) (ImportTestCasesResult, error)
+	EnsureActiveCodexWorker(ctx Context, userID, workspaceID, runtimeMode string) (string, error)
 	GetProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string) (TestCase, error)
 	UpdateProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string, input TestCaseInput) (TestCase, error)
 	ListProjectTestCaseRevisions(ctx Context, userID, workspaceID, projectID, caseID string) ([]TestCaseRevision, error)
@@ -1454,7 +1471,9 @@ type Store interface {
 	CreateProjectTestPlan(ctx Context, userID, workspaceID, projectID string, input TestPlanInput) (TestPlanDetail, error)
 	GetProjectTestPlan(ctx Context, userID, workspaceID, projectID, planID string) (TestPlanDetail, error)
 	UpdateProjectTestPlan(ctx Context, userID, workspaceID, projectID, planID string, input TestPlanInput) (TestPlanDetail, error)
+	ListProjectTestRuns(ctx Context, userID, workspaceID, projectID string, options TestRunListOptions) ([]TestRun, error)
 	StartProjectTestRun(ctx Context, user User, workspaceID, projectID, planID string, input CreateTestRunInput) (TestRunDetail, error)
+	StartAdHocProjectTestRun(ctx Context, user User, workspaceID, projectID string, input CreateAdHocTestRunInput) (TestRunDetail, error)
 	GetProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string) (TestRunDetail, error)
 	RetryProjectTestRun(ctx Context, user User, workspaceID, projectID, runID string, input RetryTestRunInput) (TestRunDetail, error)
 	AcceptProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string, input ReviewTestRunInput) (TestRun, error)

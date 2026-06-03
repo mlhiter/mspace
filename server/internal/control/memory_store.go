@@ -1770,6 +1770,35 @@ func (s *MemoryStore) ImportProjectTestCases(_ Context, userID, workspaceID, pro
 	return result, nil
 }
 
+func (s *MemoryStore) EnsureActiveCodexWorker(_ Context, userID, workspaceID, runtimeMode string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return "", ErrNotFound
+	}
+	workspace, ok := s.workspaceLocked(workspaceID)
+	if !ok {
+		return "", ErrNotFound
+	}
+	runtimeMode = strings.ToLower(strings.TrimSpace(runtimeMode))
+	if runtimeMode == "" {
+		runtimeMode = workspace.Kind
+	}
+	if runtimeMode != "personal" && runtimeMode != "team" {
+		return "", errors.New("runtimeMode must be personal or team")
+	}
+	if runtimeMode != workspace.Kind {
+		return "", ErrForbidden
+	}
+	if !s.hasActiveCodexWorkerLocked(workspaceID, runtimeMode, time.Now().UTC()) {
+		return "", ErrNoActiveCodexWorker
+	}
+	return runtimeMode, nil
+}
+
 func (s *MemoryStore) GetProjectTestCase(_ Context, userID, workspaceID, projectID, caseID string) (TestCase, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2062,26 +2091,76 @@ func (s *MemoryStore) StartProjectTestRun(_ Context, user User, workspaceID, pro
 	if err != nil {
 		return TestRunDetail{}, err
 	}
-	if normalized.RuntimeMode == "" {
-		workspace, ok := s.workspaceLocked(plan.WorkspaceID)
+	return s.startProjectTestRunLocked(user, &plan, cases, normalized)
+}
+
+func (s *MemoryStore) StartAdHocProjectTestRun(_ Context, user User, workspaceID, projectID string, input CreateAdHocTestRunInput) (TestRunDetail, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if !s.isWorkspaceMember(workspaceID, user.ID) {
+		return TestRunDetail{}, ErrNotFound
+	}
+	if _, err := s.projectForTestCasesLocked(workspaceID, projectID); err != nil {
+		return TestRunDetail{}, err
+	}
+	normalized, err := normalizeCreateAdHocTestRunInput(input)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	cases, err := s.testCasesForPlanLocked(workspaceID, projectID, normalized.CaseIDs, true)
+	if err != nil {
+		if err.Error() == "test plan can only include ready test cases" {
+			return TestRunDetail{}, errors.New("test run can only include ready test cases")
+		}
+		return TestRunDetail{}, err
+	}
+	runInput := CreateTestRunInput{
+		TargetType:   normalized.TargetType,
+		TargetValue:  normalized.TargetValue,
+		Environment:  normalized.Environment,
+		AgentProfile: normalized.AgentProfile,
+		RuntimeMode:  normalized.RuntimeMode,
+		BatchSize:    normalized.BatchSize,
+	}
+	return s.startProjectTestRunLocked(user, nil, cases, runInput)
+}
+
+func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases []TestCase, input CreateTestRunInput) (TestRunDetail, error) {
+	if len(cases) == 0 {
+		return TestRunDetail{}, errors.New("test run has no test cases")
+	}
+	workspaceID := cases[0].WorkspaceID
+	projectID := cases[0].ProjectID
+	if input.RuntimeMode == "" {
+		workspace, ok := s.workspaceLocked(workspaceID)
 		if !ok {
 			return TestRunDetail{}, ErrNotFound
 		}
-		normalized.RuntimeMode = workspace.Kind
+		input.RuntimeMode = workspace.Kind
 	}
-	if !s.hasActiveCodexWorkerLocked(plan.WorkspaceID, normalized.RuntimeMode, time.Now().UTC()) {
+	if !s.hasActiveCodexWorkerLocked(workspaceID, input.RuntimeMode, time.Now().UTC()) {
 		return TestRunDetail{}, ErrNoActiveCodexWorker
+	}
+	runSource := "ad_hoc"
+	planID := ""
+	if plan != nil {
+		runSource = "plan"
+		planID = plan.ID
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	run := TestRun{
 		ID:               fmt.Sprintf("test-run-%04d", s.nextMemoryIDLocked()),
-		WorkspaceID:      plan.WorkspaceID,
-		ProjectID:        plan.ProjectID,
-		PlanID:           plan.ID,
+		WorkspaceID:      workspaceID,
+		ProjectID:        projectID,
+		PlanID:           planID,
+		Source:           runSource,
 		Status:           "running",
-		TargetType:       normalized.TargetType,
-		TargetValue:      normalized.TargetValue,
-		Environment:      normalized.Environment,
+		TargetType:       input.TargetType,
+		TargetValue:      input.TargetValue,
+		Environment:      input.Environment,
 		TotalCount:       len(cases),
 		AcceptanceStatus: "pending",
 		CreatedByUserID:  user.ID,
@@ -2089,9 +2168,9 @@ func (s *MemoryStore) StartProjectTestRun(_ Context, user User, workspaceID, pro
 		UpdatedAt:        now,
 	}
 	parentIssueID, err := s.createIssueLocked(user, run.WorkspaceID, CreateIssueInput{
-		ProjectID: plan.ProjectID,
-		Title:     "Test run: " + plan.Title,
-		Body:      buildTestRunParentIssueBody(plan, run),
+		ProjectID: run.ProjectID,
+		Title:     testRunTitle(plan, run, cases),
+		Body:      buildTestRunParentIssueBody(plan, run, cases),
 		LabelKeys: []string{"type:test"},
 	})
 	if err != nil {
@@ -2114,10 +2193,46 @@ func (s *MemoryStore) StartProjectTestRun(_ Context, user User, workspaceID, pro
 		}
 		s.testRunItems[item.ID] = item
 	}
-	if err := s.startTestRunExecutionSessionsLocked(user.ID, run.ID, normalized); err != nil {
+	if err := s.startTestRunExecutionSessionsLocked(user.ID, run.ID, input); err != nil {
 		return TestRunDetail{}, err
 	}
 	return s.testRunDetailLocked(run.ID)
+}
+
+func (s *MemoryStore) ListProjectTestRuns(_ Context, userID, workspaceID, projectID string, options TestRunListOptions) ([]TestRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	if _, err := s.projectForTestCasesLocked(workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	status := strings.ToLower(strings.TrimSpace(options.Status))
+	source := normalizeTestRunSource(options.Source)
+	if strings.TrimSpace(options.Source) != "" && source == "" {
+		return nil, errors.New("source must be ad_hoc, plan, retry, or incremental")
+	}
+	runs := []TestRun{}
+	for _, run := range s.testRuns {
+		if run.WorkspaceID != workspaceID || run.ProjectID != projectID {
+			continue
+		}
+		if status != "" && run.Status != status {
+			continue
+		}
+		if source != "" && run.Source != source {
+			continue
+		}
+		runs = append(runs, run)
+	}
+	sort.Slice(runs, func(i, j int) bool {
+		return runs[i].UpdatedAt > runs[j].UpdatedAt
+	})
+	return runs, nil
 }
 
 func (s *MemoryStore) GetProjectTestRun(_ Context, userID, workspaceID, projectID, runID string) (TestRunDetail, error) {
@@ -4168,7 +4283,13 @@ func (s *MemoryStore) testRunDetailLocked(runID string) (TestRunDetail, error) {
 	if !ok {
 		return TestRunDetail{}, ErrNotFound
 	}
-	plan := s.testPlans[run.PlanID]
+	var plan *TestPlan
+	if run.PlanID != "" {
+		if existingPlan, ok := s.testPlans[run.PlanID]; ok {
+			snapshot := existingPlan
+			plan = &snapshot
+		}
+	}
 	items := []TestRunItem{}
 	for _, item := range s.testRunItems {
 		if item.RunID != run.ID {
@@ -4193,7 +4314,13 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 	if !ok {
 		return ErrNotFound
 	}
-	plan := s.testPlans[run.PlanID]
+	var plan *TestPlan
+	if run.PlanID != "" {
+		if existingPlan, ok := s.testPlans[run.PlanID]; ok {
+			snapshot := existingPlan
+			plan = &snapshot
+		}
+	}
 	queued := []TestRunItem{}
 	for _, item := range s.testRunItems {
 		if item.RunID == run.ID && item.Status == "queued" {
@@ -4232,7 +4359,7 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 			ProjectID:     run.ProjectID,
 			ParentIssueID: parent.ID,
 			SortOrder:     sortOrder,
-			Title:         fmt.Sprintf("Execute %s batch %d", plan.Title, start/input.BatchSize+1),
+			Title:         fmt.Sprintf("Execute %s batch %d", testRunExecutionScopeLabel(plan, cases), start/input.BatchSize+1),
 			Body:          buildTestRunExecutionIssueBody(run, cases),
 			Status:        "open",
 			TriageStatus:  "none",

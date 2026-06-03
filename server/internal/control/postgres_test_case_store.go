@@ -151,6 +151,34 @@ func (s *PostgresStore) ImportProjectTestCases(ctx Context, userID, workspaceID,
 	return result, nil
 }
 
+func (s *PostgresStore) EnsureActiveCodexWorker(ctx Context, userID, workspaceID, runtimeMode string) (string, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	userID = strings.TrimSpace(userID)
+	workspace, err := loadWorkspaceForUser(dbctx, s.pool, workspaceID, userID)
+	if err != nil {
+		return "", err
+	}
+	runtimeMode = strings.ToLower(strings.TrimSpace(runtimeMode))
+	if runtimeMode == "" {
+		runtimeMode = workspace.Kind
+	}
+	if runtimeMode != "personal" && runtimeMode != "team" {
+		return "", errors.New("runtimeMode must be personal or team")
+	}
+	if runtimeMode != workspace.Kind {
+		return "", ErrForbidden
+	}
+	hasActiveWorker, err := s.hasActiveCodexWorker(dbctx, workspaceID, runtimeMode)
+	if err != nil {
+		return "", err
+	}
+	if !hasActiveWorker {
+		return "", ErrNoActiveCodexWorker
+	}
+	return runtimeMode, nil
+}
+
 func (s *PostgresStore) GetProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string) (TestCase, error) {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
@@ -548,11 +576,73 @@ func (s *PostgresStore) StartProjectTestRun(ctx Context, user User, workspaceID,
 	if len(planCases) == 0 {
 		return TestRunDetail{}, errors.New("plan has no test cases")
 	}
+	return s.startPostgresProjectTestRun(ctx, user, workspace, &plan, planCases, normalized)
+}
+
+func (s *PostgresStore) StartAdHocProjectTestRun(ctx Context, user User, workspaceID, projectID string, input CreateAdHocTestRunInput) (TestRunDetail, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	workspace, err := loadWorkspaceForUser(dbctx, s.pool, workspaceID, user.ID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if err := ensureProjectInWorkspace(dbctx, s.pool, workspaceID, projectID); err != nil {
+		return TestRunDetail{}, err
+	}
+	normalized, err := normalizeCreateAdHocTestRunInput(input)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if normalized.RuntimeMode == "" {
+		normalized.RuntimeMode = workspace.Kind
+	}
+	if normalized.RuntimeMode != workspace.Kind {
+		return TestRunDetail{}, ErrForbidden
+	}
+	hasActiveWorker, err := s.hasActiveCodexWorker(dbctx, workspaceID, normalized.RuntimeMode)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if !hasActiveWorker {
+		return TestRunDetail{}, ErrNoActiveCodexWorker
+	}
+	cases, err := listReadyProjectTestCaseSnapshots(dbctx, s.pool, workspaceID, projectID, normalized.CaseIDs)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	runInput := CreateTestRunInput{
+		TargetType:   normalized.TargetType,
+		TargetValue:  normalized.TargetValue,
+		Environment:  normalized.Environment,
+		AgentProfile: normalized.AgentProfile,
+		RuntimeMode:  normalized.RuntimeMode,
+		BatchSize:    normalized.BatchSize,
+	}
+	return s.startPostgresProjectTestRun(ctx, user, workspace, nil, cases, runInput)
+}
+
+func (s *PostgresStore) startPostgresProjectTestRun(ctx Context, user User, workspace Workspace, plan *TestPlan, planCases []TestCase, normalized CreateTestRunInput) (TestRunDetail, error) {
+	dbctx := asContext(ctx)
+	if len(planCases) == 0 {
+		return TestRunDetail{}, errors.New("test run has no test cases")
+	}
+	runSource := "ad_hoc"
+	planID := ""
+	if plan != nil {
+		runSource = "plan"
+		planID = plan.ID
+	}
+	var runID string
+	if err := s.pool.QueryRow(dbctx, `SELECT gen_random_uuid()::text`).Scan(&runID); err != nil {
+		return TestRunDetail{}, err
+	}
 	run := TestRun{
-		ID:               "",
-		WorkspaceID:      workspaceID,
-		ProjectID:        projectID,
+		ID:               runID,
+		WorkspaceID:      workspace.ID,
+		ProjectID:        planCases[0].ProjectID,
 		PlanID:           planID,
+		Source:           runSource,
 		Status:           "running",
 		TargetType:       normalized.TargetType,
 		TargetValue:      normalized.TargetValue,
@@ -561,10 +651,10 @@ func (s *PostgresStore) StartProjectTestRun(ctx Context, user User, workspaceID,
 		AcceptanceStatus: "pending",
 		CreatedByUserID:  user.ID,
 	}
-	parentIssueID, err := s.CreateIssue(ctx, user, workspaceID, CreateIssueInput{
-		ProjectID: projectID,
-		Title:     "Test run: " + plan.Title,
-		Body:      buildTestRunParentIssueBody(plan, run),
+	parentIssueID, err := s.CreateIssue(ctx, user, workspace.ID, CreateIssueInput{
+		ProjectID: run.ProjectID,
+		Title:     testRunTitle(plan, run, planCases),
+		Body:      buildTestRunParentIssueBody(plan, run, planCases),
 		LabelKeys: []string{"type:test"},
 	})
 	if err != nil {
@@ -588,7 +678,7 @@ func (s *PostgresStore) StartProjectTestRun(ctx Context, user User, workspaceID,
 	if err := s.startPostgresTestRunExecutionSessions(ctx, user.ID, run, normalized); err != nil {
 		return TestRunDetail{}, err
 	}
-	return s.GetProjectTestRun(ctx, user.ID, workspaceID, projectID, run.ID)
+	return s.GetProjectTestRun(ctx, user.ID, run.WorkspaceID, run.ProjectID, run.ID)
 }
 
 func (s *PostgresStore) GetProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string) (TestRunDetail, error) {
@@ -603,9 +693,13 @@ func (s *PostgresStore) GetProjectTestRun(ctx Context, userID, workspaceID, proj
 	if err != nil {
 		return TestRunDetail{}, err
 	}
-	plan, err := loadTestPlan(dbctx, s.pool, workspaceID, projectID, run.PlanID)
-	if err != nil {
-		return TestRunDetail{}, err
+	var plan *TestPlan
+	if run.PlanID != "" {
+		loadedPlan, err := loadTestPlan(dbctx, s.pool, workspaceID, projectID, run.PlanID)
+		if err != nil {
+			return TestRunDetail{}, err
+		}
+		plan = &loadedPlan
 	}
 	items, err := listTestRunItems(dbctx, s.pool, workspaceID, projectID, runID)
 	if err != nil {
@@ -614,6 +708,43 @@ func (s *PostgresStore) GetProjectTestRun(ctx Context, userID, workspaceID, proj
 	run.TotalCount = len(items)
 	run.PassedCount, run.FailedCount, run.BlockedCount, run.SkippedCount = testRunCounts(items)
 	return TestRunDetail{Run: run, Plan: plan, Items: items}, nil
+}
+
+func (s *PostgresStore) ListProjectTestRuns(ctx Context, userID, workspaceID, projectID string, options TestRunListOptions) ([]TestRun, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	if err := ensureProjectInWorkspace(dbctx, s.pool, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	status := strings.ToLower(strings.TrimSpace(options.Status))
+	source := normalizeTestRunSource(options.Source)
+	if strings.TrimSpace(options.Source) != "" && source == "" {
+		return nil, errors.New("source must be ad_hoc, plan, retry, or incremental")
+	}
+	rows, err := s.pool.Query(dbctx, testRunSelectQuery(`
+		WHERE r.workspace_id = $1
+			AND r.project_id = $2
+			AND ($3 = '' OR r.status = $3)
+			AND ($4 = '' OR r.source = $4)
+		ORDER BY r.updated_at DESC, r.created_at DESC
+	`), workspaceID, projectID, status, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	runs := []TestRun{}
+	for rows.Next() {
+		run, err := scanTestRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
 }
 
 func (s *PostgresStore) RetryProjectTestRun(ctx Context, user User, workspaceID, projectID, runID string, input RetryTestRunInput) (TestRunDetail, error) {
@@ -1296,6 +1427,21 @@ func listTestPlanCaseSnapshots(ctx context.Context, q queryer, workspaceID, proj
 	return cases, nil
 }
 
+func listReadyProjectTestCaseSnapshots(ctx context.Context, q queryer, workspaceID, projectID string, caseIDs []string) ([]TestCase, error) {
+	cases := make([]TestCase, 0, len(caseIDs))
+	for _, caseID := range caseIDs {
+		testCase, err := loadProjectTestCase(ctx, q, workspaceID, projectID, caseID)
+		if err != nil {
+			return nil, err
+		}
+		if testCase.Status != "ready" {
+			return nil, errors.New("test run can only include ready test cases")
+		}
+		cases = append(cases, testCaseSnapshot(testCase))
+	}
+	return cases, nil
+}
+
 func listTestRunsForPlan(ctx context.Context, q queryer, workspaceID, projectID, planID string) ([]TestRun, error) {
 	rows, err := q.Query(ctx, testRunSelectQuery(`
 		WHERE r.workspace_id = $1 AND r.project_id = $2 AND r.plan_id = $3
@@ -1321,7 +1467,8 @@ func testRunSelectQuery(whereClause string) string {
 			r.id::text,
 			r.workspace_id::text,
 			r.project_id::text,
-			r.plan_id::text,
+			COALESCE(r.plan_id::text, ''),
+			COALESCE(r.source, 'plan'),
 			COALESCE(r.parent_issue_id::text, ''),
 			r.status,
 			r.target_type,
@@ -1353,6 +1500,7 @@ func scanTestRun(row scanner) (TestRun, error) {
 		&run.WorkspaceID,
 		&run.ProjectID,
 		&run.PlanID,
+		&run.Source,
 		&run.ParentIssueID,
 		&run.Status,
 		&run.TargetType,
@@ -1400,9 +1548,11 @@ func insertTestRunRecord(ctx context.Context, q queryer, run TestRun, parentIssu
 	var runID string
 	if err := q.QueryRow(ctx, `
 		INSERT INTO test_runs (
+			id,
 			workspace_id,
 			project_id,
 			plan_id,
+			source,
 			parent_issue_id,
 			status,
 			target_type,
@@ -1412,9 +1562,9 @@ func insertTestRunRecord(ctx context.Context, q queryer, run TestRun, parentIssu
 			acceptance_status,
 			created_by_user_id
 		)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, NULLIF($11, '')::uuid)
+		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, NULLIF($4, '')::uuid, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, NULLIF($13, '')::uuid)
 		RETURNING id::text
-	`, run.WorkspaceID, run.ProjectID, run.PlanID, parentIssueID, run.Status, run.TargetType, run.TargetValue, run.Environment, run.TotalCount, run.AcceptanceStatus, run.CreatedByUserID).Scan(&runID); err != nil {
+	`, run.ID, run.WorkspaceID, run.ProjectID, run.PlanID, firstNonEmpty(run.Source, "ad_hoc"), parentIssueID, run.Status, run.TargetType, run.TargetValue, run.Environment, run.TotalCount, run.AcceptanceStatus, run.CreatedByUserID).Scan(&runID); err != nil {
 		return TestRun{}, err
 	}
 	return loadTestRun(ctx, q, run.WorkspaceID, run.ProjectID, runID)
@@ -1623,9 +1773,13 @@ func (s *PostgresStore) startPostgresTestRunExecutionSessions(ctx Context, userI
 	if err != nil {
 		return err
 	}
-	plan, err := loadTestPlan(dbctx, s.pool, run.WorkspaceID, run.ProjectID, run.PlanID)
-	if err != nil {
-		return err
+	var plan *TestPlan
+	if run.PlanID != "" {
+		loadedPlan, err := loadTestPlan(dbctx, s.pool, run.WorkspaceID, run.ProjectID, run.PlanID)
+		if err != nil {
+			return err
+		}
+		plan = &loadedPlan
 	}
 	queued := []TestRunItem{}
 	for _, item := range items {
@@ -1645,7 +1799,7 @@ func (s *PostgresStore) startPostgresTestRunExecutionSessions(ctx Context, userI
 		}
 		body := buildTestRunExecutionIssueBody(run, cases)
 		child, err := s.CreateIssueTask(ctx, userID, run.WorkspaceID, run.ParentIssueID, IssueTaskInput{
-			Title: fmt.Sprintf("Execute %s batch %d", plan.Title, start/input.BatchSize+1),
+			Title: fmt.Sprintf("Execute %s batch %d", testRunExecutionScopeLabel(plan, cases), start/input.BatchSize+1),
 			Body:  body,
 		})
 		if err != nil {

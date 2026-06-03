@@ -221,6 +221,7 @@ export interface TestRun {
   workspaceId: string;
   projectId: string;
   planId: string;
+  source: string;
   parentIssueId: string;
   status: string;
   targetType: string;
@@ -260,11 +261,21 @@ export interface TestRunItem {
 
 export interface TestRunDetail {
   run: TestRun;
-  plan: TestPlan;
+  plan?: TestPlan;
   items: TestRunItem[];
 }
 
 export interface CreateTestRunInput {
+  targetType?: string;
+  targetValue?: string;
+  environment?: string;
+  agentProfile?: string;
+  runtimeMode?: string;
+  batchSize?: number;
+}
+
+export interface CreateAdHocTestRunInput {
+  caseIds: string[];
   targetType?: string;
   targetValue?: string;
   environment?: string;

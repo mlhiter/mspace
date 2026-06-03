@@ -11,6 +11,7 @@ const (
 	defaultTestRunBatchSize        = 5
 	maxTestRunBatchSize            = 20
 	maxTestPlanCases               = 200
+	maxAdHocTestRunCases           = 50
 	maxArtifactTestCaseProposals   = 50
 	maxArtifactTestResultItems     = 500
 	testCaseOptimizationAutomation = "test_case_optimization"
@@ -104,6 +105,17 @@ func normalizeTestTargetType(value string) string {
 	}
 }
 
+func normalizeTestRunSource(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "ad_hoc", "plan", "retry", "incremental":
+		return strings.ToLower(strings.TrimSpace(value))
+	case "adhoc", "ad-hoc", "selected_cases", "selected-cases":
+		return "ad_hoc"
+	default:
+		return ""
+	}
+}
+
 func normalizeCreateTestRunInput(input CreateTestRunInput, plan TestPlan) (CreateTestRunInput, error) {
 	input.TargetType = normalizeTestTargetType(firstNonEmpty(input.TargetType, plan.TargetType))
 	if input.TargetType == "" {
@@ -118,6 +130,31 @@ func normalizeCreateTestRunInput(input CreateTestRunInput, plan TestPlan) (Creat
 	}
 	if input.BatchSize > maxTestRunBatchSize {
 		input.BatchSize = maxTestRunBatchSize
+	}
+	return input, nil
+}
+
+func normalizeCreateAdHocTestRunInput(input CreateAdHocTestRunInput) (CreateAdHocTestRunInput, error) {
+	input.CaseIDs = uniqueStrings(input.CaseIDs)
+	input.TargetType = normalizeTestTargetType(input.TargetType)
+	if input.TargetType == "" {
+		input.TargetType = "branch"
+	}
+	input.TargetValue = strings.TrimSpace(input.TargetValue)
+	input.Environment = strings.TrimSpace(input.Environment)
+	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
+	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
+	if input.BatchSize <= 0 {
+		input.BatchSize = defaultTestRunBatchSize
+	}
+	if input.BatchSize > maxTestRunBatchSize {
+		input.BatchSize = maxTestRunBatchSize
+	}
+	if len(input.CaseIDs) == 0 {
+		return CreateAdHocTestRunInput{}, errors.New("caseIds are required")
+	}
+	if len(input.CaseIDs) > maxAdHocTestRunCases {
+		return CreateAdHocTestRunInput{}, fmt.Errorf("caseIds must contain %d or fewer cases", maxAdHocTestRunCases)
 	}
 	return input, nil
 }
@@ -226,11 +263,39 @@ func buildTestCaseGenerationIssueBody(project Project, input GenerateTestCasesIn
 	return builder.String()
 }
 
-func buildTestRunParentIssueBody(plan TestPlan, run TestRun) string {
+func testRunTitle(plan *TestPlan, run TestRun, cases []TestCase) string {
+	if plan != nil && plan.Title != "" {
+		return "Test run: " + plan.Title
+	}
+	if len(cases) == 1 && cases[0].Title != "" {
+		return "Test run: " + cases[0].Title
+	}
+	return fmt.Sprintf("Test run: %d selected cases", len(cases))
+}
+
+func testRunExecutionScopeLabel(plan *TestPlan, cases []TestCase) string {
+	if plan != nil && plan.Title != "" {
+		return "test plan `" + plan.Title + "`"
+	}
+	if len(cases) == 1 && cases[0].Title != "" {
+		return "selected test case `" + cases[0].Title + "`"
+	}
+	return fmt.Sprintf("%d selected test cases", len(cases))
+}
+
+func buildTestRunParentIssueBody(plan *TestPlan, run TestRun, cases []TestCase) string {
 	var builder strings.Builder
-	builder.WriteString("Execute test plan `" + plan.Title + "`.\n\n")
+	builder.WriteString("Execute " + testRunExecutionScopeLabel(plan, cases) + ".\n\n")
+	builder.WriteString("Source: `" + firstNonEmpty(run.Source, "ad_hoc") + "`\n")
 	builder.WriteString("Target: `" + run.TargetType + "` `" + firstNonEmpty(run.TargetValue, "not specified") + "`\n")
 	builder.WriteString("Environment: `" + firstNonEmpty(run.Environment, "not specified") + "`\n\n")
+	if len(cases) > 0 {
+		builder.WriteString("Cases:\n")
+		for _, testCase := range cases {
+			builder.WriteString("- `" + testCase.ID + "` " + testCase.Title + "\n")
+		}
+		builder.WriteString("\n")
+	}
 	builder.WriteString("This issue tracks the overall run. Execution details live in the child issues and test run items.\n\n")
 	builder.WriteString("Codex execution sessions must write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with:\n\n")
 	builder.WriteString(`{"runId":"` + run.ID + `","items":[{"caseId":"...","status":"passed|failed|blocked|skipped","actualResult":"...","failureSummary":"...","evidence":{}}]}`)
@@ -241,6 +306,7 @@ func buildTestRunExecutionIssueBody(run TestRun, cases []TestCase) string {
 	var builder strings.Builder
 	builder.WriteString("Execute this batch of test cases.\n\n")
 	builder.WriteString("Run ID: `" + run.ID + "`\n")
+	builder.WriteString("Source: `" + firstNonEmpty(run.Source, "ad_hoc") + "`\n")
 	builder.WriteString("Target: `" + run.TargetType + "` `" + firstNonEmpty(run.TargetValue, "not specified") + "`\n")
 	builder.WriteString("Environment: `" + firstNonEmpty(run.Environment, "not specified") + "`\n\n")
 	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with one item per case in this batch.\n\n")
