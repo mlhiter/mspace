@@ -34,7 +34,7 @@ The public website can use a sharper brand surface, but it should still be speci
 - Issues are durable working documents, not transient job cards.
 - Inbox is for messages and state changes that need human review, not the full issue database.
 - Agents should appear as collaborators with assignees, sessions, blockers, and progress updates.
-- Test cases are durable project objects. Codex can generate or refine Case suggestions, but humans approve suggestions before canonical test coverage changes.
+- Test cases are durable project objects. Codex can generate or refine Case suggestions, but humans approve suggestions before canonical test coverage changes. Case revision history should make changed fields readable from the detail page instead of showing only version titles.
 - Runtime evidence belongs next to the issue story: branch, logs, status, selected worker, selected cluster, namespace, preview URL, and environment links should support review.
 - Agent execution and Kubernetes validation are separate concepts, and the UI should make that boundary visible when it matters.
 

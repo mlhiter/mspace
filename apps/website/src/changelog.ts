@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-06-03",
+    title: "Readable case revision history",
+    summary:
+      "mspace made Test Case revision history show what changed instead of listing only version titles.",
+    items: [
+      "Added field-level revision summaries on the Test Case detail page, comparing each revision snapshot against the previous version.",
+      "Showed compact before/after values for changed fields such as title, type, priority, status, steps, expected result, environment, tags, and executability.",
+      "Kept the initial revision readable with an initial-version marker and key case facts.",
+      "Localized the revision summary copy for English and Simplified Chinese.",
+    ],
+  },
+  {
     date: "2026-06-02",
     title: "Runnable test case guidance",
     summary:

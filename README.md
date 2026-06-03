@@ -65,7 +65,7 @@ Production deployment uses the root `vercel.json`:
 - Document-style issue creation and comments with TipTap Markdown editing, inline child issues from checklist rows, image rendering for stable attachment URLs, and lightweight comment reactions.
 - Agent mentions from issue comments, with server-side session records, runtime task queueing, profile instructions, trigger-comment tracking, worker logs, status updates, and issue timeline updates.
 - Per-session worker-managed git worktrees, changed file lists, diff previews, commits, and comparison against the project default branch.
-- Project-level Tests workspace with Cases, Case suggestions, Plans, and Runs tabs, dedicated detail pages, modal create/import flows, Markdown/text/CSV/Excel `.xlsx` import, readiness scoring, case revisions, and human review before Codex suggestions update canonical cases.
+- Project-level Tests workspace with Cases, Case suggestions, Plans, and Runs tabs, dedicated detail pages, modal create/import flows, Markdown/text/CSV/Excel `.xlsx` import, readiness scoring, field-level case revision summaries, and human review before Codex suggestions update canonical cases.
 - Issue-backed test run workflow where test plans create issue-linked run items, workers execute through the existing agent-session path, `test-result.json` is reconciled into run state, and a human accepts or blocks the run result.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and update the issue test environment record.

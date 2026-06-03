@@ -25,6 +25,7 @@ import {
   type TestCase,
   type TestCaseInput,
   type TestCaseProposal,
+  type TestCaseRevision,
   type TestCaseStep,
   type TestPlan,
   type TestPlanDetail,
@@ -105,6 +106,21 @@ const priorityOptions = ["", "p0", "p1", "p2", "p3"] as const;
 const targetTypeOptions = ["branch", "commit", "source_session", "image", "offline_package", "version_url", "preview_url"] as const;
 const toolbarSelectClass =
   "h-8 min-h-8 rounded-[6px] bg-transparent px-2 py-1 text-[12px] leading-4 text-[color:var(--muted)] shadow-none hover:bg-[color:var(--hover)] focus:bg-[color:var(--hover)] focus:shadow-[inset_0_0_0_1px_var(--line)] data-[state=open]:bg-[color:var(--hover)] data-[state=open]:shadow-[inset_0_0_0_1px_var(--line)] [&_svg]:size-3.5";
+const revisionPreviewLimit = 96;
+
+type TestCaseRevisionChange = {
+  key: string;
+  label: string;
+  before: string;
+  after: string;
+};
+
+type TestCaseRevisionFact = {
+  key: string;
+  label: string;
+  value: string;
+  compareValue?: string;
+};
 
 function TestsPanelState(props: {
   icon: LucideIcon;
@@ -253,6 +269,140 @@ function qualityFindingLabel(code: string, message: string, t: ReturnType<typeof
 function testCaseTypeLabel(type: string, t: ReturnType<typeof useMspaceTranslation>["t"]) {
   const value = type || "functional";
   return t(`tests.typeValue.${value}`, { defaultValue: value });
+}
+
+function testCaseStatusLabel(status: string, t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  const value = status || "draft";
+  return t(`tests.statusValue.${value}`, { defaultValue: value });
+}
+
+function normalizeRevisionText(value: string | undefined) {
+  return (value || "").replace(/\s+/g, " ").trim();
+}
+
+function compactRevisionText(value: string) {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= revisionPreviewLimit) return compact;
+  return `${compact.slice(0, revisionPreviewLimit - 1)}...`;
+}
+
+function revisionEmptyValue(t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  return t("tests.revisionEmpty");
+}
+
+function revisionTextValue(value: string | undefined, t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  const compact = compactRevisionText(normalizeRevisionText(value));
+  return compact || revisionEmptyValue(t);
+}
+
+function revisionPriorityLabel(priority: string | undefined, t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  return priority ? priority.toUpperCase() : t("tests.noPriority");
+}
+
+function normalizedRevisionSteps(steps: TestCaseStep[] | undefined) {
+  return (steps || [])
+    .map((step) => ({
+      action: (step.action || "").replace(/\s+/g, " ").trim(),
+      expected: (step.expected || "").replace(/\s+/g, " ").trim(),
+    }))
+    .filter((step) => step.action || step.expected);
+}
+
+function revisionStepsValue(steps: TestCaseStep[] | undefined, t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  const normalizedSteps = normalizedRevisionSteps(steps);
+  if (normalizedSteps.length === 0) return t("tests.revisionNoSteps");
+  const firstStep = normalizedSteps[0];
+  const first = revisionTextValue([firstStep.action, firstStep.expected].filter(Boolean).join(" -> "), t);
+  if (normalizedSteps.length === 1) {
+    return t("tests.revisionOneStep", { first });
+  }
+  return t("tests.revisionStepSummary", { count: normalizedSteps.length, first });
+}
+
+function revisionStepsCompareValue(steps: TestCaseStep[] | undefined) {
+  return JSON.stringify(normalizedRevisionSteps(steps));
+}
+
+function revisionListValue(values: string[] | undefined, t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  const normalizedValues = (values || []).map((value) => value.trim()).filter(Boolean);
+  return normalizedValues.length > 0 ? compactRevisionText(normalizedValues.join(", ")) : revisionEmptyValue(t);
+}
+
+function revisionNumberValue(value: number | undefined, t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  return Number.isFinite(value) ? String(value) : revisionEmptyValue(t);
+}
+
+function testCaseRevisionFields(snapshot: TestCase, t: ReturnType<typeof useMspaceTranslation>["t"]): TestCaseRevisionFact[] {
+  const normalized = normalizeTestCaseForView(snapshot);
+  return [
+    { key: "title", label: t("tests.revisionField.title"), value: revisionTextValue(normalized.title, t), compareValue: normalizeRevisionText(normalized.title) },
+    { key: "type", label: t("tests.revisionField.type"), value: testCaseTypeLabel(normalized.type, t) },
+    { key: "area", label: t("tests.revisionField.area"), value: revisionTextValue(normalized.area, t), compareValue: normalizeRevisionText(normalized.area) },
+    { key: "priority", label: t("tests.revisionField.priority"), value: revisionPriorityLabel(normalized.priority, t) },
+    { key: "status", label: t("tests.revisionField.status"), value: testCaseStatusLabel(normalized.status, t) },
+    { key: "source", label: t("tests.revisionField.source"), value: t(`tests.sourceValue.${normalized.source}`, { defaultValue: normalized.source || revisionEmptyValue(t) }) },
+    { key: "preconditions", label: t("tests.revisionField.preconditions"), value: revisionTextValue(normalized.preconditions, t), compareValue: normalizeRevisionText(normalized.preconditions) },
+    { key: "steps", label: t("tests.revisionField.steps"), value: revisionStepsValue(normalized.steps, t), compareValue: revisionStepsCompareValue(normalized.steps) },
+    { key: "expectedResult", label: t("tests.revisionField.expectedResult"), value: revisionTextValue(normalized.expectedResult, t), compareValue: normalizeRevisionText(normalized.expectedResult) },
+    { key: "environmentRequirements", label: t("tests.revisionField.environmentRequirements"), value: revisionTextValue(normalized.environmentRequirements, t), compareValue: normalizeRevisionText(normalized.environmentRequirements) },
+    { key: "tags", label: t("tests.revisionField.tags"), value: revisionListValue(normalized.tags, t), compareValue: JSON.stringify((normalized.tags || []).map((tag) => tag.trim()).filter(Boolean)) },
+    { key: "qualityScore", label: t("tests.revisionField.qualityScore"), value: revisionNumberValue(normalized.qualityScore, t) },
+  ];
+}
+
+function describeTestCaseRevisionChanges(
+  previousSnapshot: TestCase,
+  nextSnapshot: TestCase,
+  t: ReturnType<typeof useMspaceTranslation>["t"],
+): TestCaseRevisionChange[] {
+  const previousFields = testCaseRevisionFields(previousSnapshot, t);
+  const nextFields = testCaseRevisionFields(nextSnapshot, t);
+  const previousByKey = new Map(previousFields.map((field) => [field.key, field]));
+
+  return nextFields.reduce<TestCaseRevisionChange[]>((changes, nextField) => {
+    const previousField = previousByKey.get(nextField.key);
+    if (!previousField || (previousField.compareValue || previousField.value) === (nextField.compareValue || nextField.value)) {
+      return changes;
+    }
+    changes.push({
+      key: nextField.key,
+      label: nextField.label,
+      before: previousField.value,
+      after: nextField.value,
+    });
+    return changes;
+  }, []);
+}
+
+function buildTestCaseRevisionTimeline(revisions: TestCaseRevision[], t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  const ascending = [...revisions].sort((left, right) => left.revisionNumber - right.revisionNumber);
+  const previousByRevisionId = new Map<string, TestCaseRevision>();
+
+  ascending.forEach((revision, index) => {
+    const previous = ascending[index - 1];
+    if (previous) {
+      previousByRevisionId.set(revision.id, previous);
+    }
+  });
+
+  return revisions.map((revision) => {
+    const previous = previousByRevisionId.get(revision.id);
+    const snapshot = normalizeTestCaseForView(revision.snapshot);
+    const changes = previous ? describeTestCaseRevisionChanges(normalizeTestCaseForView(previous.snapshot), snapshot, t) : [];
+    const facts = previous
+      ? []
+      : testCaseRevisionFields(snapshot, t).filter((fact) => ["type", "status", "priority", "source", "steps", "expectedResult"].includes(fact.key));
+
+    return {
+      revision: {
+        ...revision,
+        snapshot,
+      },
+      changes,
+      facts,
+      isInitial: !previous,
+    };
+  });
 }
 
 function testCaseExecutability(testCase: TestCase) {
@@ -1223,6 +1373,7 @@ export function TestCaseDetailPage() {
   });
   const testCase = useMemo(() => (caseQuery.data ? normalizeTestCaseForView(caseQuery.data) : undefined), [caseQuery.data]);
   const revisions = revisionsQuery.data || [];
+  const revisionTimeline = useMemo(() => buildTestCaseRevisionTimeline(revisions, t), [revisions, t]);
   const canSave = Boolean(effectiveProjectId && caseForm.title.trim());
 
   const createCase = useMutation({
@@ -1367,12 +1518,51 @@ export function TestCaseDetailPage() {
                 <p className="text-[12px] text-[color:var(--muted)]">{t("tests.noRevisions")}</p>
               ) : (
                 <div className="grid gap-2">
-                  {revisions.map((revision) => (
-                    <div key={revision.id} className="rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-                      <div className="font-medium text-[color:var(--text)]">#{revision.revisionNumber} - {revision.snapshot.title}</div>
-                      <div>
-                        <RelativeTime value={revision.createdAt} />
+                  {revisionTimeline.map(({ revision, changes, facts, isInitial }) => (
+                    <div key={revision.id} className="rounded-[8px] bg-[color:var(--paper)] px-3 py-3 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                        <div className="min-w-0 font-medium text-[color:var(--text)]">
+                          <span className="text-[color:var(--muted-strong)]">#{revision.revisionNumber}</span>
+                          <span> - </span>
+                          <span className="break-words">{revision.snapshot.title}</span>
+                        </div>
+                        <div className="shrink-0 text-[11px] text-[color:var(--muted)]">
+                          <RelativeTime value={revision.createdAt} />
+                        </div>
                       </div>
+
+                      {isInitial ? (
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          <span className="rounded-[6px] bg-[color:var(--surface)] px-2 py-1 text-[11px] font-medium text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+                            {t("tests.revisionInitial")}
+                          </span>
+                          {facts.map((fact) => (
+                            <span key={fact.key} className="rounded-[6px] bg-[color:var(--surface)] px-2 py-1 text-[11px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                              <span className="font-medium text-[color:var(--muted-strong)]">{fact.label}</span>: {fact.value}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {!isInitial && changes.length > 0 ? (
+                        <div className="mt-2 grid gap-1.5">
+                          {changes.map((change) => (
+                            <div key={change.key} className="grid gap-1 rounded-[6px] bg-[color:var(--surface)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+                              <div className="text-[11px] font-medium text-[color:var(--muted-strong)]">{change.label}</div>
+                              <div className="grid gap-1 text-[11px] leading-5 text-[color:var(--muted)] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                                <span className="min-w-0 break-words">{t("tests.revisionBefore", { value: change.before })}</span>
+                                <span className="min-w-0 break-words text-[color:var(--text)]">{t("tests.revisionAfter", { value: change.after })}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {!isInitial && changes.length === 0 ? (
+                        <p className="mt-2 rounded-[6px] bg-[color:var(--surface)] px-2.5 py-2 text-[11px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                          {t("tests.revisionNoVisibleChanges")}
+                        </p>
+                      ) : null}
                     </div>
                   ))}
                 </div>

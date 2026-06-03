@@ -104,6 +104,8 @@ This gives the product two important capabilities:
 - test knowledge can be rolled back;
 - users can compare before and after when Codex refines a case.
 
+Case Detail should make that comparison visible in the list itself. The first revision should show it is the initial version plus compact facts such as type, status, source, steps, and expected result. Later revisions should compare against the previous revision snapshot and show which fields changed, with before/after values for title, type, area, priority, status, source, preconditions, steps, expected result, environment requirements, tags, and executability score. Do not render revision history as only `#version - title`.
+
 ### Test Case Proposal
 
 Codex does not directly modify canonical cases. It returns proposals.
@@ -558,7 +560,7 @@ Open from a case row into a dedicated detail page and display the case as a docu
 - expected result;
 - dependencies;
 - historical runs;
-- revisions;
+- revisions with field-level change summaries;
 - related Issues.
 
 The create and edit UI should express backend constraints as user-facing runnable-case guidance. Show readiness checks, examples, and field hints for title, preconditions, steps, expected result, and environment requirements; do not ask users to memorize storage enums such as `manual`, `import`, or `codex_generated`.
@@ -763,7 +765,7 @@ Acceptance:
 - system creates structured draft cases;
 - executability and missing fields are visible;
 - user can edit a case;
-- revision history exists.
+- revision history exists and shows what changed between revisions, not only the case title.
 
 ### Phase 2: Codex Case Generation And Refinement
 
@@ -982,7 +984,7 @@ Phase 1 manual acceptance:
 3. Confirm structured draft cases are created.
 4. Confirm executability and missing-field findings are reasonable.
 5. Edit one case.
-6. Confirm revision history exists.
+6. Confirm revision history exists and summarizes the changed fields.
 
 Phase 2 manual acceptance:
 
