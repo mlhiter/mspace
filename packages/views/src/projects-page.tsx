@@ -53,6 +53,13 @@ const emptyProjectForm: CreateProjectInput = {
   defaultClusterId: "",
 };
 
+function initialProjectForm(isTeamWorkspace: boolean): CreateProjectInput {
+  return {
+    ...emptyProjectForm,
+    sourceType: isTeamWorkspace ? "github" : "local",
+  };
+}
+
 function projectNameFromPath(path: string): string {
   return path.trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
 }
@@ -62,7 +69,7 @@ function projectToForm(project: Project): CreateProjectInput {
     name: project.name,
     sourceType: project.sourceType || "local",
     repoPath: project.repoPath,
-    repoUrl: project.sourceType === "github" ? project.remoteUrl : "",
+    repoUrl: project.sourceType === "github" ? project.remoteUrl || project.repoPath : "",
     defaultBranch: project.defaultBranch,
     kubeContext: project.kubeContext,
     kubeconfigPath: project.kubeconfigPath,
@@ -80,6 +87,7 @@ export function ProjectsPage() {
   const queryClient = useQueryClient();
   const auth = useMspaceAuth();
   const workspaceId = auth.workspace?.id || "";
+  const isTeamWorkspace = auth.workspace?.kind === "team";
   const serverWorkspaceReady = Boolean(auth.token && workspaceId);
   const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
   const clustersQueryKey = queryKeys.clusters(workspaceId, auth.token);
@@ -161,7 +169,7 @@ export function ProjectsPage() {
 
   const projects = projectsQuery.data || [];
   const clusters = clustersQuery.data || [];
-  const canCreate = createForm.repoPath.trim().length > 0 || createForm.repoUrl.trim().length > 0;
+  const canCreate = isTeamWorkspace ? createForm.repoUrl.trim().length > 0 : createForm.repoPath.trim().length > 0 || createForm.repoUrl.trim().length > 0;
   const settingsSaveDisabled = saveProjectSettings.isPending || settingsRunbookQuery.isLoading;
   const settingsProjectHasWork = Boolean(
     settingsProject && (settingsProject.issueCount > 0 || settingsProject.sessionCount > 0),
@@ -187,7 +195,7 @@ export function ProjectsPage() {
   }
 
   function openCreateModal() {
-    setCreateForm(emptyProjectForm);
+    setCreateForm(initialProjectForm(isTeamWorkspace));
     setFolderPickerError("");
     createProject.reset();
     setCreateOpen(true);
@@ -215,7 +223,8 @@ export function ProjectsPage() {
 
     createProject.mutate({
       ...createForm,
-      sourceType: createForm.repoPath.trim() ? "local" : "github",
+      sourceType: isTeamWorkspace ? "github" : createForm.repoPath.trim() ? "local" : "github",
+      repoPath: isTeamWorkspace ? "" : createForm.repoPath,
     });
   }
 
@@ -361,7 +370,7 @@ export function ProjectsPage() {
         <CollectionEmptyState
           icon={Boxes}
           title={t("projects.emptyTitle")}
-          body={t("projects.emptyBody")}
+          body={isTeamWorkspace ? t("projects.emptyBodyTeam") : t("projects.emptyBody")}
           action={
             <Button variant="secondary" onClick={openCreateModal}>
               <Plus data-icon />
@@ -386,7 +395,7 @@ export function ProjectsPage() {
       )}
 
       {createOpen ? (
-        <Modal title={t("projects.newProject")} description={t("projects.createDescription")} onClose={() => setCreateOpen(false)}>
+        <Modal title={t("projects.newProject")} description={isTeamWorkspace ? t("projects.createDescriptionTeam") : t("projects.createDescription")} onClose={() => setCreateOpen(false)}>
           <form className="flex flex-col gap-4" onSubmit={submitCreate}>
             {createProject.error ? <Notice tone="danger">{createProject.error.message}</Notice> : null}
             {folderPickerError ? <Notice tone="danger">{folderPickerError}</Notice> : null}
@@ -400,24 +409,30 @@ export function ProjectsPage() {
             </Field>
 
             <div className="grid gap-3">
-              <SourceButton
-                icon={<FolderOpen data-icon />}
-                title={t("projects.localFolder")}
-                description={t("projects.localFolderDescription")}
-                action={t("projects.chooseFolder")}
-                active={Boolean(createForm.repoPath)}
-                onClick={pickProjectFolder}
-              />
-              {createForm.repoPath ? <PathPreview icon={<HardDrive data-icon />}>{createForm.repoPath}</PathPreview> : null}
+              {isTeamWorkspace ? (
+                <Notice>{t("projects.teamSourceNotice")}</Notice>
+              ) : (
+                <>
+                  <SourceButton
+                    icon={<FolderOpen data-icon />}
+                    title={t("projects.localFolder")}
+                    description={t("projects.localFolderDescription")}
+                    action={t("projects.chooseFolder")}
+                    active={Boolean(createForm.repoPath)}
+                    onClick={pickProjectFolder}
+                  />
+                  {createForm.repoPath ? <PathPreview icon={<HardDrive data-icon />}>{createForm.repoPath}</PathPreview> : null}
 
-              <div className="flex items-center gap-3 text-[12px] text-[color:var(--faint)]">
-                <span className="h-px flex-1 bg-[color:var(--line)]" />
-                {t("projects.pasteRepositoryUrl")}
-                <span className="h-px flex-1 bg-[color:var(--line)]" />
-              </div>
+                  <div className="flex items-center gap-3 text-[12px] text-[color:var(--faint)]">
+                    <span className="h-px flex-1 bg-[color:var(--line)]" />
+                    {t("projects.pasteRepositoryUrl")}
+                    <span className="h-px flex-1 bg-[color:var(--line)]" />
+                  </div>
+                </>
+              )}
 
               <div className="rounded-[10px] bg-[color:var(--block)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
-                <Field label={t("projects.githubRepositoryUrl")}>
+                <Field label={t("projects.githubRepositoryUrl")} hint={isTeamWorkspace ? t("projects.githubRepositoryTeamHint") : undefined}>
                   <div className="relative">
                     <GitBranch data-icon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--muted)]" />
                     <Input
@@ -464,10 +479,11 @@ function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: 
   const { project } = props;
   const { t } = useMspaceTranslation();
   const defaultCluster = props.clusters.find((cluster) => cluster.id === project.defaultClusterId);
+  const repositoryLocation = project.sourceType === "github" ? project.remoteUrl || project.repoPath : project.repoPath;
   const githubLabel =
     project.gitProvider === "github" && project.gitOwner && project.gitRepo
       ? `${project.gitOwner}/${project.gitRepo}`
-      : project.remoteUrl || t("projects.noRemoteDetected");
+      : repositoryLocation || t("projects.noRemoteDetected");
   const updatedAt = project.latestIssueUpdatedAt || project.updatedAt;
 
   return (
@@ -490,7 +506,7 @@ function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: 
         </div>
         <div className="mt-1 flex items-center gap-2 text-[12px] leading-5 text-[color:var(--muted)]">
           <Link data-icon className="shrink-0" />
-          <span className="truncate">{project.repoPath}</span>
+          <span className="truncate">{repositoryLocation || t("projects.noRemoteDetected")}</span>
         </div>
       </div>
 

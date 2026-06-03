@@ -1504,6 +1504,13 @@ func (s *MemoryStore) CreateProject(_ Context, userID, workspaceID string, input
 	if err != nil {
 		return Project{}, err
 	}
+	workspace, ok := s.workspaceLocked(workspaceID)
+	if !ok {
+		return Project{}, ErrNotFound
+	}
+	if err := ensureProjectSourceAllowedForWorkspace(workspace, normalized); err != nil {
+		return Project{}, err
+	}
 	s.nextID++
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	project := Project{

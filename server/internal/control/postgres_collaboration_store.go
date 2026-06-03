@@ -81,7 +81,11 @@ func (s *PostgresStore) CreateProject(ctx Context, userID, workspaceID string, i
 	if err != nil {
 		return Project{}, err
 	}
-	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+	workspace, err := loadWorkspaceForUser(dbctx, s.pool, workspaceID, userID)
+	if err != nil {
+		return Project{}, err
+	}
+	if err := ensureProjectSourceAllowedForWorkspace(workspace, normalized); err != nil {
 		return Project{}, err
 	}
 	gitInfo := gitOwnerRepoFromURL(normalized.RepoURL)

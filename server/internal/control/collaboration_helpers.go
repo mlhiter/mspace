@@ -72,6 +72,13 @@ func normalizeProjectInput(input ProjectInput) (ProjectInput, error) {
 	return input, nil
 }
 
+func ensureProjectSourceAllowedForWorkspace(workspace Workspace, input ProjectInput) error {
+	if workspace.Kind == "team" && input.SourceType == "local" {
+		return errors.New("team workspace projects must be created from a GitHub repository URL")
+	}
+	return nil
+}
+
 func projectNameFromRepoURL(value string) string {
 	parts := gitOwnerRepoFromURL(value)
 	if parts.repo != "" {

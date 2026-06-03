@@ -10,7 +10,7 @@ mspace is a review Inbox and Issue workspace for coding agents: a place where te
 
 The repository now has a runnable local desktop MVP:
 
-- create projects from a local folder picker or GitHub repository URL and manage settings later;
+- create personal projects from a local folder picker or GitHub repository URL, create team projects from a GitHub repository URL that connected workers can clone, and manage settings later;
 - create and manage issues in the Issues tab;
 - jump to issues and projects from the sidebar global search or `Command+K` palette;
 - sign in with a local username/password account, or optional GitHub OAuth when available, through the server control plane and show the current user/workspace state in the sidebar;

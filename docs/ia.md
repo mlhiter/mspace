@@ -387,8 +387,9 @@ The Project view should help operators configure the system without turning it i
 Current implementation:
 
 - lists projects;
-- creates projects in a modal from either a local folder picker or a GitHub repository URL;
-- auto-detects GitHub metadata for local repositories when a remote exists;
+- creates personal projects in a modal from either a local folder picker or a GitHub repository URL;
+- creates team projects from GitHub repository URLs only, because team workers clone source into their own repo cache and cannot read a user's desktop-local folder path;
+- auto-detects GitHub metadata for repositories when a remote URL exists;
 - opens Project settings as a full page, not a modal;
 - edits project name, default cluster, and the mspace-owned Markdown runbook from that page;
 - exposes the project runbook from Issue Detail as a read-only TipTap modal so users can inspect runbook knowledge without leaving the issue;

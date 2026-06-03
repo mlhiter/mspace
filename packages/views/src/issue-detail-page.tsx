@@ -4482,6 +4482,11 @@ function projectDisplayName(project: Project | null | undefined) {
   return project?.name || translate("common.noProject");
 }
 
+function projectRepositoryLabel(project: Project | null | undefined) {
+  if (!project) return "";
+  return project.sourceType === "github" ? project.remoteUrl || project.repoPath : project.repoPath || project.remoteUrl;
+}
+
 function detectGitHubRepoUrl(text: string): string {
   const normalized = text.replace(/[()[\]<>`"']/g, " ");
   const candidates = normalized.split(/\s+/);
@@ -5039,6 +5044,7 @@ export function IssueDetailPage() {
   const continueAgent = enabledAgents.find((agent) => mentionKey(agent.mention) === "codex") || enabledAgents[0];
   const hasProject = Boolean(detail?.project?.id);
   const projectName = projectDisplayName(detail?.project);
+  const projectRepository = projectRepositoryLabel(detail?.project);
   const childIssues = listOrEmpty(detail?.childIssues);
   const changeNodes = listOrEmpty(detail?.changeNodes);
   const handoffs = listOrEmpty(detail?.handoffs);
@@ -6287,7 +6293,7 @@ export function IssueDetailPage() {
                       <span className="block truncate">{detail.project.name}</span>
                     </button>
                   </div>
-                  <MetaLine label={t("issueDetail.sidebar.repo")} value={detail.project.repoPath || t("issueDetail.sidebar.notConfigured")} />
+                  <MetaLine label={t("issueDetail.sidebar.repo")} value={projectRepository || t("issueDetail.sidebar.notConfigured")} />
                   <MetaLine label={t("issueDetail.sidebar.defaultCluster")} value={projectCluster?.name || t("issueDetail.sidebar.notConfigured")} />
                 </div>
               ) : (

@@ -64,6 +64,11 @@ function normalizeWorkspace(workspace: WorkspaceSnapshot): WorkspaceSnapshot {
   };
 }
 
+function projectRepositoryLabel(project: { sourceType?: string; remoteUrl?: string; repoPath?: string } | null | undefined): string {
+  if (!project) return "";
+  return project.sourceType === "github" ? project.remoteUrl || project.repoPath || "" : project.repoPath || project.remoteUrl || "";
+}
+
 export function SessionDetailPage() {
   const { t } = useMspaceTranslation();
   const { sessionId = "" } = useParams({ strict: false }) as { sessionId?: string };
@@ -158,6 +163,7 @@ export function SessionDetailPage() {
   }
 
   const { session, issue, project } = sessionQuery.data;
+  const repositoryLabel = projectRepositoryLabel(project);
   const projectName = project?.name || t("sessionDetail.noProject");
   const workspace = normalizeWorkspace(sessionQuery.data.workspace);
   const sessionActive = ["queued", "running"].includes(session.status);
@@ -217,7 +223,7 @@ export function SessionDetailPage() {
               <DataBlock label={t("sessionDetail.codexTurn")} icon={SquareTerminal}>{session.codexTurnId || t("sessionDetail.notStartedYet")}</DataBlock>
               <DataBlock label={t("sessionDetail.sessionWorkspace")} icon={Files}>{session.workdir || t("sessionDetail.notReportedYet")}</DataBlock>
               <DataBlock label={t("sessionDetail.artifactDirectory")} icon={Files}>{session.artifactDir || t("sessionDetail.notReportedYet")}</DataBlock>
-              <DataBlock label={t("sessionDetail.sourceRepository")} icon={Files}>{project?.repoPath || t("sessionDetail.notConfigured")}</DataBlock>
+              <DataBlock label={t("sessionDetail.sourceRepository")} icon={Files}>{repositoryLabel || t("sessionDetail.notConfigured")}</DataBlock>
             </div>
           </Panel>
 

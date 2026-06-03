@@ -1128,6 +1128,22 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 		t.Fatalf("unexpected personal project: %+v", personalProject)
 	}
 
+	createTeamLocalProjectRecorder := httptest.NewRecorder()
+	createTeamLocalProjectReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+teamWorkspace.ID+"/projects", strings.NewReader(`{"name":"local-team","sourceType":"local","repoPath":"/Users/mlhiter/personal-projects/mspace","defaultBranch":"main"}`))
+	createTeamLocalProjectReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createTeamLocalProjectRecorder, createTeamLocalProjectReq)
+	if createTeamLocalProjectRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("team local project should be rejected, status=%d body=%s", createTeamLocalProjectRecorder.Code, createTeamLocalProjectRecorder.Body.String())
+	}
+
+	createTeamGitHubProjectRecorder := httptest.NewRecorder()
+	createTeamGitHubProjectReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+teamWorkspace.ID+"/projects", strings.NewReader(`{"name":"team-repo","sourceType":"github","repoUrl":"https://github.com/mlhiter/team-repo.git","defaultBranch":"main"}`))
+	createTeamGitHubProjectReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createTeamGitHubProjectRecorder, createTeamGitHubProjectReq)
+	if createTeamGitHubProjectRecorder.Code != http.StatusCreated {
+		t.Fatalf("team github project should be accepted, status=%d body=%s", createTeamGitHubProjectRecorder.Code, createTeamGitHubProjectRecorder.Body.String())
+	}
+
 	createIssueRecorder := httptest.NewRecorder()
 	createIssueReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues", strings.NewReader(`{"projectId":"`+personalProject.ID+`","body":"Move issues to server PG\n\n- [ ] Keep worker workdirs isolated","labelKeys":["type:feat","priority:p1"]}`))
 	createIssueReq.Header.Set("Authorization", "Bearer "+sessionToken)

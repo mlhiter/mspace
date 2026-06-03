@@ -43,7 +43,7 @@ Goal:
 
 Build in order:
 
-- Project import: support existing local folders, auto-detect GitHub remote metadata, and support direct GitHub repository URLs cloned into the mspace data directory.
+- Project import: support existing local folders for personal desktop workspaces, auto-detect GitHub remote metadata, and support direct GitHub repository URLs for team workspaces where workers clone source into their own repo cache.
 - Issue creation: keep creation in the Issues surface, use a document-style note without a project selector, allow workspace-level issues before the repository is known, and attach a project later when agent execution, PR handoff, or test deployment is needed.
 - Issue task lists: treat task rows as child issues, convert creation-time Markdown checklist lines into child rows, and let humans or agents update task status from the parent issue.
 - Agent mention flow: let a user manage agent profiles, write an issue comment with an enabled agent mention, save that comment, and create the server-owned session from the current turn request and selected profile.
@@ -118,7 +118,7 @@ Build:
 Acceptance:
 
 - A user can create an issue from the Issues surface or sidebar quick action and return to it later, even before the repository is known.
-- A user can create a project from a local folder or GitHub repository URL, attach it to the issue when execution is needed, and adjust runtime settings later.
+- A user can create a personal project from a local folder or GitHub repository URL, create a team project from a GitHub repository URL, attach it to the issue when execution is needed, and adjust runtime settings later.
 - A user can create and check off issue tasks without duplicating state between Markdown checkboxes and child issue rows.
 - A user can manage agent profiles, mention an enabled agent in an issue comment, and start a worker-backed session from that current turn request.
 - A user can label an issue and stop an active session from Issue Detail.
