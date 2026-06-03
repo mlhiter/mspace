@@ -1465,14 +1465,6 @@ export function TestCaseDetailPage() {
         { label: t("tests.title"), to: "/tests", search: testsTabSearch("cases", effectiveProjectId) },
         { label: isNew ? t("tests.newCase") : testCase?.title || t("tests.cases") },
       ]}
-      actions={
-        <Button type="button" variant="secondary" asChild>
-          <Link to="/tests" search={testsTabSearch("cases", effectiveProjectId)}>
-            <ArrowLeft data-icon />
-            {t("common.goBack")}
-          </Link>
-        </Button>
-      }
     >
       <form className="grid gap-5 rounded-[10px] bg-[color:var(--surface)] p-5 shadow-[inset_0_0_0_1px_var(--line)]" onSubmit={submitCase}>
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[color:var(--line)] pb-4">
