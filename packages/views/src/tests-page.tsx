@@ -480,10 +480,7 @@ export function TestsPage() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importFileError, setImportFileError] = useState("");
   const [importSummary, setImportSummary] = useState("");
-  const [generateArea, setGenerateArea] = useState("");
-  const [generatePrompt, setGeneratePrompt] = useState("");
   const [actionMessage, setActionMessage] = useState("");
-  const [reviewNote, setReviewNote] = useState("");
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) || projects[0];
   const effectiveProjectId = selectedProject?.id || "";
@@ -610,10 +607,7 @@ export function TestsPage() {
 
   const generateCases = useMutation({
     mutationFn: () =>
-      controlPlaneApi.generateProjectTestCases(auth.token, workspaceId, effectiveProjectId, {
-        area: generateArea,
-        prompt: generatePrompt,
-      }),
+      controlPlaneApi.generateProjectTestCases(auth.token, workspaceId, effectiveProjectId, {}),
     onSuccess: async (result) => {
       setActionMessage(t("tests.agentSessionQueued", { issueId: result.issueId }));
       await navigate({ to: "/tests", search: testsTabSearch("proposals", effectiveProjectId) });
@@ -623,9 +617,8 @@ export function TestsPage() {
 
   const applyProposal = useMutation({
     mutationFn: (proposal: TestCaseProposal) =>
-      controlPlaneApi.applyProjectTestCaseProposal(auth.token, workspaceId, effectiveProjectId, proposal.id, { note: reviewNote }),
+      controlPlaneApi.applyProjectTestCaseProposal(auth.token, workspaceId, effectiveProjectId, proposal.id),
     onSuccess: async () => {
-      setReviewNote("");
       setActionMessage(t("tests.proposalApplied"));
       await invalidateCaseWorkflow();
     },
@@ -633,9 +626,8 @@ export function TestsPage() {
 
   const rejectProposal = useMutation({
     mutationFn: (proposal: TestCaseProposal) =>
-      controlPlaneApi.rejectProjectTestCaseProposal(auth.token, workspaceId, effectiveProjectId, proposal.id, { note: reviewNote }),
+      controlPlaneApi.rejectProjectTestCaseProposal(auth.token, workspaceId, effectiveProjectId, proposal.id),
     onSuccess: async () => {
-      setReviewNote("");
       setActionMessage(t("tests.proposalRejected"));
       await invalidateCaseWorkflow();
     },
@@ -976,23 +968,6 @@ export function TestsPage() {
                   <span className="text-[12px] text-[color:var(--muted)]">
                     {t("tests.selectedSummary", { selected: selectedCaseIds.length, total: casesQuery.data?.length || 0 })}
                   </span>
-                </div>
-                <div className="border-b border-[color:var(--line)] bg-[color:var(--paper)] p-4">
-                  <div className="grid gap-3 lg:grid-cols-[240px_minmax(0,1fr)_minmax(0,1fr)]">
-                    <div>
-                      <h2 className="text-[13px] font-semibold text-[color:var(--text)]">{t("tests.generateTitle")}</h2>
-                      <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">{t("tests.generateDescription")}</p>
-                    </div>
-                    <Field label={t("tests.area")}>
-                      <Input value={generateArea} onChange={(event) => setGenerateArea(event.target.value)} placeholder={t("tests.areaPlaceholder")} />
-                    </Field>
-                    <Field label={t("tests.generatePrompt")}>
-                      <Textarea value={generatePrompt} onChange={(event) => setGeneratePrompt(event.target.value)} placeholder={t("tests.generatePlaceholder")} className="min-h-20" />
-                    </Field>
-                    <Field label={t("tests.reviewNote")} className="lg:col-start-2 lg:col-span-2">
-                      <Textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder={t("tests.reviewNotePlaceholder")} className="min-h-20" />
-                    </Field>
-                  </div>
                 </div>
                 <div className="divide-y divide-[color:var(--line)]">
                   {proposalsQuery.isLoading ? (
