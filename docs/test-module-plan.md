@@ -1,7 +1,7 @@
 # mspace Test Module Product And Implementation Plan
 
-> Status: product and implementation plan draft
-> Date: 2026-06-01
+> Status: product and implementation plan plus implementation snapshot
+> Date: 2026-06-03
 
 ## Conclusion
 
@@ -71,7 +71,7 @@ Recommended fields:
 - workspace
 - project
 - title
-- type: expose only `functional` in the first phase; extend later to `ui`, `api`, and `deployment`
+- type: currently supports `functional`, `ui`, `api`, and `deployment`
 - area or feature
 - priority, set manually
 - status: `draft`, `needs_review`, `ready`, `archived`
@@ -735,7 +735,7 @@ The server must validate artifacts:
 
 Each phase must be independently mergeable and usable.
 
-### Phase 1: Functional Test Case Library
+### Phase 1: Test Case Library
 
 Goal: let users manage test cases first.
 
@@ -749,7 +749,8 @@ Scope:
 - case quality score;
 - case revisions;
 - English and Simplified Chinese i18n;
-- server API and Postgres migration.
+- server API and Postgres migration;
+- support `functional`, `ui`, `api`, and `deployment` as case types while keeping specialized execution harnesses for later phases.
 
 This phase does not depend on Codex or workers.
 

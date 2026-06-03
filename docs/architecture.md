@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: server-owned runtime surfaces, updated 2026-06-01
+> Status: server-owned runtime and test-module surfaces, updated 2026-06-03
 
 ## Current Implementation Snapshot
 
@@ -10,7 +10,7 @@ The repository contains a runnable desktop MVP with server-owned product and run
 - Public website in `apps/website`, built with Vite, React 19, Tailwind CSS 4, and lucide-react, deployed as a static Vercel site from the root `vercel.json`.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Shared desktop localization lives in `packages/i18n` for `en` and `zh-CN`.
-- Go server control plane in `server/`, built with chi. Team/shared deployments use PostgreSQL through `pgx`; packaged personal desktop mode can use a server-owned SQLite snapshot store.
+- Go server control plane in `server/`, built with chi. Team/shared deployments use PostgreSQL through `pgx`; packaged personal desktop mode can use a server-owned SQLite snapshot store. Project-level test cases, case suggestions, plans, and runs live in this same server store.
 - Go runtime worker in `worker/`, registered to workspaces with `msw_...` tokens.
 - Local username/password auth creates a personal workspace by default and works without GitHub access. Default local personal sign-in opens on account creation and hides GitHub. GitHub sign-in remains an optional external identity provider for explicitly configured team servers, from a saved Team server URL or `MSPACE_SERVER_URL`, when `/health` reports `capabilities.githubAuth: true`. Auth responses include `identity.provider` and `identity.login`, so the desktop can show local accounts and GitHub accounts without guessing from `user.email`. Personal and team workspaces both use the server store; team/shared deployments use Postgres, while packaged personal desktop mode can stay local on SQLite.
 - Team collaboration features require an explicit team workspace created from the workspace menu. Team access is through one-time join links rather than email-targeted invitations, with a safe unauthenticated preview for signed-out recipients and desktop deep links that carry the invited team server context.
@@ -19,7 +19,7 @@ The repository contains a runnable desktop MVP with server-owned product and run
 The control plane owns:
 
 - users, local password credentials, workspaces, membership, GitHub identity, and mspace auth sessions;
-- projects, project runbooks, issues, child issue tasks, comments, reactions, labels, Inbox events, and per-user receipts;
+- projects, project runbooks, project test cases, test case revisions, test case proposals, test plans, test runs, issues, child issue tasks, comments, reactions, labels, Inbox events, and per-user receipts;
 - workspace settings, agent profiles, clusters, issue test environments, issue handoffs, review evidence, failures, and source change records;
 - runtime worker registration, task queue state, task logs, task events, cancellation, and task results;
 - future GitHub App installation state.
@@ -84,6 +84,40 @@ Server
 
 Failed, cancelled, or invalid triage task results mark the issue triage as failed rather than falling back to keyword classification.
 
+## Test Module Flow
+
+Tests are project-level quality objects, but execution still uses Issues and worker-claimed agent sessions:
+
+```text
+Tests / Cases
+  -> create or import cases as project objects
+  -> optional Optimize or Generate action
+Server
+  -> creates an issue-backed agent session for Codex work
+Worker
+  -> writes test-case-proposals.json
+Server
+  -> validates proposals and stores them as Case suggestions
+Human
+  -> accepts or rejects suggestions before canonical cases change
+
+Tests / Plans
+  -> select ready cases and start a run
+Server
+  -> creates a parent issue plus run items linked to cases
+Worker
+  -> executes through the existing agent_session runtime path
+  -> writes test-result.json
+Server
+  -> reconciles run item status and evidence
+Human
+  -> accepts or blocks the run result
+```
+
+The Tests UI is intentionally not a separate test-management product. It owns durable case knowledge, case suggestions, plans, and run review state. Collaboration, execution, worker logs, and evidence remain in the existing Issue, Agent Session, Runtime Task, and Evidence model.
+
+Case creation and import use modal flows. Markdown and text imports treat each non-empty line as a case. CSV and Excel `.xlsx` imports share a column contract: `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags`. Excel workbooks are base64-encoded in the API request, the server reads the first non-empty sheet, skips rows without a title, validates case types, and opens the workbook with explicit unzip limits.
+
 ## Storage Modes
 
 The store boundary stays inside `server/`.
@@ -102,6 +136,7 @@ Main server-owned state groups:
 - Identity: `users`, `user_password_credentials`, `user_identities`, `auth_sessions`, `oauth_states`, `oauth_results`. `/api/auth/me` and auth result payloads expose a lightweight `identity` object derived from `user_identities` for UI display and admin-login matching.
 - Workspaces: `workspaces`, `workspace_members`, `workspace_invitations`. Invitation tokens are stored as server-side secrets and surfaced to users only as one-time join links. The signed-out preview API returns safe metadata such as workspace name, role, inviter display fields, expiry, and status; it does not expose member lists, raw internal ids, or token debug fields.
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
+- Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
 - Runtime surfaces: `workspace_settings`, `agent_profiles`, `clusters`, `issue_test_environments`, `issue_handoffs`.
 - Runtime queue: `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, `runtime_task_logs`.
@@ -119,6 +154,10 @@ Desktop routes:
 - `/issues/:issueId/commits/:commitSha`
 - `/issues/:issueId/evidence/history`
 - `/issues/:issueId/evidence/snapshots`
+- `/tests`
+- `/tests/cases/:caseId`
+- `/tests/plans/:planId`
+- `/tests/runs/:runId`
 - `/agents`
 - `/clusters`
 - `/projects`
@@ -131,6 +170,7 @@ Server route groups:
 - auth and workspace APIs;
 - Inbox event/receipt APIs;
 - project and runbook APIs;
+- project test case, case revision, case proposal, test plan, and test run APIs;
 - issue/comment/task/label/reaction APIs;
 - workspace setting, agent profile, and cluster APIs;
 - issue test environment deploy/cleanup/retain/resources/probe APIs;
@@ -213,7 +253,7 @@ Team invitation setup follows the same user-centered rule. Workspace Settings cr
 
 Open account registration creates a personal workspace and a personal runtime boundary. Only server-admin logins configured by `MSPACE_SERVER_ADMIN_LOGINS` or `MSPACE_BOOTSTRAP_ADMIN_LOGIN` can create team workspaces. Team server runners are reachable only through membership in a team workspace, and runtime worker/task mode must match the workspace kind.
 
-Agents stays focused on mentionable Codex-backed role behavior. Clusters stays focused on reusable validation access. Projects stays focused on repository metadata and project runbooks.
+Tests stays focused on project-level cases, suggestions, plans, and run acceptance. Agents stays focused on mentionable Codex-backed role behavior. Clusters stays focused on reusable validation access. Projects stays focused on repository metadata and project runbooks.
 
 The desktop visual language is a quiet Notion-like workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, restrained icon actions, and no decorative dashboard language.
 

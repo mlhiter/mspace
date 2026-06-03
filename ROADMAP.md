@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-05-21
+> Status: milestone roadmap, updated 2026-06-03
 
 ## Purpose
 
@@ -28,6 +28,8 @@ The roadmap intentionally keeps fixed worker workflow first. Kubernetes is the m
 The server control-plane slice now owns local password auth, optional GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, workspace settings, agent profiles, clusters, issue test environments, PR handoffs, runtime registration, runtime tasks, worker logs, and runtime results. Team/shared workspace data uses server Postgres; packaged personal desktop mode can use the same server contract on a local SQLite store. Runtime execution happens through registered workers that claim server tasks. Open registration stays enabled for personal workspaces, while team workspace creation and shared server runner access are gated by server admin creation plus owner/admin invitations.
 
 The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, opt-in automatic test deploy after captured source commits, automatic personal worker startup/credential renewal, and bilingual desktop UI support for English and Simplified Chinese. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
+
+The Tests surface is now part of the local MVP loop: project cases, case suggestions, plans, runs, modal create/import, Excel `.xlsx` import, case revisions, and issue-backed test run execution are implemented. The next test-module proof point is dogfooding a real plan through worker-produced `test-result.json`, human acceptance/blocking, and follow-up case suggestions rather than expanding into CDP, SSH, or multi-worker scheduling first.
 
 ## Approved Execution Plan
 
@@ -90,7 +92,7 @@ Goal:
 Acceptance:
 
 - Electron desktop shell exists.
-- Inbox, Issues, Projects, Issue Detail, and Session Detail routes exist.
+- Inbox, Issues, Tests, Projects, Issue Detail, Test Case Detail, Test Plan Detail, Test Run Detail, and Session Detail routes exist.
 - shadcn/ui primitives are installed under `packages/ui/src/components/ui`.
 - `DESIGN.md` defines the Notion-style black-and-white product surface.
 - Server control plane, runtime worker registration, task logs, and worker-managed git worktree execution exist.
@@ -119,6 +121,7 @@ Acceptance:
 
 - A user can create an issue from the Issues surface or sidebar quick action and return to it later, even before the repository is known.
 - A user can create a personal project from a local folder or GitHub repository URL, create a team project from a GitHub repository URL, attach it to the issue when execution is needed, and adjust runtime settings later.
+- A user can import or create project test cases, review case suggestions, assemble a plan, and start an issue-backed test run.
 - A user can create and check off issue tasks without duplicating state between Markdown checkboxes and child issue rows.
 - A user can manage agent profiles, mention an enabled agent in an issue comment, and start a worker-backed session from that current turn request.
 - A user can label an issue and stop an active session from Issue Detail.

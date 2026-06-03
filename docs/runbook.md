@@ -1,6 +1,6 @@
 # mspace Runbook
 
-> Status: server-owned local MVP operations guide, updated 2026-06-01
+> Status: server-owned local MVP operations guide, updated 2026-06-03
 
 ## Local Data
 
@@ -16,10 +16,12 @@ The product and runtime state for signed-in workspaces lives in the server store
 | `<worker-root>/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory. |
 | `<artifact-dir>/test-environment.json` | Optional deploy/test artifact with preview values. |
 | `<artifact-dir>/review-evidence.json` | Optional review artifact for commands, tests, build/deploy result, summary, risks, and follow-ups. |
+| `<artifact-dir>/test-case-proposals.json` | Optional Codex case suggestion artifact reconciled into project Case suggestions. |
+| `<artifact-dir>/test-result.json` | Optional Codex test run artifact reconciled into test run items and run acceptance state. |
 | `<artifact-dir>/branch-name.json` | Optional agent-proposed source branch name. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-learned project runbook artifact. |
 
-The server store records users, local password credentials, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, issue handoffs, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs. Postgres stores these in migrated tables. SQLite personal mode stores a server-owned snapshot in `store_snapshots` and persists after mutating requests plus the OAuth GET routes that create or consume login state.
+The server store records users, local password credentials, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, project test cases, test case revisions, test case suggestions, test plans, test runs, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, issue handoffs, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs. Postgres stores these in migrated tables. SQLite personal mode stores a server-owned snapshot in `store_snapshots` and persists after mutating requests plus the OAuth GET routes that create or consume login state.
 
 Docker-backed workers store target project source under the worker root volume, not in the host checkout. The dry-run worker defaults to the `mspace-worker-dev-root` Docker volume, and the Codex-capable worker defaults to `mspace-worker-codex-dev-root`; both mount that volume at `/var/lib/mspace-worker`.
 
@@ -80,6 +82,23 @@ The worker registers with the server, sends heartbeat state, claims matching run
 Codex configuration and authentication belong to worker runtimes. The server control plane queues work and applies runtime results, but it does not install Codex or mount Codex credentials.
 
 Issue title suggestion is deterministic server fallback only. Issue type triage is LLM-backed, but it still runs through the worker queue as `runtime_tasks.kind="issue_type_triage"` with `requiredCapabilities={"codex":true}`. The server validates the worker result before writing the type label.
+
+## Tests Workflow
+
+Use Tests after a project exists. Personal projects can use a local folder or GitHub URL. Team projects must use a GitHub URL so the team worker can clone source into its own repo cache.
+
+Recommended smoke order:
+
+1. Open Tests and pick a project.
+2. Create one case from the modal and verify the case detail page opens.
+3. Import Markdown/text cases and confirm non-empty lines become draft cases.
+4. Import CSV or Excel `.xlsx` cases with `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers. Rows without `title` should appear in the skipped list.
+5. Edit a case and verify revisions show newest first.
+6. Exercise Optimize or Generate with no connected worker; the UI should surface the worker/session blocker rather than silently claiming success.
+7. Connect a Codex-capable worker, then verify `test-case-proposals.json` becomes Case suggestions and `test-result.json` updates run items.
+8. Accept or block the run manually. A Codex-completed run is not release acceptance until a human records that decision.
+
+The current case library accepts `functional`, `ui`, `api`, and `deployment` as case types. Specialized UI/CDP automation, API harnessing, deployment orchestration, and multi-worker scheduling are still later execution work; the first loop keeps execution behind Issues, Agent Sessions, Workers, and Evidence.
 
 Dry-run Docker worker:
 
@@ -327,6 +346,43 @@ List namespace resources for an issue test environment:
 ```bash
 curl -H "Authorization: Bearer <msp-token>" \
   http://127.0.0.1:8787/api/workspaces/<workspace-id>/issues/<issue-id>/test-environment/resources
+```
+
+Create a test case:
+
+```bash
+curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/projects/<project-id>/test-cases" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Local password login succeeds","type":"functional","status":"ready","steps":[{"action":"Submit valid credentials"}],"expectedResult":"The workspace opens.","environmentRequirements":"Personal desktop server is running."}'
+```
+
+Import Markdown cases:
+
+```bash
+curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/projects/<project-id>/test-cases/import" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"format":"markdown","content":"- Invalid password shows an error\n- Invite link opens the workspace"}'
+```
+
+Import `.xlsx` cases by base64-encoding the workbook bytes:
+
+```bash
+python3 - <<'PY'
+import base64, json, pathlib
+path = pathlib.Path("cases.xlsx")
+print(json.dumps({"format": "xlsx", "fileName": path.name, "content": base64.b64encode(path.read_bytes()).decode()}))
+PY
+```
+
+Then send that JSON body to:
+
+```bash
+curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/projects/<project-id>/test-cases/import" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  --data-binary @/tmp/test-cases-import.json
 ```
 
 ## Validation

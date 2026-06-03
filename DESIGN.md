@@ -1,6 +1,6 @@
 # mspace Design System
 
-> Status: design system baseline, updated 2026-05-19
+> Status: design system baseline, updated 2026-06-03
 
 ## Visual Thesis
 
@@ -159,13 +159,14 @@ The default desktop shape is a sidebar plus document workspace.
 - Sidebar width: about `252px`.
 - Main content: centered page frame with a max width near `1280px`.
 - Page padding: generous enough for reading, tight enough for operations.
-- Default routes in the app shell: Inbox, Issues, Agents, Clusters, and Projects. Issue and Session details are reached from objects.
+- Default routes in the app shell: Inbox, Issues, Tests, Agents, Clusters, and Projects. Issue, Test Case, Test Plan, Test Run, and Session details are reached from objects.
 - Object list pages must not use a left-list/right-detail split. Clicking a row opens a dedicated detail page with its own route and breadcrumbs. Inline list pages may use filters, batch actions, and creation/import panels, but not persistent side-by-side detail panes.
 
 Screen priorities:
 
 - Inbox: row-level triage, unread state, assignment, linked session.
 - Issue Detail: document body first, then activity, session, and evidence. Keep the right metadata sidebar on Overview only; Commits, Sessions, and Evidence use the full page width so diffs, paths, command output, and Kubernetes evidence have room.
+- Tests: project-level cases, case suggestions, plans, and runs. Creation/import can use focused modals; row details should open dedicated pages rather than a persistent list/detail split.
 - Session Detail: logs, worktree state, branch comparison, evidence.
 - Agents: managed Codex-backed profiles, mentions, enabled state, and instructions.
 - Clusters: reusable kubeconfig, registry, and preview exposure defaults.

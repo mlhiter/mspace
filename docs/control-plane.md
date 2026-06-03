@@ -1,6 +1,6 @@
 # mspace Control Plane
 
-> Status: server-owned runtime surfaces, updated 2026-05-27
+> Status: server-owned runtime and test-module surfaces, updated 2026-06-03
 
 ## Decision
 
@@ -99,6 +99,7 @@ The server module provides:
 - team access: members, safe unauthenticated invitation previews, one-time join links, and invite acceptance;
 - Inbox events and per-user receipts;
 - workspace projects and project runbooks;
+- project test cases, test case revisions, test case suggestions, test plans, test runs, and run items;
 - issue labels, issues, child tasks, comments, comment edits, and comment reactions;
 - workspace settings;
 - workspace agent profiles;
@@ -112,11 +113,13 @@ The server module provides:
 - a server-owned SQLite personal store selected by `MSPACE_STORE=sqlite` or by omitting `DATABASE_URL`;
 - memory-backed store used only by tests.
 
-Workspaces have an explicit `kind`: `personal` or `team`. The first password registration or GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in the server store. Team/customer/shared deployments use Postgres. Packaged personal desktop mode can use the local SQLite store under the Electron user-data path. Team collaboration is opt-in: server admins create team workspaces through `POST /api/workspaces`, and invitation/member APIs reject personal workspaces.
+Workspaces have an explicit `kind`: `personal` or `team`. The first password registration or GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in the server store. Team/customer/shared deployments use Postgres. Packaged personal desktop mode can use the local SQLite store under the Electron user-data path. Team collaboration is opt-in: server admins create team workspaces through `POST /api/workspaces`, and invitation/member APIs reject personal workspaces.
 
 The desktop requires an mspace session before product data is available. For agent mentions, Issue Detail first verifies a matching active Codex worker; personal desktop mode may start the host-local personal worker, while team workspaces require an explicitly registered team worker. Only after that preflight does the renderer write the server comment and call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`. The server repeats the worker-liveness check and returns HTTP `409` with `no active codex worker` if the task cannot be claimed, so unsupported `@codex` comments do not sit in the queue waiting for a worker that is not there.
 
 New issue type classification is also a runtime task. When an issue has `triage_status=pending` and no explicit type label, the server queues `runtime_tasks.kind="issue_type_triage"` with `required_capabilities={"codex":true}` and a classification-only prompt. A matching worker runs Codex, returns a compact JSON result, and the server validates the type before writing the `type:*` label. The server never falls back to keyword matching or an in-process Codex client.
+
+The test module follows the same ownership rule. Canonical cases, revisions, suggestions, plans, runs, and run items live in server tables. Markdown/text/CSV/Excel imports are parsed by the server. Optimize/generate actions and test run execution create issue-backed agent sessions; workers may return `test-case-proposals.json` or `test-result.json`, but the server validates those artifacts and requires human apply/accept actions before canonical case knowledge or run acceptance changes.
 
 ## Runtime Registry
 
@@ -150,7 +153,9 @@ For UI-only local testing, the Docker dev worker can advertise `codex:true,dryRu
 
 Real Codex worker sessions should prefer non-interactive validation and must not present container-local `localhost` or `127.0.0.1` URLs as user-facing previews unless mspace provides an explicit preview/test-environment URL or a known host mapping was requested.
 
-## Test Environment And Handoff
+## Test Module, Test Environment, And Handoff
+
+Test cases are project-scoped and can be typed as `functional`, `ui`, `api`, or `deployment`. The current product records those types and can plan against them; specialized UI/CDP, API harness, deployment orchestration, multi-worker scheduling, and formal environment templates are later execution layers behind the same runtime task protocol.
 
 Cluster configs live in server `clusters`. One issue can have one `issue_test_environments` row. Test deployment is queued through the same agent-session/runtime-task protocol as normal coding turns, with resolved cluster, namespace, source commit, registry, and exposure settings in the payload.
 
@@ -162,4 +167,4 @@ PR handoff records live in server `issue_handoffs`. The current implementation r
 
 ## Migration Rule
 
-New features should land in `server/` first. If a feature involves users, membership, shared issue ownership, GitHub identity, GitHub App installation credentials, audit, runtime state, clusters, test environments, handoffs, evidence, or cross-device sync, do not add it to a local sidecar store. Update the server store contract and Postgres migrations; the SQLite personal store should remain a local packaged mode, not a separate product model.
+New features should land in `server/` first. If a feature involves users, membership, shared issue ownership, GitHub identity, GitHub App installation credentials, audit, runtime state, tests, clusters, test environments, handoffs, evidence, or cross-device sync, do not add it to a local sidecar store. Update the server store contract and Postgres migrations; the SQLite personal store should remain a local packaged mode, not a separate product model.

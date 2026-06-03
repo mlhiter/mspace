@@ -1,6 +1,6 @@
 # mspace Server
 
-`server/` is the mspace control plane. It owns identity, workspaces, membership, auth sessions, workspace product data, runtime-facing product surfaces, and future GitHub App installation state.
+`server/` is the mspace control plane. It owns identity, workspaces, membership, auth sessions, workspace product data, project test data, runtime-facing product surfaces, and future GitHub App installation state.
 
 The desktop app and runtime workers are clients of this service. They do not own collaboration identity or product truth.
 
@@ -106,6 +106,26 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `DELETE` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Delete a project when no issues reference it. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Read the workspace project runbook. |
 | `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the workspace project runbook and record a revision. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | List project test cases. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import` | Import Markdown, text, CSV, or Excel `.xlsx` cases. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize` | Queue an issue-backed Codex case refinement session. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate` | Queue an issue-backed Codex case generation session. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | Create a project test case. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}` | Read one project test case. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}` | Update one project test case and record a revision. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}/revisions` | List project test case revisions. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals` | List Codex case suggestions. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/apply` | Accept a case suggestion. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/reject` | Dismiss a case suggestion. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | List project test plans. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | Create a project test plan. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Read one project test plan. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Update one project test plan. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs` | Start an issue-backed test run. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}` | Read one test run. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry` | Retry blocked or failed test run items. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/accept` | Human-accept a test run result. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block` | Mark a test run blocked with a human note. |
 | `GET` | `/api/workspaces/{workspaceID}/workspace/settings` | Read workspace automation settings. |
 | `PUT` | `/api/workspaces/{workspaceID}/workspace/settings` | Update workspace automation settings. |
 | `GET` | `/api/workspaces/{workspaceID}/agents` | List workspace agent profiles. |
@@ -162,7 +182,19 @@ The workspace Inbox is event-based. `issue_events` stores the append-only review
 
 Personal workspaces are the default result of password registration or GitHub sign-in. Personal and team workspaces both store projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in the server store. Team/shared deployments use Postgres; packaged personal desktop mode can use local SQLite. Runtime worker registration and task APIs are available to both personal and team workspaces, but the runtime mode must match the workspace kind: personal workspaces use personal workers, while team workspaces use team workers. Team workspaces additionally unlock invitations and shared membership.
 
-Issue `project_id` is optional in the control plane. A user can capture a workspace-level issue before the repository is known, comment on it, and attach a project later through `PUT /api/workspaces/{workspaceID}/issues/{issueID}` with `projectId`. If a create request omits `projectId` and the workspace has exactly one project, the server auto-attaches it; zero or multiple projects leave the issue unassigned. Agent execution, PR handoff, and issue test environments require an attached project.
+Issue `project_id` is optional in the control plane. A user can capture a workspace-level issue before the repository is known, comment on it, and attach a project later through `PUT /api/workspaces/{workspaceID}/issues/{issueID}` with `projectId`. If a create request omits `projectId` and the workspace has exactly one project, the server auto-attaches it; zero or multiple projects leave the issue unassigned. Agent execution, PR handoff, Tests, and issue test environments require an attached project.
+
+Project creation is workspace-kind aware. Personal workspaces may use `sourceType:"local"` with a local repository path or `sourceType:"github"` with a repository URL. Team workspaces must use `sourceType:"github"` so external team workers can clone source into their own repository cache; the server rejects team projects that try to store a user's desktop-local path.
+
+## Test Module Model
+
+Test cases, revisions, suggestions, plans, runs, and run items are server-owned project data. Team/shared deployments persist them through Postgres migrations, while packaged personal desktop mode persists them through the server-owned SQLite snapshot store.
+
+Case import supports `markdown`, `text`, `csv`, and `xlsx`. Markdown/text import treats each non-empty line as one case. CSV and `.xlsx` share the `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` header contract. Excel content is base64-encoded in the JSON request; the server reads the first non-empty sheet, skips rows without a title, validates types, and opens workbooks with explicit unzip limits.
+
+Valid case types are `functional`, `ui`, `api`, and `deployment`. The current product can classify those cases and plan against them; specialized UI/CDP automation, API harnessing, deployment orchestration, and multi-worker scheduling remain future execution capabilities behind the same Issue and Worker runtime path.
+
+Codex-generated or Codex-refined cases never write directly into canonical test cases. Workers return `test-case-proposals.json`; the server stores validated proposals as Case suggestions; humans apply or reject them. Test runs also remain human-reviewed: workers return `test-result.json`, the server reconciles run items, and a user accepts or blocks the run result.
 
 ## Workspace Invitations
 

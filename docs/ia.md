@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-06-01
+> Status: local MVP implementation snapshot, updated 2026-06-03
 
 ## IA Goal
 
@@ -25,6 +25,7 @@ The first MVP should keep the navigation narrow:
 
 - Inbox
 - Issues
+- Tests
 - Agents
 - Clusters
 - Projects
@@ -34,6 +35,7 @@ Navigation rules:
 - Inbox is the default entry screen.
 - Inbox is the unread review surface for issue and session updates.
 - Issues is the durable knowledge surface and issue creation home.
+- Tests is the project-level quality surface for cases, case suggestions, plans, and runs. It sits after Issues because test execution still routes through issue-backed worker sessions.
 - Agents is the managed profile surface for Codex-backed collaborators and mentions.
 - Clusters is reusable test cluster access: kubeconfig import, reachability status, registry, and exposure defaults.
 - Projects is configuration and project-level history.
@@ -52,6 +54,10 @@ Workspace
           -> Agent Session
               -> Runtime
                   -> Evidence
+  -> Project
+      -> Test Case
+      -> Test Plan
+          -> Test Run
 ```
 
 The ownership model should be clear:
@@ -61,6 +67,7 @@ The ownership model should be clear:
 - Agent Session is for execution.
 - Runtime is for environment access.
 - Evidence is the result attached back to the issue.
+- Test Case and Test Plan are project-level quality knowledge; Test Run records issue-backed execution and human acceptance.
 
 ## Screen Map
 
@@ -73,6 +80,10 @@ Current implemented desktop routes:
 /issues/:issueId/commits/:commitSha
 /issues/:issueId/evidence/history
 /issues/:issueId/evidence/snapshots
+/tests
+/tests/cases/:caseId
+/tests/plans/:planId
+/tests/runs/:runId
 /agents
 /clusters
 /projects
@@ -88,7 +99,7 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The current sidebar exposes Inbox, Issues, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. The workspace menu owns workspace switching, team workspace creation, language switching, and the entry into Workspace Settings. Workspace Settings owns workspace automation, team-only access controls, and runtime worker/queue controls for the selected workspace. The invite route is a deep-link entry that resolves the target team server, shows safe invitation context, handles login or registration, accepts the invite, and lands in the invited workspace. Session detail remains deep-linked from issue work.
+The current sidebar exposes Inbox, Issues, Tests, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. The workspace menu owns workspace switching, team workspace creation, language switching, and the entry into Workspace Settings. Workspace Settings owns workspace automation, team-only access controls, and runtime worker/queue controls for the selected workspace. The invite route is a deep-link entry that resolves the target team server, shows safe invitation context, handles login or registration, accepts the invite, and lands in the invited workspace. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
@@ -510,6 +521,7 @@ Must-have for MVP:
 - Agent turns inline on the issue timeline
 - Evidence tab plus Test environment sidebar state, without health-check noise in the issue timeline
 - Project settings, workspace automation policy, and runtime defaults
+- Tests case library, case suggestions, plans, and issue-backed test runs
 - Worker session startup with git worktree isolation
 - Manual cleanup for retained worker session workdirs
 - Session detail with logs and workspace evidence
@@ -545,7 +557,7 @@ Avoiding Kubernetes as the first visual focus does not mean hiding it. Kubeconfi
 
 ## Build Sequence
 
-Implemented as of 2026-05-11:
+Implemented as of 2026-06-03:
 
 1. Inbox review list, Issues list, and issue creation flow.
 2. Issue detail shell with document body and activity thread.
@@ -565,6 +577,7 @@ Implemented as of 2026-05-11:
 16. Structured `session_failures` records that surface failed sessions, deploy-time preview verification failures, agent interruption, and cleanup failures as continueable Issue Detail timeline and Evidence entries.
 17. Preview status refreshes that update Test environment state and `Checked` time without adding healthy snapshot cards to the Overview timeline.
 18. Issue Resources tab for the fixed test namespace, using live Kubernetes resource reads without exposing cross-namespace browsing.
+19. Tests route with Cases, Case suggestions, Plans, Runs, dedicated detail pages, modal case create/import flows, Excel `.xlsx` import, and issue-backed test run execution.
 
 Next build steps:
 

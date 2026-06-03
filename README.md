@@ -55,8 +55,8 @@ Production deployment uses the root `vercel.json`:
 
 ## Features
 
-- Electron desktop app with Inbox, Issues, Agents, Clusters, Projects, Workspace Settings, Issue Detail, and Session Detail screens.
-- Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, mspace session tokens, personal/team workspaces, workspace membership, one-time team join links with safe signed-out previews, Inbox receipts, projects, runbooks, issues, comments, reactions, labels, runtime worker registration, agent profiles, clusters, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
+- Electron desktop app with Inbox, Issues, Tests, Agents, Clusters, Projects, Workspace Settings, Issue Detail, and Session Detail screens.
+- Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, mspace session tokens, personal/team workspaces, workspace membership, one-time team join links with safe signed-out previews, Inbox receipts, projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, comments, reactions, labels, runtime worker registration, agent profiles, clusters, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
 - Runtime worker daemon in `worker/` that registers with `msw_...`, heartbeats, claims matching server tasks, prepares its own repo cache/workdir, runs `codex app-server --listen stdio://`, streams logs, captures source metadata, and reports task results.
 - Codex execution belongs to runtime workers. The server image does not install Codex or mount Codex credentials.
 - Workspace Settings for team access, worker environment installation, worker liveness, issue-linked runtime tasks, task events, task logs, and workspace automation.
@@ -65,6 +65,8 @@ Production deployment uses the root `vercel.json`:
 - Document-style issue creation and comments with TipTap Markdown editing, inline child issues from checklist rows, image rendering for stable attachment URLs, and lightweight comment reactions.
 - Agent mentions from issue comments, with server-side session records, runtime task queueing, profile instructions, trigger-comment tracking, worker logs, status updates, and issue timeline updates.
 - Per-session worker-managed git worktrees, changed file lists, diff previews, commits, and comparison against the project default branch.
+- Project-level Tests workspace with Cases, Case suggestions, Plans, and Runs tabs, dedicated detail pages, modal create/import flows, Markdown/text/CSV/Excel `.xlsx` import, readiness scoring, case revisions, and human review before Codex suggestions update canonical cases.
+- Issue-backed test run workflow where test plans create issue-linked run items, workers execute through the existing agent-session path, `test-result.json` is reconciled into run state, and a human accepts or blocks the run result.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and update the issue test environment record.
 - Opt-in workspace automation that queues the same test deployment flow after a successful source session captures a commit, when the issue and runtime are ready.
@@ -150,14 +152,15 @@ The packaged desktop app includes bundled `mspace-server` and `mspace-worker` bi
 
 1. Sign in with a local account, or use GitHub OAuth when it is configured, then select the personal or team workspace. For team access from an invitation, open the join link; the desktop switches to the invited team server, shows a safe preview, lets you sign in or create an account if needed, accepts the invitation, and opens the invited workspace.
 2. Create an issue in the Issues tab with a document-style note.
-3. Attach or create a project before agent execution, PR handoff, project runbook access, or test environments.
-4. Create/import a cluster config in Clusters if the issue needs a Kubernetes test environment.
-5. For personal desktop workspaces, let mspace start the local worker when you mention an agent. For team workspaces, connect a worker environment from Workspace Settings and run the generated install command in the target environment. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
-6. Mention an enabled agent profile, such as `@codex`, in an issue comment.
-7. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
-8. Use Commits for source review and PR handoff.
-9. Trigger a manual test deployment from Issue Detail when ready, or enable workspace auto-deploy to queue it after successful source sessions.
-10. Use Resources and Evidence to inspect namespace state, preview status, command evidence, failures, and cleanup decisions.
+3. Attach or create a project before agent execution, PR handoff, project runbook access, Tests, or test environments. Personal workspaces can use a local folder or GitHub URL; team workspaces require a GitHub URL so connected workers can clone the repository.
+4. In Tests, import or create project cases. Markdown/text imports use one non-empty line per case; CSV and `.xlsx` workbooks use the same column contract: `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags`.
+5. Create/import a cluster config in Clusters if the issue needs a Kubernetes test environment.
+6. For personal desktop workspaces, let mspace start the local worker when you mention an agent. For team workspaces, connect a worker environment from Workspace Settings and run the generated install command in the target environment. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
+7. Mention an enabled agent profile, such as `@codex`, in an issue comment, or start a test run from a ready test plan.
+8. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
+9. Use Commits for source review and PR handoff.
+10. Trigger a manual test deployment from Issue Detail when ready, or enable workspace auto-deploy to queue it after successful source sessions.
+11. Use Resources and Evidence to inspect namespace state, preview status, command evidence, failures, and cleanup decisions.
 
 ## Configuration
 
@@ -224,6 +227,8 @@ Local data paths:
 | `<worker-root>/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory. |
 | `<artifact-dir>/test-environment.json` | Optional agent-written deployment result. |
 | `<artifact-dir>/review-evidence.json` | Optional agent-written review snapshot. |
+| `<artifact-dir>/test-case-proposals.json` | Optional Codex-written test case suggestion artifact reconciled into Case suggestions. |
+| `<artifact-dir>/test-result.json` | Optional Codex-written test run artifact reconciled into run items and acceptance state. |
 | `<artifact-dir>/branch-name.json` | Optional agent-written source branch proposal such as `{ "branch": "fix/pr-source-branch-selection" }`. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-written project runbook update. |
 
@@ -257,7 +262,7 @@ apps/website/        Public Vite/React brand site and changelog for the issue-to
 packages/core/       Shared API client and TypeScript types
 packages/i18n/       Shared English and Simplified Chinese desktop localization
 packages/ui/         Shared UI primitives and shadcn/ui source components
-packages/views/      Product routes for Inbox, Issues, Agents, Projects, Sessions
+packages/views/      Product routes for Inbox, Issues, Tests, Agents, Projects, Sessions
 server/              Go control plane for identity, workspaces, auth sessions, product state, runtime state
 worker/              Go runtime worker for claiming and executing server tasks
 docs/                Product, value thesis, architecture, IA, references, runbook, and images
@@ -273,6 +278,7 @@ docs/                Product, value thesis, architecture, IA, references, runboo
 - [Kubernetes Deployment Runbook](./docs/kubernetes-deployment.md)
 - [MVP Information Architecture](./docs/ia.md)
 - [Runbook](./docs/runbook.md)
+- [Test Module Plan](./docs/test-module-plan.md)
 - [Reference Notes](./docs/references.md)
 - [Design System](./DESIGN.md)
 - [Website App Notes](./apps/website/README.md)

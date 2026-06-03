@@ -1,6 +1,6 @@
 # mspace API Integration Guide
 
-> Status: server-owned local MVP API guide, updated 2026-06-01
+> Status: server-owned local MVP API guide, updated 2026-06-03
 
 This guide covers the current server control-plane API used by the desktop and workers. The control plane normally runs on `http://127.0.0.1:8787`.
 
@@ -41,7 +41,7 @@ The server control plane owns:
 
 - local password auth, optional GitHub auth, and mspace `msp_...` sessions;
 - users, workspaces, members, invitations, and identity;
-- projects, project runbooks, issues, child tasks, comments, reactions, labels, Inbox events, and per-user receipts;
+- projects, project runbooks, project test cases, test case revisions, test case suggestions, test plans, test runs, issues, child tasks, comments, reactions, labels, Inbox events, and per-user receipts;
 - workspace settings, agent profiles, clusters, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
 - runtime worker registration, worker heartbeat/capability state, runtime task queue state, task events, task logs, cancellation, and task results.
 
@@ -173,6 +173,26 @@ Successful acceptance returns the joined workspace. Desktop clients should selec
 | `DELETE` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Delete a project when no issues reference it. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Read the project runbook. |
 | `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the project runbook and record a revision. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | List project test cases, optionally filtered by status. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import` | Import Markdown, text, CSV, or Excel `.xlsx` cases. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize` | Queue an issue-backed Codex session that returns case suggestions. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate` | Queue an issue-backed Codex session that proposes baseline cases. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | Create one test case. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}` | Read one test case. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}` | Update one test case and record a revision. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}/revisions` | List case revisions newest first. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals` | List Codex case suggestions. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/apply` | Accept a case suggestion and optionally write a review note. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/reject` | Dismiss a case suggestion and optionally write a review note. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | List project test plans. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | Create a test plan from selected cases. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Read a test plan with selected cases. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Update plan metadata and selected cases. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs` | Start an issue-backed test run. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}` | Read a test run with run items. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry` | Retry failed or blocked run items. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/accept` | Human-accept a run result. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block` | Mark a run blocked with a human note. |
 | `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List Type and Priority label options. |
 | `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level issues. |
 | `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. |
@@ -208,6 +228,71 @@ curl -X PUT "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues/<issue-id>
   -H 'Content-Type: application/json' \
   -d '{"projectId":"<project-id>"}'
 ```
+
+## Test Module APIs
+
+Test module records are project-scoped. A personal project may point at a local folder or a GitHub repository URL. A team project must use `sourceType:"github"` and a GitHub URL because team workers clone source into their own repository cache and cannot read a user's desktop-local path.
+
+Create a case:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<project-id>/test-cases" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title":"Invite link opens the team workspace",
+    "type":"ui",
+    "area":"team access",
+    "priority":"p1",
+    "status":"ready",
+    "preconditions":"A valid mspace invite link exists.",
+    "steps":[
+      {"action":"Open the invite link"},
+      {"action":"Sign in with a local account","expected":"The app accepts the invite"}
+    ],
+    "expectedResult":"The invited workspace opens.",
+    "environmentRequirements":"Desktop is connected to the team server.",
+    "tags":["invite","smoke"]
+  }'
+```
+
+Valid case types are `functional`, `ui`, `api`, and `deployment`. Status values are `draft`, `needs_review`, `ready`, and `archived`. Priority is optional and can be empty or `p0`, `p1`, `p2`, or `p3`.
+
+Import cases:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<project-id>/test-cases/import" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"format":"markdown","content":"- Invalid password shows an error\n- User can reset password from the login page"}'
+```
+
+`format` can be `markdown`, `text`, `csv`, or `xlsx`. Markdown and text imports treat each non-empty line as one case. CSV and `.xlsx` imports use the same header contract:
+
+```text
+title,type,area,priority,preconditions,steps,expected_result,environment_requirements,tags
+```
+
+For `.xlsx`, send the workbook bytes as base64 in `content` and set `format:"xlsx"`. The server reads the first non-empty worksheet, skips rows without `title`, validates `type`, records skipped rows in the response, and uses explicit workbook unzip limits.
+
+```json
+{
+  "format": "xlsx",
+  "fileName": "cases.xlsx",
+  "content": "<base64 workbook bytes>"
+}
+```
+
+Optimize or generate cases queues an issue-backed Codex session and stores returned `test-case-proposals.json` items as Case suggestions. Applying a suggestion is the only path that mutates canonical cases from Codex output.
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<project-id>/test-case-proposals/<proposal-id>/apply" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"note":"Looks executable after the added environment requirement."}'
+```
+
+Test plans select ready cases and start issue-backed runs. Workers report results through `test-result.json`; the server reconciles run items, and a human must call `accept` or `block` before the run is treated as accepted.
 
 ## Workspace Runtime Surface APIs
 

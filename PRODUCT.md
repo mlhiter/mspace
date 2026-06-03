@@ -10,9 +10,9 @@ mspace is for engineering and platform teams that already use coding agents and 
 
 ## Product Purpose
 
-mspace is an Inbox and Issue workspace for coding agents. It turns a fragmented workflow of agent edits, chat notes, issue trackers, reusable test cluster config, and test-cluster validation into one document-style workspace where an issue can hold the problem statement, discussion, agent session, branch state, selected cluster, issue test namespace, preview URL, Kubernetes evidence, and final review trail.
+mspace is an Inbox, Issue, and Tests workspace for coding agents. It turns a fragmented workflow of agent edits, chat notes, issue trackers, reusable test case lists, reusable test cluster config, and test-cluster validation into one document-style workspace where a project can hold test coverage and an issue can hold the problem statement, discussion, agent session, branch state, selected cluster, issue test namespace, preview URL, Kubernetes evidence, and final review trail.
 
-The product succeeds when a team can create or route an issue, assign a worker-backed agent session, let that agent modify code, then record a branch/PR handoff and run an issue-scoped Kubernetes test deployment with enough preview and evidence to decide what happens next.
+The product succeeds when a team can create or route an issue, manage project-level test cases, assign a worker-backed agent session, let that agent modify code, then record a branch/PR handoff and run an issue-scoped Kubernetes test deployment or issue-backed test run with enough preview and evidence to decide what happens next.
 
 ## Brand Personality
 
@@ -34,6 +34,7 @@ The public website can use a sharper brand surface, but it should still be speci
 - Issues are durable working documents, not transient job cards.
 - Inbox is for messages and state changes that need human review, not the full issue database.
 - Agents should appear as collaborators with assignees, sessions, blockers, and progress updates.
+- Test cases are durable project objects. Codex can generate or refine Case suggestions, but humans approve suggestions before canonical test coverage changes.
 - Runtime evidence belongs next to the issue story: branch, logs, status, selected worker, selected cluster, namespace, preview URL, and environment links should support review.
 - Agent execution and Kubernetes validation are separate concepts, and the UI should make that boundary visible when it matters.
 
