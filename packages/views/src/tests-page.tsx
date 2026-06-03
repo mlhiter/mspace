@@ -723,11 +723,12 @@ export function TestsPage() {
                   />
                 ) : (
                   <div className="overflow-x-auto">
-                    <div className="min-w-[860px]">
-                      <div className="grid grid-cols-[24px_minmax(260px,1fr)_120px_88px_132px_108px_88px_24px] items-center gap-3 border-b border-[color:var(--line)] px-4 py-2 text-[11px] font-medium text-[color:var(--muted)]">
+                    <div className="min-w-[940px]">
+                      <div className="grid grid-cols-[24px_minmax(260px,1fr)_96px_120px_88px_132px_108px_88px_24px] items-center gap-3 border-b border-[color:var(--line)] px-4 py-2 text-[11px] font-medium text-[color:var(--muted)]">
                         <span className="sr-only">{t("tests.selectedSummary", { selected: selectedCaseIds.length, total: cases.length })}</span>
                         <span aria-hidden="true" />
                         <span>{t("tests.titleLabel")}</span>
+                        <span className="text-right">{t("tests.type")}</span>
                         <span className="text-right">{t("tests.status")}</span>
                         <span className="text-right">{t("tests.priority")}</span>
                         <span className="text-right">{t("tests.quality")}</span>
@@ -741,7 +742,7 @@ export function TestsPage() {
                           return (
                             <div
                               key={testCase.id}
-                              className="grid w-full grid-cols-[24px_minmax(260px,1fr)_120px_88px_132px_108px_88px_24px] items-center gap-3 px-4 py-3 transition-colors hover:bg-[color:var(--hover)]"
+                              className="grid w-full grid-cols-[24px_minmax(260px,1fr)_96px_120px_88px_132px_108px_88px_24px] items-center gap-3 px-4 py-3 transition-colors hover:bg-[color:var(--hover)]"
                             >
                               <input
                                 type="checkbox"
@@ -762,6 +763,9 @@ export function TestsPage() {
                                 </div>
                                 <div className="mt-1 truncate text-[12px] text-[color:var(--muted)]">{testCase.area || t("common.unknown")}</div>
                               </Link>
+                              <div className="truncate text-right text-[12px] text-[color:var(--muted-strong)]">
+                                {testCaseTypeLabel(testCase.type, t)}
+                              </div>
                               <div className="flex items-center justify-end">
                                 <StatusBadge value={testCase.status} valueLabel={t(`tests.statusValue.${testCase.status}`, { defaultValue: testCase.status })} />
                               </div>
