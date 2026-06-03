@@ -83,6 +83,37 @@ func TestRunOnceCompletesProtocolSmokeTask(t *testing.T) {
 	}
 }
 
+func TestReadTestResultArtifactAcceptsArrayShape(t *testing.T) {
+	artifactDir := t.TempDir()
+	data := `[
+		{
+			"runId": "test-run-1",
+			"caseId": "test-case-1",
+			"status": "passed",
+			"actualResult": "Passed through CDP.",
+			"evidence": {"screenshot": "homepage.png"}
+		}
+	]`
+	if err := os.WriteFile(filepath.Join(artifactDir, testResultArtifactName), []byte(data), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	artifact, ok := readTestResultArtifact(agentSessionPayload{ArtifactDir: artifactDir})
+	if !ok {
+		t.Fatal("expected array-shaped test-result artifact to be accepted")
+	}
+	if artifact.RunID != "test-run-1" || len(artifact.Items) != 1 {
+		t.Fatalf("unexpected artifact: %+v", artifact)
+	}
+	item := artifact.Items[0]
+	if item.RunID != "test-run-1" || item.CaseID != "test-case-1" || item.Status != "passed" {
+		t.Fatalf("unexpected item: %+v", item)
+	}
+	if !strings.Contains(string(item.Evidence), "homepage.png") {
+		t.Fatalf("expected evidence to be preserved, got %s", item.Evidence)
+	}
+}
+
 func TestRunOnceFailsInvalidAgentSessionPayload(t *testing.T) {
 	var completedStatus string
 	var completedError string

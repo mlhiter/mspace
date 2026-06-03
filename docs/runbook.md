@@ -17,7 +17,7 @@ The product and runtime state for signed-in workspaces lives in the server store
 | `<artifact-dir>/test-environment.json` | Optional deploy/test artifact with preview values. |
 | `<artifact-dir>/review-evidence.json` | Optional review artifact for commands, tests, build/deploy result, summary, risks, and follow-ups. |
 | `<artifact-dir>/test-case-proposals.json` | Optional Codex case suggestion artifact reconciled into project Case suggestions. |
-| `<artifact-dir>/test-result.json` | Optional Codex test run artifact reconciled into test run items and run acceptance state. |
+| `<artifact-dir>/test-result.json` | Optional Codex test run artifact reconciled into test run items and run acceptance state. Prefer `{"runId":"...","items":[...]}`; the worker also accepts a top-level array of result items when each item carries `runId`. |
 | `<artifact-dir>/branch-name.json` | Optional agent-proposed source branch name. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-learned project runbook artifact. |
 

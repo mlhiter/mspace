@@ -716,6 +716,24 @@ Codex test execution writes:
 test-result.json
 ```
 
+Preferred shape:
+
+```json
+{
+  "runId": "test-run-...",
+  "items": [
+    {
+      "caseId": "test-case-...",
+      "status": "passed",
+      "actualResult": "...",
+      "evidence": {}
+    }
+  ]
+}
+```
+
+The worker also accepts a top-level array for Codex-authored single-run artifacts when each item includes `runId`; it normalizes that array into the object shape before returning `result.testResult`.
+
 Future UI testing can write:
 
 ```text

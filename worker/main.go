@@ -266,6 +266,7 @@ type testResultArtifact struct {
 }
 
 type testResultArtifactItem struct {
+	RunID          string          `json:"runId,omitempty"`
 	CaseID         string          `json:"caseId"`
 	Status         string          `json:"status"`
 	ActualResult   string          `json:"actualResult"`
@@ -1806,7 +1807,12 @@ func readTestResultArtifact(payload agentSessionPayload) (testResultArtifact, bo
 	}
 	var artifact testResultArtifact
 	if err := json.Unmarshal(data, &artifact); err != nil || len(artifact.Items) == 0 {
-		return testResultArtifact{}, false
+		var items []testResultArtifactItem
+		if err := json.Unmarshal(data, &items); err != nil || len(items) == 0 {
+			return testResultArtifact{}, false
+		}
+		artifact.Items = items
+		artifact.RunID = strings.TrimSpace(items[0].RunID)
 	}
 	return artifact, true
 }
