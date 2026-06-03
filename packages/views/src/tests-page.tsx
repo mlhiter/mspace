@@ -31,6 +31,7 @@ import {
   type TestCaseStep,
   type TestPlan,
   type TestPlanDetail,
+  type TestRun,
   type TestRunDetail,
   type TestRunItem,
 } from "@mspace/core";
@@ -106,6 +107,12 @@ const planStatusOptions = ["draft", "ready", "archived"] as const;
 const testCaseTypeOptions = ["functional", "ui", "api", "deployment"] as const;
 const priorityOptions = ["", "p0", "p1", "p2", "p3"] as const;
 const targetTypeOptions = ["branch", "commit", "source_session", "image", "offline_package", "version_url", "preview_url"] as const;
+const emptyProjects: Project[] = [];
+const emptyTestCases: TestCase[] = [];
+const emptyTestCaseProposals: TestCaseProposal[] = [];
+const emptyTestPlans: TestPlan[] = [];
+const emptyTestRuns: TestRun[] = [];
+const emptyTestCaseRevisions: TestCaseRevision[] = [];
 const toolbarSelectClass =
   "h-8 min-h-8 rounded-[6px] bg-transparent px-2 py-1 text-[12px] leading-4 text-[color:var(--muted)] shadow-none hover:bg-[color:var(--hover)] focus:bg-[color:var(--hover)] focus:shadow-[inset_0_0_0_1px_var(--line)] data-[state=open]:bg-[color:var(--hover)] data-[state=open]:shadow-[inset_0_0_0_1px_var(--line)] [&_svg]:size-3.5";
 const revisionPreviewLimit = 96;
@@ -548,7 +555,7 @@ function useWorkspaceProjects() {
     workspaceId,
     serverWorkspaceReady,
     projectsQuery,
-    projects: projectsQuery.data || [],
+    projects: projectsQuery.data || emptyProjects,
   };
 }
 
@@ -717,18 +724,18 @@ export function TestsPage() {
     enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
   });
 
-  const cases = useMemo(() => (casesQuery.data || []).filter((testCase) => testCaseMatchesQuery(testCase, query)), [casesQuery.data, query]);
-  const allCases = allCasesQuery.data || casesQuery.data || [];
-  const allProposals = allProposalsQuery.data || proposalsQuery.data || [];
-  const allPlans = allPlansQuery.data || plansQuery.data || [];
-  const allRuns = allRunsQuery.data || [];
+  const cases = useMemo(() => (casesQuery.data || emptyTestCases).filter((testCase) => testCaseMatchesQuery(testCase, query)), [casesQuery.data, query]);
+  const allCases = allCasesQuery.data || casesQuery.data || emptyTestCases;
+  const allProposals = allProposalsQuery.data || proposalsQuery.data || emptyTestCaseProposals;
+  const allPlans = allPlansQuery.data || plansQuery.data || emptyTestPlans;
+  const allRuns = allRunsQuery.data || emptyTestRuns;
   const readyCases = useMemo(() => allCases.filter((testCase) => testCase.status === "ready"), [allCases]);
   const readyCaseIdSet = useMemo(() => new Set(readyCases.map((testCase) => testCase.id)), [readyCases]);
   const selectedReadyCaseIds = useMemo(() => selectedCaseIds.filter((caseId) => readyCaseIdSet.has(caseId)), [readyCaseIdSet, selectedCaseIds]);
   const pendingProposals = useMemo(() => allProposals.filter((proposal) => proposal.status === "pending"), [allProposals]);
   const readyPlans = useMemo(() => allPlans.filter((plan) => plan.status === "ready"), [allPlans]);
-  const proposals = proposalsQuery.data || [];
-  const plans = plansQuery.data || [];
+  const proposals = proposalsQuery.data || emptyTestCaseProposals;
+  const plans = plansQuery.data || emptyTestPlans;
   const selectedPlan = selectedPlanQuery.data?.plan || plans.find((plan) => plan.id === selectedPlanId);
   const selectedPlanDetail = selectedPlanQuery.data;
   const latestRun = useMemo(() => [...allRuns].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0], [allRuns]);
@@ -965,7 +972,10 @@ export function TestsPage() {
   }, [projects, search.project, selectedProjectId]);
 
   useEffect(() => {
-    setSelectedCaseIds((current) => current.filter((caseId) => allCases.some((testCase) => testCase.id === caseId)));
+    setSelectedCaseIds((current) => {
+      const next = current.filter((caseId) => allCases.some((testCase) => testCase.id === caseId));
+      return next.length === current.length ? current : next;
+    });
   }, [allCases]);
 
   useEffect(() => {
@@ -1672,7 +1682,7 @@ export function TestCaseDetailPage() {
     enabled: serverWorkspaceReady && Boolean(effectiveProjectId && caseId && !isNew),
   });
   const testCase = useMemo(() => (caseQuery.data ? normalizeTestCaseForView(caseQuery.data) : undefined), [caseQuery.data]);
-  const revisions = revisionsQuery.data || [];
+  const revisions = revisionsQuery.data || emptyTestCaseRevisions;
   const revisionTimeline = useMemo(() => buildTestCaseRevisionTimeline(revisions, t), [revisions, t]);
   const canSave = Boolean(effectiveProjectId && caseForm.title.trim());
   const canRunCase = Boolean(testCase && testCase.status === "ready");
