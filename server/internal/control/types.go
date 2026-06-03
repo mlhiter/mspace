@@ -335,8 +335,9 @@ type TestCaseListOptions struct {
 }
 
 type ImportTestCasesInput struct {
-	Format  string `json:"format"`
-	Content string `json:"content"`
+	Format   string `json:"format"`
+	Content  string `json:"content"`
+	FileName string `json:"fileName"`
 }
 
 type TestCaseImportSkip struct {
@@ -348,6 +349,23 @@ type TestCaseImportSkip struct {
 type ImportTestCasesResult struct {
 	Created []TestCase           `json:"created"`
 	Skipped []TestCaseImportSkip `json:"skipped"`
+}
+
+func normalizeImportTestCasesResult(value ImportTestCasesResult) ImportTestCasesResult {
+	if value.Created == nil {
+		value.Created = []TestCase{}
+	}
+	if value.Skipped == nil {
+		value.Skipped = []TestCaseImportSkip{}
+	}
+	return value
+}
+
+func testCaseImportSkipsOrEmpty(values []TestCaseImportSkip) []TestCaseImportSkip {
+	if values == nil {
+		return []TestCaseImportSkip{}
+	}
+	return values
 }
 
 type OptimizeTestCasesInput struct {

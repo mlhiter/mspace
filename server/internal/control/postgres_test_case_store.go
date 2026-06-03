@@ -50,7 +50,7 @@ func (s *PostgresStore) ListProjectTestCases(ctx Context, userID, workspaceID, p
 		WHERE workspace_id = $1
 			AND project_id = $2
 			AND ($3 = '' OR status = $3)
-			AND ($4 = '' OR lower(title || ' ' || area || ' ' || tags::text) LIKE '%' || $4 || '%')
+			AND ($4 = '' OR lower(title || ' ' || type || ' ' || area || ' ' || tags::text) LIKE '%' || $4 || '%')
 		ORDER BY updated_at DESC, created_at DESC
 	`, workspaceID, projectID, status, query)
 	if err != nil {
@@ -125,7 +125,7 @@ func (s *PostgresStore) ImportProjectTestCases(ctx Context, userID, workspaceID,
 	}
 	defer tx.Rollback(dbctx)
 
-	result := ImportTestCasesResult{Created: []TestCase{}, Skipped: skipped}
+	result := ImportTestCasesResult{Created: []TestCase{}, Skipped: testCaseImportSkipsOrEmpty(skipped)}
 	for _, imported := range inputs {
 		normalized, score, findings, err := normalizeTestCaseInput(imported, defaultImportedCaseSource)
 		if err != nil {

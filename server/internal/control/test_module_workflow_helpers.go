@@ -156,11 +156,11 @@ func testCaseToInput(testCase TestCase) TestCaseInput {
 		Status:                  testCase.Status,
 		Source:                  testCase.Source,
 		Preconditions:           testCase.Preconditions,
-		Steps:                   append([]TestCaseStep(nil), testCase.Steps...),
+		Steps:                   testCaseStepsOrEmpty(testCase.Steps),
 		ExpectedResult:          testCase.ExpectedResult,
 		EnvironmentRequirements: testCase.EnvironmentRequirements,
-		Dependencies:            append([]string(nil), testCase.Dependencies...),
-		Tags:                    append([]string(nil), testCase.Tags...),
+		Dependencies:            stringsOrEmpty(testCase.Dependencies),
+		Tags:                    stringsOrEmpty(testCase.Tags),
 	}
 }
 
@@ -170,9 +170,9 @@ func cloneTestCasePointer(testCase TestCase) *TestCase {
 }
 
 func copyTestCaseInput(input TestCaseInput) TestCaseInput {
-	input.Steps = append([]TestCaseStep(nil), input.Steps...)
-	input.Dependencies = append([]string(nil), input.Dependencies...)
-	input.Tags = append([]string(nil), input.Tags...)
+	input.Steps = testCaseStepsOrEmpty(input.Steps)
+	input.Dependencies = stringsOrEmpty(input.Dependencies)
+	input.Tags = stringsOrEmpty(input.Tags)
 	return input
 }
 
@@ -196,11 +196,11 @@ func decodeTestCaseInput(payload []byte) TestCaseInput {
 
 func buildTestCaseOptimizationIssueBody(project Project, cases []TestCase, prompt string) string {
 	var builder strings.Builder
-	builder.WriteString("Optimize the selected functional test cases for project `" + project.Name + "`.\n\n")
+	builder.WriteString("Optimize the selected test cases for project `" + project.Name + "`.\n\n")
 	builder.WriteString("Codex must write `${MSPACE_SESSION_ARTIFACT_DIR}/test-case-proposals.json` and must not edit canonical test cases directly.\n\n")
 	builder.WriteString("Expected artifact shape:\n\n")
 	builder.WriteString("```json\n")
-	builder.WriteString(`{"proposals":[{"type":"update","caseId":"...","title":"...","summary":"...","rationale":"...","proposedCase":{"title":"...","type":"functional","steps":[{"action":"...","expected":"..."}],"expectedResult":"..."}}]}`)
+	builder.WriteString(`{"proposals":[{"type":"update","caseId":"...","title":"...","summary":"...","rationale":"...","proposedCase":{"title":"...","type":"functional|ui|api|deployment","steps":[{"action":"...","expected":"..."}],"expectedResult":"..."}}]}`)
 	builder.WriteString("\n```\n\n")
 	if strings.TrimSpace(prompt) != "" {
 		builder.WriteString("Human guidance:\n" + strings.TrimSpace(prompt) + "\n\n")
@@ -214,9 +214,9 @@ func buildTestCaseOptimizationIssueBody(project Project, cases []TestCase, promp
 
 func buildTestCaseGenerationIssueBody(project Project, input GenerateTestCasesInput) string {
 	var builder strings.Builder
-	builder.WriteString("Generate baseline functional test case proposals for project `" + project.Name + "`.\n\n")
+	builder.WriteString("Generate baseline test case proposals for project `" + project.Name + "`.\n\n")
 	builder.WriteString("Codex must write `${MSPACE_SESSION_ARTIFACT_DIR}/test-case-proposals.json` and must not edit canonical test cases directly.\n\n")
-	builder.WriteString("Every proposal must use type `create` and include a `proposedCase` with `type:functional`, steps, expected result, and environment requirements when relevant.\n")
+	builder.WriteString("Every proposal must use type `create` and include a `proposedCase` with `type:functional|ui|api|deployment`, steps, expected result, and environment requirements when relevant.\n")
 	if strings.TrimSpace(input.Area) != "" {
 		builder.WriteString("\nFocus area: " + strings.TrimSpace(input.Area) + "\n")
 	}
@@ -228,7 +228,7 @@ func buildTestCaseGenerationIssueBody(project Project, input GenerateTestCasesIn
 
 func buildTestRunParentIssueBody(plan TestPlan, run TestRun) string {
 	var builder strings.Builder
-	builder.WriteString("Execute functional test plan `" + plan.Title + "`.\n\n")
+	builder.WriteString("Execute test plan `" + plan.Title + "`.\n\n")
 	builder.WriteString("Target: `" + run.TargetType + "` `" + firstNonEmpty(run.TargetValue, "not specified") + "`\n")
 	builder.WriteString("Environment: `" + firstNonEmpty(run.Environment, "not specified") + "`\n\n")
 	builder.WriteString("This issue tracks the overall run. Execution details live in the child issues and test run items.\n\n")
@@ -239,13 +239,14 @@ func buildTestRunParentIssueBody(plan TestPlan, run TestRun) string {
 
 func buildTestRunExecutionIssueBody(run TestRun, cases []TestCase) string {
 	var builder strings.Builder
-	builder.WriteString("Execute this batch of functional test cases.\n\n")
+	builder.WriteString("Execute this batch of test cases.\n\n")
 	builder.WriteString("Run ID: `" + run.ID + "`\n")
 	builder.WriteString("Target: `" + run.TargetType + "` `" + firstNonEmpty(run.TargetValue, "not specified") + "`\n")
 	builder.WriteString("Environment: `" + firstNonEmpty(run.Environment, "not specified") + "`\n\n")
 	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with one item per case in this batch.\n\n")
 	for _, testCase := range cases {
 		builder.WriteString("## " + testCase.ID + ": " + testCase.Title + "\n")
+		builder.WriteString("Type: " + firstNonEmpty(testCase.Type, defaultTestCaseType) + "\n")
 		if testCase.Preconditions != "" {
 			builder.WriteString("Preconditions: " + testCase.Preconditions + "\n")
 		}

@@ -1165,9 +1165,9 @@ export function Textarea({ className, ...props }: ComponentProps<typeof ShadcnTe
   );
 }
 
-export function Field(props: PropsWithChildren<{ label: string; hint?: string }>) {
+export function Field(props: PropsWithChildren<{ label: string; hint?: string; className?: string }>) {
   return (
-    <ShadcnField className="flex flex-col gap-1.5">
+    <ShadcnField className={cn("flex flex-col gap-1.5", props.className)}>
       <FieldLabel className="text-[13px] font-medium leading-5 text-[color:var(--muted-strong)]">
         {props.label}
       </FieldLabel>

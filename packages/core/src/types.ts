@@ -51,7 +51,7 @@ export interface TestCaseQualityFinding {
 }
 
 export type TestCaseStatus = "draft" | "needs_review" | "ready" | "archived" | string;
-export type TestCaseType = "functional" | string;
+export type TestCaseType = "functional" | "ui" | "api" | "deployment" | string;
 export type TestCaseSource = "manual" | "import" | "codex_generated" | "codex_refined" | string;
 
 export interface TestCase {
@@ -104,8 +104,9 @@ export interface TestCaseInput {
 }
 
 export interface ImportTestCasesInput {
-  format?: "markdown" | "text" | "csv" | string;
+  format?: "markdown" | "text" | "csv" | "xlsx" | string;
   content: string;
+  fileName?: string;
 }
 
 export interface TestCaseImportSkip {

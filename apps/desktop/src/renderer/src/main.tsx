@@ -24,6 +24,9 @@ import {
   MspaceAuthProvider,
   ProjectsPage,
   SessionDetailPage,
+  TestCaseDetailPage,
+  TestPlanDetailPage,
+  TestRunDetailPage,
   TestsPage,
   WorkspaceSettingsPage,
   WorkspaceInvitePage,
@@ -1049,6 +1052,24 @@ const testsRoute = createRoute({
   component: TestsPage,
 });
 
+const testCaseDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tests/cases/$caseId",
+  component: TestCaseDetailPage,
+});
+
+const testPlanDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tests/plans/$planId",
+  component: TestPlanDetailPage,
+});
+
+const testRunDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tests/runs/$runId",
+  component: TestRunDetailPage,
+});
+
 const issueDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/issues/$issueId",
@@ -1114,6 +1135,9 @@ const routeTree = rootRoute.addChildren([
   inboxRoute,
   issuesRoute,
   testsRoute,
+  testCaseDetailRoute,
+  testPlanDetailRoute,
+  testRunDetailRoute,
   issueCommitDetailRoute,
   issueEvidenceSnapshotsRoute,
   issueEvidenceHistoryRoute,

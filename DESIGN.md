@@ -160,6 +160,7 @@ The default desktop shape is a sidebar plus document workspace.
 - Main content: centered page frame with a max width near `1280px`.
 - Page padding: generous enough for reading, tight enough for operations.
 - Default routes in the app shell: Inbox, Issues, Agents, Clusters, and Projects. Issue and Session details are reached from objects.
+- Object list pages must not use a left-list/right-detail split. Clicking a row opens a dedicated detail page with its own route and breadcrumbs. Inline list pages may use filters, batch actions, and creation/import panels, but not persistent side-by-side detail panes.
 
 Screen priorities:
 

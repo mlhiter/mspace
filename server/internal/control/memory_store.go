@@ -1682,7 +1682,7 @@ func (s *MemoryStore) ListProjectTestCases(_ Context, userID, workspaceID, proje
 			continue
 		}
 		if query != "" {
-			searchText := strings.ToLower(strings.Join([]string{testCase.Title, testCase.Area, strings.Join(testCase.Tags, " ")}, " "))
+			searchText := strings.ToLower(strings.Join([]string{testCase.Title, testCase.Type, testCase.Area, strings.Join(stringsOrEmpty(testCase.Tags), " ")}, " "))
 			if !strings.Contains(searchText, query) {
 				continue
 			}
@@ -1730,7 +1730,7 @@ func (s *MemoryStore) ImportProjectTestCases(_ Context, userID, workspaceID, pro
 	if len(inputs) == 0 {
 		return ImportTestCasesResult{}, errors.New("content cannot be empty")
 	}
-	result := ImportTestCasesResult{Created: []TestCase{}, Skipped: skipped}
+	result := ImportTestCasesResult{Created: []TestCase{}, Skipped: testCaseImportSkipsOrEmpty(skipped)}
 	for _, imported := range inputs {
 		normalized, score, findings, err := normalizeTestCaseInput(imported, defaultImportedCaseSource)
 		if err != nil {
@@ -4004,8 +4004,8 @@ func (s *MemoryStore) testCaseProposalForProjectLocked(userID, workspaceID, proj
 
 func (s *MemoryStore) testCaseProposalSnapshotLocked(proposal TestCaseProposal) TestCaseProposal {
 	proposal.ProposedCase = copyTestCaseInput(proposal.ProposedCase)
-	proposal.ValidationErrors = append([]string(nil), proposal.ValidationErrors...)
-	proposal.QualityFindings = append([]TestCaseQualityFinding(nil), proposal.QualityFindings...)
+	proposal.ValidationErrors = stringsOrEmpty(proposal.ValidationErrors)
+	proposal.QualityFindings = qualityFindingsOrEmpty(proposal.QualityFindings)
 	if proposal.CurrentCase != nil {
 		proposal.CurrentCase = cloneTestCasePointer(*proposal.CurrentCase)
 	} else if proposal.TargetCaseID != "" {

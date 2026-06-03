@@ -108,6 +108,8 @@ This gives the product two important capabilities:
 
 Codex does not directly modify canonical cases. It returns proposals.
 
+In the user-facing UI, label this surface as `Case suggestions` / `用例建议` rather than `Proposals` / `提案`. The product meaning is not a separate planning object. It is a review queue for suggested changes to the case library.
+
 Proposal types include:
 
 - create a new case;
@@ -120,7 +122,7 @@ Proposal types include:
 - suggest archiving;
 - suggest missing coverage.
 
-The user accepts or rejects these proposals in a Proposal Review surface.
+The user accepts or dismisses these suggestions in the Case Suggestions review surface.
 
 ### Test Environment
 
@@ -229,6 +231,7 @@ The user enters `Tests -> Cases`, selects a project, then can:
 - paste a rough test list;
 - import Markdown;
 - import CSV;
+- import Excel `.xlsx` workbooks with the same column contract as CSV;
 - create a case manually;
 - generate suggestions from the repository and runbook.
 
@@ -262,7 +265,7 @@ Tests page
   -> worker starts codex app-server
   -> Codex writes test-case-proposals.json
   -> server validates proposals
-  -> human accepts or rejects them in Proposal Review
+  -> human accepts or dismisses them in Case Suggestions review
 ```
 
 This keeps the optimization auditable:
@@ -287,7 +290,7 @@ Codex returns proposed cases, not direct writes.
 
 The first version should support two entry points:
 
-- generate baseline functional cases for the whole project;
+- generate baseline test cases for the whole project;
 - generate incremental cases for the current change.
 
 ### 4. Create A Test Plan
@@ -515,6 +518,8 @@ Add `Tests` to the main navigation after `Issues`.
 
 The page should keep the quiet mspace workspace style. It should not become a dashboard-heavy test management console.
 
+Tests should not use a left-list/right-detail layout. The Cases, Plans, and Runs tabs are list surfaces. Selecting a case, plan, or run opens a dedicated detail page so the content has enough room for editing, evidence, and review.
+
 ### Tests / Cases
 
 Purpose: manage project test cases.
@@ -544,7 +549,7 @@ List columns:
 
 ### Case Detail
 
-Display the case as a document:
+Open from a case row into a dedicated detail page and display the case as a document:
 
 - title;
 - preconditions;
@@ -555,7 +560,9 @@ Display the case as a document:
 - revisions;
 - related Issues.
 
-### Proposal Review
+The create and edit UI should express backend constraints as user-facing runnable-case guidance. Show readiness checks, examples, and field hints for title, preconditions, steps, expected result, and environment requirements; do not ask users to memorize storage enums such as `manual`, `import`, or `codex_generated`.
+
+### Case Suggestions Review
 
 Show Codex proposals as diffs:
 
@@ -571,9 +578,13 @@ Actions:
 - reject all;
 - edit manually, then accept.
 
+The tab label should be `Case suggestions` / `用例建议`, with action copy such as `Accept suggestion` and `Dismiss suggestion`, so users understand they are approving changes to test cases.
+
 ### Tests / Plans
 
 Purpose: define a test scope for a version, branch, or environment.
+
+Plan rows open into dedicated plan detail pages. The list page should not keep a selected-plan detail pane beside the plan list.
 
 Show:
 
@@ -589,6 +600,8 @@ Show:
 ### Tests / Runs
 
 Purpose: inspect each test run's progress and result.
+
+Run rows open into dedicated run detail pages. The list page should not render run results beside the run list.
 
 Show:
 
@@ -730,8 +743,8 @@ Scope:
 
 - add `Tests` navigation;
 - case list;
-- case detail;
-- Markdown, CSV, and paste import;
+- case detail as a dedicated page, not a side pane;
+- Markdown, CSV, Excel `.xlsx`, and paste import;
 - manual create and edit;
 - case quality score;
 - case revisions;
@@ -744,6 +757,7 @@ Acceptance:
 
 - user can select a Project;
 - user can import a rough test list;
+- user can import `.xlsx` workbooks whose first non-empty sheet uses `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers;
 - system creates structured draft cases;
 - quality score and missing fields are visible;
 - user can edit a case;
@@ -756,11 +770,11 @@ Goal: let Codex improve cases while humans approve the final writes.
 Scope:
 
 - optimize selected cases;
-- generate baseline functional cases from a project;
+- generate baseline test cases from a project;
 - create traceable optimization Issues;
 - run Codex through the existing worker path;
 - parse `test-case-proposals.json`;
-- Proposal Review page;
+- Case Suggestions review page;
 - accept/reject proposals;
 - write accepted changes as case revisions.
 
@@ -777,7 +791,7 @@ Goal: turn cases into executable plans and assign Codex through Issues.
 
 Scope:
 
-- test plan list and detail;
+- test plan list and dedicated detail page;
 - target selection: branch, commit, source session, image, offline package, version URL, or preview URL;
 - environment selection;
 - create Test Run;
@@ -792,7 +806,7 @@ Scope:
 Acceptance:
 
 - user can create a plan such as `rc4 functional test plan`;
-- user can select ready functional cases;
+- user can select ready functional, UI, API, or deployment cases;
 - user can start a test run;
 - parent Issue and execution Issues are created;
 - Codex sessions run through the normal worker path;
@@ -892,9 +906,9 @@ UI, API, deployment, and multi-machine testing together would make the first ver
 
 Mitigation:
 
-- first version is functional testing only;
-- UI/CDP, API, and deployment testing are later phases;
-- prove one real end-to-end loop first: case -> plan -> Issue -> Codex -> evidence -> human acceptance.
+- keep one shared case -> plan -> Issue -> Codex -> evidence -> human acceptance loop;
+- support functional, UI, API, and deployment as case types without forking the workflow;
+- defer specialized UI/CDP, API harness, and deployment orchestration until the shared loop is stable.
 
 ## Recommended MVP
 
@@ -962,7 +976,7 @@ git diff --check
 Phase 1 manual acceptance:
 
 1. Create or select a Project.
-2. Import a rough test case list.
+2. Import a rough test case list from Markdown, CSV, or an `.xlsx` workbook.
 3. Confirm structured draft cases are created.
 4. Confirm quality scores and missing-field findings are reasonable.
 5. Edit one case.
@@ -973,7 +987,7 @@ Phase 2 manual acceptance:
 1. Select a few low-quality cases.
 2. Start Codex optimization.
 3. Confirm an Issue and Agent Session are created.
-4. Confirm Proposal Review shows before/after differences.
+4. Confirm Case Suggestions review shows before/after differences.
 5. Accept one proposal and reject another.
 6. Confirm only accepted proposals update canonical cases.
 
@@ -1000,9 +1014,9 @@ Phase 3 manual acceptance:
 **Key decisions**:
 
 - Cases belong to Projects because execution depends on code, runbooks, environments, and versions.
-- Case refinement must go through Proposal Review so AI output does not pollute the canonical library.
+- Case refinement must go through Case Suggestions review so AI output does not pollute the canonical library.
 - Test Run Items store per-case result state; Issues store collaboration and evidence.
-- Start with functional tests, then add UI/API/deployment tests after the loop works.
+- Support functional, UI, API, and deployment as case types, while keeping specialized execution harnesses behind the shared Issue/Worker loop.
 - Formal test clusters and parallel scheduling are important, but they belong in Phase 4 so the first version stays shippable.
 
 **Most fragile assumption**: the existing worker-backed `agent_session` path is stable enough to support case refinement and functional test execution. If this assumption fails, ship only the Phase 1 case library first and delay Phases 2 and 3 until the worker/session loop is stable.

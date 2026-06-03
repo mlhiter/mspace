@@ -100,6 +100,7 @@ The product should stay narrow:
 - Product UI must stay user-centered: show the user-facing meaning, decision, and next useful action; hide raw implementation details, tokens, ids, protocol states, and debug-only metadata unless the user is explicitly debugging or operating an admin surface.
 - Do not ask users to operate things they do not care about. If the system can carry state from a link, session, server capability, or workspace context, do that automatically instead of exposing an input, code, or configuration knob.
 - Preserve the quiet Notion-like workspace style: document-first, low-contrast paper surfaces, compact rows, restrained icon buttons, and no decorative dashboard or marketing layout.
+- Do not use persistent left-list/right-detail split panes for object browsing. Lists should open object details on dedicated pages with their own route and breadcrumbs; keep sidebars only for narrow metadata on explicitly designed overview pages.
 - Visible product copy in desktop, UI, and view packages should be locale-aware through `@mspace/i18n` when it belongs to the shell or main workflows.
 - Treat `DESIGN.md` as the first reference for UI style, tokens, component rules, and visual guardrails.
 - Never execute database write operations unless the user explicitly asks for database modification.

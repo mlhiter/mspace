@@ -3,6 +3,7 @@ package control
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xuri/excelize/v2"
 )
 
 type fakeGitHubClient struct{}
@@ -1497,6 +1500,7 @@ func TestProjectTestCasesHTTPFlow(t *testing.T) {
 	createRecorder := httptest.NewRecorder()
 	createBody := `{
 		"title":"Local password login succeeds",
+		"type":"ui",
 		"area":"auth",
 		"priority":"p1",
 		"status":"ready",
@@ -1516,7 +1520,7 @@ func TestProjectTestCasesHTTPFlow(t *testing.T) {
 	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
 		t.Fatalf("parse created test case: %v", err)
 	}
-	if created.ProjectID != project.ID || created.Status != "ready" || created.QualityScore < 80 {
+	if created.ProjectID != project.ID || created.Type != "ui" || created.Status != "ready" || created.QualityScore < 80 {
 		t.Fatalf("unexpected created test case: %+v", created)
 	}
 
@@ -1534,6 +1538,31 @@ func TestProjectTestCasesHTTPFlow(t *testing.T) {
 	if len(imported.Created) != 2 || imported.Created[0].Source != "import" {
 		t.Fatalf("unexpected import result: %+v", imported)
 	}
+	if imported.Created[0].Type != "functional" {
+		t.Fatalf("expected markdown import to default to functional type, got %+v", imported.Created[0])
+	}
+	if imported.Created[0].Tags == nil || imported.Created[0].Dependencies == nil {
+		t.Fatalf("expected imported case array fields to be non-nil, got %+v", imported.Created[0])
+	}
+	var rawImported map[string]json.RawMessage
+	if err := json.Unmarshal(importRecorder.Body.Bytes(), &rawImported); err != nil {
+		t.Fatalf("parse raw imported test cases: %v", err)
+	}
+	var rawCreated []map[string]json.RawMessage
+	if err := json.Unmarshal(rawImported["created"], &rawCreated); err != nil {
+		t.Fatalf("parse raw imported created cases: %v", err)
+	}
+	for _, field := range []string{"tags", "dependencies", "qualityFindings"} {
+		if string(rawCreated[0][field]) == "null" {
+			t.Fatalf("expected created[0].%s to be an empty array, got null in %s", field, importRecorder.Body.String())
+		}
+	}
+	if string(rawImported["skipped"]) == "null" {
+		t.Fatalf("expected skipped to be an empty array, got null in %s", importRecorder.Body.String())
+	}
+	if len(imported.Skipped) != 0 {
+		t.Fatalf("expected no skipped markdown imports, got %+v", imported.Skipped)
+	}
 
 	listRecorder := httptest.NewRecorder()
 	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases?status=ready", nil)
@@ -1550,9 +1579,45 @@ func TestProjectTestCasesHTTPFlow(t *testing.T) {
 		t.Fatalf("expected only ready created case, got %+v", listed)
 	}
 
+	excelRecorder := httptest.NewRecorder()
+	excelBody, err := json.Marshal(ImportTestCasesInput{
+		Format:   "xlsx",
+		FileName: "cases.xlsx",
+		Content:  testCaseWorkbookBase64(t),
+	})
+	if err != nil {
+		t.Fatalf("marshal excel import body: %v", err)
+	}
+	excelReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/import", bytes.NewReader(excelBody))
+	excelReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(excelRecorder, excelReq)
+	if excelRecorder.Code != http.StatusCreated {
+		t.Fatalf("excel import test cases status=%d body=%s", excelRecorder.Code, excelRecorder.Body.String())
+	}
+	var excelImported ImportTestCasesResult
+	if err := json.Unmarshal(excelRecorder.Body.Bytes(), &excelImported); err != nil {
+		t.Fatalf("parse excel imported test cases: %v", err)
+	}
+	if len(excelImported.Created) != 2 || len(excelImported.Skipped) != 2 {
+		t.Fatalf("unexpected excel import result: %+v", excelImported)
+	}
+	if excelImported.Created[0].Title != "Invite link opens workspace" || excelImported.Created[0].Type != "deployment" || excelImported.Created[0].Priority != "p1" || excelImported.Created[0].Source != "import" {
+		t.Fatalf("unexpected first excel import case: %+v", excelImported.Created[0])
+	}
+	if len(excelImported.Created[0].Steps) != 2 || excelImported.Created[0].Steps[0].Action != "Open invite link" {
+		t.Fatalf("unexpected excel import steps: %+v", excelImported.Created[0].Steps)
+	}
+	if excelImported.Skipped[0].Line != 3 || excelImported.Skipped[0].Reason != "missing title" {
+		t.Fatalf("unexpected excel import skip: %+v", excelImported.Skipped)
+	}
+	if excelImported.Skipped[1].Reason != "type must be functional, ui, api, or deployment" {
+		t.Fatalf("unexpected invalid type skip: %+v", excelImported.Skipped)
+	}
+
 	updateRecorder := httptest.NewRecorder()
 	updateBody := `{
 		"title":"Local password login succeeds with saved workspace",
+		"type":"api",
 		"area":"auth",
 		"priority":"p0",
 		"status":"ready",
@@ -1572,7 +1637,7 @@ func TestProjectTestCasesHTTPFlow(t *testing.T) {
 	if err := json.Unmarshal(updateRecorder.Body.Bytes(), &updated); err != nil {
 		t.Fatalf("parse updated test case: %v", err)
 	}
-	if updated.Priority != "p0" || updated.Title == created.Title {
+	if updated.Type != "api" || updated.Priority != "p0" || updated.Title == created.Title {
 		t.Fatalf("unexpected updated test case: %+v", updated)
 	}
 
@@ -1590,6 +1655,46 @@ func TestProjectTestCasesHTTPFlow(t *testing.T) {
 	if len(revisions) != 2 || revisions[0].RevisionNumber != 2 || revisions[1].RevisionNumber != 1 {
 		t.Fatalf("expected two descending revisions, got %+v", revisions)
 	}
+}
+
+func testCaseWorkbookBase64(t *testing.T) string {
+	t.Helper()
+	file := excelize.NewFile()
+	sheet := "Cases"
+	index, err := file.NewSheet(sheet)
+	if err != nil {
+		t.Fatalf("create worksheet: %v", err)
+	}
+	file.SetActiveSheet(index)
+	if err := file.DeleteSheet("Sheet1"); err != nil {
+		t.Fatalf("delete default worksheet: %v", err)
+	}
+	rows := [][]string{
+		{"title", "type", "area", "priority", "preconditions", "steps", "expected_result", "environment_requirements", "tags"},
+		{"Invite link opens workspace", "deployment", "team access", "p1", "A valid invite link exists.", "Open invite link\nSign in with local account", "The app accepts the invitation and opens the team workspace.", "Desktop app connected to the team server.", "invite,smoke"},
+		{"", "ui", "team access", "p2", "No title", "Do something", "Skipped", "Any environment", "skip"},
+		{"CSV-compatible columns import from Excel", "api", "tests", "p2", "A project test library exists.", "Import the workbook", "Two valid cases are created from the workbook.", "Personal desktop server is running.", "tests,import"},
+		{"Unsupported mobile type is skipped", "mobile", "tests", "p3", "A project test library exists.", "Import the workbook", "This row is skipped.", "Personal desktop server is running.", "tests,import"},
+	}
+	for rowIndex, row := range rows {
+		for columnIndex, value := range row {
+			cell, err := excelize.CoordinatesToCellName(columnIndex+1, rowIndex+1)
+			if err != nil {
+				t.Fatalf("cell name: %v", err)
+			}
+			if err := file.SetCellValue(sheet, cell, value); err != nil {
+				t.Fatalf("set cell %s: %v", cell, err)
+			}
+		}
+	}
+	var buffer bytes.Buffer
+	if err := file.Write(&buffer); err != nil {
+		t.Fatalf("write workbook: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close workbook: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(buffer.Bytes())
 }
 
 func TestProjectTestCasesAreProjectScoped(t *testing.T) {
@@ -1669,7 +1774,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
 		ProjectID: project.ID,
 		Title:     "Optimize test module cases",
-		Body:      "Ask Codex to refine and generate functional cases.",
+		Body:      "Ask Codex to refine and generate test cases.",
 	})
 	if err != nil {
 		t.Fatalf("create optimization issue: %v", err)

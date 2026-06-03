@@ -352,6 +352,8 @@ Current implementation:
 The document body and activity thread are the center of gravity. Session and evidence should support them, not compete with them.
 The two-column layout is the Overview shape. Review-heavy tabs such as Commits, Sessions, and Evidence hide the metadata sidebar and expand the main column inside the same page frame.
 
+Do not reuse this Overview shape for object list/detail browsing. Lists such as Tests cases, plans, runs, projects, sessions, or future object collections should open row details on dedicated pages. A persistent left-list/right-detail pane is too cramped for mspace's document-first workspace and should not be introduced as a general pattern.
+
 ## Projects
 
 ### Purpose
@@ -534,6 +536,7 @@ Design rules:
 
 - prefer readable document layouts over card-heavy marketing composition;
 - treat the issue body as a real page with generous writing space;
+- route object details to dedicated pages instead of side-by-side list/detail panes;
 - keep session and evidence details compact and inspectable;
 - avoid making Kubernetes details the first visual focus;
 - make agent activity legible without turning the screen into a terminal wall.

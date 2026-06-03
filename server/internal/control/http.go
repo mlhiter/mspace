@@ -33,7 +33,7 @@ type Server struct {
 const serverProtocolVersion = 1
 const maxIssueAttachmentBytes = 10 << 20
 const maxPasswordAuthBodyBytes = 4 << 10
-const maxTestCaseImportBodyBytes = 300 << 10
+const maxTestCaseImportBodyBytes = 3 << 20
 const defaultRuntimeTaskListLimit = 10
 const maxRuntimeTaskListLimit = 100
 
@@ -795,7 +795,7 @@ func (s *Server) handleImportProjectTestCases(w http.ResponseWriter, r *http.Req
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, result)
+	writeJSON(w, http.StatusCreated, normalizeImportTestCasesResult(result))
 }
 
 func (s *Server) handleOptimizeProjectTestCases(w http.ResponseWriter, r *http.Request) {
@@ -882,7 +882,7 @@ func (s *Server) handleGenerateProjectTestCases(w http.ResponseWriter, r *http.R
 	body := buildTestCaseGenerationIssueBody(project, input)
 	issueID, err := s.store.CreateIssue(r.Context(), user, workspaceID, CreateIssueInput{
 		ProjectID: projectID,
-		Title:     "Generate functional test cases",
+		Title:     "Generate test cases",
 		Body:      body,
 		LabelKeys: []string{"type:test"},
 	})

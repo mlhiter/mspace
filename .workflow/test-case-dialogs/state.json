@@ -1,0 +1,16 @@
+{
+  "title": "Test case dialogs",
+  "slug": "test-case-dialogs",
+  "created_at": "2026-06-02T07:57:09+00:00",
+  "status": "planned",
+  "approval": {
+    "required": null,
+    "granted": null,
+    "notes": ""
+  },
+  "packets": [],
+  "verification": {
+    "status": "not_started",
+    "checks": []
+  }
+}
