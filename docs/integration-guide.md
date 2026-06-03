@@ -257,6 +257,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
 ```
 
 Valid case types are `functional`, `ui`, `api`, and `deployment`. Status values are `draft`, `needs_review`, `ready`, and `archived`. Priority is optional and can be empty or `p0`, `p1`, `p2`, or `p3`.
+The import parser also accepts common type aliases such as `functional_test`, `ui_test`, `api_test`, `deployment_test`, `功能测试`, `UI 测试`, `接口测试`, and `部署测试`, then stores the normalized fixed value.
 
 Import cases:
 

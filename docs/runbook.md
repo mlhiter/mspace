@@ -93,7 +93,7 @@ Recommended smoke order:
 2. Verify the Cases list shows compact operational columns: title, type, status, priority, executability, latest result, and updated time.
 3. Create one case from the modal and verify the case detail page opens.
 4. Import Markdown/text cases and confirm non-empty lines become draft cases.
-5. Import CSV or Excel `.xlsx` cases with `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers. Rows without `title` should appear in the skipped list.
+5. Import CSV or Excel `.xlsx` cases with `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers. Rows without `title` should appear in the skipped list. Use `functional`, `ui`, `api`, or `deployment` for `type`; common aliases such as `UI 测试`, `接口测试`, and `部署测试` normalize to the fixed values.
 6. Edit a case and verify revisions show newest first.
 7. Exercise Optimize or Generate with no connected worker; the UI should surface the worker/session blocker rather than silently claiming success.
 8. Connect a Codex-capable worker, then verify `test-case-proposals.json` becomes Case suggestions and `test-result.json` updates run items.
