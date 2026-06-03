@@ -7,6 +7,30 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-06-02",
+    title: "Runnable test case guidance",
+    summary:
+      "mspace made the Tests case form explain what makes a test case executable instead of leaving users to infer backend format rules.",
+    items: [
+      "Added a runnable-case checklist to the shared create and edit form for title, preconditions, steps, expected result, and environment requirements.",
+      "Added a test case type field for functional, UI, API, and deployment cases so the case detail page no longer implies every case is functional-only.",
+      "Added field-level examples and hints so users understand priority, status, concrete steps, and environment requirements before saving.",
+      "Localized quality findings into actionable labels and clarified Markdown, text, and CSV import expectations.",
+      "Added Excel `.xlsx` import for project test cases, using the same title, type, area, priority, preconditions, steps, expected result, environment, and tags columns as CSV.",
+    ],
+  },
+  {
+    date: "2026-06-02",
+    title: "Workspace-aware project source selection",
+    summary:
+      "mspace clarified where project source comes from when a user is working in a shared team workspace.",
+    items: [
+      "Kept the local folder picker available for personal desktop projects.",
+      "Changed team project creation to use GitHub repository URLs only, because connected team workers clone source into their own repo cache instead of reading a user's Mac-local path.",
+      "Added server-side validation so API requests cannot create a team project backed by a desktop-local folder.",
+    ],
+  },
+  {
     date: "2026-06-01",
     title: "One-step Helm worker bootstrap",
     summary:
