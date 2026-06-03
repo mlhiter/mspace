@@ -82,11 +82,11 @@ Recommended fields:
 - dependent cases
 - environment requirements
 - tags
-- quality score
-- quality findings
+- executability signal
+- executability findings
 - creator and updated time
 
-The quality score should start as a deterministic rule set rather than an AI judgment. Examples:
+The executability signal should start as a deterministic rule set rather than an AI judgment. It can still be stored as `qualityScore` internally, but the user-facing meaning is whether a case is runnable enough to trust. Examples:
 
 - missing preconditions lower the score;
 - missing expected result lowers the score;
@@ -238,7 +238,7 @@ The user enters `Tests -> Cases`, selects a project, then can:
 The system does three things:
 
 1. converts rough input into structured draft cases;
-2. computes quality scores;
+2. computes executability signals;
 3. highlights missing information and likely duplicates.
 
 Output:
@@ -246,14 +246,14 @@ Output:
 ```text
 Rough case list
   -> structured drafts
-  -> quality evaluation
+  -> executability evaluation
   -> human review and adjustment
   -> ready test case library
 ```
 
 ### 2. Refine Test Cases With Codex
 
-The user selects draft or low-quality cases and clicks `Optimize`.
+The user selects draft or low-executability cases and clicks `Optimize`.
 
 mspace should not call Codex from the server. It should create a normal issue-backed Agent Session:
 
@@ -531,7 +531,7 @@ Main actions:
 - create;
 - batch optimize;
 - generate from project;
-- filter by quality score;
+- filter by executability;
 - filter by status;
 - filter by type, area, and priority;
 - add to test plan.
@@ -540,12 +540,13 @@ List columns:
 
 - title;
 - type;
-- area;
-- priority;
 - status;
-- quality score;
+- priority;
+- executability;
 - latest run result;
 - updated time.
+
+The compact Cases list should currently show `title`, `type`, `status`, `priority`, `executability`, `latest run result`, and `updated time`; `area` can remain secondary metadata under the title instead of consuming its own column.
 
 ### Case Detail
 
@@ -746,7 +747,7 @@ Scope:
 - case detail as a dedicated page, not a side pane;
 - Markdown, CSV, Excel `.xlsx`, and paste import;
 - manual create and edit;
-- case quality score;
+- case executability signal;
 - case revisions;
 - English and Simplified Chinese i18n;
 - server API and Postgres migration;
@@ -760,7 +761,7 @@ Acceptance:
 - user can import a rough test list;
 - user can import `.xlsx` workbooks whose first non-empty sheet uses `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers;
 - system creates structured draft cases;
-- quality score and missing fields are visible;
+- executability and missing fields are visible;
 - user can edit a case;
 - revision history exists.
 
@@ -979,13 +980,13 @@ Phase 1 manual acceptance:
 1. Create or select a Project.
 2. Import a rough test case list from Markdown, CSV, or an `.xlsx` workbook.
 3. Confirm structured draft cases are created.
-4. Confirm quality scores and missing-field findings are reasonable.
+4. Confirm executability and missing-field findings are reasonable.
 5. Edit one case.
 6. Confirm revision history exists.
 
 Phase 2 manual acceptance:
 
-1. Select a few low-quality cases.
+1. Select a few low-executability cases.
 2. Start Codex optimization.
 3. Confirm an Issue and Agent Session are created.
 4. Confirm Case Suggestions review shows before/after differences.

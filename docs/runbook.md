@@ -90,13 +90,14 @@ Use Tests after a project exists. Personal projects can use a local folder or Gi
 Recommended smoke order:
 
 1. Open Tests and pick a project.
-2. Create one case from the modal and verify the case detail page opens.
-3. Import Markdown/text cases and confirm non-empty lines become draft cases.
-4. Import CSV or Excel `.xlsx` cases with `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers. Rows without `title` should appear in the skipped list.
-5. Edit a case and verify revisions show newest first.
-6. Exercise Optimize or Generate with no connected worker; the UI should surface the worker/session blocker rather than silently claiming success.
-7. Connect a Codex-capable worker, then verify `test-case-proposals.json` becomes Case suggestions and `test-result.json` updates run items.
-8. Accept or block the run manually. A Codex-completed run is not release acceptance until a human records that decision.
+2. Verify the Cases list shows compact operational columns: title, type, status, priority, executability, latest result, and updated time.
+3. Create one case from the modal and verify the case detail page opens.
+4. Import Markdown/text cases and confirm non-empty lines become draft cases.
+5. Import CSV or Excel `.xlsx` cases with `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers. Rows without `title` should appear in the skipped list.
+6. Edit a case and verify revisions show newest first.
+7. Exercise Optimize or Generate with no connected worker; the UI should surface the worker/session blocker rather than silently claiming success.
+8. Connect a Codex-capable worker, then verify `test-case-proposals.json` becomes Case suggestions and `test-result.json` updates run items.
+9. Accept or block the run manually. A Codex-completed run is not release acceptance until a human records that decision.
 
 The current case library accepts `functional`, `ui`, `api`, and `deployment` as case types. Specialized UI/CDP automation, API harnessing, deployment orchestration, and multi-worker scheduling are still later execution work; the first loop keeps execution behind Issues, Agent Sessions, Workers, and Evidence.
 
