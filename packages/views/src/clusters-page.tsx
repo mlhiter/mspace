@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cloud, Clock3, FileUp, Globe2, HardDrive, Network, Plus, Server, Settings2, Trash2, X } from "lucide-react";
+import { ChevronDown, Cloud, Clock3, FileUp, Globe2, HardDrive, Network, Server, Settings2, Trash2, X } from "lucide-react";
 import {
   controlPlaneApi,
   queryKeys,
@@ -15,6 +15,11 @@ import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
   CollectionEmptyState,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
   Field,
   InlineMeta,
   Input,
@@ -259,25 +264,23 @@ export function ClustersPage() {
     setDefaultImportOpen(false);
   }
 
+  function openCreateVirtualMachine() {
+    setVirtualMachineForm(emptyVirtualMachineForm);
+    setCreateVirtualMachineOpen(true);
+    createEnvironment.reset();
+  }
+
   return (
     <PageFrame
       title={t("clusters.title")}
       subtitle={t("clusters.subtitle")}
       actions={
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button variant="secondary" onClick={importFromPicker} disabled={!workspaceReady || importKubeconfigs.isPending}>
-            <FileUp data-icon />
-            {importKubeconfigs.isPending ? t("clusters.importing") : t("clusters.importKubeconfig")}
-          </Button>
-          <Button onClick={() => {
-            setVirtualMachineForm(emptyVirtualMachineForm);
-            setCreateVirtualMachineOpen(true);
-            createEnvironment.reset();
-          }} disabled={!workspaceReady}>
-            <Plus data-icon />
-            {t("clusters.addVirtualMachine")}
-          </Button>
-        </div>
+        <EnvironmentActionMenu
+          workspaceReady={workspaceReady}
+          importing={importKubeconfigs.isPending}
+          onImportKubeconfig={importFromPicker}
+          onAddVirtualMachine={openCreateVirtualMachine}
+        />
       }
     >
       {importSummary ? <Notice>{importSummary}</Notice> : null}
@@ -295,10 +298,12 @@ export function ClustersPage() {
             title={t("clusters.emptyTitle")}
             body={t("clusters.emptyBody")}
             action={
-              <Button variant="secondary" onClick={importFromPicker} disabled={!workspaceReady || importKubeconfigs.isPending}>
-                <FileUp data-icon />
-                {t("clusters.importKubeconfig")}
-              </Button>
+              <EnvironmentEmptyActions
+                workspaceReady={workspaceReady}
+                importing={importKubeconfigs.isPending}
+                onImportKubeconfig={importFromPicker}
+                onAddVirtualMachine={openCreateVirtualMachine}
+              />
             }
           />
         </div>
@@ -418,6 +423,102 @@ export function ClustersPage() {
         />
       ) : null}
     </PageFrame>
+  );
+}
+
+function EnvironmentActionMenu(props: {
+  workspaceReady: boolean;
+  importing: boolean;
+  onImportKubeconfig: () => void;
+  onAddVirtualMachine: () => void;
+}) {
+  const { t } = useMspaceTranslation();
+  return (
+    <div className="inline-flex overflow-hidden rounded-[8px] bg-[color:var(--surface)] shadow-[0_0_0_1px_var(--line)]">
+      <button
+        type="button"
+        className="inline-flex h-8 items-center gap-1.5 px-3 text-[13px] font-medium leading-5 text-[color:var(--text)] transition-[background-color,color,opacity] duration-150 ease-out hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] disabled:pointer-events-none disabled:opacity-50"
+        disabled={!props.workspaceReady || props.importing}
+        onClick={props.onImportKubeconfig}
+      >
+        <FileUp data-icon />
+        {props.importing ? t("clusters.importing") : t("clusters.importKubeconfig")}
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="grid h-8 w-8 place-items-center border-l border-[color:var(--line)] text-[color:var(--muted)] transition-[background-color,color,opacity] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] disabled:pointer-events-none disabled:opacity-50"
+            disabled={!props.workspaceReady}
+            aria-label={t("clusters.moreEnvironmentActions")}
+          >
+            <ChevronDown data-icon />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-64">
+          <DropdownMenuLabel>{t("clusters.actionMenuTitle")}</DropdownMenuLabel>
+          <DropdownMenuItem disabled={props.importing} onSelect={props.onImportKubeconfig}>
+            <FileUp data-icon />
+            <span className="grid gap-0.5">
+              <span>{props.importing ? t("clusters.importing") : t("clusters.importKubeconfig")}</span>
+              <span className="text-[12px] leading-4 text-[color:var(--muted)]">
+                {t("clusters.importKubeconfigDescription")}
+              </span>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={props.onAddVirtualMachine}>
+            <Server data-icon />
+            <span className="grid gap-0.5">
+              <span>{t("clusters.addVirtualMachine")}</span>
+              <span className="text-[12px] leading-4 text-[color:var(--muted)]">
+                {t("clusters.addVirtualMachineDescription")}
+              </span>
+            </span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+function EnvironmentEmptyActions(props: {
+  workspaceReady: boolean;
+  importing: boolean;
+  onImportKubeconfig: () => void;
+  onAddVirtualMachine: () => void;
+}) {
+  const { t } = useMspaceTranslation();
+  return (
+    <div className="grid w-[min(430px,calc(100vw-96px))] grid-cols-1 gap-2 sm:grid-cols-2">
+      <button
+        type="button"
+        className="min-h-[92px] rounded-[9px] bg-[color:var(--paper)] px-3 py-3 text-left shadow-[inset_0_0_0_1px_var(--line)] transition-[background-color,box-shadow,opacity,transform] duration-150 ease-out hover:-translate-y-px hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] disabled:pointer-events-none disabled:opacity-50"
+        disabled={!props.workspaceReady || props.importing}
+        onClick={props.onImportKubeconfig}
+      >
+        <span className="flex items-center gap-2 text-[13px] font-semibold leading-5 text-[color:var(--text)]">
+          <FileUp data-icon />
+          {props.importing ? t("clusters.importing") : t("clusters.emptyKubernetesTitle")}
+        </span>
+        <span className="mt-1.5 block text-[12px] leading-5 text-[color:var(--muted)] text-pretty">
+          {t("clusters.emptyKubernetesBody")}
+        </span>
+      </button>
+      <button
+        type="button"
+        className="min-h-[92px] rounded-[9px] bg-[color:var(--paper)] px-3 py-3 text-left shadow-[inset_0_0_0_1px_var(--line)] transition-[background-color,box-shadow,opacity,transform] duration-150 ease-out hover:-translate-y-px hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)] disabled:pointer-events-none disabled:opacity-50"
+        disabled={!props.workspaceReady}
+        onClick={props.onAddVirtualMachine}
+      >
+        <span className="flex items-center gap-2 text-[13px] font-semibold leading-5 text-[color:var(--text)]">
+          <Server data-icon />
+          {t("clusters.emptyVirtualMachineTitle")}
+        </span>
+        <span className="mt-1.5 block text-[12px] leading-5 text-[color:var(--muted)] text-pretty">
+          {t("clusters.emptyVirtualMachineBody")}
+        </span>
+      </button>
+    </div>
   );
 }
 
