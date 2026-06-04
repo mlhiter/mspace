@@ -32,6 +32,7 @@ import {
   SelectValue,
   StatusBadge,
   cn,
+  useMspaceToast,
 } from "@mspace/ui";
 import { RelativeTime } from "./time";
 import { useMspaceAuth } from "./auth-context";
@@ -95,6 +96,7 @@ export function ClustersPage() {
   const { t } = useMspaceTranslation();
   const queryClient = useQueryClient();
   const auth = useMspaceAuth();
+  const { showToast } = useMspaceToast();
   const workspaceId = auth.workspace?.id || "";
   const workspaceReady = auth.status === "signed-in" && Boolean(auth.token && workspaceId);
   const environmentsQueryKey = queryKeys.environments(workspaceId, auth.token);
@@ -113,16 +115,18 @@ export function ClustersPage() {
   const [defaultDiscoveryRequested, setDefaultDiscoveryRequested] = useState(false);
   const [defaultDiscovery, setDefaultDiscovery] = useState<KubeconfigDiscoveryResult | null>(null);
   const [selectedDefaultPaths, setSelectedDefaultPaths] = useState<string[]>([]);
-  const [importSummary, setImportSummary] = useState("");
 
   const importKubeconfigs = useMutation({
     mutationFn: (paths: string[]) => controlPlaneApi.importKubeconfigFiles(auth.token, workspaceId, paths),
-    onSuccess: async () => {
-      setImportSummary("");
+    onSuccess: async (result) => {
+      showToast({ tone: "success", description: formatImportResult(result) });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
         queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
       ]);
+    },
+    onError: (error) => {
+      showToast({ tone: "danger", description: error.message });
     },
   });
   const discoverDefaultKubeconfigs = useMutation({
@@ -227,27 +231,18 @@ export function ClustersPage() {
   }
 
   async function importFromPicker() {
-    setImportSummary("");
     importKubeconfigs.reset();
     if (!workspaceReady) {
-      setImportSummary(t("workspace.signInRequired"));
+      showToast({ tone: "danger", description: t("workspace.signInRequired") });
       return;
     }
     if (!window.mspaceDesktop?.selectKubeconfigFiles) {
-      setImportSummary(t("clusters.pickerDesktopOnly"));
+      showToast({ tone: "danger", description: t("clusters.pickerDesktopOnly") });
       return;
     }
     const paths = await window.mspaceDesktop.selectKubeconfigFiles();
     if (paths.length === 0) return;
-    importKubeconfigs.mutate(paths, {
-      onSuccess: async (result) => {
-        setImportSummary(formatImportResult(result));
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
-          queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
-        ]);
-      },
-    });
+    importKubeconfigs.mutate(paths);
   }
 
   useEffect(() => {
@@ -283,8 +278,6 @@ export function ClustersPage() {
         />
       }
     >
-      {importSummary ? <Notice>{importSummary}</Notice> : null}
-      {importKubeconfigs.error ? <Notice tone="danger">{importKubeconfigs.error.message}</Notice> : null}
       {discoverDefaultKubeconfigs.error ? <Notice tone="danger">{discoverDefaultKubeconfigs.error.message}</Notice> : null}
 
       {environmentsQuery.isPending ? (
@@ -409,15 +402,7 @@ export function ClustersPage() {
           }}
           onImport={() => {
             closeDefaultImportPrompt();
-            importKubeconfigs.mutate(selectedDefaultPaths, {
-              onSuccess: async (result) => {
-                setImportSummary(formatImportResult(result));
-                await Promise.all([
-                  queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
-                  queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
-                ]);
-              },
-            });
+            importKubeconfigs.mutate(selectedDefaultPaths);
           }}
           onSkip={closeDefaultImportPrompt}
         />

@@ -43,7 +43,7 @@ import {
   type CreateWorkspaceInput,
   type WorkspaceInvitationPreview,
 } from "@mspace/core";
-import { AppShell, Button, Field, Input, Notice, type ShellSearchItem } from "@mspace/ui";
+import { AppShell, Button, Field, Input, MspaceToastProvider, Notice, type ShellSearchItem } from "@mspace/ui";
 import { initializeMspaceI18n, t, useMspaceTranslation } from "@mspace/i18n";
 import mspaceLogoUrl from "../../../assets/brand/mspace-logo.svg";
 import "./globals.css";
@@ -1165,7 +1165,9 @@ const router = createRouter({
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <MspaceToastProvider>
+        <RouterProvider router={router} />
+      </MspaceToastProvider>
     </QueryClientProvider>
   </React.StrictMode>,
 );

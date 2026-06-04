@@ -28,8 +28,11 @@ import {
   Settings,
   Sparkles,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import {
+  createContext,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -136,6 +139,132 @@ export { ScrollArea, ScrollBar } from "./components/ui/scroll-area";
 export { Separator } from "./components/ui/separator";
 export { Switch } from "./components/ui/switch";
 export { Textarea as ShadcnTextarea } from "./components/ui/textarea";
+
+type MspaceToastTone = "info" | "success" | "danger";
+
+type MspaceToastInput = {
+  title?: string;
+  description: ReactNode;
+  tone?: MspaceToastTone;
+  duration?: number;
+};
+
+type MspaceToastRecord = MspaceToastInput & {
+  id: string;
+  createdAt: number;
+};
+
+type MspaceToastContextValue = {
+  showToast: (toast: MspaceToastInput) => string;
+  dismissToast: (id: string) => void;
+};
+
+const MspaceToastContext = createContext<MspaceToastContextValue | null>(null);
+
+const defaultToastDuration = 3_600;
+
+export function MspaceToastProvider(props: PropsWithChildren) {
+  const [toasts, setToasts] = useState<MspaceToastRecord[]>([]);
+
+  const dismissToast = useMemo(
+    () => (id: string) => {
+      setToasts((items) => items.filter((item) => item.id !== id));
+    },
+    [],
+  );
+
+  const showToast = useMemo(
+    () => (toast: MspaceToastInput) => {
+      const id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `toast-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const record: MspaceToastRecord = {
+        ...toast,
+        id,
+        tone: toast.tone || "info",
+        duration: toast.duration ?? defaultToastDuration,
+        createdAt: Date.now(),
+      };
+      setToasts((items) => [...items.slice(-3), record]);
+      return id;
+    },
+    [],
+  );
+
+  const value = useMemo(() => ({ showToast, dismissToast }), [dismissToast, showToast]);
+
+  return (
+    <MspaceToastContext.Provider value={value}>
+      {props.children}
+      <MspaceToastViewport toasts={toasts} onDismiss={dismissToast} />
+    </MspaceToastContext.Provider>
+  );
+}
+
+export function useMspaceToast() {
+  const value = useContext(MspaceToastContext);
+  if (!value) throw new Error("useMspaceToast must be used inside MspaceToastProvider");
+  return value;
+}
+
+function MspaceToastViewport(props: { toasts: MspaceToastRecord[]; onDismiss: (id: string) => void }) {
+  useEffect(() => {
+    const timers = props.toasts
+      .filter((toast) => (toast.duration ?? defaultToastDuration) > 0)
+      .map((toast) => {
+        const remaining = Math.max((toast.duration ?? defaultToastDuration) - (Date.now() - toast.createdAt), 0);
+        return window.setTimeout(() => props.onDismiss(toast.id), remaining);
+      });
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [props.toasts, props.onDismiss]);
+
+  if (props.toasts.length === 0) return null;
+
+  return (
+    <div
+      className="pointer-events-none fixed bottom-5 right-5 z-[120] flex w-[min(360px,calc(100vw-32px))] flex-col gap-2"
+      aria-live="polite"
+      aria-relevant="additions text"
+    >
+      {props.toasts.map((toast) => (
+        <MspaceToastItem key={toast.id} toast={toast} onDismiss={() => props.onDismiss(toast.id)} />
+      ))}
+    </div>
+  );
+}
+
+function MspaceToastItem(props: { toast: MspaceToastRecord; onDismiss: () => void }) {
+  const { toast } = props;
+  const { t } = useMspaceTranslation();
+  const tone = toast.tone || "info";
+  const Icon = tone === "danger" ? CircleAlert : tone === "success" ? CheckCircle2 : MessageSquareText;
+  return (
+    <section
+      role={tone === "danger" ? "alert" : "status"}
+      className={cn(
+        "pointer-events-auto grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 rounded-[10px] bg-[color:var(--paper)] px-3.5 py-3 text-[13px] leading-5 shadow-[0_16px_46px_rgba(0,0,0,0.14),0_0_0_1px_var(--line)]",
+        tone === "success" ? "text-[color:var(--success)]" : null,
+        tone === "danger" ? "text-[color:var(--danger)]" : null,
+        tone === "info" ? "text-[color:var(--muted-strong)]" : null,
+      )}
+    >
+      <Icon data-icon className="mt-0.5 shrink-0" />
+      <div className="min-w-0 text-[color:var(--muted-strong)]">
+        {toast.title ? <div className="font-semibold text-[color:var(--text)]">{toast.title}</div> : null}
+        <div className={cn("text-pretty", toast.title ? "mt-0.5" : null)}>{toast.description}</div>
+      </div>
+      <button
+        type="button"
+        aria-label={t("common.close")}
+        className="-mr-1 -mt-1 grid size-7 shrink-0 place-items-center rounded-[7px] text-[color:var(--faint)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--focus)]"
+        onClick={props.onDismiss}
+      >
+        <X data-icon />
+      </button>
+    </section>
+  );
+}
 
 const sidebarItems = [
   { to: "/inbox", labelKey: "navigation.inbox", icon: Inbox },
