@@ -689,6 +689,11 @@ if (!gotSingleInstanceLock) {
       await ensureServerStarted();
     } catch (error) {
       console.error("[server] failed to start", error);
+      await stopPersonalWorker();
+      await stopDockerWorker();
+      await stopServer();
+      app.exit(1);
+      return;
     }
     const brandIconPath = resolveBrandIconPath();
     if (brandIconPath) app.dock?.setIcon(brandIconPath);
