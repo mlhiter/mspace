@@ -3551,7 +3551,7 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
         role="dialog"
         aria-modal="true"
         aria-label={t("tests.screenshotPreviewTitle")}
-        className="relative grid max-h-[calc(100vh-64px)] w-full max-w-[1120px] overflow-hidden rounded-[12px] bg-[color:var(--surface)] shadow-[0_24px_80px_rgba(31,31,31,0.30),inset_0_0_0_1px_var(--line)]"
+        className="relative grid h-[calc(100vh-64px)] max-h-[calc(100vh-64px)] w-full max-w-[1120px] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[12px] bg-[color:var(--surface)] shadow-[0_24px_80px_rgba(31,31,31,0.30),inset_0_0_0_1px_var(--line)]"
       >
         <div className="flex min-w-0 items-center justify-between gap-3 border-b border-[color:var(--line)] px-4 py-3">
           <div className="min-w-0">
@@ -3578,7 +3578,7 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
             </Button>
           </div>
         </div>
-        <div className="min-h-0 overflow-auto bg-[color:var(--paper)] p-3">
+        <div className="min-h-0 overflow-auto overscroll-contain bg-[color:var(--paper)] p-3">
           {imageSource.src && !imageFailed ? (
             <img
               src={imageSource.src}
