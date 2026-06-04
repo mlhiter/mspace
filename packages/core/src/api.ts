@@ -62,6 +62,7 @@ import type {
   TestCaseInput,
   TestCaseProposal,
   TestCaseRevision,
+  TestCaseRunItem,
   TestPlan,
   TestPlanDetail,
   TestPlanInput,
@@ -123,6 +124,8 @@ export const queryKeys = {
     ["project-test-cases", workspaceId, projectId, token, status, query] as const,
   projectTestCase: (workspaceId: string, projectId: string, caseId: string, token: string) =>
     ["project-test-case", workspaceId, projectId, caseId, token] as const,
+  projectTestCaseRunItems: (workspaceId: string, projectId: string, caseId: string, token: string) =>
+    ["project-test-case-run-items", workspaceId, projectId, caseId, token] as const,
   projectTestCaseRevisions: (workspaceId: string, projectId: string, caseId: string, token: string) =>
     ["project-test-case-revisions", workspaceId, projectId, caseId, token] as const,
   projectTestCaseProposals: (workspaceId: string, projectId: string, token: string, status = "") =>
@@ -499,6 +502,10 @@ export const controlPlaneApi = {
     }),
   listProjectTestCaseRevisions: (token: string, workspaceId: string, projectId: string, caseId: string) =>
     requestControlPlane<TestCaseRevision[]>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/${caseId}/revisions`, {
+      headers: authHeaders(token),
+    }),
+  listProjectTestCaseRunItems: (token: string, workspaceId: string, projectId: string, caseId: string) =>
+    requestControlPlane<TestCaseRunItem[]>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/${caseId}/runs`, {
       headers: authHeaders(token),
     }),
   listProjectTestCaseProposals: (token: string, workspaceId: string, projectId: string, input: { status?: string } = {}) => {

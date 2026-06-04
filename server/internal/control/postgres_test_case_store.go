@@ -760,6 +760,57 @@ func (s *PostgresStore) ListProjectTestRuns(ctx Context, userID, workspaceID, pr
 	return runs, rows.Err()
 }
 
+func (s *PostgresStore) ListProjectTestCaseRunItems(ctx Context, userID, workspaceID, projectID, caseID string) ([]TestCaseRunItem, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	caseID = strings.TrimSpace(caseID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	if _, err := loadProjectTestCase(dbctx, s.pool, workspaceID, projectID, caseID); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT
+			i.id::text,
+			i.workspace_id::text,
+			i.project_id::text,
+			i.run_id::text,
+			i.case_id::text,
+			COALESCE(i.execution_issue_id::text, ''),
+			i.agent_session_id,
+			i.status,
+			i.actual_result,
+			i.failure_summary,
+			i.evidence,
+			i.created_at,
+			i.updated_at,
+			`+testCaseSelectColumnsForAlias("tc")+`,
+			`+testRunSelectColumnsForAlias("r")+`
+		FROM test_run_items i
+		JOIN test_cases tc ON tc.id = i.case_id
+		JOIN test_runs r ON r.id = i.run_id
+		WHERE i.workspace_id = $1
+			AND i.project_id = $2
+			AND i.case_id = $3
+		ORDER BY i.updated_at DESC, r.updated_at DESC, i.id DESC
+	`, workspaceID, projectID, caseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TestCaseRunItem{}
+	for rows.Next() {
+		item, err := scanTestCaseRunItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *PostgresStore) RetryProjectTestRun(ctx Context, user User, workspaceID, projectID, runID string, input RetryTestRunInput) (TestRunDetail, error) {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
@@ -1547,31 +1598,35 @@ func listTestRunsForPlan(ctx context.Context, q queryer, workspaceID, projectID,
 
 func testRunSelectQuery(whereClause string) string {
 	return `SELECT
-			r.id::text,
-			r.workspace_id::text,
-			r.project_id::text,
-			COALESCE(r.plan_id::text, ''),
-			COALESCE(r.source, 'plan'),
-			COALESCE(r.parent_issue_id::text, ''),
-			r.status,
-			r.target_type,
-			r.target_value,
-			r.environment,
-			r.total_count,
-			r.passed_count,
-			r.failed_count,
-			r.blocked_count,
-			r.skipped_count,
-			r.acceptance_status,
-			r.acceptance_note,
-			COALESCE(r.created_by_user_id::text, ''),
-			COALESCE(r.accepted_by_user_id::text, ''),
-			r.completed_at,
-			r.accepted_at,
-			r.created_at,
-			r.updated_at
+			` + testRunSelectColumnsForAlias("r") + `
 		FROM test_runs r
 	` + whereClause
+}
+
+func testRunSelectColumnsForAlias(alias string) string {
+	return alias + `.id::text,
+			` + alias + `.workspace_id::text,
+			` + alias + `.project_id::text,
+			COALESCE(` + alias + `.plan_id::text, ''),
+			COALESCE(` + alias + `.source, 'plan'),
+			COALESCE(` + alias + `.parent_issue_id::text, ''),
+			` + alias + `.status,
+			` + alias + `.target_type,
+			` + alias + `.target_value,
+			` + alias + `.environment,
+			` + alias + `.total_count,
+			` + alias + `.passed_count,
+			` + alias + `.failed_count,
+			` + alias + `.blocked_count,
+			` + alias + `.skipped_count,
+			` + alias + `.acceptance_status,
+			` + alias + `.acceptance_note,
+			COALESCE(` + alias + `.created_by_user_id::text, ''),
+			COALESCE(` + alias + `.accepted_by_user_id::text, ''),
+			` + alias + `.completed_at,
+			` + alias + `.accepted_at,
+			` + alias + `.created_at,
+			` + alias + `.updated_at`
 }
 
 func scanTestRun(row scanner) (TestRun, error) {
@@ -1759,6 +1814,95 @@ func scanTestRunItem(row scanner) (TestRunItem, error) {
 	item.TestCase.CreatedAt = caseCreatedAt.UTC().Format(time.RFC3339)
 	item.TestCase.UpdatedAt = caseUpdatedAt.UTC().Format(time.RFC3339)
 	return item, nil
+}
+
+func scanTestCaseRunItem(row scanner) (TestCaseRunItem, error) {
+	var item TestRunItem
+	var run TestRun
+	var evidenceBytes []byte
+	var itemCreatedAt, itemUpdatedAt time.Time
+	var stepsBytes, dependenciesBytes, tagsBytes, qualityFindingsBytes []byte
+	var caseCreatedAt, caseUpdatedAt time.Time
+	var completedAt, acceptedAt sql.NullTime
+	var runCreatedAt, runUpdatedAt time.Time
+	if err := row.Scan(
+		&item.ID,
+		&item.WorkspaceID,
+		&item.ProjectID,
+		&item.RunID,
+		&item.TestCaseID,
+		&item.ExecutionIssueID,
+		&item.AgentSessionID,
+		&item.Status,
+		&item.ActualResult,
+		&item.FailureSummary,
+		&evidenceBytes,
+		&itemCreatedAt,
+		&itemUpdatedAt,
+		&item.TestCase.ID,
+		&item.TestCase.WorkspaceID,
+		&item.TestCase.ProjectID,
+		&item.TestCase.Title,
+		&item.TestCase.Type,
+		&item.TestCase.Area,
+		&item.TestCase.Priority,
+		&item.TestCase.Status,
+		&item.TestCase.Source,
+		&item.TestCase.Preconditions,
+		&stepsBytes,
+		&item.TestCase.ExpectedResult,
+		&item.TestCase.EnvironmentRequirements,
+		&dependenciesBytes,
+		&tagsBytes,
+		&item.TestCase.QualityScore,
+		&qualityFindingsBytes,
+		&item.TestCase.CreatedByUserID,
+		&caseCreatedAt,
+		&caseUpdatedAt,
+		&run.ID,
+		&run.WorkspaceID,
+		&run.ProjectID,
+		&run.PlanID,
+		&run.Source,
+		&run.ParentIssueID,
+		&run.Status,
+		&run.TargetType,
+		&run.TargetValue,
+		&run.Environment,
+		&run.TotalCount,
+		&run.PassedCount,
+		&run.FailedCount,
+		&run.BlockedCount,
+		&run.SkippedCount,
+		&run.AcceptanceStatus,
+		&run.AcceptanceNote,
+		&run.CreatedByUserID,
+		&run.AcceptedByUserID,
+		&completedAt,
+		&acceptedAt,
+		&runCreatedAt,
+		&runUpdatedAt,
+	); err != nil {
+		return TestCaseRunItem{}, err
+	}
+	item.Evidence = copyRawMessage(json.RawMessage(evidenceBytes))
+	item.CreatedAt = itemCreatedAt.UTC().Format(time.RFC3339)
+	item.UpdatedAt = itemUpdatedAt.UTC().Format(time.RFC3339)
+	item.TestCase.Steps = decodeTestCaseSteps(stepsBytes)
+	item.TestCase.Dependencies = decodeStringSlice(dependenciesBytes)
+	item.TestCase.Tags = decodeStringSlice(tagsBytes)
+	item.TestCase.QualityFindings = decodeQualityFindings(qualityFindingsBytes)
+	item.TestCase.CreatedAt = caseCreatedAt.UTC().Format(time.RFC3339)
+	item.TestCase.UpdatedAt = caseUpdatedAt.UTC().Format(time.RFC3339)
+	if completedAt.Valid {
+		run.CompletedAt = completedAt.Time.UTC().Format(time.RFC3339)
+	}
+	if acceptedAt.Valid {
+		run.AcceptedAt = acceptedAt.Time.UTC().Format(time.RFC3339)
+	}
+	run.CreatedAt = runCreatedAt.UTC().Format(time.RFC3339)
+	run.UpdatedAt = runUpdatedAt.UTC().Format(time.RFC3339)
+	return TestCaseRunItem{Item: item, Run: run}, nil
 }
 
 func resetTestRunItemsForRetry(ctx context.Context, q queryer, workspaceID, projectID, runID string, itemIDs []string) error {

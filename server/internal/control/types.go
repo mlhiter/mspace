@@ -490,6 +490,11 @@ type TestRunListOptions struct {
 	Source string `json:"source"`
 }
 
+type TestCaseRunItem struct {
+	Item TestRunItem `json:"item"`
+	Run  TestRun     `json:"run"`
+}
+
 type TestRun struct {
 	ID               string `json:"id"`
 	WorkspaceID      string `json:"workspaceId"`
@@ -531,6 +536,60 @@ type TestRunItem struct {
 	TestCase         TestCase        `json:"testCase"`
 	CreatedAt        string          `json:"createdAt"`
 	UpdatedAt        string          `json:"updatedAt"`
+}
+
+type TestArtifact struct {
+	ID              string          `json:"id"`
+	WorkspaceID     string          `json:"workspaceId"`
+	ProjectID       string          `json:"projectId"`
+	RunID           string          `json:"runId"`
+	RunItemID       string          `json:"runItemId"`
+	CaseID          string          `json:"caseId"`
+	SourceIssueID   string          `json:"sourceIssueId"`
+	SourceTaskID    string          `json:"sourceTaskId"`
+	SourceSessionID string          `json:"sourceSessionId"`
+	Kind            string          `json:"kind"`
+	Role            string          `json:"role"`
+	Filename        string          `json:"filename"`
+	ContentType     string          `json:"contentType"`
+	SizeBytes       int64           `json:"sizeBytes"`
+	SHA256          string          `json:"sha256"`
+	StorageBackend  string          `json:"storageBackend"`
+	StorageKey      string          `json:"storageKey"`
+	Content         []byte          `json:"-"`
+	Metadata        json.RawMessage `json:"metadata"`
+	CreatedAt       string          `json:"createdAt"`
+}
+
+type TestArtifactRef struct {
+	ID           string          `json:"id"`
+	Kind         string          `json:"kind"`
+	Role         string          `json:"role"`
+	Filename     string          `json:"filename"`
+	ContentType  string          `json:"contentType"`
+	SizeBytes    int64           `json:"sizeBytes"`
+	SHA256       string          `json:"sha256"`
+	URL          string          `json:"url"`
+	ThumbnailURL string          `json:"thumbnailUrl"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt    string          `json:"createdAt"`
+}
+
+type CreateTestArtifactInput struct {
+	WorkspaceID     string
+	ProjectID       string
+	RunID           string
+	RunItemID       string
+	CaseID          string
+	SourceIssueID   string
+	SourceTaskID    string
+	SourceSessionID string
+	Kind            string
+	Role            string
+	Filename        string
+	ContentType     string
+	Content         []byte
+	Metadata        json.RawMessage
 }
 
 type TestRunDetail struct {
@@ -1488,6 +1547,9 @@ type Store interface {
 	StartProjectTestRun(ctx Context, user User, workspaceID, projectID, planID string, input CreateTestRunInput) (TestRunDetail, error)
 	StartAdHocProjectTestRun(ctx Context, user User, workspaceID, projectID string, input CreateAdHocTestRunInput) (TestRunDetail, error)
 	GetProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string) (TestRunDetail, error)
+	ListProjectTestCaseRunItems(ctx Context, userID, workspaceID, projectID, caseID string) ([]TestCaseRunItem, error)
+	ListProjectTestRunArtifacts(ctx Context, userID, workspaceID, projectID, runID string) ([]TestArtifact, error)
+	GetTestArtifact(ctx Context, userID, artifactID string) (TestArtifact, error)
 	RetryProjectTestRun(ctx Context, user User, workspaceID, projectID, runID string, input RetryTestRunInput) (TestRunDetail, error)
 	AcceptProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string, input ReviewTestRunInput) (TestRun, error)
 	BlockProjectTestRun(ctx Context, userID, workspaceID, projectID, runID string, input ReviewTestRunInput) (TestRun, error)

@@ -65,8 +65,8 @@ Production deployment uses the root `vercel.json`:
 - Document-style issue creation and comments with TipTap Markdown editing, inline child issues from checklist rows, image rendering for stable attachment URLs, and lightweight comment reactions.
 - Agent mentions from issue comments, with server-side session records, runtime task queueing, profile instructions, trigger-comment tracking, worker logs, status updates, and issue timeline updates.
 - Per-session worker-managed git worktrees, changed file lists, diff previews, commits, and comparison against the project default branch.
-- Project-level Tests workspace with Cases, Case suggestions, Plans, and Runs tabs, dedicated detail pages, modal create/import flows, Markdown/text/CSV/Excel `.xlsx` import, readiness scoring, field-level case revision summaries, and human review before Codex suggestions update canonical cases.
-- Issue-backed test run workflow where selected ready cases or formal plans create issue-linked run items, workers execute through the existing agent-session path, `test-result.json` is reconciled into run state, and a human accepts or blocks the run result.
+- Project-level Tests workspace with Cases, Case suggestions, Plans, and Runs tabs, dedicated detail pages, modal create/import flows, Markdown/text/CSV/Excel `.xlsx` import, readiness scoring, case-detail run history, field-level case revision summaries, and human review before Codex suggestions update canonical cases.
+- Issue-backed test run workflow where selected ready cases or formal plans create issue-linked run items, workers execute through the existing agent-session path, `test-result.json` is reconciled into run state, supported screenshot evidence is persisted as server-owned artifacts, and a human accepts or blocks the run result.
 - Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and update the issue test environment record.
 - Opt-in workspace automation that queues the same test deployment flow after a successful source session captures a commit, when the issue and runtime are ready.
@@ -228,7 +228,7 @@ Local data paths:
 | `<artifact-dir>/test-environment.json` | Optional agent-written deployment result. |
 | `<artifact-dir>/review-evidence.json` | Optional agent-written review snapshot. |
 | `<artifact-dir>/test-case-proposals.json` | Optional Codex-written test case suggestion artifact reconciled into Case suggestions. |
-| `<artifact-dir>/test-result.json` | Optional Codex-written test run artifact reconciled into run items and acceptance state. |
+| `<artifact-dir>/test-result.json` | Optional Codex-written test run artifact reconciled into run items and acceptance state. Supported screenshot evidence is transferred from the worker artifact directory, persisted as server-owned test artifacts, and shown from Case Detail / Run Detail. |
 | `<artifact-dir>/branch-name.json` | Optional agent-written source branch proposal such as `{ "branch": "fix/pr-source-branch-selection" }`. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-written project runbook update. |
 

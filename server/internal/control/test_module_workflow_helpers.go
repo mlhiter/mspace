@@ -14,6 +14,8 @@ const (
 	maxAdHocTestRunCases           = 50
 	maxArtifactTestCaseProposals   = 50
 	maxArtifactTestResultItems     = 500
+	maxTestResultArtifactBytes     = 2 << 20
+	maxTestResultArtifactsPerItem  = 10
 	testCaseOptimizationAutomation = "test_case_optimization"
 	testCaseGenerationAutomation   = "test_case_generation"
 	testRunExecutionAutomation     = "test_run_execution"

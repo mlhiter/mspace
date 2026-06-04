@@ -293,7 +293,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
   -d '{"note":"Looks executable after the added environment requirement."}'
 ```
 
-Test plans select ready cases and start issue-backed runs. Workers report results through `test-result.json`; the server reconciles run items, and a human must call `accept` or `block` before the run is treated as accepted.
+Test plans select ready cases and start issue-backed runs. Workers report results through `test-result.json`; the server reconciles run items, persists supported screenshot evidence as test artifacts, rewrites run item evidence to authenticated artifact refs, and a human must call `accept` or `block` before the run is treated as accepted.
 
 ## Workspace Runtime Surface APIs
 

@@ -196,7 +196,7 @@ Case import supports `markdown`, `text`, `csv`, and `xlsx`. Markdown/text import
 
 Valid case types are `functional`, `ui`, `api`, and `deployment`. The current product can classify those cases and plan against them; specialized UI/CDP automation, API harnessing, deployment orchestration, and multi-worker scheduling remain future execution capabilities behind the same Issue and Worker runtime path.
 
-Codex-generated or Codex-refined cases never write directly into canonical test cases. Workers return `test-case-proposals.json`; the server stores validated proposals as Case suggestions; humans apply or reject them. Test runs can come from a formal test plan or from selected ready cases. Both paths still create a parent Issue, child execution Issues, and agent sessions through the worker runtime; workers return `test-result.json`, the server reconciles run items, and a user accepts or blocks the run result.
+Codex-generated or Codex-refined cases never write directly into canonical test cases. Workers return `test-case-proposals.json`; the server stores validated proposals as Case suggestions; humans apply or reject them. Test runs can come from a formal test plan or from selected ready cases. Both paths still create a parent Issue, child execution Issues, and agent sessions through the worker runtime; workers return `test-result.json`, the server reconciles run items, persists supported screenshot evidence as `test_artifacts`, and a user accepts or blocks the run result.
 
 ## Workspace Invitations
 

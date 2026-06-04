@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -280,6 +281,55 @@ func TestSQLiteStorePersistsTestModuleWorkflowSnapshot(t *testing.T) {
 	if adHocRun.Run.PlanID != "" || adHocRun.Run.Source != "ad_hoc" || adHocRun.Plan != nil || len(adHocRun.Items) != 1 {
 		t.Fatalf("unexpected direct started run: %+v", adHocRun)
 	}
+	resultTask, err := store.ClaimRuntimeTask(ctx, registration, worker.ID)
+	if err != nil {
+		t.Fatalf("claim test run task: %v", err)
+	}
+	if resultTask == nil || resultTask.SessionID == "" {
+		t.Fatalf("expected test run task with session id, got %+v", resultTask)
+	}
+	const screenshotDataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+	if _, err := store.UpdateRuntimeTaskStatus(ctx, registration, worker.ID, resultTask.ID, UpdateRuntimeTaskStatusInput{
+		Status: "completed",
+		Result: json.RawMessage(`{"exitCode":0,"testResult":{"runId":"` + run.Run.ID + `","items":[{"caseId":"` + sourceCase.ID + `","status":"passed","actualResult":"Workspace opened from persisted run.","evidence":{"screenshotImages":[{"path":"homepage.png","dataUrl":"` + screenshotDataURL + `"}],"assertions":[{"name":"workspace visible","passed":true}]}}]}}`),
+	}); err != nil {
+		t.Fatalf("complete test run task: %v", err)
+	}
+	artifactRefs, err := store.ListProjectTestRunArtifacts(ctx, user.ID, workspaceID, project.ID, run.Run.ID)
+	if err != nil {
+		t.Fatalf("list test artifacts: %v", err)
+	}
+	if len(artifactRefs) != 1 || artifactRefs[0].Kind != "screenshot" || artifactRefs[0].ContentType != "image/png" || len(artifactRefs[0].Content) == 0 {
+		t.Fatalf("expected one persisted screenshot artifact, got %+v", artifactRefs)
+	}
+	reconciledRun, err := store.GetProjectTestRun(ctx, user.ID, workspaceID, project.ID, run.Run.ID)
+	if err != nil {
+		t.Fatalf("load reconciled run: %v", err)
+	}
+	var reconciledItem TestRunItem
+	for _, item := range reconciledRun.Items {
+		if item.TestCaseID == sourceCase.ID {
+			reconciledItem = item
+			break
+		}
+	}
+	if reconciledItem.Status != "passed" {
+		t.Fatalf("expected source case to pass, got %+v", reconciledItem)
+	}
+	evidence := string(reconciledItem.Evidence)
+	if strings.Contains(evidence, "data:image") || strings.Contains(evidence, "base64") {
+		t.Fatalf("expected embedded image payload to be stripped, got %s", evidence)
+	}
+	if !strings.Contains(evidence, `"/api/test-artifacts/`+artifactRefs[0].ID+`"`) {
+		t.Fatalf("expected evidence to reference persisted artifact, got %s", evidence)
+	}
+	caseRuns, err := store.ListProjectTestCaseRunItems(ctx, user.ID, workspaceID, project.ID, sourceCase.ID)
+	if err != nil {
+		t.Fatalf("list case run history: %v", err)
+	}
+	if len(caseRuns) < 2 || caseRuns[0].Item.Status != "passed" || caseRuns[0].Run.ID != run.Run.ID {
+		t.Fatalf("expected latest case run history entry to be passed run item, got %+v", caseRuns)
+	}
 
 	if err := store.Persist(); err != nil {
 		t.Fatalf("persist sqlite store: %v", err)
@@ -328,10 +378,26 @@ func TestSQLiteStorePersistsTestModuleWorkflowSnapshot(t *testing.T) {
 	if loadedRun.Run.Status != "running" || loadedRun.Run.ParentIssueID == "" || len(loadedRun.Items) != 2 {
 		t.Fatalf("unexpected persisted run: %+v", loadedRun)
 	}
+	var loadedPassedItem TestRunItem
 	for _, item := range loadedRun.Items {
-		if item.Status != "running" || item.ExecutionIssueID == "" || item.AgentSessionID == "" {
-			t.Fatalf("expected persisted running run item with issue/session, got %+v", item)
+		if item.ExecutionIssueID == "" || item.AgentSessionID == "" {
+			t.Fatalf("expected persisted run item with issue/session, got %+v", item)
 		}
+		if item.TestCaseID == sourceCase.ID {
+			loadedPassedItem = item
+		} else if item.Status != "running" {
+			t.Fatalf("expected untouched persisted item to remain running, got %+v", item)
+		}
+	}
+	if loadedPassedItem.Status != "passed" || strings.Contains(string(loadedPassedItem.Evidence), "data:image") || !strings.Contains(string(loadedPassedItem.Evidence), "/api/test-artifacts/") {
+		t.Fatalf("expected persisted passed item with artifact ref evidence, got %+v", loadedPassedItem)
+	}
+	loadedArtifacts, err := reopened.ListProjectTestRunArtifacts(ctx, user.ID, workspaceID, project.ID, run.Run.ID)
+	if err != nil {
+		t.Fatalf("load persisted test artifacts: %v", err)
+	}
+	if len(loadedArtifacts) != 1 || loadedArtifacts[0].ID != artifactRefs[0].ID || len(loadedArtifacts[0].Content) == 0 {
+		t.Fatalf("expected persisted screenshot artifact, got %+v", loadedArtifacts)
 	}
 	loadedAdHocRun, err := reopened.GetProjectTestRun(ctx, user.ID, workspaceID, project.ID, adHocRun.Run.ID)
 	if err != nil {

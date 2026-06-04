@@ -47,6 +47,8 @@ type memoryStoreSnapshot struct {
 	TestPlanCases        map[string]TestPlanCase                      `json:"testPlanCases"`
 	TestRuns             map[string]TestRun                           `json:"testRuns"`
 	TestRunItems         map[string]TestRunItem                       `json:"testRunItems"`
+	TestArtifacts        map[string]TestArtifact                      `json:"testArtifacts"`
+	TestArtifactContents map[string][]byte                            `json:"testArtifactContents,omitempty"`
 	Issues               map[string]Issue                             `json:"issues"`
 	Comments             map[string]Comment                           `json:"comments"`
 	CommentReactions     map[string]map[string]CommentReactionSummary `json:"commentReactions"`
@@ -191,6 +193,8 @@ func (s *MemoryStore) snapshotJSON() ([]byte, error) {
 		TestPlanCases:        copyMap(s.testPlanCases),
 		TestRuns:             copyMap(s.testRuns),
 		TestRunItems:         copyMap(s.testRunItems),
+		TestArtifacts:        copyMap(s.testArtifacts),
+		TestArtifactContents: testArtifactContentsSnapshot(s.testArtifacts),
 		Issues:               copyMap(s.issues),
 		Comments:             copyMap(s.comments),
 		CommentReactions:     copyMap(s.commentReactions),
@@ -238,6 +242,15 @@ func (s *MemoryStore) restoreSnapshot(snapshot memoryStoreSnapshot) {
 	s.testPlanCases = ensureMap(snapshot.TestPlanCases)
 	s.testRuns = ensureMap(snapshot.TestRuns)
 	s.testRunItems = ensureMap(snapshot.TestRunItems)
+	s.testArtifacts = ensureMap(snapshot.TestArtifacts)
+	for id, content := range snapshot.TestArtifactContents {
+		artifact, ok := s.testArtifacts[id]
+		if !ok {
+			continue
+		}
+		artifact.Content = append([]byte(nil), content...)
+		s.testArtifacts[id] = artifact
+	}
 	s.issues = ensureMap(snapshot.Issues)
 	s.comments = ensureMap(snapshot.Comments)
 	s.commentReactions = ensureMap(snapshot.CommentReactions)
@@ -266,6 +279,17 @@ func copyMap[M ~map[K]V, K comparable, V any](input M) M {
 	output := make(M, len(input))
 	for key, value := range input {
 		output[key] = value
+	}
+	return output
+}
+
+func testArtifactContentsSnapshot(input map[string]TestArtifact) map[string][]byte {
+	output := make(map[string][]byte, len(input))
+	for id, artifact := range input {
+		if len(artifact.Content) == 0 {
+			continue
+		}
+		output[id] = append([]byte(nil), artifact.Content...)
 	}
 	return output
 }

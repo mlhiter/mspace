@@ -110,6 +110,7 @@ Worker
   -> writes test-result.json
 Server
   -> reconciles run item status and evidence
+  -> persists screenshot evidence as server-owned test_artifacts
 Human
   -> accepts or blocks the run result
 ```
@@ -136,7 +137,7 @@ Main server-owned state groups:
 - Identity: `users`, `user_password_credentials`, `user_identities`, `auth_sessions`, `oauth_states`, `oauth_results`. `/api/auth/me` and auth result payloads expose a lightweight `identity` object derived from `user_identities` for UI display and admin-login matching.
 - Workspaces: `workspaces`, `workspace_members`, `workspace_invitations`. Invitation tokens are stored as server-side secrets and surfaced to users only as one-time join links. The signed-out preview API returns safe metadata such as workspace name, role, inviter display fields, expiry, and status; it does not expose member lists, raw internal ids, or token debug fields.
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
-- Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
+- Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`, and `test_artifacts`. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
 - Runtime surfaces: `workspace_settings`, `agent_profiles`, `clusters`, `issue_test_environments`, `issue_handoffs`.
 - Runtime queue: `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, `runtime_task_logs`.

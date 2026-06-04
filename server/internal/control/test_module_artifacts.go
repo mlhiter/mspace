@@ -195,14 +195,14 @@ func (s *PostgresStore) reconcileTestResultArtifact(ctx context.Context, q query
 		return err
 	}
 	for _, item := range artifact.Items {
-		if err := updateTestRunItemFromArtifact(ctx, q, run, item); err != nil {
+		if err := s.updateTestRunItemFromArtifact(ctx, q, task, run, item); err != nil {
 			return err
 		}
 	}
 	return updateTestRunCounts(ctx, q, run.WorkspaceID, run.ProjectID, run.ID)
 }
 
-func updateTestRunItemFromArtifact(ctx context.Context, q queryer, run TestRun, item TestResultArtifactItem) error {
+func (s *PostgresStore) updateTestRunItemFromArtifact(ctx context.Context, q queryer, task RuntimeTask, run TestRun, item TestResultArtifactItem) error {
 	caseID := strings.TrimSpace(item.CaseID)
 	status := normalizeTestRunItemStatus(item.Status)
 	if caseID == "" {
@@ -211,7 +211,16 @@ func updateTestRunItemFromArtifact(ctx context.Context, q queryer, run TestRun, 
 	if status == "" || !isFinalTestRunItemStatus(status) {
 		return errors.New("test-result.json status must be passed, failed, blocked, or skipped")
 	}
+	runItem, err := loadTestRunItemByRunAndCase(ctx, q, run.WorkspaceID, run.ProjectID, run.ID, caseID)
+	if err != nil {
+		return err
+	}
 	evidence := cloneRawJSONObject(item.Evidence)
+	artifacts, err := s.storeTestResultEvidenceArtifacts(ctx, q, task, run, runItem, evidence)
+	if err != nil {
+		return err
+	}
+	evidence = rewriteTestResultEvidenceWithArtifacts(evidence, artifacts)
 	tag, err := q.Exec(ctx, `
 		UPDATE test_run_items
 		SET status = $5,
@@ -231,6 +240,80 @@ func updateTestRunItemFromArtifact(ctx context.Context, q queryer, run TestRun, 
 		return ErrNotFound
 	}
 	return nil
+}
+
+func loadTestRunItemByRunAndCase(ctx context.Context, q queryer, workspaceID, projectID, runID, caseID string) (TestRunItem, error) {
+	rows, err := q.Query(ctx, `
+		SELECT
+			i.id::text,
+			i.workspace_id::text,
+			i.project_id::text,
+			i.run_id::text,
+			i.case_id::text,
+			COALESCE(i.execution_issue_id::text, ''),
+			i.agent_session_id,
+			i.status,
+			i.actual_result,
+			i.failure_summary,
+			i.evidence,
+			i.created_at,
+			i.updated_at,
+			`+testCaseSelectColumnsForAlias("tc")+`
+		FROM test_run_items i
+		JOIN test_cases tc ON tc.id = i.case_id
+		WHERE i.workspace_id = $1
+			AND i.project_id = $2
+			AND i.run_id = $3
+			AND i.case_id::text = $4
+		LIMIT 1
+	`, workspaceID, projectID, runID, caseID)
+	if err != nil {
+		return TestRunItem{}, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return TestRunItem{}, ErrNotFound
+	}
+	item, err := scanTestRunItem(rows)
+	if err != nil {
+		return TestRunItem{}, err
+	}
+	if err := rows.Err(); err != nil {
+		return TestRunItem{}, err
+	}
+	return item, nil
+}
+
+func (s *PostgresStore) storeTestResultEvidenceArtifacts(ctx context.Context, q queryer, task RuntimeTask, run TestRun, item TestRunItem, evidence json.RawMessage) ([]TestArtifact, error) {
+	candidates := testEvidenceScreenshotCandidates(evidence)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	artifacts := []TestArtifact{}
+	for _, candidate := range candidates {
+		metadata, _ := json.Marshal(candidate.Metadata)
+		artifact, err := s.createTestArtifact(ctx, q, CreateTestArtifactInput{
+			WorkspaceID:     run.WorkspaceID,
+			ProjectID:       run.ProjectID,
+			RunID:           run.ID,
+			RunItemID:       item.ID,
+			CaseID:          item.TestCaseID,
+			SourceIssueID:   firstNonEmpty(item.ExecutionIssueID, task.IssueID),
+			SourceTaskID:    task.ID,
+			SourceSessionID: firstNonEmpty(item.AgentSessionID, task.SessionID),
+			Kind:            "screenshot",
+			Role:            "evidence",
+			Filename:        candidate.Filename,
+			ContentType:     candidate.ContentType,
+			Content:         candidate.Data,
+			Metadata:        metadata,
+		})
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, nil
 }
 
 func (s *MemoryStore) reconcileTestResultArtifactLocked(task RuntimeTask, artifact TestResultArtifact) {
@@ -256,7 +339,8 @@ func (s *MemoryStore) reconcileTestResultArtifactLocked(task RuntimeTask, artifa
 				item.Status = status
 				item.ActualResult = strings.TrimSpace(artifactItem.ActualResult)
 				item.FailureSummary = strings.TrimSpace(artifactItem.FailureSummary)
-				item.Evidence = cloneRawJSONObject(artifactItem.Evidence)
+				artifacts := s.storeMemoryTestResultEvidenceArtifactsLocked(task, run, item, artifactItem.Evidence)
+				item.Evidence = rewriteTestResultEvidenceWithArtifacts(cloneRawJSONObject(artifactItem.Evidence), artifacts)
 				item.UpdatedAt = now
 				s.testRunItems[id] = item
 			}
@@ -278,6 +362,38 @@ func (s *MemoryStore) reconcileTestResultArtifactLocked(task RuntimeTask, artifa
 	}
 	run.UpdatedAt = now
 	s.testRuns[run.ID] = run
+}
+
+func (s *MemoryStore) storeMemoryTestResultEvidenceArtifactsLocked(task RuntimeTask, run TestRun, item TestRunItem, evidence json.RawMessage) []TestArtifact {
+	candidates := testEvidenceScreenshotCandidates(evidence)
+	if len(candidates) == 0 {
+		return nil
+	}
+	artifacts := []TestArtifact{}
+	for _, candidate := range candidates {
+		metadata, _ := json.Marshal(candidate.Metadata)
+		artifact, err := s.createMemoryTestArtifactLocked(CreateTestArtifactInput{
+			WorkspaceID:     run.WorkspaceID,
+			ProjectID:       run.ProjectID,
+			RunID:           run.ID,
+			RunItemID:       item.ID,
+			CaseID:          item.TestCaseID,
+			SourceIssueID:   firstNonEmpty(item.ExecutionIssueID, task.IssueID),
+			SourceTaskID:    task.ID,
+			SourceSessionID: firstNonEmpty(item.AgentSessionID, task.SessionID),
+			Kind:            "screenshot",
+			Role:            "evidence",
+			Filename:        candidate.Filename,
+			ContentType:     candidate.ContentType,
+			Content:         candidate.Data,
+			Metadata:        metadata,
+		})
+		if err != nil {
+			continue
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts
 }
 
 func testRunIDFromTaskPayload(task RuntimeTask) string {

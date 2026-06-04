@@ -272,6 +272,11 @@ export interface TestRunItem {
   updatedAt: string;
 }
 
+export interface TestCaseRunItem {
+  item: TestRunItem;
+  run: TestRun;
+}
+
 export interface TestRunDetail {
   run: TestRun;
   plan?: TestPlan;

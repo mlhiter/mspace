@@ -1,6 +1,8 @@
 package control
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +36,7 @@ type MemoryStore struct {
 	testPlanCases        map[string]TestPlanCase
 	testRuns             map[string]TestRun
 	testRunItems         map[string]TestRunItem
+	testArtifacts        map[string]TestArtifact
 	issues               map[string]Issue
 	comments             map[string]Comment
 	commentReactions     map[string]map[string]CommentReactionSummary
@@ -117,6 +120,7 @@ func NewMemoryStore() *MemoryStore {
 		testPlanCases:        map[string]TestPlanCase{},
 		testRuns:             map[string]TestRun{},
 		testRunItems:         map[string]TestRunItem{},
+		testArtifacts:        map[string]TestArtifact{},
 		issues:               map[string]Issue{},
 		comments:             map[string]Comment{},
 		commentReactions:     map[string]map[string]CommentReactionSummary{},
@@ -2248,6 +2252,39 @@ func (s *MemoryStore) GetProjectTestRun(_ Context, userID, workspaceID, projectI
 	return s.testRunDetailLocked(strings.TrimSpace(runID))
 }
 
+func (s *MemoryStore) ListProjectTestCaseRunItems(_ Context, userID, workspaceID, projectID, caseID string) ([]TestCaseRunItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	testCase, err := s.testCaseForProjectLocked(userID, workspaceID, projectID, caseID)
+	if err != nil {
+		return nil, err
+	}
+	items := []TestCaseRunItem{}
+	for _, item := range s.testRunItems {
+		if item.WorkspaceID != testCase.WorkspaceID || item.ProjectID != testCase.ProjectID || item.TestCaseID != testCase.ID {
+			continue
+		}
+		run, ok := s.testRuns[item.RunID]
+		if !ok {
+			continue
+		}
+		copyItem := item
+		copyItem.TestCase = testCaseSnapshot(testCase)
+		items = append(items, TestCaseRunItem{Item: copyItem, Run: run})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Item.UpdatedAt != items[j].Item.UpdatedAt {
+			return items[i].Item.UpdatedAt > items[j].Item.UpdatedAt
+		}
+		if items[i].Run.UpdatedAt != items[j].Run.UpdatedAt {
+			return items[i].Run.UpdatedAt > items[j].Run.UpdatedAt
+		}
+		return items[i].Item.ID > items[j].Item.ID
+	})
+	return items, nil
+}
+
 func (s *MemoryStore) RetryProjectTestRun(_ Context, user User, workspaceID, projectID, runID string, input RetryTestRunInput) (TestRunDetail, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3594,6 +3631,88 @@ func (s *MemoryStore) GetIssueAttachment(_ Context, userID, attachmentID string)
 		return IssueAttachment{}, ErrNotFound
 	}
 	return attachment, nil
+}
+
+func (s *MemoryStore) createMemoryTestArtifactLocked(input CreateTestArtifactInput) (TestArtifact, error) {
+	normalized, err := normalizeCreateTestArtifactInput(input)
+	if err != nil {
+		return TestArtifact{}, err
+	}
+	for _, artifact := range s.testArtifacts {
+		if artifact.RunItemID == normalized.RunItemID {
+			sum := sha256.Sum256(normalized.Content)
+			if artifact.SHA256 == hex.EncodeToString(sum[:]) {
+				return artifact, nil
+			}
+		}
+	}
+	sum := sha256.Sum256(normalized.Content)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	artifact := TestArtifact{
+		ID:              fmt.Sprintf("test-artifact-%04d", s.nextMemoryIDLocked()),
+		WorkspaceID:     normalized.WorkspaceID,
+		ProjectID:       normalized.ProjectID,
+		RunID:           normalized.RunID,
+		RunItemID:       normalized.RunItemID,
+		CaseID:          normalized.CaseID,
+		SourceIssueID:   normalized.SourceIssueID,
+		SourceTaskID:    normalized.SourceTaskID,
+		SourceSessionID: normalized.SourceSessionID,
+		Kind:            normalized.Kind,
+		Role:            normalized.Role,
+		Filename:        normalized.Filename,
+		ContentType:     normalized.ContentType,
+		SizeBytes:       int64(len(normalized.Content)),
+		SHA256:          hex.EncodeToString(sum[:]),
+		StorageBackend:  "memory_blob",
+		Content:         append([]byte(nil), normalized.Content...),
+		Metadata:        copyRawMessage(normalized.Metadata),
+		CreatedAt:       now,
+	}
+	s.testArtifacts[artifact.ID] = artifact
+	return artifact, nil
+}
+
+func (s *MemoryStore) ListProjectTestRunArtifacts(_ Context, userID, workspaceID, projectID, runID string) ([]TestArtifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := s.testRunForProjectLocked(userID, workspaceID, projectID, runID); err != nil {
+		return nil, err
+	}
+	artifacts := []TestArtifact{}
+	for _, artifact := range s.testArtifacts {
+		if artifact.WorkspaceID == strings.TrimSpace(workspaceID) && artifact.ProjectID == strings.TrimSpace(projectID) && artifact.RunID == strings.TrimSpace(runID) {
+			copyArtifact := artifact
+			copyArtifact.Content = append([]byte(nil), artifact.Content...)
+			copyArtifact.Metadata = copyRawMessage(artifact.Metadata)
+			artifacts = append(artifacts, copyArtifact)
+		}
+	}
+	sort.Slice(artifacts, func(i, j int) bool {
+		if artifacts[i].CreatedAt != artifacts[j].CreatedAt {
+			return artifacts[i].CreatedAt > artifacts[j].CreatedAt
+		}
+		return artifacts[i].ID > artifacts[j].ID
+	})
+	return artifacts, nil
+}
+
+func (s *MemoryStore) GetTestArtifact(_ Context, userID, artifactID string) (TestArtifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	artifact, ok := s.testArtifacts[strings.TrimSpace(artifactID)]
+	if !ok {
+		return TestArtifact{}, ErrNotFound
+	}
+	if !s.isWorkspaceMember(artifact.WorkspaceID, strings.TrimSpace(userID)) {
+		return TestArtifact{}, ErrNotFound
+	}
+	copyArtifact := artifact
+	copyArtifact.Content = append([]byte(nil), artifact.Content...)
+	copyArtifact.Metadata = copyRawMessage(artifact.Metadata)
+	return copyArtifact, nil
 }
 
 func (s *MemoryStore) SetCommentReaction(_ Context, user User, workspaceID, issueID, commentID, reaction string) error {

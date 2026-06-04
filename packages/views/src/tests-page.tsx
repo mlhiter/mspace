@@ -10,6 +10,7 @@ import {
   ExternalLink,
   FileUp,
   ListChecks,
+  Maximize2,
   Network,
   Play,
   Plus,
@@ -23,8 +24,10 @@ import {
   X,
 } from "lucide-react";
 import {
+  buildControlPlaneUrl,
   controlPlaneApi,
   getControlPlaneBaseUrl,
+  getStoredAuthToken,
   queryKeys,
   type Project,
   type RuntimeWorker,
@@ -33,6 +36,7 @@ import {
   type TestCaseLatestResult,
   type TestCaseProposal,
   type TestCaseRevision,
+  type TestCaseRunItem,
   type TestCaseStep,
   type TestPlan,
   type TestPlanDetail,
@@ -61,6 +65,7 @@ import { useMspaceAuth } from "./auth-context";
 import { RelativeTime } from "./time";
 
 type TabKey = "cases" | "proposals" | "plans" | "runs";
+type TestCaseDetailTab = "details" | "runs" | "revisions";
 
 type CaseForm = {
   title: string;
@@ -107,6 +112,7 @@ const emptyPlanForm: PlanForm = {
 };
 
 const tabs: TabKey[] = ["cases", "proposals", "plans", "runs"];
+const caseDetailTabs: TestCaseDetailTab[] = ["details", "runs", "revisions"];
 const statusOptions = ["draft", "needs_review", "ready", "archived"] as const;
 const proposalStatusOptions = ["pending", "applied", "rejected", "invalid"] as const;
 const planStatusOptions = ["draft", "ready", "archived"] as const;
@@ -254,8 +260,21 @@ function testsTabSearch(tab: TabKey, projectId?: string) {
   return { tab, project: projectId || undefined };
 }
 
-function useTestsSearch(): { tab?: string; project?: string } {
-  return useSearch({ strict: false }) as { tab?: string; project?: string };
+function testCaseDetailSearch(
+  projectId?: string,
+  caseTab: TestCaseDetailTab = "details",
+  focus?: { runId?: string; itemId?: string },
+) {
+  return {
+    ...testsTabSearch("cases", projectId),
+    caseTab,
+    run: focus?.runId || undefined,
+    item: focus?.itemId || undefined,
+  };
+}
+
+function useTestsSearch(): { tab?: string; project?: string; caseTab?: string; run?: string; item?: string } {
+  return useSearch({ strict: false }) as { tab?: string; project?: string; caseTab?: string; run?: string; item?: string };
 }
 
 function normalizeTestCaseForView(testCase: Partial<TestCase> | null | undefined): TestCase {
@@ -278,6 +297,7 @@ function normalizeTestCaseForView(testCase: Partial<TestCase> | null | undefined
     tags: value.tags ?? [],
     qualityScore: value.qualityScore ?? 0,
     qualityFindings: value.qualityFindings ?? [],
+    latestResult: value.latestResult,
     createdByUserId: value.createdByUserId || "",
     createdAt: value.createdAt || "",
     updatedAt: value.updatedAt || "",
@@ -381,7 +401,11 @@ type TestEvidenceNetworkStatus = {
 type TestEvidenceScreenshotImage = {
   path: string;
   dataUrl: string;
+  url: string;
+  artifactUrl: string;
+  artifactId: string;
   mime?: string;
+  title?: string;
 };
 
 type StructuredTestEvidence = {
@@ -394,54 +418,265 @@ type StructuredTestEvidence = {
   assertions: TestEvidenceAssertion[];
   previewUrl?: string;
   finalUrl?: string;
-  cdpUrlUsed?: string;
   raw: Record<string, unknown>;
+};
+
+type TestCaseRunHistoryEntry = {
+  id: string;
+  itemId: string;
+  runId: string;
+  runStatus: string;
+  runSource: string;
+  status: string;
+  actualResult: string;
+  failureSummary: string;
+  evidence?: Record<string, unknown>;
+  targetType?: string;
+  targetValue?: string;
+  createdAt?: string;
+  updatedAt: string;
 };
 
 function structuredTestEvidence(evidence: Record<string, unknown> | undefined): StructuredTestEvidence | undefined {
   if (!evidence || Object.keys(evidence).length === 0) return undefined;
   const screenshot = stringValue(evidence.screenshot);
-  const screenshots = [...stringArrayValue(evidence.screenshots), ...stringArrayValue(evidence.screenshotPaths)];
-  if (screenshot) screenshots.unshift(screenshot);
+  const screenshotImages = uniqueScreenshotImages([
+    ...screenshotReferencesValue(evidence.artifacts),
+    ...screenshotReferencesValue(evidence.screenshot),
+    ...screenshotReferencesValue(evidence.screenshots),
+    ...screenshotReferencesValue(evidence.screenshotPaths, "path"),
+    ...screenshotImagesValue(evidence.screenshotImages),
+  ]);
+  const screenshots = screenshotImages.map(screenshotImageOpenTarget).filter(Boolean);
   return {
     screenshot,
     screenshots: [...new Set(screenshots)],
-    screenshotImages: screenshotImagesValue(evidence.screenshotImages),
+    screenshotImages,
     domSnapshot: stringValue(evidence.domSnapshot),
     postSubmitSnapshot: stringValue(evidence.postSubmitSnapshot),
     networkStatuses: networkStatusesValue(evidence.networkStatuses),
     assertions: assertionsValue(evidence.assertions),
     previewUrl: stringValue(evidence.previewUrl),
     finalUrl: stringValue(evidence.finalUrl),
-    cdpUrlUsed: stringValue(evidence.cdpUrlUsed),
     raw: evidence,
   };
+}
+
+function screenshotReferencesValue(value: unknown, defaultKind: "auto" | "path" = "auto"): TestEvidenceScreenshotImage[] {
+  if (Array.isArray(value)) return value.flatMap((item) => screenshotReferencesValue(item, defaultKind));
+  if (!value) return [];
+  if (typeof value === "string") {
+    const reference = screenshotReferenceFromString(value, defaultKind);
+    return reference ? [reference] : [];
+  }
+  if (typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const dataUrl = stringValue(record.dataUrl) || stringValue(record.dataURL) || stringValue(record.data_url);
+  const url = stringValue(record.url);
+  const artifactUrl = stringValue(record.artifactUrl) || stringValue(record.artifactURL) || stringValue(record.artifact_url);
+  const thumbnailUrl = stringValue(record.thumbnailUrl) || stringValue(record.thumbnailURL) || stringValue(record.thumbnail_url);
+  const path = stringValue(record.path);
+  const artifactId = stringValue(record.artifactId) || stringValue(record.artifactID) || stringValue(record.artifact_id) || stringValue(record.id);
+  if (!dataUrl && !url && !artifactUrl && !thumbnailUrl && !path && !artifactId) return [];
+  return [
+    {
+      dataUrl: dataUrl.startsWith("data:image/") ? dataUrl : "",
+      url: url || thumbnailUrl,
+      artifactUrl: artifactUrl || thumbnailUrl,
+      artifactId,
+      path,
+      mime: stringValue(record.mime),
+      title: stringValue(record.title) || stringValue(record.name),
+    },
+  ];
+}
+
+function screenshotReferenceFromString(value: string, defaultKind: "auto" | "path"): TestEvidenceScreenshotImage | undefined {
+  const reference = value.trim();
+  if (!reference) return undefined;
+  if (reference.startsWith("data:image/")) {
+    return { dataUrl: reference, url: "", artifactUrl: "", artifactId: "", path: "" };
+  }
+  if (defaultKind !== "path" && isHttpUrl(reference)) {
+    return { dataUrl: "", url: reference, artifactUrl: "", artifactId: "", path: "" };
+  }
+  if (defaultKind !== "path" && (reference.startsWith("/api/") || reference.startsWith("/artifacts/"))) {
+    return { dataUrl: "", url: "", artifactUrl: reference, artifactId: "", path: "" };
+  }
+  return { dataUrl: "", url: "", artifactUrl: "", artifactId: "", path: reference };
 }
 
 function screenshotImagesValue(value: unknown): TestEvidenceScreenshotImage[] {
   if (!Array.isArray(value)) return [];
   const images: TestEvidenceScreenshotImage[] = [];
   for (const item of value) {
-    if (!item || typeof item !== "object") continue;
-    const record = item as Record<string, unknown>;
-    const dataUrl = stringValue(record.dataUrl);
-    if (!dataUrl.startsWith("data:image/")) continue;
-    images.push({
-      dataUrl,
-      path: stringValue(record.path),
-      mime: stringValue(record.mime),
-    });
+    images.push(...screenshotReferencesValue(item));
   }
   return images;
 }
 
-function stringValue(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
+function uniqueScreenshotImages(images: TestEvidenceScreenshotImage[]) {
+  const seen = new Set<string>();
+  const unique: TestEvidenceScreenshotImage[] = [];
+  for (const image of images) {
+    const key = screenshotImageTarget(image) || image.artifactId;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(image);
+  }
+  return unique;
 }
 
-function stringArrayValue(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => stringValue(item)).filter(Boolean);
+function screenshotImageSource(image: TestEvidenceScreenshotImage) {
+  const source = image.dataUrl || image.url || image.artifactUrl;
+  if (source.startsWith("/")) return `${getControlPlaneBaseUrl()}${source}`;
+  return source;
+}
+
+function isProtectedEvidenceApiPath(value: string) {
+  return value.startsWith("/api/test-artifacts/") || value.includes("/api/test-artifacts/");
+}
+
+function evidenceApiUrl(value: string) {
+  const target = value.trim();
+  if (!target) return "";
+  if (target.startsWith("http")) return target;
+  if (target.startsWith("/")) return buildControlPlaneUrl(target);
+  return "";
+}
+
+function useResolvedEvidenceImageSrc(image: TestEvidenceScreenshotImage) {
+  const rawSource = screenshotImageSource(image);
+  const token = getStoredAuthToken();
+  const rawApiSource = image.artifactUrl || image.url || rawSource;
+  const protectedPath = isProtectedEvidenceApiPath(rawApiSource) ? rawApiSource : "";
+  const [resolvedSrc, setResolvedSrc] = useState(protectedPath ? "" : rawSource);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!protectedPath) {
+      setResolvedSrc(rawSource);
+      setError("");
+      return;
+    }
+    if (!token) {
+      setResolvedSrc("");
+      setError("missing authorization");
+      return;
+    }
+    const controller = new AbortController();
+    let objectUrl = "";
+    setResolvedSrc("");
+    setError("");
+    const url = evidenceApiUrl(protectedPath);
+    fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error((await response.text()) || `Request failed with status ${response.status}`);
+        return response.blob();
+      })
+      .then((blob) => {
+        if (controller.signal.aborted) return;
+        objectUrl = URL.createObjectURL(blob);
+        setResolvedSrc(objectUrl);
+      })
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setError(cause instanceof Error ? cause.message : "image unavailable");
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [protectedPath, rawSource, token]);
+
+  return {
+    src: resolvedSrc,
+    loading: Boolean(protectedPath && !resolvedSrc && !error),
+    error,
+  };
+}
+
+function screenshotImageTarget(image: TestEvidenceScreenshotImage) {
+  return image.artifactUrl || image.url || image.path || image.dataUrl || image.artifactId;
+}
+
+function screenshotImageOpenTarget(image: TestEvidenceScreenshotImage) {
+  return image.artifactUrl || image.url || image.path;
+}
+
+function screenshotImageLabel(image: TestEvidenceScreenshotImage, fallback: string) {
+  return image.title || image.path || image.artifactId || image.artifactUrl || image.url || fallback;
+}
+
+function normalizeTestCaseRunHistoryEntry(value: TestCaseRunItem): TestCaseRunHistoryEntry | undefined {
+  const { item, run } = value;
+  const itemId = item.id;
+  const runId = item.runId || run.id;
+  const updatedAt = item.updatedAt || run.updatedAt;
+  if (!runId && !itemId) return undefined;
+  return {
+    id: itemId || runId,
+    itemId,
+    runId,
+    runStatus: run.status,
+    runSource: run.source,
+    status: item.status,
+    actualResult: item.actualResult,
+    failureSummary: item.failureSummary,
+    evidence: item.evidence,
+    targetType: run.targetType,
+    targetValue: run.targetValue,
+    createdAt: item.createdAt || run.createdAt,
+    updatedAt,
+  };
+}
+
+function latestResultToHistoryEntry(result: TestCaseLatestResult | undefined): TestCaseRunHistoryEntry | undefined {
+  if (!result) return undefined;
+  return {
+    id: result.itemId || result.runId,
+    itemId: result.itemId,
+    runId: result.runId,
+    runStatus: result.runStatus,
+    runSource: result.runSource,
+    status: result.status,
+    actualResult: result.actualResult,
+    failureSummary: result.failureSummary,
+    evidence: result.evidence,
+    updatedAt: result.updatedAt,
+  };
+}
+
+function useTestCaseRunHistory(params: {
+  token: string;
+  workspaceId: string;
+  projectId: string;
+  caseId: string;
+  enabled: boolean;
+  latestResult?: TestCaseLatestResult;
+}) {
+  const historyQuery = useQuery({
+    queryKey: queryKeys.projectTestCaseRunItems(params.workspaceId, params.projectId, params.caseId || "__none", params.token),
+    queryFn: async () =>
+      (await controlPlaneApi.listProjectTestCaseRunItems(params.token, params.workspaceId, params.projectId, params.caseId))
+        .map(normalizeTestCaseRunHistoryEntry)
+        .filter((entry): entry is TestCaseRunHistoryEntry => Boolean(entry)),
+    enabled: params.enabled,
+  });
+  const latestEntry = useMemo(() => latestResultToHistoryEntry(params.latestResult), [params.latestResult]);
+  const apiEntries = historyQuery.data || [];
+  const entries = apiEntries.length > 0 ? apiEntries : latestEntry ? [latestEntry] : [];
+  return {
+    query: historyQuery,
+    entries,
+  };
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function networkStatusesValue(value: unknown): TestEvidenceNetworkStatus[] {
@@ -491,6 +726,13 @@ function isHttpUrl(value: string) {
   return /^https?:\/\//i.test(value);
 }
 
+function resolveEvidenceUrl(value: string) {
+  const target = value.trim();
+  if (!target) return "";
+  if (target.startsWith("/")) return `${getControlPlaneBaseUrl()}${target}`;
+  return target;
+}
+
 function evidenceStatusTone(status?: number) {
   if (!status) return "text-[color:var(--muted)]";
   if (status >= 200 && status < 400) return "text-[color:var(--success)]";
@@ -499,8 +741,27 @@ function evidenceStatusTone(status?: number) {
 }
 
 async function openEvidenceTarget(value: string) {
-  const target = value.trim();
+  const target = resolveEvidenceUrl(value);
   if (!target) return;
+  if (isProtectedEvidenceApiPath(value) || isProtectedEvidenceApiPath(target)) {
+    const token = getStoredAuthToken();
+    if (!token) return;
+    const response = await fetch(evidenceApiUrl(value) || target, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      console.warn(await response.text());
+      return;
+    }
+    const objectUrl = URL.createObjectURL(await response.blob());
+    window.open(objectUrl, "_blank", "noopener,noreferrer");
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    return;
+  }
+  if (value.startsWith("data:image/")) {
+    window.open(value, "_blank", "noopener,noreferrer");
+    return;
+  }
   if (isHttpUrl(target) && window.mspaceDesktop?.openExternal) {
     await window.mspaceDesktop.openExternal(target);
     return;
@@ -1475,9 +1736,12 @@ export function TestsPage() {
                               <div className="min-w-0 text-right text-[12px]">
                                 {testCase.latestResult?.runId ? (
                                   <Link
-                                    to="/tests/runs/$runId"
-                                    params={{ runId: testCase.latestResult.runId }}
-                                    search={testsTabSearch("runs", effectiveProjectId)}
+                                    to="/tests/cases/$caseId"
+                                    params={{ caseId: testCase.id }}
+                                    search={testCaseDetailSearch(effectiveProjectId, "runs", {
+                                      runId: testCase.latestResult.runId,
+                                      itemId: testCase.latestResult.itemId,
+                                    })}
                                     className={cn("font-medium hover:underline", latestResultTone(testCase.latestResult))}
                                   >
                                     {latestResultLabel(testCase.latestResult, t)}
@@ -1914,6 +2178,15 @@ export function TestCaseDetailPage() {
   const testCase = useMemo(() => (caseQuery.data ? normalizeTestCaseForView(caseQuery.data) : undefined), [caseQuery.data]);
   const revisions = revisionsQuery.data || emptyTestCaseRevisions;
   const revisionTimeline = useMemo(() => buildTestCaseRevisionTimeline(revisions, t), [revisions, t]);
+  const activeCaseTab = !isNew && caseDetailTabs.includes(search.caseTab as TestCaseDetailTab) ? (search.caseTab as TestCaseDetailTab) : "details";
+  const runHistory = useTestCaseRunHistory({
+    token: auth.token,
+    workspaceId,
+    projectId: effectiveProjectId,
+    caseId,
+    enabled: serverWorkspaceReady && Boolean(effectiveProjectId && caseId && !isNew),
+    latestResult: testCase?.latestResult,
+  });
   const canSave = Boolean(effectiveProjectId && caseForm.title.trim());
   const canRunCase = Boolean(testCase && testCase.status === "ready");
 
@@ -1921,7 +2194,7 @@ export function TestCaseDetailPage() {
     mutationFn: (input: TestCaseInput) => controlPlaneApi.createProjectTestCase(auth.token, workspaceId, effectiveProjectId, input),
     onSuccess: async (created) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCases(workspaceId, effectiveProjectId, auth.token) });
-      await navigate({ to: "/tests/cases/$caseId", params: { caseId: created.id }, search: testsTabSearch("cases", effectiveProjectId) });
+      await navigate({ to: "/tests/cases/$caseId", params: { caseId: created.id }, search: testCaseDetailSearch(effectiveProjectId, "details") });
     },
   });
   const updateCase = useMutation({
@@ -1932,6 +2205,7 @@ export function TestCaseDetailPage() {
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCases(workspaceId, effectiveProjectId, auth.token) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCase(workspaceId, effectiveProjectId, updated.id, auth.token) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCaseRevisions(workspaceId, effectiveProjectId, updated.id, auth.token) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCaseRunItems(workspaceId, effectiveProjectId, updated.id, auth.token) }),
       ]);
     },
   });
@@ -1947,10 +2221,17 @@ export function TestCaseDetailPage() {
       });
     },
     onSuccess: async (detail) => {
+      const runningCaseId = testCase?.id || detail.items[0]?.testCaseId || caseId;
       setActionMessage(t("tests.adHocRunStarted"));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestRuns(workspaceId, effectiveProjectId, auth.token) }),
-        navigate({ to: "/tests/runs/$runId", params: { runId: detail.run.id }, search: testsTabSearch("runs", effectiveProjectId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCase(workspaceId, effectiveProjectId, runningCaseId, auth.token) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCaseRunItems(workspaceId, effectiveProjectId, runningCaseId, auth.token) }),
+        navigate({
+          to: "/tests/cases/$caseId",
+          params: { caseId: runningCaseId },
+          search: testCaseDetailSearch(effectiveProjectId, "runs", { runId: detail.run.id, itemId: detail.items[0]?.id }),
+        }),
       ]);
     },
   });
@@ -2041,10 +2322,12 @@ export function TestCaseDetailPage() {
                 {startCaseRun.isPending ? t("tests.startingAdHocRun") : t("tests.runCase")}
               </Button>
             ) : null}
-            <Button type="submit" disabled={!canSave || savePending}>
-              <Save data-icon />
-              {savePending ? t("tests.saving") : isNew ? t("tests.createCase") : t("tests.saveCase")}
-            </Button>
+            {isNew || activeCaseTab === "details" ? (
+              <Button type="submit" disabled={!canSave || savePending}>
+                <Save data-icon />
+                {savePending ? t("tests.saving") : isNew ? t("tests.createCase") : t("tests.saveCase")}
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -2054,115 +2337,37 @@ export function TestCaseDetailPage() {
           <p className="text-[12px] text-[color:var(--muted)]">{actionMessage}</p>
         ) : null}
 
-        <CaseFormFields
-          form={caseForm}
-          onChange={setCaseForm}
-          onStepChange={updateStep}
-        />
+        {!isNew && testCase ? (
+          <CaseDetailTabs activeTab={activeCaseTab} projectId={effectiveProjectId} caseId={testCase.id} />
+        ) : null}
 
-        {testCase ? (
-          <div className="grid gap-4 border-t border-[color:var(--line)] pt-4">
-            <section>
-              <h3 className="mb-2 text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("tests.latestResult")}</h3>
-              {testCase.latestResult ? (
-                <div className="rounded-[8px] bg-[color:var(--paper)] px-3 py-3 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <StatusBadge
-                      value={testCase.latestResult.status}
-                      valueLabel={latestResultLabel(testCase.latestResult, t)}
-                    />
-                    <Button type="button" variant="secondary" size="sm" asChild>
-                      <Link to="/tests/runs/$runId" params={{ runId: testCase.latestResult.runId }} search={testsTabSearch("runs", effectiveProjectId)}>
-                        <ArrowRight data-icon />
-                        {t("tests.openRun")}
-                      </Link>
-                    </Button>
-                  </div>
-                  <p className="mt-2 text-[12px] text-[color:var(--muted)]">
-                    {testCase.latestResult.actualResult || testCase.latestResult.failureSummary || t("tests.noResultYet")}
-                  </p>
-                  <p className="mt-1 text-[11px] text-[color:var(--faint)]">
-                    {t("tests.latestResultUpdated", { time: testCase.latestResult.updatedAt ? new Date(testCase.latestResult.updatedAt).toLocaleString() : t("common.unknown") })}
-                  </p>
-                  <TestRunEvidencePanel evidence={testCase.latestResult.evidence} />
-                </div>
-              ) : (
-                <p className="text-[12px] text-[color:var(--muted)]">{t("tests.notRun")}</p>
-              )}
-            </section>
-            <section>
-              <h3 className="mb-2 text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("tests.findings")}</h3>
-              {testCase.qualityFindings.length === 0 ? (
-                <p className="text-[12px] text-[color:var(--muted)]">{t("tests.noFindings")}</p>
-              ) : (
-                <div className="grid gap-2">
-                  {testCase.qualityFindings.map((finding) => (
-                    <div key={finding.code} className="rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-                      <span className="font-medium text-[color:var(--muted-strong)]">{qualityFindingLabel(finding.code, finding.message, t)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-            <section>
-              <h3 className="mb-2 text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("tests.revisions")}</h3>
-              {revisionsQuery.error ? (
-                <Notice tone="danger">{revisionsQuery.error.message}</Notice>
-              ) : revisions.length === 0 ? (
-                <p className="text-[12px] text-[color:var(--muted)]">{t("tests.noRevisions")}</p>
-              ) : (
-                <div className="grid gap-2">
-                  {revisionTimeline.map(({ revision, changes, facts, isInitial }) => (
-                    <div key={revision.id} className="rounded-[8px] bg-[color:var(--paper)] px-3 py-3 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                        <div className="min-w-0 font-medium text-[color:var(--text)]">
-                          <span className="text-[color:var(--muted-strong)]">#{revision.revisionNumber}</span>
-                          <span> - </span>
-                          <span className="break-words">{revision.snapshot.title || t("tests.untitledCase")}</span>
-                        </div>
-                        <div className="shrink-0 text-[11px] text-[color:var(--muted)]">
-                          <RelativeTime value={revision.createdAt} />
-                        </div>
-                      </div>
+        {isNew || activeCaseTab === "details" ? (
+          <CaseDetailsTab
+            form={caseForm}
+            testCase={testCase}
+            onChange={setCaseForm}
+            onStepChange={updateStep}
+          />
+        ) : null}
 
-                      {isInitial ? (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <span className="rounded-[6px] bg-[color:var(--surface)] px-2 py-1 text-[11px] font-medium text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
-                            {t("tests.revisionInitial")}
-                          </span>
-                          {facts.map((fact) => (
-                            <span key={fact.key} className="rounded-[6px] bg-[color:var(--surface)] px-2 py-1 text-[11px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-                              <span className="font-medium text-[color:var(--muted-strong)]">{fact.label}</span>: {fact.value}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
+        {!isNew && testCase && activeCaseTab === "runs" ? (
+          <CaseRunHistoryTab
+            testCase={testCase}
+            projectId={effectiveProjectId}
+            entries={runHistory.entries}
+            queryPending={runHistory.query.isPending}
+            queryError={runHistory.query.error}
+            focusedRunId={search.run}
+            focusedItemId={search.item}
+          />
+        ) : null}
 
-                      {!isInitial && changes.length > 0 ? (
-                        <div className="mt-2 grid gap-1.5">
-                          {changes.map((change) => (
-                            <div key={change.key} className="grid gap-1 rounded-[6px] bg-[color:var(--surface)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
-                              <div className="text-[11px] font-medium text-[color:var(--muted-strong)]">{change.label}</div>
-                              <div className="grid gap-1 text-[11px] leading-5 text-[color:var(--muted)] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                                <span className="min-w-0 break-words">{t("tests.revisionBefore", { value: change.before })}</span>
-                                <span className="min-w-0 break-words text-[color:var(--text)]">{t("tests.revisionAfter", { value: change.after })}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-
-                      {!isInitial && changes.length === 0 ? (
-                        <p className="mt-2 rounded-[6px] bg-[color:var(--surface)] px-2.5 py-2 text-[11px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-                          {t("tests.revisionNoVisibleChanges")}
-                        </p>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
+        {!isNew && activeCaseTab === "revisions" ? (
+          <CaseRevisionHistoryTab
+            revisions={revisions}
+            revisionTimeline={revisionTimeline}
+            error={revisionsQuery.error}
+          />
         ) : null}
 
         {createCase.error || updateCase.error ? (
@@ -2567,6 +2772,247 @@ function ProposalCasePreview(props: { title: string; testCase?: TestCase; input?
   );
 }
 
+function CaseDetailTabs(props: {
+  activeTab: TestCaseDetailTab;
+  projectId: string;
+  caseId: string;
+}) {
+  const { t } = useMspaceTranslation();
+  return (
+    <div className="flex flex-wrap gap-1 border-b border-[color:var(--line)] pb-3">
+      {caseDetailTabs.map((tab) => (
+        <Link
+          key={tab}
+          to="/tests/cases/$caseId"
+          params={{ caseId: props.caseId }}
+          search={testCaseDetailSearch(props.projectId, tab)}
+          className={cn(
+            "rounded-[7px] px-2.5 py-1.5 text-[12px] font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
+            props.activeTab === tab ? "bg-[color:var(--selection)] text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--line)]" : "",
+          )}
+        >
+          {t(`tests.caseDetailTabs.${tab}`)}
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function CaseDetailsTab(props: {
+  form: CaseForm;
+  testCase?: TestCase;
+  onChange: Dispatch<SetStateAction<CaseForm>>;
+  onStepChange: (index: number, patch: Partial<TestCaseStep>) => void;
+}) {
+  const { t } = useMspaceTranslation();
+  return (
+    <div className="grid gap-5">
+      <CaseFormFields
+        form={props.form}
+        onChange={props.onChange}
+        onStepChange={props.onStepChange}
+      />
+
+      {props.testCase ? (
+        <section className="border-t border-[color:var(--line)] pt-4">
+          <h3 className="mb-2 text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("tests.findings")}</h3>
+          {props.testCase.qualityFindings.length === 0 ? (
+            <p className="text-[12px] text-[color:var(--muted)]">{t("tests.noFindings")}</p>
+          ) : (
+            <div className="grid gap-2">
+              {props.testCase.qualityFindings.map((finding) => (
+                <div key={finding.code} className="rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                  <span className="font-medium text-[color:var(--muted-strong)]">{qualityFindingLabel(finding.code, finding.message, t)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function CaseRunHistoryTab(props: {
+  testCase: TestCase;
+  projectId: string;
+  entries: TestCaseRunHistoryEntry[];
+  queryPending: boolean;
+  queryError: Error | null;
+  focusedRunId?: string;
+  focusedItemId?: string;
+}) {
+  const { t } = useMspaceTranslation();
+
+  if (props.queryPending && props.entries.length === 0) {
+    return (
+      <div className="divide-y divide-[color:var(--line)] rounded-[8px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
+        <TestsLoadingRows label={t("tests.loadingCaseRuns")} />
+      </div>
+    );
+  }
+
+  return (
+    <section id="case-run-history" className="grid gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("tests.caseRunHistoryTitle")}</h3>
+          <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">{t("tests.caseRunHistoryDescription")}</p>
+        </div>
+        {props.testCase.latestResult ? (
+          <StatusBadge value={props.testCase.latestResult.status} valueLabel={latestResultLabel(props.testCase.latestResult, t)} />
+        ) : null}
+      </div>
+
+      {props.queryError ? <Notice tone="danger">{props.queryError.message}</Notice> : null}
+
+      {props.entries.length === 0 ? (
+        <div className="rounded-[8px] bg-[color:var(--paper)] px-3 py-4 text-[12px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+          {t("tests.noCaseRuns")}
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          {props.entries.map((entry, index) => {
+            const focused = (props.focusedItemId && entry.itemId === props.focusedItemId) || (props.focusedRunId && entry.runId === props.focusedRunId);
+            return (
+              <CaseRunHistoryItem
+                key={`${entry.runId || "run"}-${entry.itemId || index}`}
+                entry={entry}
+                projectId={props.projectId}
+                focused={Boolean(focused)}
+              />
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CaseRunHistoryItem(props: {
+  entry: TestCaseRunHistoryEntry;
+  projectId: string;
+  focused: boolean;
+}) {
+  const { t } = useMspaceTranslation();
+  const resultText = props.entry.actualResult || props.entry.failureSummary || t("tests.noResultYet");
+  const updatedAt = props.entry.updatedAt || props.entry.createdAt;
+
+  return (
+    <article
+      id={props.entry.itemId ? `run-item-${props.entry.itemId}` : props.entry.runId ? `run-${props.entry.runId}` : undefined}
+      className={cn(
+        "grid gap-3 rounded-[8px] bg-[color:var(--paper)] px-3 py-3 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]",
+        props.focused ? "bg-[color:var(--selection)] shadow-[inset_0_0_0_1px_var(--text)]" : "",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <StatusBadge value={props.entry.status} valueLabel={t(`tests.runItemStatusValue.${props.entry.status}`, { defaultValue: props.entry.status || t("common.unknown") })} />
+            <span className="truncate text-[12px] font-medium text-[color:var(--muted-strong)]">
+              {props.entry.runId ? t("tests.runShortId", { id: props.entry.runId.slice(0, 8) }) : t("tests.adHocRun")}
+            </span>
+          </div>
+          <p className="mt-2 text-[12px] text-[color:var(--muted)]">{resultText}</p>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--faint)]">
+            {updatedAt ? <span>{t("tests.latestResultUpdated", { time: new Date(updatedAt).toLocaleString() })}</span> : null}
+            {props.entry.runSource ? <span>{t(`tests.runSourceValue.${props.entry.runSource}`, { defaultValue: props.entry.runSource })}</span> : null}
+            {props.entry.targetType ? (
+              <span>
+                {t("tests.runTarget", {
+                  type: t(`tests.targetTypeValue.${props.entry.targetType}`, { defaultValue: props.entry.targetType }),
+                  value: props.entry.targetValue || t("common.unknown"),
+                })}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        {props.entry.runId ? (
+          <Button type="button" variant="secondary" size="sm" asChild>
+            <Link to="/tests/runs/$runId" params={{ runId: props.entry.runId }} search={testsTabSearch("runs", props.projectId)}>
+              <ArrowRight data-icon />
+              {t("tests.openRun")}
+            </Link>
+          </Button>
+        ) : null}
+      </div>
+      <TestRunEvidencePanel evidence={props.entry.evidence} />
+    </article>
+  );
+}
+
+function CaseRevisionHistoryTab(props: {
+  revisions: TestCaseRevision[];
+  revisionTimeline: ReturnType<typeof buildTestCaseRevisionTimeline>;
+  error: Error | null;
+}) {
+  const { t } = useMspaceTranslation();
+  return (
+    <section className="grid gap-3">
+      <div className="min-w-0">
+        <h3 className="text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("tests.revisions")}</h3>
+        <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">{t("tests.revisionHistoryDescription")}</p>
+      </div>
+      {props.error ? (
+        <Notice tone="danger">{props.error.message}</Notice>
+      ) : props.revisions.length === 0 ? (
+        <p className="text-[12px] text-[color:var(--muted)]">{t("tests.noRevisions")}</p>
+      ) : (
+        <div className="grid gap-2">
+          {props.revisionTimeline.map(({ revision, changes, facts, isInitial }) => (
+            <div key={revision.id} className="rounded-[8px] bg-[color:var(--paper)] px-3 py-3 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <div className="min-w-0 font-medium text-[color:var(--text)]">
+                  <span className="text-[color:var(--muted-strong)]">#{revision.revisionNumber}</span>
+                  <span> - </span>
+                  <span className="break-words">{revision.snapshot.title || t("tests.untitledCase")}</span>
+                </div>
+                <div className="shrink-0 text-[11px] text-[color:var(--muted)]">
+                  <RelativeTime value={revision.createdAt} />
+                </div>
+              </div>
+
+              {isInitial ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <span className="rounded-[6px] bg-[color:var(--surface)] px-2 py-1 text-[11px] font-medium text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+                    {t("tests.revisionInitial")}
+                  </span>
+                  {facts.map((fact) => (
+                    <span key={fact.key} className="rounded-[6px] bg-[color:var(--surface)] px-2 py-1 text-[11px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                      <span className="font-medium text-[color:var(--muted-strong)]">{fact.label}</span>: {fact.value}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+
+              {!isInitial && changes.length > 0 ? (
+                <div className="mt-2 grid gap-1.5">
+                  {changes.map((change) => (
+                    <div key={change.key} className="grid gap-1 rounded-[6px] bg-[color:var(--surface)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+                      <div className="text-[11px] font-medium text-[color:var(--muted-strong)]">{change.label}</div>
+                      <div className="grid gap-1 text-[11px] leading-5 text-[color:var(--muted)] sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                        <span className="min-w-0 break-words">{t("tests.revisionBefore", { value: change.before })}</span>
+                        <span className="min-w-0 break-words text-[color:var(--text)]">{t("tests.revisionAfter", { value: change.after })}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {!isInitial && changes.length === 0 ? (
+                <p className="mt-2 rounded-[6px] bg-[color:var(--surface)] px-2.5 py-2 text-[11px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                  {t("tests.revisionNoVisibleChanges")}
+                </p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function CaseFormFields(props: {
   form: CaseForm;
   onChange: Dispatch<SetStateAction<CaseForm>>;
@@ -2870,125 +3316,233 @@ function TestsModal(props: { title: string; description: string; onClose: () => 
 function TestRunEvidencePanel(props: { evidence?: Record<string, unknown> }) {
   const { t } = useMspaceTranslation();
   const evidence = structuredTestEvidence(props.evidence);
+  const [previewImage, setPreviewImage] = useState<TestEvidenceScreenshotImage | null>(null);
   if (!evidence) return null;
   const snapshot = evidence.postSubmitSnapshot || evidence.domSnapshot;
+  const screenshotCount = Math.max(evidence.screenshots.length, evidence.screenshotImages.length);
 
   return (
-    <div className="mt-3 grid gap-3 rounded-[8px] bg-[color:var(--paper)] p-3 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 font-medium text-[color:var(--muted-strong)]">
-          <ShieldCheck data-icon className="size-3.5" />
-          {t("tests.evidenceTitle")}
+    <>
+      <div className="mt-3 grid gap-3 rounded-[8px] bg-[color:var(--paper)] p-3 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 font-medium text-[color:var(--muted-strong)]">
+            <ShieldCheck data-icon className="size-3.5" />
+            {t("tests.evidenceTitle")}
+          </div>
+          <span className="text-[11px] text-[color:var(--faint)]">
+            {t("tests.evidenceSummary", {
+              screenshots: screenshotCount,
+              assertions: evidence.assertions.length,
+              network: evidence.networkStatuses.length,
+            })}
+          </span>
         </div>
-        <span className="text-[11px] text-[color:var(--faint)]">
-          {t("tests.evidenceSummary", {
-            screenshots: evidence.screenshots.length,
-            assertions: evidence.assertions.length,
-            network: evidence.networkStatuses.length,
-          })}
-        </span>
-      </div>
 
-      {evidence.screenshots.length > 0 ? (
-        <div className="grid gap-1.5">
-          <div className="text-[11px] font-medium uppercase text-[color:var(--muted)]">{t("tests.evidenceScreenshots")}</div>
-          {evidence.screenshotImages.length > 0 ? (
-            <div className="grid gap-2 sm:grid-cols-2">
-              {evidence.screenshotImages.slice(0, 2).map((image, index) => (
+        {evidence.screenshots.length > 0 || evidence.screenshotImages.length > 0 ? (
+          <div className="grid gap-1.5">
+            <div className="text-[11px] font-medium uppercase text-[color:var(--muted)]">{t("tests.evidenceScreenshots")}</div>
+            {evidence.screenshotImages.length > 0 ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {evidence.screenshotImages.slice(0, 4).map((image, index) => (
+                  <EvidenceScreenshotThumb
+                    key={`${screenshotImageTarget(image)}-${index}`}
+                    image={image}
+                    index={index}
+                    onPreview={() => setPreviewImage(image)}
+                  />
+                ))}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-1.5">
+              {evidence.screenshots.map((path, index) => (
                 <button
-                  key={`${image.path || image.dataUrl}-${index}`}
+                  key={`${path}-${index}`}
                   type="button"
-                  className="overflow-hidden rounded-[8px] bg-[color:var(--surface)] text-left shadow-[inset_0_0_0_1px_var(--line)] transition-opacity hover:opacity-90"
-                  title={image.path || t("tests.openScreenshot")}
-                  onClick={() => {
-                    if (image.path) void openEvidenceTarget(image.path);
-                  }}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-[7px] bg-[color:var(--surface)] px-2 py-1 text-left text-[12px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)] transition-colors hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
+                  title={path}
+                  onClick={() => void openEvidenceTarget(path)}
                 >
-                  <img src={image.dataUrl} alt={t("tests.screenshotAlt", { index: index + 1 })} className="h-44 w-full object-cover object-top" />
-                  {image.path ? <div className="truncate px-2 py-1 font-mono text-[11px] text-[color:var(--faint)]">{image.path}</div> : null}
+                  <ExternalLink data-icon className="size-3.5 shrink-0" />
+                  <span className="truncate">{index === 0 ? t("tests.openScreenshot") : t("tests.openScreenshotN", { index: index + 1 })}</span>
                 </button>
               ))}
             </div>
-          ) : null}
-          <div className="flex flex-wrap gap-1.5">
-            {evidence.screenshots.map((path, index) => (
-              <button
-                key={`${path}-${index}`}
-                type="button"
-                className="inline-flex max-w-full items-center gap-1.5 rounded-[7px] bg-[color:var(--surface)] px-2 py-1 text-left text-[12px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)] transition-colors hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
-                title={path}
-                onClick={() => void openEvidenceTarget(path)}
-              >
-                <ExternalLink data-icon className="size-3.5 shrink-0" />
-                <span className="truncate">{index === 0 ? t("tests.openScreenshot") : t("tests.openScreenshotN", { index: index + 1 })}</span>
-              </button>
-            ))}
+            <div className="break-all font-mono text-[11px] text-[color:var(--faint)]">{evidence.screenshots[0]}</div>
           </div>
-          <div className="break-all font-mono text-[11px] text-[color:var(--faint)]">{evidence.screenshots[0]}</div>
-        </div>
-      ) : null}
+        ) : null}
 
-      {evidence.assertions.length > 0 ? (
-        <div className="grid gap-1.5">
-          <div className="text-[11px] font-medium uppercase text-[color:var(--muted)]">{t("tests.evidenceAssertions")}</div>
-          <div className="grid gap-1">
-            {evidence.assertions.map((assertion, index) => (
-              <div key={`${assertion.name}-${index}`} className="flex min-w-0 items-start justify-between gap-3 rounded-[7px] bg-[color:var(--surface)] px-2 py-1">
-                <span className="min-w-0 truncate text-[color:var(--muted-strong)]">{assertion.name}</span>
-                <span className={cn("shrink-0 font-medium", assertion.passed === false ? "text-[color:var(--danger)]" : "text-[color:var(--success)]")}>
-                  {assertion.passed === false ? t("tests.assertionFailed") : t("tests.assertionPassed")}
-                  {assertion.status ? ` · ${assertion.status}` : ""}
-                </span>
-              </div>
-            ))}
+        {evidence.assertions.length > 0 ? (
+          <div className="grid gap-1.5">
+            <div className="text-[11px] font-medium uppercase text-[color:var(--muted)]">{t("tests.evidenceAssertions")}</div>
+            <div className="grid gap-1">
+              {evidence.assertions.map((assertion, index) => (
+                <div key={`${assertion.name}-${index}`} className="flex min-w-0 items-start justify-between gap-3 rounded-[7px] bg-[color:var(--surface)] px-2 py-1">
+                  <span className="min-w-0 truncate text-[color:var(--muted-strong)]">{assertion.name}</span>
+                  <span className={cn("shrink-0 font-medium", assertion.passed === false ? "text-[color:var(--danger)]" : "text-[color:var(--success)]")}>
+                    {assertion.passed === false ? t("tests.assertionFailed") : t("tests.assertionPassed")}
+                    {assertion.status ? ` · ${assertion.status}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {evidence.networkStatuses.length > 0 ? (
+          <div className="grid gap-1.5">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase text-[color:var(--muted)]">
+              <Network data-icon className="size-3.5" />
+              {t("tests.evidenceNetwork")}
+            </div>
+            <div className="grid gap-1">
+              {evidence.networkStatuses.slice(0, 6).map((entry, index) => (
+                <div key={`${entry.url}-${index}`} className="grid grid-cols-[56px_52px_minmax(0,1fr)] items-center gap-2 rounded-[7px] bg-[color:var(--surface)] px-2 py-1 font-mono text-[11px]">
+                  <span className="text-[color:var(--muted)]">{entry.method || "-"}</span>
+                  <span className={cn("font-semibold", evidenceStatusTone(entry.status))}>{entry.status || "-"}</span>
+                  <span className="truncate text-[color:var(--muted-strong)]" title={entry.url}>{entry.url}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {(evidence.previewUrl || evidence.finalUrl) ? (
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {evidence.previewUrl ? <EvidenceValue label={t("tests.evidencePreviewUrl")} value={evidence.previewUrl} openable /> : null}
+            {evidence.finalUrl ? <EvidenceValue label={t("tests.evidenceFinalUrl")} value={evidence.finalUrl} openable /> : null}
+          </div>
+        ) : null}
+
+        {snapshot ? (
+          <div className="grid gap-1.5">
+            <div className="text-[11px] font-medium uppercase text-[color:var(--muted)]">{t("tests.evidenceDomSnapshot")}</div>
+            <div className="max-h-24 overflow-auto rounded-[7px] bg-[color:var(--surface)] px-2 py-1.5 text-[11px] leading-5 text-[color:var(--muted)]">
+              {evidencePreviewText(snapshot)}
+            </div>
+          </div>
+        ) : null}
+
+        <details>
+          <summary className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-[color:var(--muted)] hover:text-[color:var(--text)]">
+            <TerminalSquare data-icon className="size-3.5" />
+            {t("tests.evidenceRaw")}
+          </summary>
+          <pre className="mt-2 max-h-48 overflow-auto rounded-[8px] bg-[color:var(--surface)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+            {JSON.stringify(evidence.raw, null, 2)}
+          </pre>
+        </details>
+      </div>
+      {previewImage ? <EvidenceLightbox image={previewImage} onClose={() => setPreviewImage(null)} /> : null}
+    </>
+  );
+}
+
+function EvidenceScreenshotThumb(props: {
+  image: TestEvidenceScreenshotImage;
+  index: number;
+  onPreview: () => void;
+}) {
+  const { t } = useMspaceTranslation();
+  const imageSource = useResolvedEvidenceImageSrc(props.image);
+  const label = screenshotImageLabel(props.image, t("tests.openScreenshotN", { index: props.index + 1 }));
+  const target = screenshotImageOpenTarget(props.image);
+
+  return (
+    <div className="overflow-hidden rounded-[8px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+      <button
+        type="button"
+        className="group relative block h-44 w-full bg-[color:var(--block)] text-left"
+        title={t("tests.previewScreenshot")}
+        onClick={props.onPreview}
+      >
+        {imageSource.src ? (
+          <img src={imageSource.src} alt={t("tests.screenshotAlt", { index: props.index + 1 })} className="h-full w-full object-cover object-top" />
+        ) : imageSource.loading ? (
+          <span className="grid h-full place-items-center px-4 text-center text-[12px] text-[color:var(--muted)]">{t("tests.screenshotLoading")}</span>
+        ) : imageSource.error ? (
+          <span className="grid h-full place-items-center px-4 text-center text-[12px] text-[color:var(--muted)]">{t("tests.screenshotUnavailable")}</span>
+        ) : (
+          <span className="grid h-full place-items-center px-4 text-center text-[12px] text-[color:var(--muted)]">{t("tests.screenshotArtifactOnly")}</span>
+        )}
+        <span className="absolute right-2 top-2 grid size-7 place-items-center rounded-[7px] bg-[rgba(255,255,255,0.86)] text-[color:var(--muted-strong)] opacity-0 shadow-[inset_0_0_0_1px_var(--line)] transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+          <Maximize2 data-icon className="size-3.5" />
+        </span>
+      </button>
+      <div className="flex min-w-0 items-center justify-between gap-2 px-2 py-1">
+        <div className="min-w-0 truncate font-mono text-[11px] text-[color:var(--faint)]" title={label}>{label}</div>
+        {target ? (
+          <button
+            type="button"
+            className="shrink-0 text-[11px] font-medium text-[color:var(--accent)] hover:underline"
+            onClick={() => void openEvidenceTarget(target)}
+          >
+            {t("tests.openScreenshot")}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: () => void }) {
+  const { t } = useMspaceTranslation();
+  const { image, onClose } = props;
+  const imageSource = useResolvedEvidenceImageSrc(image);
+  const target = screenshotImageOpenTarget(image);
+  const label = screenshotImageLabel(image, t("tests.previewScreenshot"));
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[90] grid min-w-0 place-items-center bg-[rgba(31,31,31,0.70)] px-5 py-8">
+      <button type="button" aria-label={t("tests.closeScreenshotPreview")} className="absolute inset-0 cursor-default" onClick={onClose} />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("tests.screenshotPreviewTitle")}
+        className="relative grid max-h-[calc(100vh-64px)] w-full max-w-[1120px] overflow-hidden rounded-[12px] bg-[color:var(--surface)] shadow-[0_24px_80px_rgba(31,31,31,0.30),inset_0_0_0_1px_var(--line)]"
+      >
+        <div className="flex min-w-0 items-center justify-between gap-3 border-b border-[color:var(--line)] px-4 py-3">
+          <div className="min-w-0">
+            <h2 className="truncate text-[14px] font-semibold text-[color:var(--text)]">{t("tests.screenshotPreviewTitle")}</h2>
+            <p className="mt-0.5 truncate font-mono text-[11px] text-[color:var(--muted)]" title={label}>{label}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {target ? (
+              <Button type="button" variant="secondary" size="sm" onClick={() => void openEvidenceTarget(target)}>
+                <ExternalLink data-icon />
+                {t("tests.openScreenshot")}
+              </Button>
+            ) : null}
+            <Button type="button" variant="ghost" size="icon" aria-label={t("tests.closeScreenshotPreview")} onClick={onClose}>
+              <X data-icon />
+            </Button>
           </div>
         </div>
-      ) : null}
-
-      {evidence.networkStatuses.length > 0 ? (
-        <div className="grid gap-1.5">
-          <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase text-[color:var(--muted)]">
-            <Network data-icon className="size-3.5" />
-            {t("tests.evidenceNetwork")}
-          </div>
-          <div className="grid gap-1">
-            {evidence.networkStatuses.slice(0, 6).map((entry, index) => (
-              <div key={`${entry.url}-${index}`} className="grid grid-cols-[56px_52px_minmax(0,1fr)] items-center gap-2 rounded-[7px] bg-[color:var(--surface)] px-2 py-1 font-mono text-[11px]">
-                <span className="text-[color:var(--muted)]">{entry.method || "-"}</span>
-                <span className={cn("font-semibold", evidenceStatusTone(entry.status))}>{entry.status || "-"}</span>
-                <span className="truncate text-[color:var(--muted-strong)]" title={entry.url}>{entry.url}</span>
-              </div>
-            ))}
-          </div>
+        <div className="min-h-0 overflow-auto bg-[color:var(--paper)] p-3">
+          {imageSource.src ? (
+            <img src={imageSource.src} alt={t("tests.screenshotPreviewTitle")} className="mx-auto max-h-[calc(100vh-168px)] w-auto max-w-full rounded-[8px] bg-[color:var(--surface)] object-contain shadow-[inset_0_0_0_1px_var(--line)]" />
+          ) : imageSource.loading ? (
+            <div className="grid min-h-[360px] place-items-center rounded-[8px] bg-[color:var(--surface)] px-6 text-center text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+              {t("tests.screenshotLoading")}
+            </div>
+          ) : imageSource.error ? (
+            <div className="grid min-h-[360px] place-items-center rounded-[8px] bg-[color:var(--surface)] px-6 text-center text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+              {t("tests.screenshotUnavailable")}
+            </div>
+          ) : (
+            <div className="grid min-h-[360px] place-items-center rounded-[8px] bg-[color:var(--surface)] px-6 text-center text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+              {t("tests.screenshotArtifactOnly")}
+            </div>
+          )}
         </div>
-      ) : null}
-
-      {(evidence.previewUrl || evidence.finalUrl || evidence.cdpUrlUsed) ? (
-        <div className="grid gap-1.5 sm:grid-cols-3">
-          {evidence.previewUrl ? <EvidenceValue label={t("tests.evidencePreviewUrl")} value={evidence.previewUrl} openable /> : null}
-          {evidence.finalUrl ? <EvidenceValue label={t("tests.evidenceFinalUrl")} value={evidence.finalUrl} openable /> : null}
-          {evidence.cdpUrlUsed ? <EvidenceValue label={t("tests.evidenceCdpUrl")} value={evidence.cdpUrlUsed} /> : null}
-        </div>
-      ) : null}
-
-      {snapshot ? (
-        <div className="grid gap-1.5">
-          <div className="text-[11px] font-medium uppercase text-[color:var(--muted)]">{t("tests.evidenceDomSnapshot")}</div>
-          <div className="max-h-24 overflow-auto rounded-[7px] bg-[color:var(--surface)] px-2 py-1.5 text-[11px] leading-5 text-[color:var(--muted)]">
-            {evidencePreviewText(snapshot)}
-          </div>
-        </div>
-      ) : null}
-
-      <details>
-        <summary className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-[color:var(--muted)] hover:text-[color:var(--text)]">
-          <TerminalSquare data-icon className="size-3.5" />
-          {t("tests.evidenceRaw")}
-        </summary>
-        <pre className="mt-2 max-h-48 overflow-auto rounded-[8px] bg-[color:var(--surface)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-          {JSON.stringify(evidence.raw, null, 2)}
-        </pre>
-      </details>
+      </section>
     </div>
   );
 }

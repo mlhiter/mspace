@@ -119,7 +119,7 @@ The desktop requires an mspace session before product data is available. For age
 
 New issue type classification is also a runtime task. When an issue has `triage_status=pending` and no explicit type label, the server queues `runtime_tasks.kind="issue_type_triage"` with `required_capabilities={"codex":true}` and a classification-only prompt. A matching worker runs Codex, returns a compact JSON result, and the server validates the type before writing the `type:*` label. The server never falls back to keyword matching or an in-process Codex client.
 
-The test module follows the same ownership rule. Canonical cases, revisions, suggestions, plans, runs, and run items live in server tables. Markdown/text/CSV/Excel imports are parsed by the server. Optimize/generate actions and test run execution create issue-backed agent sessions; workers may return `test-case-proposals.json` or `test-result.json`, but the server validates those artifacts and requires human apply/accept actions before canonical case knowledge or run acceptance changes.
+The test module follows the same ownership rule. Canonical cases, revisions, suggestions, plans, runs, run items, and test evidence artifacts live in server tables. Markdown/text/CSV/Excel imports are parsed by the server. Optimize/generate actions and test run execution create issue-backed agent sessions; workers may return `test-case-proposals.json` or `test-result.json`, but the server validates those artifacts and requires human apply/accept actions before canonical case knowledge or run acceptance changes. Screenshot evidence may be transferred through worker artifacts, then the server persists it as `test_artifacts` and rewrites run item evidence to artifact refs.
 
 ## Runtime Registry
 

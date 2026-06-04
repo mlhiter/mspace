@@ -415,12 +415,12 @@ Future model:
 ```text
 Test Run Item
   -> requires browser capability
-  -> server routes only to workers with chrome_cdp capability
-  -> worker connects to Chrome CDP
+  -> server routes to browser-capable workers
+  -> worker connects to the configured browser environment
   -> worker returns screenshots, DOM state, and failed step details
 ```
 
-Screenshots should not be stored in renderer-local storage. The first target is session artifacts. Later, server-owned attachments can make this more durable.
+Screenshots must not be stored in renderer-local storage or exposed as worker-local paths. The worker may use session artifacts as the transfer boundary, but reconciled screenshots are persisted by the server as `test_artifacts` and referenced from run item evidence. The product UI should show user-facing evidence such as screenshots, DOM state, network summaries, assertions, and URLs; raw browser protocol details stay inside raw evidence for debugging.
 
 ### API Tests: Later Phase
 
@@ -656,11 +656,11 @@ Phase 2:
 - `test_plan_cases`
 - `test_runs`
 - `test_run_items`
+- `test_artifacts`
 
 Later:
 
 - `test_run_environment_snapshots`
-- `test_artifacts`, if session artifacts and issue attachments are not enough;
 - `test_worker_capability_requirements`
 
 ### Recommended New APIs
@@ -734,7 +734,7 @@ Preferred shape:
 
 The worker also accepts a top-level array for Codex-authored single-run artifacts when each item includes `runId`; it normalizes that array into the object shape before returning `result.testResult`.
 
-When a UI test writes screenshot paths inside `evidence`, the worker may embed small screenshot files from the session artifact directory as `evidence.screenshotImages[]` data URLs. This lets Case Detail and Run Detail show immediate visual evidence while keeping the first durable storage boundary in the worker/session artifact model.
+When a UI test writes screenshot paths inside `evidence`, the worker may embed small screenshot files from the session artifact directory as `evidence.screenshotImages[]` data URLs. The server extracts supported image data into `test_artifacts`, removes embedded image payloads from run item evidence, and writes artifact refs back into `evidence.artifacts` and `evidence.screenshotImages`. Case Detail and Run Detail render those refs as authenticated thumbnails with an in-app preview.
 
 Future UI testing can write:
 
@@ -826,7 +826,9 @@ Scope:
 - start Codex sessions for execution Issues;
 - parse `test-result.json`;
 - update Test Run Items;
+- persist screenshot evidence as server-owned artifacts;
 - show pass rate, failed, blocked, and skipped items;
+- show per-case run history from Case Detail;
 - retry failed or blocked items;
 - support human acceptance.
 
@@ -874,12 +876,13 @@ Scope:
 - API tests: requests, assertions, auth, mock data;
 - deployment tests: SSH, `sealos run`, offline package, component upgrade;
 - multi-machine scheduling;
-- richer artifact and attachment storage.
+- richer trace/log/resource artifact storage beyond screenshots.
 
 Acceptance:
 
 - different test types route to workers by capability;
 - UI tests preserve screenshots;
+- Case Detail shows a run history tab for all runs of that case;
 - deployment tests have audit, rollback, and cleanup paths;
 - multi-machine failures identify the machine, step, and environment involved.
 

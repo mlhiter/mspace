@@ -119,12 +119,15 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs", s.handleStartAdHocProjectTestRun)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs", s.handleStartProjectTestRun)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}", s.handleGetProjectTestRun)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/artifacts", s.handleListProjectTestRunArtifacts)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry", s.handleRetryProjectTestRun)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/accept", s.handleAcceptProjectTestRun)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block", s.handleBlockProjectTestRun)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}", s.handleGetProjectTestCase)
 	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}", s.handleUpdateProjectTestCase)
+	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}/runs", s.handleListProjectTestCaseRunItems)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}/revisions", s.handleListProjectTestCaseRevisions)
+	r.Get("/api/test-artifacts/{artifactID}", s.handleGetTestArtifact)
 	r.Get("/api/workspaces/{workspaceID}/issue-label-definitions", s.handleListIssueLabelDefinitions)
 	r.Get("/api/workspaces/{workspaceID}/workspace/settings", s.handleGetWorkspaceSettings)
 	r.Put("/api/workspaces/{workspaceID}/workspace/settings", s.handleUpdateWorkspaceSettings)
@@ -1095,6 +1098,49 @@ func (s *Server) handleGetProjectTestRun(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleListProjectTestRunArtifacts(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	artifacts, err := s.store.ListProjectTestRunArtifacts(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "runID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, testArtifactRefs(artifacts))
+}
+
+func (s *Server) handleListProjectTestCaseRunItems(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.store.ListProjectTestCaseRunItems(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "caseID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) handleGetTestArtifact(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	artifact, err := s.store.GetTestArtifact(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "artifactID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", artifact.ContentType)
+	w.Header().Set("Content-Disposition", contentDispositionInline(artifact.Filename))
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(artifact.Content)
 }
 
 func (s *Server) handleRetryProjectTestRun(w http.ResponseWriter, r *http.Request) {
