@@ -1474,6 +1474,7 @@ func (s *MemoryStore) CreateEnvironment(_ Context, userID, workspaceID string, i
 			return Environment{}, err
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
+		cluster.Status = kubeconfigStatus(context.Background(), cluster.KubeconfigPath, cluster.KubeContext)
 		cluster.ID = fmt.Sprintf("cluster-%04d", s.nextMemoryIDLocked())
 		cluster.WorkspaceID = workspaceID
 		cluster.LastCheckedAt = now
@@ -1512,6 +1513,7 @@ func (s *MemoryStore) UpdateEnvironment(_ Context, userID, workspaceID, environm
 		updated.ID = cluster.ID
 		updated.WorkspaceID = cluster.WorkspaceID
 		updated.CreatedAt = cluster.CreatedAt
+		updated.Status = kubeconfigStatus(context.Background(), updated.KubeconfigPath, updated.KubeContext)
 		updated.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		updated.UpdatedAt = updated.LastCheckedAt
 		s.clusters[environmentID] = updated

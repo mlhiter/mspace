@@ -1887,6 +1887,49 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 	}
 }
 
+func TestEnvironmentAPIChecksKubernetesReachability(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "environment-kubernetes-user",
+		Login:          "environment-kubernetes-user",
+		Name:           "Environment Kubernetes User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createRecorder := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/environments", strings.NewReader(`{
+		"name":"staging-k8s",
+		"kind":"kubernetes",
+		"kubernetes":{
+			"kubeconfigPath":"/tmp/mspace-missing-kubeconfig",
+			"imageRegistryPrefix":"registry.example.com/team",
+			"exposureMode":"nodeport"
+		}
+	}`))
+	createReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createRecorder, createReq)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create kubernetes environment status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created Environment
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("parse kubernetes environment: %v", err)
+	}
+	if created.Kind != environmentKindKubernetes || created.Status != "unreachable" || created.LastCheckedAt == "" {
+		t.Fatalf("expected unreachable checked kubernetes environment, got %+v", created)
+	}
+}
+
 func TestTestPlansFreezeEnvironmentSnapshotsAndProtectReferences(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
