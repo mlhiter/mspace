@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -31,6 +32,7 @@ const testEnvironmentArtifactName = "test-environment.json"
 const reviewEvidenceArtifactName = "review-evidence.json"
 const testCaseProposalsArtifactName = "test-case-proposals.json"
 const testResultArtifactName = "test-result.json"
+const maxTestResultScreenshotBytes = 2 * 1024 * 1024
 
 var branchSlugUnsafePattern = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -1814,7 +1816,102 @@ func readTestResultArtifact(payload agentSessionPayload) (testResultArtifact, bo
 		artifact.Items = items
 		artifact.RunID = strings.TrimSpace(items[0].RunID)
 	}
+	artifact = enrichTestResultArtifactEvidence(payload, artifact)
 	return artifact, true
+}
+
+func enrichTestResultArtifactEvidence(payload agentSessionPayload, artifact testResultArtifact) testResultArtifact {
+	for index, item := range artifact.Items {
+		item.Evidence = enrichTestResultEvidence(payload.ArtifactDir, item.Evidence)
+		artifact.Items[index] = item
+	}
+	return artifact
+}
+
+func enrichTestResultEvidence(artifactDir string, evidence json.RawMessage) json.RawMessage {
+	if len(evidence) == 0 {
+		return evidence
+	}
+	var record map[string]any
+	if err := json.Unmarshal(evidence, &record); err != nil || len(record) == 0 {
+		return evidence
+	}
+	if _, exists := record["screenshotImages"]; exists {
+		return evidence
+	}
+	paths := evidenceScreenshotPaths(record)
+	if len(paths) == 0 {
+		return evidence
+	}
+	images := []map[string]string{}
+	for _, path := range paths {
+		image, ok := readTestResultScreenshotDataURL(artifactDir, path)
+		if !ok {
+			continue
+		}
+		images = append(images, image)
+	}
+	if len(images) == 0 {
+		return evidence
+	}
+	record["screenshotImages"] = images
+	data, err := json.Marshal(record)
+	if err != nil {
+		return evidence
+	}
+	return data
+}
+
+func evidenceScreenshotPaths(record map[string]any) []string {
+	paths := []string{}
+	if value, ok := record["screenshot"].(string); ok && strings.TrimSpace(value) != "" {
+		paths = append(paths, strings.TrimSpace(value))
+	}
+	for _, key := range []string{"screenshots", "screenshotPaths"} {
+		values, ok := record[key].([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range values {
+			if value, ok := item.(string); ok && strings.TrimSpace(value) != "" {
+				paths = append(paths, strings.TrimSpace(value))
+			}
+		}
+	}
+	return paths
+}
+
+func readTestResultScreenshotDataURL(artifactDir, screenshotPath string) (map[string]string, bool) {
+	artifactDir = strings.TrimSpace(artifactDir)
+	screenshotPath = strings.TrimSpace(screenshotPath)
+	if artifactDir == "" || screenshotPath == "" {
+		return nil, false
+	}
+	path := screenshotPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(artifactDir, path)
+	}
+	artifactRoot, err := filepath.Abs(artifactDir)
+	if err != nil {
+		return nil, false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil || !strings.HasPrefix(absPath, artifactRoot+string(os.PathSeparator)) {
+		return nil, false
+	}
+	content, err := os.ReadFile(absPath)
+	if err != nil || len(content) == 0 || len(content) > maxTestResultScreenshotBytes {
+		return nil, false
+	}
+	mimeType := http.DetectContentType(content)
+	if mimeType != "image/png" && mimeType != "image/jpeg" && mimeType != "image/webp" && mimeType != "image/gif" {
+		return nil, false
+	}
+	return map[string]string{
+		"path":    screenshotPath,
+		"mime":    mimeType,
+		"dataUrl": "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content),
+	}, true
 }
 
 func normalizeSemanticBranchArtifact(artifact branchNameArtifact) (string, error) {

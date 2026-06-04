@@ -86,6 +86,7 @@ export interface TestCaseLatestResult {
   status: string;
   actualResult: string;
   failureSummary: string;
+  evidence?: Record<string, unknown>;
   updatedAt: string;
 }
 

@@ -305,14 +305,15 @@ type TestCase struct {
 }
 
 type TestCaseLatestResult struct {
-	ItemID         string `json:"itemId"`
-	RunID          string `json:"runId"`
-	RunStatus      string `json:"runStatus"`
-	RunSource      string `json:"runSource"`
-	Status         string `json:"status"`
-	ActualResult   string `json:"actualResult"`
-	FailureSummary string `json:"failureSummary"`
-	UpdatedAt      string `json:"updatedAt"`
+	ItemID         string          `json:"itemId"`
+	RunID          string          `json:"runId"`
+	RunStatus      string          `json:"runStatus"`
+	RunSource      string          `json:"runSource"`
+	Status         string          `json:"status"`
+	ActualResult   string          `json:"actualResult"`
+	FailureSummary string          `json:"failureSummary"`
+	Evidence       json.RawMessage `json:"evidence,omitempty"`
+	UpdatedAt      string          `json:"updatedAt"`
 }
 
 type TestCaseRevision struct {

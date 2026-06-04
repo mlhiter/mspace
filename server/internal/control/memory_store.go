@@ -4273,6 +4273,7 @@ func (s *MemoryStore) attachLatestTestCaseResultsLocked(cases []TestCase) {
 			Status:         item.Status,
 			ActualResult:   item.ActualResult,
 			FailureSummary: item.FailureSummary,
+			Evidence:       copyRawMessage(item.Evidence),
 			UpdatedAt:      item.UpdatedAt,
 		}
 		current := cases[index].LatestResult

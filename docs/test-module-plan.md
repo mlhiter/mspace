@@ -734,6 +734,8 @@ Preferred shape:
 
 The worker also accepts a top-level array for Codex-authored single-run artifacts when each item includes `runId`; it normalizes that array into the object shape before returning `result.testResult`.
 
+When a UI test writes screenshot paths inside `evidence`, the worker may embed small screenshot files from the session artifact directory as `evidence.screenshotImages[]` data URLs. This lets Case Detail and Run Detail show immediate visual evidence while keeping the first durable storage boundary in the worker/session artifact model.
+
 Future UI testing can write:
 
 ```text

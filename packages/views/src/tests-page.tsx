@@ -7,14 +7,18 @@ import {
   Ban,
   Check,
   ClipboardCheck,
+  ExternalLink,
   FileUp,
   ListChecks,
+  Network,
   Play,
   Plus,
   RotateCcw,
   Save,
+  ShieldCheck,
   Search,
   Sparkles,
+  TerminalSquare,
   type LucideIcon,
   X,
 } from "lucide-react";
@@ -357,6 +361,156 @@ function latestResultTone(result: TestCaseLatestResult | undefined) {
     default:
       return "text-[color:var(--muted)]";
   }
+}
+
+type TestEvidenceAssertion = {
+  name: string;
+  passed?: boolean;
+  status?: number;
+  url?: string;
+  error?: unknown;
+};
+
+type TestEvidenceNetworkStatus = {
+  url: string;
+  status?: number;
+  method?: string;
+  resourceType?: string;
+};
+
+type TestEvidenceScreenshotImage = {
+  path: string;
+  dataUrl: string;
+  mime?: string;
+};
+
+type StructuredTestEvidence = {
+  screenshot?: string;
+  screenshots: string[];
+  screenshotImages: TestEvidenceScreenshotImage[];
+  domSnapshot?: string;
+  postSubmitSnapshot?: string;
+  networkStatuses: TestEvidenceNetworkStatus[];
+  assertions: TestEvidenceAssertion[];
+  previewUrl?: string;
+  finalUrl?: string;
+  cdpUrlUsed?: string;
+  raw: Record<string, unknown>;
+};
+
+function structuredTestEvidence(evidence: Record<string, unknown> | undefined): StructuredTestEvidence | undefined {
+  if (!evidence || Object.keys(evidence).length === 0) return undefined;
+  const screenshot = stringValue(evidence.screenshot);
+  const screenshots = [...stringArrayValue(evidence.screenshots), ...stringArrayValue(evidence.screenshotPaths)];
+  if (screenshot) screenshots.unshift(screenshot);
+  return {
+    screenshot,
+    screenshots: [...new Set(screenshots)],
+    screenshotImages: screenshotImagesValue(evidence.screenshotImages),
+    domSnapshot: stringValue(evidence.domSnapshot),
+    postSubmitSnapshot: stringValue(evidence.postSubmitSnapshot),
+    networkStatuses: networkStatusesValue(evidence.networkStatuses),
+    assertions: assertionsValue(evidence.assertions),
+    previewUrl: stringValue(evidence.previewUrl),
+    finalUrl: stringValue(evidence.finalUrl),
+    cdpUrlUsed: stringValue(evidence.cdpUrlUsed),
+    raw: evidence,
+  };
+}
+
+function screenshotImagesValue(value: unknown): TestEvidenceScreenshotImage[] {
+  if (!Array.isArray(value)) return [];
+  const images: TestEvidenceScreenshotImage[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const dataUrl = stringValue(record.dataUrl);
+    if (!dataUrl.startsWith("data:image/")) continue;
+    images.push({
+      dataUrl,
+      path: stringValue(record.path),
+      mime: stringValue(record.mime),
+    });
+  }
+  return images;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function stringArrayValue(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => stringValue(item)).filter(Boolean);
+}
+
+function networkStatusesValue(value: unknown): TestEvidenceNetworkStatus[] {
+  if (!Array.isArray(value)) return [];
+  const statuses: TestEvidenceNetworkStatus[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const url = stringValue(record.url);
+    if (!url) continue;
+    statuses.push({
+      url,
+      status: typeof record.status === "number" ? record.status : undefined,
+      method: stringValue(record.method),
+      resourceType: stringValue(record.resourceType),
+    });
+  }
+  return statuses;
+}
+
+function assertionsValue(value: unknown): TestEvidenceAssertion[] {
+  if (!Array.isArray(value)) return [];
+  const assertions: TestEvidenceAssertion[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const name = stringValue(record.name);
+    if (!name) continue;
+    assertions.push({
+      name,
+      passed: typeof record.passed === "boolean" ? record.passed : undefined,
+      status: typeof record.status === "number" ? record.status : undefined,
+      url: stringValue(record.url),
+      error: record.error,
+    });
+  }
+  return assertions;
+}
+
+function evidencePreviewText(value: string, limit = 560) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit)}...`;
+}
+
+function isHttpUrl(value: string) {
+  return /^https?:\/\//i.test(value);
+}
+
+function evidenceStatusTone(status?: number) {
+  if (!status) return "text-[color:var(--muted)]";
+  if (status >= 200 && status < 400) return "text-[color:var(--success)]";
+  if (status >= 400) return "text-[color:var(--danger)]";
+  return "text-[color:var(--warning)]";
+}
+
+async function openEvidenceTarget(value: string) {
+  const target = value.trim();
+  if (!target) return;
+  if (isHttpUrl(target) && window.mspaceDesktop?.openExternal) {
+    await window.mspaceDesktop.openExternal(target);
+    return;
+  }
+  if (window.mspaceDesktop?.openPath) {
+    const error = await window.mspaceDesktop.openPath(target);
+    if (error) console.warn(error);
+    return;
+  }
+  window.open(target, "_blank", "noopener,noreferrer");
 }
 
 function hasText(value?: string) {
@@ -1930,6 +2084,7 @@ export function TestCaseDetailPage() {
                   <p className="mt-1 text-[11px] text-[color:var(--faint)]">
                     {t("tests.latestResultUpdated", { time: testCase.latestResult.updatedAt ? new Date(testCase.latestResult.updatedAt).toLocaleString() : t("common.unknown") })}
                   </p>
+                  <TestRunEvidencePanel evidence={testCase.latestResult.evidence} />
                 </div>
               ) : (
                 <p className="text-[12px] text-[color:var(--muted)]">{t("tests.notRun")}</p>
@@ -2379,11 +2534,7 @@ export function TestRunDetailPage() {
                   <span className="truncate text-[13px] font-medium text-[color:var(--text)]">{item.testCase.title}</span>
                 </div>
                 <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">{item.actualResult || item.failureSummary || t("tests.noResultYet")}</p>
-                {Object.keys(item.evidence || {}).length > 0 ? (
-                  <pre className="mt-2 max-h-48 overflow-auto rounded-[8px] bg-[color:var(--paper)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-                    {JSON.stringify(item.evidence, null, 2)}
-                  </pre>
-                ) : null}
+                <TestRunEvidencePanel evidence={item.evidence} />
               </div>
               <div className="flex items-start md:justify-end">
                 <StatusBadge value={item.status} valueLabel={t(`tests.runItemStatusValue.${item.status}`, { defaultValue: item.status })} />
@@ -2712,6 +2863,147 @@ function TestsModal(props: { title: string; description: string; onClose: () => 
           {props.children}
         </div>
       </section>
+    </div>
+  );
+}
+
+function TestRunEvidencePanel(props: { evidence?: Record<string, unknown> }) {
+  const { t } = useMspaceTranslation();
+  const evidence = structuredTestEvidence(props.evidence);
+  if (!evidence) return null;
+  const snapshot = evidence.postSubmitSnapshot || evidence.domSnapshot;
+
+  return (
+    <div className="mt-3 grid gap-3 rounded-[8px] bg-[color:var(--paper)] p-3 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 font-medium text-[color:var(--muted-strong)]">
+          <ShieldCheck data-icon className="size-3.5" />
+          {t("tests.evidenceTitle")}
+        </div>
+        <span className="text-[11px] text-[color:var(--faint)]">
+          {t("tests.evidenceSummary", {
+            screenshots: evidence.screenshots.length,
+            assertions: evidence.assertions.length,
+            network: evidence.networkStatuses.length,
+          })}
+        </span>
+      </div>
+
+      {evidence.screenshots.length > 0 ? (
+        <div className="grid gap-1.5">
+          <div className="text-[11px] font-medium uppercase text-[color:var(--muted)]">{t("tests.evidenceScreenshots")}</div>
+          {evidence.screenshotImages.length > 0 ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {evidence.screenshotImages.slice(0, 2).map((image, index) => (
+                <button
+                  key={`${image.path || image.dataUrl}-${index}`}
+                  type="button"
+                  className="overflow-hidden rounded-[8px] bg-[color:var(--surface)] text-left shadow-[inset_0_0_0_1px_var(--line)] transition-opacity hover:opacity-90"
+                  title={image.path || t("tests.openScreenshot")}
+                  onClick={() => {
+                    if (image.path) void openEvidenceTarget(image.path);
+                  }}
+                >
+                  <img src={image.dataUrl} alt={t("tests.screenshotAlt", { index: index + 1 })} className="h-44 w-full object-cover object-top" />
+                  {image.path ? <div className="truncate px-2 py-1 font-mono text-[11px] text-[color:var(--faint)]">{image.path}</div> : null}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-1.5">
+            {evidence.screenshots.map((path, index) => (
+              <button
+                key={`${path}-${index}`}
+                type="button"
+                className="inline-flex max-w-full items-center gap-1.5 rounded-[7px] bg-[color:var(--surface)] px-2 py-1 text-left text-[12px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)] transition-colors hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
+                title={path}
+                onClick={() => void openEvidenceTarget(path)}
+              >
+                <ExternalLink data-icon className="size-3.5 shrink-0" />
+                <span className="truncate">{index === 0 ? t("tests.openScreenshot") : t("tests.openScreenshotN", { index: index + 1 })}</span>
+              </button>
+            ))}
+          </div>
+          <div className="break-all font-mono text-[11px] text-[color:var(--faint)]">{evidence.screenshots[0]}</div>
+        </div>
+      ) : null}
+
+      {evidence.assertions.length > 0 ? (
+        <div className="grid gap-1.5">
+          <div className="text-[11px] font-medium uppercase text-[color:var(--muted)]">{t("tests.evidenceAssertions")}</div>
+          <div className="grid gap-1">
+            {evidence.assertions.map((assertion, index) => (
+              <div key={`${assertion.name}-${index}`} className="flex min-w-0 items-start justify-between gap-3 rounded-[7px] bg-[color:var(--surface)] px-2 py-1">
+                <span className="min-w-0 truncate text-[color:var(--muted-strong)]">{assertion.name}</span>
+                <span className={cn("shrink-0 font-medium", assertion.passed === false ? "text-[color:var(--danger)]" : "text-[color:var(--success)]")}>
+                  {assertion.passed === false ? t("tests.assertionFailed") : t("tests.assertionPassed")}
+                  {assertion.status ? ` · ${assertion.status}` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {evidence.networkStatuses.length > 0 ? (
+        <div className="grid gap-1.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase text-[color:var(--muted)]">
+            <Network data-icon className="size-3.5" />
+            {t("tests.evidenceNetwork")}
+          </div>
+          <div className="grid gap-1">
+            {evidence.networkStatuses.slice(0, 6).map((entry, index) => (
+              <div key={`${entry.url}-${index}`} className="grid grid-cols-[56px_52px_minmax(0,1fr)] items-center gap-2 rounded-[7px] bg-[color:var(--surface)] px-2 py-1 font-mono text-[11px]">
+                <span className="text-[color:var(--muted)]">{entry.method || "-"}</span>
+                <span className={cn("font-semibold", evidenceStatusTone(entry.status))}>{entry.status || "-"}</span>
+                <span className="truncate text-[color:var(--muted-strong)]" title={entry.url}>{entry.url}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {(evidence.previewUrl || evidence.finalUrl || evidence.cdpUrlUsed) ? (
+        <div className="grid gap-1.5 sm:grid-cols-3">
+          {evidence.previewUrl ? <EvidenceValue label={t("tests.evidencePreviewUrl")} value={evidence.previewUrl} openable /> : null}
+          {evidence.finalUrl ? <EvidenceValue label={t("tests.evidenceFinalUrl")} value={evidence.finalUrl} openable /> : null}
+          {evidence.cdpUrlUsed ? <EvidenceValue label={t("tests.evidenceCdpUrl")} value={evidence.cdpUrlUsed} /> : null}
+        </div>
+      ) : null}
+
+      {snapshot ? (
+        <div className="grid gap-1.5">
+          <div className="text-[11px] font-medium uppercase text-[color:var(--muted)]">{t("tests.evidenceDomSnapshot")}</div>
+          <div className="max-h-24 overflow-auto rounded-[7px] bg-[color:var(--surface)] px-2 py-1.5 text-[11px] leading-5 text-[color:var(--muted)]">
+            {evidencePreviewText(snapshot)}
+          </div>
+        </div>
+      ) : null}
+
+      <details>
+        <summary className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-[color:var(--muted)] hover:text-[color:var(--text)]">
+          <TerminalSquare data-icon className="size-3.5" />
+          {t("tests.evidenceRaw")}
+        </summary>
+        <pre className="mt-2 max-h-48 overflow-auto rounded-[8px] bg-[color:var(--surface)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+          {JSON.stringify(evidence.raw, null, 2)}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
+function EvidenceValue(props: { label: string; value: string; openable?: boolean }) {
+  return (
+    <div className="min-w-0 rounded-[7px] bg-[color:var(--surface)] px-2 py-1.5">
+      <div className="text-[11px] font-medium text-[color:var(--muted)]">{props.label}</div>
+      {props.openable ? (
+        <button type="button" className="mt-0.5 max-w-full truncate text-left font-mono text-[11px] text-[color:var(--accent)] hover:underline" title={props.value} onClick={() => void openEvidenceTarget(props.value)}>
+          {props.value}
+        </button>
+      ) : (
+        <div className="mt-0.5 truncate font-mono text-[11px] text-[color:var(--muted-strong)]" title={props.value}>{props.value}</div>
+      )}
     </div>
   );
 }

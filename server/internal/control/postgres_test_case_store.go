@@ -1077,6 +1077,7 @@ func attachLatestTestCaseResults(ctx context.Context, q queryer, workspaceID, pr
 			i.status,
 			i.actual_result,
 			i.failure_summary,
+			i.evidence,
 			i.updated_at
 		FROM test_run_items i
 		JOIN test_runs r ON r.id = i.run_id
@@ -1093,6 +1094,7 @@ func attachLatestTestCaseResults(ctx context.Context, q queryer, workspaceID, pr
 	for rows.Next() {
 		var caseID string
 		var latest TestCaseLatestResult
+		var evidenceBytes []byte
 		var updatedAt time.Time
 		if err := rows.Scan(
 			&caseID,
@@ -1103,10 +1105,12 @@ func attachLatestTestCaseResults(ctx context.Context, q queryer, workspaceID, pr
 			&latest.Status,
 			&latest.ActualResult,
 			&latest.FailureSummary,
+			&evidenceBytes,
 			&updatedAt,
 		); err != nil {
 			return err
 		}
+		latest.Evidence = copyRawMessage(json.RawMessage(evidenceBytes))
 		latest.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 		if index, ok := indexByCaseID[caseID]; ok {
 			copyLatest := latest

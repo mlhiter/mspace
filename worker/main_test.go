@@ -114,6 +114,37 @@ func TestReadTestResultArtifactAcceptsArrayShape(t *testing.T) {
 	}
 }
 
+func TestReadTestResultArtifactEmbedsScreenshotImages(t *testing.T) {
+	artifactDir := t.TempDir()
+	pngBytes := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	if err := os.WriteFile(filepath.Join(artifactDir, "homepage.png"), pngBytes, 0o644); err != nil {
+		t.Fatalf("write screenshot: %v", err)
+	}
+	data := `{
+		"runId": "test-run-1",
+		"items": [
+			{
+				"caseId": "test-case-1",
+				"status": "passed",
+				"actualResult": "Passed through CDP.",
+				"evidence": {"screenshot": "homepage.png"}
+			}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(artifactDir, testResultArtifactName), []byte(data), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	artifact, ok := readTestResultArtifact(agentSessionPayload{ArtifactDir: artifactDir})
+	if !ok || len(artifact.Items) != 1 {
+		t.Fatalf("expected test result artifact, got %+v", artifact)
+	}
+	evidence := string(artifact.Items[0].Evidence)
+	if !strings.Contains(evidence, `"screenshotImages"`) || !strings.Contains(evidence, `data:image/png;base64`) {
+		t.Fatalf("expected embedded screenshot image, got %s", evidence)
+	}
+}
+
 func TestRunOnceFailsInvalidAgentSessionPayload(t *testing.T) {
 	var completedStatus string
 	var completedError string

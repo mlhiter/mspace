@@ -1948,7 +1948,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if len(adHocRuns) < 2 {
 		t.Fatalf("expected project run list to include plan and direct runs, got %+v", adHocRuns)
 	}
-	adHocResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"passed","actualResult":"Direct case passed.","evidence":{"commands":["pnpm test -- login"]}}]}}}`, adHocRun.Run.ID, existingCase.ID)
+	adHocResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"passed","actualResult":"Direct case passed.","evidence":{"screenshot":"homepage.png","commands":["pnpm test -- login"]}}]}}}`, adHocRun.Run.ID, existingCase.ID)
 	if _, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, adHocResult); err != nil {
 		t.Fatalf("complete direct run result task: %v", err)
 	}
@@ -1961,9 +1961,15 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if caseAfterAdHocRun.LatestResult == nil || caseAfterAdHocRun.LatestResult.RunID != adHocRun.Run.ID || caseAfterAdHocRun.LatestResult.Status != "passed" || caseAfterAdHocRun.LatestResult.ActualResult != "Direct case passed." {
 		t.Fatalf("expected case list to expose latest run result, got %+v", caseAfterAdHocRun.LatestResult)
 	}
+	if !strings.Contains(string(caseAfterAdHocRun.LatestResult.Evidence), "homepage.png") {
+		t.Fatalf("expected case list latest result to expose evidence, got %s", caseAfterAdHocRun.LatestResult.Evidence)
+	}
 	detailAfterAdHocRun := getProjectTestCaseViaHTTP(t, router, sessionToken, workspaceID, project.ID, existingCase.ID)
 	if detailAfterAdHocRun.LatestResult == nil || detailAfterAdHocRun.LatestResult.RunID != adHocRun.Run.ID || detailAfterAdHocRun.LatestResult.Status != "passed" {
 		t.Fatalf("expected case detail to expose latest run result, got %+v", detailAfterAdHocRun.LatestResult)
+	}
+	if !strings.Contains(string(detailAfterAdHocRun.LatestResult.Evidence), "homepage.png") {
+		t.Fatalf("expected case detail latest result to expose evidence, got %s", detailAfterAdHocRun.LatestResult.Evidence)
 	}
 
 	firstItem := run.Items[0]
