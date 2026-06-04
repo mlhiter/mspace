@@ -1247,6 +1247,11 @@ export function TestsPage() {
   const selectedPlan = selectedPlanQuery.data?.plan || plans.find((plan) => plan.id === selectedPlanId);
   const selectedPlanDetail = selectedPlanQuery.data;
   const latestRun = useMemo(() => [...allRuns].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0], [allRuns]);
+  const visibleCaseIds = useMemo(() => cases.map((testCase) => testCase.id), [cases]);
+  const visibleCaseIdSet = useMemo(() => new Set(visibleCaseIds), [visibleCaseIds]);
+  const selectedVisibleCaseCount = useMemo(() => selectedCaseIds.filter((caseId) => visibleCaseIdSet.has(caseId)).length, [selectedCaseIds, visibleCaseIdSet]);
+  const allVisibleCasesSelected = cases.length > 0 && selectedVisibleCaseCount === cases.length;
+  const someVisibleCasesSelected = selectedVisibleCaseCount > 0 && !allVisibleCasesSelected;
   const canCreateCase = Boolean(effectiveProjectId && caseForm.title.trim());
   const canCreatePlan = Boolean(effectiveProjectId && planForm.title.trim() && selectedCaseIds.length > 0);
   const isExcelImport = importFormat === "xlsx";
@@ -1504,6 +1509,17 @@ export function TestsPage() {
     setSelectedCaseIds(readyCases.map((testCase) => testCase.id));
   }
 
+  function toggleVisibleCasesSelection() {
+    setSelectedCaseIds((current) => {
+      if (allVisibleCasesSelected) {
+        return current.filter((caseId) => !visibleCaseIdSet.has(caseId));
+      }
+      const next = new Set(current);
+      visibleCaseIds.forEach((caseId) => next.add(caseId));
+      return Array.from(next);
+    });
+  }
+
   function updateCreateStep(index: number, patch: Partial<TestCaseStep>) {
     setCaseForm((current) => ({
       ...current,
@@ -1691,6 +1707,9 @@ export function TestsPage() {
                 <div className="flex items-center justify-between border-b border-[color:var(--line)] px-4 py-2 text-[12px] text-[color:var(--muted)]">
                   <span>{t("tests.selectedSummary", { selected: selectedCaseIds.length, total: cases.length })}</span>
                   <div className="flex items-center gap-2">
+                    <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={toggleVisibleCasesSelection} disabled={cases.length === 0 || allVisibleCasesSelected}>
+                      {t("tests.selectAll")}
+                    </Button>
                     <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={selectReadyCases} disabled={readyCases.length === 0}>
                       {t("tests.selectReady")}
                     </Button>
@@ -1714,8 +1733,17 @@ export function TestsPage() {
                   <div className="overflow-x-auto">
                     <div className="min-w-[940px]">
                       <div className="grid grid-cols-[24px_minmax(260px,1fr)_96px_120px_88px_132px_108px_88px_24px] items-center gap-3 border-b border-[color:var(--line)] px-4 py-2 text-[11px] font-medium text-[color:var(--muted)]">
-                        <span className="sr-only">{t("tests.selectedSummary", { selected: selectedCaseIds.length, total: cases.length })}</span>
-                        <span aria-hidden="true" />
+                        <input
+                          type="checkbox"
+                          className="size-4 accent-[color:var(--accent)]"
+                          checked={allVisibleCasesSelected}
+                          ref={(node) => {
+                            if (node) node.indeterminate = someVisibleCasesSelected;
+                          }}
+                          aria-label={allVisibleCasesSelected ? t("tests.clearVisibleSelectionAria") : t("tests.selectAllCasesAria")}
+                          aria-checked={someVisibleCasesSelected ? "mixed" : allVisibleCasesSelected}
+                          onChange={toggleVisibleCasesSelection}
+                        />
                         <span>{t("tests.titleLabel")}</span>
                         <span className="text-right">{t("tests.type")}</span>
                         <span className="text-right">{t("tests.status")}</span>

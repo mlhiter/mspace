@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-06-05",
+    title: "Select-all controls for test cases",
+    summary:
+      "mspace made the Test Case library easier to use when starting batch optimization, plans, or selected-case runs.",
+    items: [
+      "Added a Select all action for the current filtered case list so users can quickly prepare a batch from search or status results.",
+      "Added a header checkbox with checked, unchecked, and mixed states to match the row-selection model users expect in a table.",
+      "Kept Select ready and Clear available as separate batch actions so runnable-case selection remains explicit.",
+      "Localized the new selection controls and screen-reader labels for English and Simplified Chinese.",
+    ],
+  },
+  {
     date: "2026-06-04",
     title: "Issue-style test case detail layout",
     summary:
