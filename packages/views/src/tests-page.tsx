@@ -2343,7 +2343,7 @@ export function TestCaseDetailPage() {
         { label: caseTitle },
       ]}
       actions={
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2 pt-[38px]">
           {!isNew ? (
             <Button type="button" variant="secondary" onClick={() => startCaseRun.mutate()} disabled={!canRunCase || startCaseRun.isPending}>
               <Play data-icon />
