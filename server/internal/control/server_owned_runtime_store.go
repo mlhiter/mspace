@@ -216,6 +216,11 @@ func (s *PostgresStore) CreateEnvironment(ctx Context, userID, workspaceID strin
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
 		return Environment{}, err
 	}
+	status, err := virtualMachineSSHStatus(dbctx, normalized, input.SSHAuth)
+	if err != nil {
+		return Environment{}, err
+	}
+	normalized.Status = status
 	row := s.pool.QueryRow(dbctx, `
 		INSERT INTO environments (workspace_id, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, now())
@@ -249,6 +254,11 @@ func (s *PostgresStore) UpdateEnvironment(ctx Context, userID, workspaceID, envi
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
 		return Environment{}, err
 	}
+	status, err := virtualMachineSSHStatus(dbctx, normalized, input.SSHAuth)
+	if err != nil {
+		return Environment{}, err
+	}
+	normalized.Status = status
 	row := s.pool.QueryRow(dbctx, `
 		UPDATE environments
 		SET name = $3,

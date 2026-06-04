@@ -371,9 +371,15 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/environments" \
       "sshAuthRef":"secret://mspace/staging-vm-01",
       "workdir":"/srv/mspace",
       "serviceHint":"systemd:mspace"
+    },
+    "sshAuth":{
+      "method":"password",
+      "password":"<one-time-password-for-validation>"
     }
   }'
 ```
+
+For private-key validation, send `"sshAuth":{"method":"private_key","privateKey":"<pem-or-openssh-private-key>","passphrase":"<optional-passphrase>"}`. The server uses `sshAuth` only for the create/update login check and does not return raw secret material in the Environment response.
 
 Create a Kubernetes Environment through the product API:
 
@@ -393,7 +399,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/environments" \
   }'
 ```
 
-Kubernetes Environments currently use the existing `clusters` storage and remain visible through the `/clusters` compatibility API. Create, update, import, and `POST /clusters/{clusterID}/check` all refresh `status` and `lastCheckedAt` from a server-side kubeconfig check: API server discovery plus a lightweight namespace list permission probe. Virtual machine Environments are stored as VM target metadata only; `sshAuthRef` points to a credential managed outside the normal product payload and must not contain private key material.
+Kubernetes Environments currently use the existing `clusters` storage and remain visible through the `/clusters` compatibility API. Create, update, import, and `POST /clusters/{clusterID}/check` all refresh `status` and `lastCheckedAt` from a server-side kubeconfig check: API server discovery plus a lightweight namespace list permission probe. Virtual machine Environments run an SSH login check during create/update with either password or private-key auth. Only a successful login marks the VM `ready`; network/auth failures save it as `unreachable`, while missing password/private key input is rejected. `sshAuthRef` points to a credential managed outside the normal product payload and must not contain raw password or private key material.
 
 ## Server Agent Sessions
 

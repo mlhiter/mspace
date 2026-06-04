@@ -1823,10 +1823,12 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/environments", strings.NewReader(`{
 		"name":"staging-vm",
 		"kind":"virtual_machine",
-		"sshHost":"10.0.0.12",
-		"sshPort":2222,
+		"status":"ready",
+		"sshHost":"127.0.0.1",
+		"sshPort":1,
 		"sshUser":"ubuntu",
 		"sshAuthRef":"secret://mspace/staging-vm",
+		"sshAuth":{"method":"password","password":"wrong-password"},
 		"workdir":"/srv/app",
 		"serviceHint":"systemd:mspace"
 	}`))
@@ -1839,16 +1841,22 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
 		t.Fatalf("parse vm environment: %v", err)
 	}
-	if created.Kind != environmentKindVirtualMachine || created.VirtualMachine == nil || created.VirtualMachine.SSHHost != "10.0.0.12" || created.VirtualMachine.SSHPort != 2222 {
+	if created.Kind != environmentKindVirtualMachine || created.VirtualMachine == nil || created.VirtualMachine.SSHHost != "127.0.0.1" || created.VirtualMachine.SSHPort != 1 {
 		t.Fatalf("unexpected vm environment: %+v", created)
+	}
+	if created.Status != "unreachable" || created.LastCheckedAt == "" {
+		t.Fatalf("expected failed ssh check to save vm as unreachable, got %+v", created)
 	}
 
 	updateRecorder := httptest.NewRecorder()
 	updateReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/environments/"+created.ID, strings.NewReader(`{
 		"name":"staging-vm-renamed",
 		"kind":"virtual_machine",
-		"sshHost":"10.0.0.13",
-		"sshUser":"ubuntu"
+		"status":"ready",
+		"sshHost":"127.0.0.1",
+		"sshPort":1,
+		"sshUser":"ubuntu",
+		"sshAuth":{"method":"password","password":"still-wrong"}
 	}`))
 	updateReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(updateRecorder, updateReq)
@@ -1859,8 +1867,11 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 	if err := json.Unmarshal(updateRecorder.Body.Bytes(), &updated); err != nil {
 		t.Fatalf("parse updated vm environment: %v", err)
 	}
-	if updated.Name != "staging-vm-renamed" || updated.VirtualMachine == nil || updated.VirtualMachine.SSHHost != "10.0.0.13" || updated.VirtualMachine.SSHPort != 2222 {
+	if updated.Name != "staging-vm-renamed" || updated.VirtualMachine == nil || updated.VirtualMachine.SSHHost != "127.0.0.1" || updated.VirtualMachine.SSHPort != 1 {
 		t.Fatalf("unexpected updated vm environment: %+v", updated)
+	}
+	if updated.Status != "unreachable" || updated.LastCheckedAt == "" {
+		t.Fatalf("expected updated vm to remain unreachable after failed ssh check, got %+v", updated)
 	}
 
 	listRecorder := httptest.NewRecorder()
@@ -1884,6 +1895,76 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 	router.ServeHTTP(deleteRecorder, deleteReq)
 	if deleteRecorder.Code != http.StatusOK {
 		t.Fatalf("delete vm environment status=%d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+}
+
+func TestEnvironmentAPIRejectsVirtualMachineWithoutUsableSSHAuth(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "environment-vm-auth-user",
+		Login:          "environment-vm-auth-user",
+		Name:           "Environment VM Auth User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	for _, item := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "missing auth",
+			body: `{
+				"name":"missing-auth-vm",
+				"kind":"virtual_machine",
+				"sshHost":"127.0.0.1",
+				"sshPort":1,
+				"sshUser":"ubuntu"
+			}`,
+			want: "sshAuth is required",
+		},
+		{
+			name: "missing password",
+			body: `{
+				"name":"missing-password-vm",
+				"kind":"virtual_machine",
+				"sshHost":"127.0.0.1",
+				"sshPort":1,
+				"sshUser":"ubuntu",
+				"sshAuth":{"method":"password"}
+			}`,
+			want: "ssh password is required",
+		},
+		{
+			name: "invalid private key",
+			body: `{
+				"name":"bad-key-vm",
+				"kind":"virtual_machine",
+				"sshHost":"127.0.0.1",
+				"sshPort":1,
+				"sshUser":"ubuntu",
+				"sshAuth":{"method":"private_key","privateKey":"not a private key"}
+			}`,
+			want: "ssh private key must be parseable",
+		},
+	} {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/environments", strings.NewReader(item.body))
+		req.Header.Set("Authorization", "Bearer "+sessionToken)
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), item.want) {
+			t.Fatalf("%s status=%d body=%s", item.name, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 
@@ -1958,10 +2039,11 @@ func TestTestPlansFreezeEnvironmentSnapshotsAndProtectReferences(t *testing.T) {
 	environment, err := store.CreateEnvironment(context.Background(), user.ID, workspaceID, EnvironmentInput{
 		Name:       "plan-vm",
 		Kind:       environmentKindVirtualMachine,
-		SSHHost:    "10.0.0.20",
-		SSHPort:    22,
+		SSHHost:    "127.0.0.1",
+		SSHPort:    1,
 		SSHUser:    "ubuntu",
 		SSHAuthRef: "secret://mspace/plan-vm",
+		SSHAuth:    &VirtualMachineSSHAuthInput{Method: "password", Password: "wrong-password"},
 	})
 	if err != nil {
 		t.Fatalf("create environment: %v", err)
@@ -2014,8 +2096,10 @@ func TestIssueTestDeployRejectsVirtualMachineEnvironment(t *testing.T) {
 	environment, err := store.CreateEnvironment(context.Background(), user.ID, workspaceID, EnvironmentInput{
 		Name:    "deploy-vm",
 		Kind:    environmentKindVirtualMachine,
-		SSHHost: "10.0.0.21",
+		SSHHost: "127.0.0.1",
+		SSHPort: 1,
 		SSHUser: "ubuntu",
+		SSHAuth: &VirtualMachineSSHAuthInput{Method: "password", Password: "wrong-password"},
 	})
 	if err != nil {
 		t.Fatalf("create vm environment: %v", err)

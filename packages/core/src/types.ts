@@ -366,6 +366,13 @@ export interface VirtualMachineEnvironmentConfig {
   labels?: Record<string, unknown>;
 }
 
+export interface VirtualMachineSSHAuthInput {
+  method: "password" | "private_key" | string;
+  password?: string;
+  privateKey?: string;
+  passphrase?: string;
+}
+
 export interface Environment {
   id: string;
   workspaceId: string;
@@ -1144,6 +1151,7 @@ export interface EnvironmentInput {
   workdir?: string;
   serviceHint?: string;
   labels?: Record<string, unknown>;
+  sshAuth?: VirtualMachineSSHAuthInput;
 }
 
 export interface KubeconfigImportSkip {

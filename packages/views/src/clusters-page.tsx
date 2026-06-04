@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronDown, Cloud, Clock3, FileUp, Globe2, HardDrive, Network, RefreshCw, Server, Settings2, Trash2, X } from "lucide-react";
+import { CheckCircle2, ChevronDown, Cloud, Clock3, FileKey2, FileUp, Globe2, HardDrive, KeyRound, Network, RefreshCw, Server, Settings2, Trash2, X } from "lucide-react";
 import {
   controlPlaneApi,
   queryKeys,
@@ -31,6 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
   StatusBadge,
+  Textarea,
   cn,
   useMspaceToast,
 } from "@mspace/ui";
@@ -38,6 +39,13 @@ import { RelativeTime } from "./time";
 import { useMspaceAuth } from "./auth-context";
 
 const DEFAULT_KUBE_IMPORT_PROMPT_KEY = "mspace.clusters.defaultKubeImportPrompted";
+type VirtualMachineAuthMethod = "password" | "private_key";
+type VirtualMachineFormState = EnvironmentInput & {
+  sshAuthMethod?: VirtualMachineAuthMethod;
+  sshPassword?: string;
+  sshPrivateKey?: string;
+  sshPassphrase?: string;
+};
 
 const emptyClusterForm: ClusterInput = {
   name: "",
@@ -51,7 +59,7 @@ const emptyClusterForm: ClusterInput = {
   status: "configured",
 };
 
-const emptyVirtualMachineForm: EnvironmentInput = {
+const emptyVirtualMachineForm: VirtualMachineFormState = {
   name: "",
   kind: "virtual_machine",
   status: "configured",
@@ -61,6 +69,10 @@ const emptyVirtualMachineForm: EnvironmentInput = {
   sshAuthRef: "",
   workdir: "",
   serviceHint: "",
+  sshAuthMethod: "password",
+  sshPassword: "",
+  sshPrivateKey: "",
+  sshPassphrase: "",
 };
 
 function clusterToForm(cluster: Cluster): ClusterInput {
@@ -77,7 +89,7 @@ function clusterToForm(cluster: Cluster): ClusterInput {
   };
 }
 
-function environmentToVMForm(environment: Environment): EnvironmentInput {
+function environmentToVMForm(environment: Environment): VirtualMachineFormState {
   return {
     name: environment.name,
     kind: "virtual_machine",
@@ -89,6 +101,10 @@ function environmentToVMForm(environment: Environment): EnvironmentInput {
     workdir: environment.virtualMachine?.workdir || "",
     serviceHint: environment.virtualMachine?.serviceHint || "",
     labels: environment.virtualMachine?.labels || {},
+    sshAuthMethod: "password",
+    sshPassword: "",
+    sshPrivateKey: "",
+    sshPassphrase: "",
   };
 }
 
@@ -110,7 +126,7 @@ export function ClustersPage() {
   const settingsClusterIdRef = useRef<string | null>(null);
   const [settingsForm, setSettingsForm] = useState<ClusterInput>(emptyClusterForm);
   const [settingsEnvironment, setSettingsEnvironment] = useState<Environment | null>(null);
-  const [virtualMachineForm, setVirtualMachineForm] = useState<EnvironmentInput>(emptyVirtualMachineForm);
+  const [virtualMachineForm, setVirtualMachineForm] = useState<VirtualMachineFormState>(emptyVirtualMachineForm);
   const [createVirtualMachineOpen, setCreateVirtualMachineOpen] = useState(false);
   const [defaultImportOpen, setDefaultImportOpen] = useState(false);
   const [defaultDiscoveryRequested, setDefaultDiscoveryRequested] = useState(false);
@@ -192,9 +208,16 @@ export function ClustersPage() {
   });
   const createEnvironment = useMutation({
     mutationFn: (input: EnvironmentInput) => controlPlaneApi.createEnvironment(auth.token, workspaceId, input),
-    onSuccess: async () => {
+    onSuccess: async (environment) => {
       setCreateVirtualMachineOpen(false);
       setVirtualMachineForm(emptyVirtualMachineForm);
+      showToast({
+        tone: environment.status === "ready" ? "success" : "warning",
+        description:
+          environment.status === "ready"
+            ? t("clusters.vmCheckSucceeded", { name: environment.name })
+            : t("clusters.vmCheckUnreachable", { name: environment.name }),
+      });
       await queryClient.invalidateQueries({ queryKey: environmentsQueryKey });
     },
   });
@@ -203,9 +226,16 @@ export function ClustersPage() {
       if (!settingsEnvironment) throw new Error(t("clusters.noEnvironmentSelected"));
       return controlPlaneApi.updateEnvironment(auth.token, workspaceId, settingsEnvironment.id, input);
     },
-    onSuccess: async () => {
+    onSuccess: async (environment) => {
       setSettingsEnvironment(null);
       setVirtualMachineForm(emptyVirtualMachineForm);
+      showToast({
+        tone: environment.status === "ready" ? "success" : "warning",
+        description:
+          environment.status === "ready"
+            ? t("clusters.vmCheckSucceeded", { name: environment.name })
+            : t("clusters.vmCheckUnreachable", { name: environment.name }),
+      });
       await queryClient.invalidateQueries({ queryKey: environmentsQueryKey });
     },
   });
@@ -914,16 +944,17 @@ function ClusterModal(props: {
 function VirtualMachineModal(props: {
   title: string;
   description: string;
-  value: EnvironmentInput;
+  value: VirtualMachineFormState;
   error?: Error | null;
   isPending: boolean;
   canSubmit: boolean;
   footerStart?: ReactNode;
-  onChange: (value: EnvironmentInput) => void;
+  onChange: (value: VirtualMachineFormState) => void;
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const { t } = useMspaceTranslation();
+  const authMethod = props.value.sshAuthMethod || "password";
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -987,21 +1018,79 @@ function VirtualMachineModal(props: {
               />
             </Field>
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <Field label={t("clusters.sshUser")}>
-              <Input
-                value={props.value.sshUser || ""}
-                onChange={(event) => props.onChange({ ...props.value, sshUser: event.target.value })}
-                placeholder="root"
-              />
+          <Field label={t("clusters.sshUser")}>
+            <Input
+              value={props.value.sshUser || ""}
+              onChange={(event) => props.onChange({ ...props.value, sshUser: event.target.value })}
+              placeholder="root"
+            />
+          </Field>
+          <div className="grid gap-3">
+            <Field label={t("clusters.vmAuthMethod")}>
+              <div className="grid grid-cols-2 gap-1 rounded-[8px] bg-[color:var(--surface)] p-1 shadow-[inset_0_0_0_1px_var(--line)]" role="group" aria-label={t("clusters.vmAuthMethod")}>
+                <button
+                  type="button"
+                  aria-pressed={authMethod === "password"}
+                  className={cn(
+                    "inline-flex min-h-9 items-center justify-center gap-2 rounded-[7px] px-3 text-[13px] font-medium text-[color:var(--muted-strong)] transition-[background-color,color,box-shadow,transform] duration-150 ease-out active:scale-[0.99]",
+                    authMethod === "password"
+                      ? "bg-[color:var(--paper)] text-[color:var(--text)] shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_var(--line)]"
+                      : "hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
+                  )}
+                  onClick={() => props.onChange({ ...props.value, sshAuthMethod: "password" })}
+                >
+                  <KeyRound data-icon className="size-4" />
+                  {t("clusters.vmAuthPassword")}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={authMethod === "private_key"}
+                  className={cn(
+                    "inline-flex min-h-9 items-center justify-center gap-2 rounded-[7px] px-3 text-[13px] font-medium text-[color:var(--muted-strong)] transition-[background-color,color,box-shadow,transform] duration-150 ease-out active:scale-[0.99]",
+                    authMethod === "private_key"
+                      ? "bg-[color:var(--paper)] text-[color:var(--text)] shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_var(--line)]"
+                      : "hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
+                  )}
+                  onClick={() => props.onChange({ ...props.value, sshAuthMethod: "private_key" })}
+                >
+                  <FileKey2 data-icon className="size-4" />
+                  {t("clusters.vmAuthPrivateKey")}
+                </button>
+              </div>
             </Field>
-            <Field label={t("clusters.sshAuthRef")}>
-              <Input
-                value={props.value.sshAuthRef || ""}
-                onChange={(event) => props.onChange({ ...props.value, sshAuthRef: event.target.value })}
-                placeholder={t("clusters.optional")}
-              />
-            </Field>
+            {authMethod === "password" ? (
+              <Field label={t("clusters.sshPassword")}>
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  value={props.value.sshPassword || ""}
+                  onChange={(event) => props.onChange({ ...props.value, sshPassword: event.target.value })}
+                  placeholder={t("clusters.sshPasswordPlaceholder")}
+                />
+              </Field>
+            ) : (
+              <div className="grid gap-3">
+                <Field label={t("clusters.sshPrivateKey")}>
+                  <Textarea
+                    value={props.value.sshPrivateKey || ""}
+                    onChange={(event) => props.onChange({ ...props.value, sshPrivateKey: event.target.value })}
+                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                    className="min-h-32 font-mono text-[12px] leading-5"
+                    spellCheck={false}
+                  />
+                </Field>
+                <Field label={t("clusters.sshPassphrase")}>
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
+                    value={props.value.sshPassphrase || ""}
+                    onChange={(event) => props.onChange({ ...props.value, sshPassphrase: event.target.value })}
+                    placeholder={t("clusters.optional")}
+                  />
+                </Field>
+              </div>
+            )}
+            <Notice>{t("clusters.vmCheckDescription")}</Notice>
           </div>
           <Field label={t("clusters.workdir")}>
             <Input
@@ -1024,7 +1113,7 @@ function VirtualMachineModal(props: {
                 {t("common.cancel")}
               </Button>
               <Button type="submit" disabled={!props.canSubmit || props.isPending}>
-                {props.isPending ? t("clusters.saving") : t("clusters.saveEnvironment")}
+                {props.isPending ? t("clusters.checking") : t("clusters.saveAndVerifyEnvironment")}
               </Button>
             </div>
           </div>
@@ -1055,11 +1144,12 @@ function canSubmitCluster(form: ClusterInput) {
   return true;
 }
 
-function normalizeVirtualMachineForm(form: EnvironmentInput): EnvironmentInput {
+function normalizeVirtualMachineForm(form: VirtualMachineFormState): EnvironmentInput {
+  const authMethod = form.sshAuthMethod || "password";
   const normalized: EnvironmentInput = {
     name: form.name.trim(),
     kind: "virtual_machine",
-    status: form.status || "configured",
+    status: "configured",
     sshHost: (form.sshHost || "").trim(),
     sshPort: form.sshPort || 22,
     sshUser: (form.sshUser || "").trim(),
@@ -1076,12 +1166,26 @@ function normalizeVirtualMachineForm(form: EnvironmentInput): EnvironmentInput {
     serviceHint: normalized.serviceHint || "",
     labels: {},
   };
+  normalized.sshAuth =
+    authMethod === "private_key"
+      ? {
+          method: "private_key",
+          privateKey: (form.sshPrivateKey || "").trim(),
+          passphrase: form.sshPassphrase || "",
+        }
+      : {
+          method: "password",
+          password: form.sshPassword || "",
+        };
   return normalized;
 }
 
-function canSubmitVirtualMachine(form: EnvironmentInput) {
+function canSubmitVirtualMachine(form: VirtualMachineFormState) {
   const normalized = normalizeVirtualMachineForm(form);
-  return Boolean(normalized.name && normalized.sshHost && normalized.sshUser && (normalized.sshPort || 0) > 0);
+  const authMethod = form.sshAuthMethod || "password";
+  const hasAuthMaterial =
+    authMethod === "private_key" ? Boolean((form.sshPrivateKey || "").trim()) : Boolean(form.sshPassword || "");
+  return Boolean(normalized.name && normalized.sshHost && normalized.sshUser && (normalized.sshPort || 0) > 0 && hasAuthMaterial);
 }
 
 function clusterFromEnvironment(environment: Environment): Cluster | null {

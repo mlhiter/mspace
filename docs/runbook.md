@@ -451,6 +451,16 @@ curl -H "Authorization: Bearer <msp-token>" \
 
 The task's `runtimeMode` and `requiredCapabilities` must match the worker heartbeat.
 
+### VM Environment stays unreachable
+
+Virtual machine Environments run an SSH login check on create/update. `ready` only comes from a successful password or private-key login, and raw passwords/private keys are not stored in the Environment response. If a VM stays `unreachable`, verify the same tuple from the server host:
+
+```bash
+ssh -p <port> <user>@<host>
+```
+
+Then retry saving the VM Environment with the corrected password or private key. Missing password/private key input is rejected before saving; connection and authentication failures keep the record for repair as `unreachable`.
+
 ### Personal worker credential expires
 
 The desktop-managed personal worker should renew credentials automatically. Check the Electron log for `[personal-worker] credential renewal failed` or `restart failed` first. If renewal keeps failing, confirm the user is still signed in, the selected server URL is reachable, and the personal workspace id has not changed. As a last local debug step, stop and restart the personal worker by switching server source or relaunching the desktop app; do not create a long-lived manual worker credential for normal personal mode.

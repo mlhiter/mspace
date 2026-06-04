@@ -165,7 +165,7 @@ Goal:
 
 Build:
 
-- Store reusable Environments with `kubernetes` and `virtual_machine` kinds. Kubernetes environments project from cluster compatibility records; VM environments store SSH target metadata and credential references.
+- Store reusable Environments with `kubernetes` and `virtual_machine` kinds. Kubernetes environments project from cluster compatibility records and refresh readiness from kubeconfig checks; VM environments store SSH target metadata and credential references, with `ready` gated by password/private-key SSH login validation.
 - Discover regular files under `~/.kube` on first Environments entry, show the candidates and contexts, and let the user choose which kubeconfig files to import.
 - Store project default Environment id, currently backed by the Kubernetes compatibility default for issue deploys.
 - Store one test environment record per issue: environment id/kind/snapshot, Kubernetes cluster id when applicable, namespace, preview URL, deploy session, cleanup session, namespace state, and cleanup state.

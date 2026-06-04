@@ -1312,6 +1312,13 @@ type VirtualMachineEnvironmentConfig struct {
 	Labels      json.RawMessage `json:"labels,omitempty"`
 }
 
+type VirtualMachineSSHAuthInput struct {
+	Method     string `json:"method"`
+	Password   string `json:"password,omitempty"`
+	PrivateKey string `json:"privateKey,omitempty"`
+	Passphrase string `json:"passphrase,omitempty"`
+}
+
 type EnvironmentInput struct {
 	Name           string                           `json:"name"`
 	Kind           string                           `json:"kind"`
@@ -1323,6 +1330,7 @@ type EnvironmentInput struct {
 	Workdir        string                           `json:"workdir"`
 	ServiceHint    string                           `json:"serviceHint"`
 	Labels         json.RawMessage                  `json:"labels,omitempty"`
+	SSHAuth        *VirtualMachineSSHAuthInput      `json:"sshAuth,omitempty"`
 	Kubernetes     *KubernetesEnvironmentConfig     `json:"kubernetes,omitempty"`
 	VirtualMachine *VirtualMachineEnvironmentConfig `json:"virtualMachine,omitempty"`
 }

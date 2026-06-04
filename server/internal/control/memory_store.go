@@ -1461,13 +1461,43 @@ func (s *MemoryStore) ListEnvironments(_ Context, userID, workspaceID string) ([
 }
 
 func (s *MemoryStore) CreateEnvironment(_ Context, userID, workspaceID string, input EnvironmentInput) (Environment, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	kind := normalizeEnvironmentKind(input.Kind)
+	if kind != environmentKindKubernetes {
+		s.mu.Lock()
+		allowed := s.hasWorkspaceRole(workspaceID, userID, "owner", "admin")
+		s.mu.Unlock()
+		if !allowed {
+			return Environment{}, ErrForbidden
+		}
+		normalized, err := normalizeEnvironmentInput(Environment{}, input)
+		if err != nil {
+			return Environment{}, err
+		}
+		status, err := virtualMachineSSHStatus(context.Background(), normalized, input.SSHAuth)
+		if err != nil {
+			return Environment{}, err
+		}
+		normalized.Status = status
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+			return Environment{}, ErrForbidden
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		normalized.ID = fmt.Sprintf("environment-%04d", s.nextMemoryIDLocked())
+		normalized.WorkspaceID = workspaceID
+		normalized.LastCheckedAt = now
+		normalized.CreatedAt = now
+		normalized.UpdatedAt = now
+		s.environments[normalized.ID] = normalized
+		return normalized, nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	workspaceID = strings.TrimSpace(workspaceID)
 	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
 		return Environment{}, ErrForbidden
 	}
-	kind := normalizeEnvironmentKind(input.Kind)
 	if kind == environmentKindKubernetes {
 		cluster, err := normalizeClusterInput(Cluster{}, clusterInputFromEnvironmentInput(input))
 		if err != nil {
@@ -1483,29 +1513,19 @@ func (s *MemoryStore) CreateEnvironment(_ Context, userID, workspaceID string, i
 		s.clusters[cluster.ID] = cluster
 		return environmentFromCluster(cluster), nil
 	}
-	normalized, err := normalizeEnvironmentInput(Environment{}, input)
-	if err != nil {
-		return Environment{}, err
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	normalized.ID = fmt.Sprintf("environment-%04d", s.nextMemoryIDLocked())
-	normalized.WorkspaceID = workspaceID
-	normalized.LastCheckedAt = now
-	normalized.CreatedAt = now
-	normalized.UpdatedAt = now
-	s.environments[normalized.ID] = normalized
-	return normalized, nil
+	return Environment{}, errors.New("environment kind must be kubernetes or virtual_machine")
 }
 
 func (s *MemoryStore) UpdateEnvironment(_ Context, userID, workspaceID, environmentID string, input EnvironmentInput) (Environment, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	workspaceID = strings.TrimSpace(workspaceID)
 	environmentID = strings.TrimSpace(environmentID)
+	s.mu.Lock()
 	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		s.mu.Unlock()
 		return Environment{}, ErrForbidden
 	}
 	if cluster, ok := s.clusters[environmentID]; ok && cluster.WorkspaceID == workspaceID {
+		defer s.mu.Unlock()
 		updated, err := normalizeClusterInput(cluster, clusterInputFromEnvironmentInput(input))
 		if err != nil {
 			return Environment{}, err
@@ -1521,11 +1541,30 @@ func (s *MemoryStore) UpdateEnvironment(_ Context, userID, workspaceID, environm
 	}
 	existing, ok := s.environments[environmentID]
 	if !ok || existing.WorkspaceID != workspaceID {
+		s.mu.Unlock()
 		return Environment{}, ErrNotFound
 	}
+	s.mu.Unlock()
 	updated, err := normalizeEnvironmentInput(existing, input)
 	if err != nil {
 		return Environment{}, err
+	}
+	if updated.Kind != existing.Kind {
+		return Environment{}, errors.New("environment kind cannot be changed")
+	}
+	status, err := virtualMachineSSHStatus(context.Background(), updated, input.SSHAuth)
+	if err != nil {
+		return Environment{}, err
+	}
+	updated.Status = status
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return Environment{}, ErrForbidden
+	}
+	existing, ok = s.environments[environmentID]
+	if !ok || existing.WorkspaceID != workspaceID {
+		return Environment{}, ErrNotFound
 	}
 	if updated.Kind != existing.Kind {
 		return Environment{}, errors.New("environment kind cannot be changed")

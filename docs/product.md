@@ -125,6 +125,8 @@ A virtual machine Environment stores SSH-oriented target metadata:
 - optional working directory and service hint;
 - optional labels for future worker routing or runbook matching.
 
+Creating or editing a virtual machine Environment requires a password or private key so mspace can verify SSH login before the target is treated as usable. Only a successful SSH check marks the VM `ready`; failed checks keep the record for later repair as `unreachable`, and missing auth material is rejected instead of creating a fake-ready environment.
+
 ### Runtime and Environment Stance
 
 The development runtime and the validation environment should be treated as separate concepts.

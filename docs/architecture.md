@@ -228,7 +228,7 @@ Kubernetes environments are currently projected from `clusters` compatibility re
 
 Creating, updating, importing, or manually checking a Kubernetes Environment refreshes readiness from the server side. The check loads the selected kubeconfig/context, reaches the Kubernetes API server, and verifies lightweight namespace list permission before the Environment is marked `ready`; failures leave it `unreachable` with a refreshed check time.
 
-Virtual machine environments store SSH target metadata: host, port, user, credential reference, workdir, service hints, labels, readiness status, and timestamps. They do not store raw passwords or private keys.
+Virtual machine environments store SSH target metadata: host, port, user, credential reference, workdir, service hints, labels, readiness status, and timestamps. Creating or updating a VM Environment requires one-time SSH auth material, either password or private key, so the server can run an `ssh user@host`-level login check before saving. A successful check marks the Environment `ready`; connection or authentication failure saves it as `unreachable`; missing or unusable auth material is rejected. The Environment payload still stores only the credential reference and readiness result, not raw passwords or private keys.
 
 Test plans and test runs can select an Environment. The server stores `environment_id`, `environment_kind`, and a frozen `environment_snapshot` so historical runs keep their meaning even if the reusable environment changes later. The older free-text `environment` field remains human notes/prompt context.
 

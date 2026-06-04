@@ -27,6 +27,7 @@ export const changelog: ChangelogEntry[] = [
       "Added workspace Environment APIs and UI navigation while keeping the old Kubernetes cluster APIs as compatibility records.",
       "Made Kubernetes environments project from kubeconfig-backed cluster records and added virtual machine environments with SSH host, user, port, workdir, service hint, labels, and credential references.",
       "Added a Kubernetes Environment reachability check that refreshes status from the kubeconfig, selected context, API server, and namespace list permission.",
+      "Added SSH password and private-key validation for virtual machine environments so VMs are only marked verified after a real login check.",
       "Let test plans and test runs select an Environment and freeze environment id, kind, and snapshot at creation time so historical runs keep their target context.",
       "Kept workers decoupled from environments: workers claim runtime tasks, then operate the selected target through Kubernetes, SSH, or future provider-specific access.",
       "Renamed the team worker setup language around worker hosts and install commands so workers are not confused with validation targets.",

@@ -1,11 +1,16 @@
 package control
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net"
+	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 const (
@@ -230,4 +235,79 @@ func environmentSnapshot(environment Environment) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return copyRawMessage(payload)
+}
+
+func virtualMachineSSHStatus(ctx context.Context, environment Environment, auth *VirtualMachineSSHAuthInput) (string, error) {
+	if environment.VirtualMachine == nil {
+		return "configured", errors.New("virtual machine environment is required")
+	}
+	authMethods, authRef, err := virtualMachineSSHAuthMethods(auth)
+	if err != nil {
+		return "configured", err
+	}
+	if environment.VirtualMachine.SSHAuthRef == "" {
+		environment.VirtualMachine.SSHAuthRef = authRef
+	}
+	if err := validateVirtualMachineSSH(ctx, *environment.VirtualMachine, authMethods); err != nil {
+		return "unreachable", nil
+	}
+	return "ready", nil
+}
+
+func virtualMachineSSHAuthMethods(auth *VirtualMachineSSHAuthInput) ([]ssh.AuthMethod, string, error) {
+	if auth == nil {
+		return nil, "", errors.New("sshAuth is required for virtual machine validation")
+	}
+	method := strings.ToLower(strings.TrimSpace(auth.Method))
+	switch method {
+	case "password":
+		if auth.Password == "" {
+			return nil, "ssh:password", errors.New("ssh password is required")
+		}
+		return []ssh.AuthMethod{ssh.Password(auth.Password)}, "ssh:password", nil
+	case "private_key":
+		if auth.PrivateKey == "" {
+			return nil, "ssh:private_key", errors.New("ssh private key is required")
+		}
+		key := []byte(auth.PrivateKey)
+		var signer ssh.Signer
+		var err error
+		if auth.Passphrase != "" {
+			signer, err = ssh.ParsePrivateKeyWithPassphrase(key, []byte(auth.Passphrase))
+		} else {
+			signer, err = ssh.ParsePrivateKey(key)
+		}
+		if err != nil {
+			return nil, "ssh:private_key", errors.New("ssh private key must be parseable")
+		}
+		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, "ssh:private_key", nil
+	default:
+		return nil, "", errors.New("sshAuth method must be password or private_key")
+	}
+}
+
+func validateVirtualMachineSSH(ctx context.Context, vm VirtualMachineEnvironmentConfig, authMethods []ssh.AuthMethod) error {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	address := net.JoinHostPort(vm.SSHHost, strconv.Itoa(vm.SSHPort))
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(8 * time.Second))
+	config := &ssh.ClientConfig{
+		User:            vm.SSHUser,
+		Auth:            authMethods,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         8 * time.Second,
+		ClientVersion:   "SSH-2.0-mspace-env-check",
+	}
+	clientConn, chans, reqs, err := ssh.NewClientConn(conn, address, config)
+	if err != nil {
+		return err
+	}
+	client := ssh.NewClient(clientConn, chans, reqs)
+	defer client.Close()
+	return nil
 }

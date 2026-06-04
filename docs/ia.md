@@ -37,7 +37,7 @@ Navigation rules:
 - Issues is the durable knowledge surface and issue creation home.
 - Tests is the project-level quality surface for cases, case suggestions, plans, and runs. It sits after Issues because test execution still routes through issue-backed worker sessions.
 - Agents is the managed profile surface for Codex-backed collaborators and mentions.
-- Environments is reusable target access: Kubernetes kubeconfig import, reachability status, registry/exposure defaults, and virtual machine SSH target metadata.
+- Environments is reusable target access: Kubernetes kubeconfig import, reachability status, registry/exposure defaults, and virtual machine SSH target metadata with password/private-key login validation.
 - Projects is configuration and project-level history.
 - Workspace Settings is accessed from the workspace identity menu instead of the main rail, because it controls automation, membership, and runtime worker policy for the current workspace rather than daily issue work.
 - Language switching also lives in the workspace identity menu, because English/Simplified Chinese is a global desktop preference rather than a route-specific action.
