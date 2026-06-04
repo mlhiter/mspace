@@ -3466,9 +3466,15 @@ function EvidenceScreenshotThumb(props: {
 }) {
   const { t } = useMspaceTranslation();
   const imageSource = useResolvedEvidenceImageSrc(props.image);
+  const [imageFailed, setImageFailed] = useState(false);
   const label = screenshotImageLabel(props.image, t("tests.openScreenshotN", { index: props.index + 1 }));
   const target = screenshotImageOpenTarget(props.image);
   const isLegacyLocalPath = screenshotImageIsLegacyLocalPath(props.image);
+  const imageUnavailable = imageFailed || Boolean(imageSource.error);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [imageSource.src]);
 
   return (
     <div className="overflow-hidden rounded-[8px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
@@ -3478,13 +3484,19 @@ function EvidenceScreenshotThumb(props: {
         title={t("tests.previewScreenshot")}
         onClick={props.onPreview}
       >
-        {imageSource.src ? (
-          <img src={imageSource.src} alt={t("tests.screenshotAlt", { index: props.index + 1 })} className="h-full w-full object-cover object-top" />
+        {imageSource.src && !imageFailed ? (
+          <img
+            src={imageSource.src}
+            alt={t("tests.screenshotAlt", { index: props.index + 1 })}
+            className="h-full w-full object-cover object-top"
+            onError={() => setImageFailed(true)}
+            onLoad={() => setImageFailed(false)}
+          />
         ) : imageSource.loading ? (
           <span className="grid h-full place-items-center px-4 text-center text-[12px] text-[color:var(--muted)]">{t("tests.screenshotLoading")}</span>
         ) : isLegacyLocalPath ? (
           <span className="grid h-full place-items-center px-4 text-center text-[12px] text-[color:var(--muted)]">{t("tests.screenshotLegacyLocalPath")}</span>
-        ) : imageSource.error ? (
+        ) : imageUnavailable ? (
           <span className="grid h-full place-items-center px-4 text-center text-[12px] text-[color:var(--muted)]">{t("tests.screenshotUnavailable")}</span>
         ) : (
           <span className="grid h-full place-items-center px-4 text-center text-[12px] text-[color:var(--muted)]">{t("tests.screenshotArtifactOnly")}</span>
@@ -3513,9 +3525,11 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
   const { t } = useMspaceTranslation();
   const { image, onClose } = props;
   const imageSource = useResolvedEvidenceImageSrc(image);
+  const [imageFailed, setImageFailed] = useState(false);
   const target = screenshotImageOpenTarget(image);
   const label = screenshotImageLabel(image, t("tests.previewScreenshot"));
   const isLegacyLocalPath = screenshotImageIsLegacyLocalPath(image);
+  const imageUnavailable = imageFailed || Boolean(imageSource.error);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -3524,6 +3538,10 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [imageSource.src]);
 
   return (
     <div className="fixed inset-0 z-[90] grid min-w-0 place-items-center bg-[rgba(31,31,31,0.70)] px-5 py-8">
@@ -3552,8 +3570,14 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
           </div>
         </div>
         <div className="min-h-0 overflow-auto bg-[color:var(--paper)] p-3">
-          {imageSource.src ? (
-            <img src={imageSource.src} alt={t("tests.screenshotPreviewTitle")} className="mx-auto max-h-[calc(100vh-168px)] w-auto max-w-full rounded-[8px] bg-[color:var(--surface)] object-contain shadow-[inset_0_0_0_1px_var(--line)]" />
+          {imageSource.src && !imageFailed ? (
+            <img
+              src={imageSource.src}
+              alt={t("tests.screenshotPreviewTitle")}
+              className="mx-auto max-h-[calc(100vh-168px)] w-auto max-w-full rounded-[8px] bg-[color:var(--surface)] object-contain shadow-[inset_0_0_0_1px_var(--line)]"
+              onError={() => setImageFailed(true)}
+              onLoad={() => setImageFailed(false)}
+            />
           ) : imageSource.loading ? (
             <div className="grid min-h-[360px] place-items-center rounded-[8px] bg-[color:var(--surface)] px-6 text-center text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
               {t("tests.screenshotLoading")}
@@ -3562,7 +3586,7 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
             <div className="grid min-h-[360px] place-items-center rounded-[8px] bg-[color:var(--surface)] px-6 text-center text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
               {t("tests.screenshotLegacyLocalPath")}
             </div>
-          ) : imageSource.error ? (
+          ) : imageUnavailable ? (
             <div className="grid min-h-[360px] place-items-center rounded-[8px] bg-[color:var(--surface)] px-6 text-center text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
               {t("tests.screenshotUnavailable")}
             </div>
