@@ -1800,6 +1800,63 @@ func TestProjectTestCaseAgentActionsRequireWorkerBeforeCreatingIssues(t *testing
 	}
 }
 
+func TestIssueListHidesLegacyTestAutomationIssues(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "test-module-legacy-automation-user",
+		Login:          "test-module-legacy-automation-user",
+		Name:           "Test Module Legacy Automation User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "test-module-legacy-automation")
+	testCase := createProjectTestCaseViaHTTP(t, router, sessionToken, workspaceID, project.ID, `{
+		"title":"Password login opens the workspace",
+		"status":"ready",
+		"steps":[{"action":"Open the sign-in form","expected":"The password form is visible."}],
+		"expectedResult":"The selected workspace opens."
+	}`)
+	legacyOptimizeIssueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Title:     "Optimize test cases",
+		Body:      buildTestCaseOptimizationIssueBody(project, []TestCase{testCase}, ""),
+		LabelKeys: []string{"type:test"},
+	})
+	if err != nil {
+		t.Fatalf("create legacy optimization issue: %v", err)
+	}
+	manualTestIssueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Title:     "Manual test investigation",
+		Body:      "This is a human-owned testing issue and should remain in Issues.",
+		LabelKeys: []string{"type:test"},
+	})
+	if err != nil {
+		t.Fatalf("create manual test issue: %v", err)
+	}
+
+	defaultIssues := listIssuesViaHTTP(t, router, sessionToken, workspaceID)
+	if issueListContains(defaultIssues, legacyOptimizeIssueID) {
+		t.Fatalf("default issue list should hide legacy test automation issue %s, got %+v", legacyOptimizeIssueID, defaultIssues)
+	}
+	if !issueListContains(defaultIssues, manualTestIssueID) {
+		t.Fatalf("default issue list should keep manual type:test issue %s, got %+v", manualTestIssueID, defaultIssues)
+	}
+	allTopLevelIssues := listIssuesViaHTTPWithQuery(t, router, sessionToken, workspaceID, "includeTestAutomation=1")
+	if !issueListContains(allTopLevelIssues, legacyOptimizeIssueID) {
+		t.Fatalf("includeTestAutomation should expose legacy optimization issue %s, got %+v", legacyOptimizeIssueID, allTopLevelIssues)
+	}
+}
+
 func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{

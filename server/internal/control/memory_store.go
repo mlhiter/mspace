@@ -2366,7 +2366,7 @@ func (s *MemoryStore) ListIssues(_ Context, userID, workspaceID string, options 
 		if issue.WorkspaceID != workspaceID || issue.ParentIssueID != "" {
 			continue
 		}
-		if !options.IncludeTestAutomation && s.isTestAutomationIssueLocked(issue.ID) {
+		if !options.IncludeTestAutomation && s.isTestAutomationIssueLocked(issue) {
 			continue
 		}
 		items = append(items, s.issueListItemLocked(issue))
@@ -2377,10 +2377,13 @@ func (s *MemoryStore) ListIssues(_ Context, userID, workspaceID string, options 
 	return items, nil
 }
 
-func (s *MemoryStore) isTestAutomationIssueLocked(issueID string) bool {
-	issueID = strings.TrimSpace(issueID)
+func (s *MemoryStore) isTestAutomationIssueLocked(issue Issue) bool {
+	issueID := strings.TrimSpace(issue.ID)
 	if issueID == "" {
 		return false
+	}
+	if isLegacyTestAutomationIssue(issue.Title, issue.Body) {
+		return true
 	}
 	for _, run := range s.testRuns {
 		if run.ParentIssueID == issueID {

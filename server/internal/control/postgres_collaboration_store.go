@@ -367,14 +367,21 @@ func (s *PostgresStore) ListIssues(ctx Context, userID, workspaceID string, opti
 				WHERE tr.workspace_id = i.workspace_id
 					AND tr.parent_issue_id = i.id
 			)
-			AND NOT EXISTS (
-				SELECT 1
-				FROM runtime_tasks rt
-				WHERE rt.workspace_id = i.workspace_id
-					AND rt.issue_id = i.id::text
-					AND rt.payload->>'automation' IN ('test_case_optimization', 'test_case_generation')
-			)
-		`
+				AND NOT EXISTS (
+					SELECT 1
+					FROM runtime_tasks rt
+					WHERE rt.workspace_id = i.workspace_id
+						AND rt.issue_id = i.id::text
+						AND rt.payload->>'automation' IN ('test_case_optimization', 'test_case_generation')
+				)
+				AND NOT (
+					POSITION(('Codex must write ' || chr(96) || '${MSPACE_SESSION_ARTIFACT_DIR}/test-case-proposals.json' || chr(96) || ' and must not edit canonical test cases directly.') IN i.body) > 0
+					AND (
+						(i.title = 'Optimize test cases' AND i.body LIKE ('Optimize the selected test cases for project ' || chr(96) || '%'))
+						OR (i.title = 'Generate test cases' AND i.body LIKE ('Generate baseline test case proposals for project ' || chr(96) || '%'))
+					)
+				)
+			`
 	}
 	rows, err := s.pool.Query(dbctx, issueListQuery(whereClause, `
 		ORDER BY i.updated_at DESC

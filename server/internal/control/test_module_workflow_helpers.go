@@ -265,6 +265,23 @@ func buildTestCaseGenerationIssueBody(project Project, input GenerateTestCasesIn
 	return builder.String()
 }
 
+func isLegacyTestAutomationIssue(title, body string) bool {
+	title = strings.TrimSpace(title)
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return false
+	}
+	const proposalArtifactInstruction = "Codex must write `${MSPACE_SESSION_ARTIFACT_DIR}/test-case-proposals.json` and must not edit canonical test cases directly."
+	switch title {
+	case "Optimize test cases":
+		return strings.HasPrefix(body, "Optimize the selected test cases for project `") && strings.Contains(body, proposalArtifactInstruction)
+	case "Generate test cases":
+		return strings.HasPrefix(body, "Generate baseline test case proposals for project `") && strings.Contains(body, proposalArtifactInstruction)
+	default:
+		return false
+	}
+}
+
 func testRunTitle(plan *TestPlan, run TestRun, cases []TestCase) string {
 	if plan != nil && plan.Title != "" {
 		return "Test run: " + plan.Title
