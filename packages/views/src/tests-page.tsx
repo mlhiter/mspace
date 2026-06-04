@@ -3092,17 +3092,25 @@ function CaseFormFields(props: {
       <Field label={t("tests.steps")} hint={t("tests.stepsHint")}>
         <div className="grid gap-2">
           {form.steps.map((step, index) => (
-            <div key={index} className="grid gap-2 rounded-[8px] bg-[color:var(--paper)] p-2 shadow-[inset_0_0_0_1px_var(--line)]">
-              <Input
-                value={step.action}
-                onChange={(event) => onStepChange(index, { action: event.target.value })}
-                placeholder={t("tests.stepAction", { index: index + 1 })}
-              />
-              <Input
-                value={step.expected || ""}
-                onChange={(event) => onStepChange(index, { expected: event.target.value })}
-                placeholder={t("tests.stepExpected", { index: index + 1 })}
-              />
+            <div key={index} className="grid grid-cols-[24px_minmax(0,1fr)] gap-2 rounded-[8px] bg-[color:var(--paper)] p-2 shadow-[inset_0_0_0_1px_var(--line)]">
+              <span
+                aria-hidden="true"
+                className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[color:var(--surface)] text-[11px] font-medium tabular-nums text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]"
+              >
+                {index + 1}
+              </span>
+              <div className="grid min-w-0 gap-2">
+                <Input
+                  value={step.action}
+                  onChange={(event) => onStepChange(index, { action: event.target.value })}
+                  placeholder={t("tests.stepAction", { index: index + 1 })}
+                />
+                <Input
+                  value={step.expected || ""}
+                  onChange={(event) => onStepChange(index, { expected: event.target.value })}
+                  placeholder={t("tests.stepExpected", { index: index + 1 })}
+                />
+              </div>
             </div>
           ))}
           <Button
