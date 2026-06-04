@@ -2318,6 +2318,8 @@ export function TestCaseDetailPage() {
   }
 
   const caseDetailError = caseQuery.error || revisionsQuery.error;
+  const caseDetailFormId = "test-case-detail-form";
+  const caseTitle = isNew ? t("tests.newCase") : testCase?.title || t("tests.cases");
 
   if (!isNew && !testCase) {
     return (
@@ -2333,48 +2335,38 @@ export function TestCaseDetailPage() {
 
   return (
     <PageFrame
-      title={isNew ? t("tests.newCase") : testCase?.title || t("tests.cases")}
-      subtitle={selectedProject?.name || t("tests.project")}
+      title={caseTitle}
+      subtitle={<CaseHeaderMeta projectName={selectedProject?.name || t("tests.project")} testCase={testCase} />}
       breadcrumbs={[
         { label: t("common.mspace"), to: "/inbox" },
         { label: t("tests.title"), to: "/tests", search: testsTabSearch("cases", effectiveProjectId) },
-        { label: isNew ? t("tests.newCase") : testCase?.title || t("tests.cases") },
+        { label: caseTitle },
       ]}
-    >
-      <form className="grid gap-5 rounded-[10px] bg-[color:var(--surface)] p-5 shadow-[inset_0_0_0_1px_var(--line)]" onSubmit={submitCase}>
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[color:var(--line)] pb-4">
-          <div className="min-w-0">
-            <h2 className="truncate text-[15px] font-semibold text-[color:var(--text)]">{isNew ? t("tests.newCase") : testCase?.title}</h2>
-            {testCase ? (
-              <p className="mt-1 text-[12px] text-[color:var(--muted)]">
-                {t("tests.quality")}: <span className={cn("font-semibold", scoreTone(testCase.qualityScore))}>{testCase.qualityScore}</span>
-              </p>
-            ) : null}
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {!isNew ? (
-              <Button type="button" variant="secondary" onClick={() => startCaseRun.mutate()} disabled={!canRunCase || startCaseRun.isPending}>
-                <Play data-icon />
-                {startCaseRun.isPending ? t("tests.startingAdHocRun") : t("tests.runCase")}
-              </Button>
-            ) : null}
-            {isNew || activeCaseTab === "details" ? (
-              <Button type="submit" disabled={!canSave || savePending}>
-                <Save data-icon />
-                {savePending ? t("tests.saving") : isNew ? t("tests.createCase") : t("tests.saveCase")}
-              </Button>
-            ) : null}
-          </div>
+      actions={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {!isNew ? (
+            <Button type="button" variant="secondary" onClick={() => startCaseRun.mutate()} disabled={!canRunCase || startCaseRun.isPending}>
+              <Play data-icon />
+              {startCaseRun.isPending ? t("tests.startingAdHocRun") : t("tests.runCase")}
+            </Button>
+          ) : null}
+          {isNew || activeCaseTab === "details" ? (
+            <Button type="submit" form={caseDetailFormId} disabled={!canSave || savePending}>
+              <Save data-icon />
+              {savePending ? t("tests.saving") : isNew ? t("tests.createCase") : t("tests.saveCase")}
+            </Button>
+          ) : null}
         </div>
-
+      }
+    >
+      {!isNew && testCase ? (
+        <CaseDetailTabs activeTab={activeCaseTab} projectId={effectiveProjectId} caseId={testCase.id} />
+      ) : null}
+      <form id={caseDetailFormId} className="grid gap-5" onSubmit={submitCase}>
         {startCaseRun.error ? (
           <p className="text-[12px] text-[color:var(--danger)]">{startCaseRun.error.message}</p>
         ) : actionMessage ? (
           <p className="text-[12px] text-[color:var(--muted)]">{actionMessage}</p>
-        ) : null}
-
-        {!isNew && testCase ? (
-          <CaseDetailTabs activeTab={activeCaseTab} projectId={effectiveProjectId} caseId={testCase.id} />
         ) : null}
 
         {isNew || activeCaseTab === "details" ? (
@@ -2411,6 +2403,27 @@ export function TestCaseDetailPage() {
         ) : null}
       </form>
     </PageFrame>
+  );
+}
+
+function CaseHeaderMeta(props: { projectName: string; testCase?: TestCase }) {
+  const { t } = useMspaceTranslation();
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2 text-[12px] leading-5 text-[color:var(--muted)]">
+      <span className="max-w-[28rem] truncate text-[14px] leading-6">{props.projectName}</span>
+      {props.testCase ? (
+        <>
+          <span aria-hidden="true" className="text-[color:var(--faint)]">/</span>
+          <span>
+            {t("tests.quality")}: <span className={cn("font-semibold", scoreTone(props.testCase.qualityScore))}>{props.testCase.qualityScore}</span>
+          </span>
+          <StatusBadge value={props.testCase.status} valueLabel={testCaseStatusLabel(props.testCase.status, t)} />
+          <span className="rounded-[6px] bg-[color:var(--surface)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+            {testCaseTypeLabel(props.testCase.type, t)}
+          </span>
+        </>
+      ) : null}
+    </div>
   );
 }
 
@@ -2822,19 +2835,23 @@ function CaseDetailTabs(props: {
 }) {
   const { t } = useMspaceTranslation();
   return (
-    <div className="flex flex-wrap gap-1 border-b border-[color:var(--line)] pb-3">
+    <div className="mb-7 flex min-w-0 flex-wrap gap-1 border-b border-[color:var(--line)] pb-2" role="tablist" aria-label={t("tests.caseDetailSections")}>
       {caseDetailTabs.map((tab) => (
         <Link
           key={tab}
           to="/tests/cases/$caseId"
           params={{ caseId: props.caseId }}
           search={testCaseDetailSearch(props.projectId, tab)}
+          role="tab"
+          aria-selected={props.activeTab === tab}
           className={cn(
-            "rounded-[7px] px-2.5 py-1.5 text-[12px] font-medium text-[color:var(--muted)] transition-colors hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
-            props.activeTab === tab ? "bg-[color:var(--selection)] text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--line)]" : "",
+            "inline-flex h-8 max-w-full items-center rounded-[7px] px-2.5 text-[13px] font-medium leading-5 transition-[background-color,color,transform] duration-150 ease-out active:scale-95",
+            props.activeTab === tab
+              ? "bg-[color:var(--selection)] text-[color:var(--text)]"
+              : "text-[color:var(--muted)] hover:bg-[color:var(--hover)] hover:text-[color:var(--muted-strong)]",
           )}
         >
-          {t(`tests.caseDetailTabs.${tab}`)}
+          <span className="truncate">{t(`tests.caseDetailTabs.${tab}`)}</span>
         </Link>
       ))}
     </div>

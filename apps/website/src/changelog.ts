@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-04",
+    title: "Issue-style test case detail layout",
+    summary:
+      "mspace made Test Case Detail read more like Issue Detail, with page-level actions and tabs instead of a repeated inner header.",
+    items: [
+      "Moved Run case and Save case actions into the page header so they stay aligned with the object title.",
+      "Removed the duplicated case title summary block below the page title while keeping project, executability, status, and type as compact metadata.",
+      "Moved Details, Run history, and Revisions navigation directly under the title area with the same quiet tab treatment as Issue Detail.",
+      "Kept save behavior intact by binding the header Save action back to the detail form.",
+    ],
+  },
+  {
+    date: "2026-06-04",
     title: "Environments for Kubernetes and VM targets",
     summary:
       "mspace evolved the Clusters module into Environments so test and deployment work can target Kubernetes clusters or SSH-managed virtual machines.",

@@ -338,6 +338,7 @@ const resources = {
           runs: "Run history",
           revisions: "Revisions",
         },
+        caseDetailSections: "Test case detail sections",
         workflow: {
           title: "Workflow status",
           caseCount: "{{count}} cases",
@@ -1949,6 +1950,7 @@ const resources = {
           runs: "运行记录",
           revisions: "修订历史",
         },
+        caseDetailSections: "测试用例详情分区",
         workflow: {
           title: "流程状态",
           caseCount: "{{count}} 条用例",
