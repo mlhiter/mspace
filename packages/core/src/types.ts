@@ -72,8 +72,20 @@ export interface TestCase {
   tags: string[];
   qualityScore: number;
   qualityFindings: TestCaseQualityFinding[];
+  latestResult?: TestCaseLatestResult;
   createdByUserId: string;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestCaseLatestResult {
+  itemId: string;
+  runId: string;
+  runStatus: string;
+  runSource: string;
+  status: string;
+  actualResult: string;
+  failureSummary: string;
   updatedAt: string;
 }
 

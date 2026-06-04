@@ -66,7 +66,13 @@ func (s *PostgresStore) ListProjectTestCases(ctx Context, userID, workspaceID, p
 		}
 		cases = append(cases, testCase)
 	}
-	return cases, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := attachLatestTestCaseResults(dbctx, s.pool, workspaceID, projectID, cases); err != nil {
+		return nil, err
+	}
+	return cases, nil
 }
 
 func (s *PostgresStore) CreateProjectTestCase(ctx Context, userID, workspaceID, projectID string, input TestCaseInput) (TestCase, error) {
@@ -194,7 +200,14 @@ func (s *PostgresStore) GetProjectTestCase(ctx Context, userID, workspaceID, pro
 	if errors.Is(err, pgx.ErrNoRows) {
 		return TestCase{}, ErrNotFound
 	}
-	return testCase, err
+	if err != nil {
+		return TestCase{}, err
+	}
+	cases := []TestCase{testCase}
+	if err := attachLatestTestCaseResults(dbctx, s.pool, workspaceID, projectID, cases); err != nil {
+		return TestCase{}, err
+	}
+	return cases[0], nil
 }
 
 func (s *PostgresStore) UpdateProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string, input TestCaseInput) (TestCase, error) {
@@ -1035,6 +1048,72 @@ func scanTestCase(row scanner) (TestCase, error) {
 	testCase.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	testCase.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 	return testCase, nil
+}
+
+func attachLatestTestCaseResults(ctx context.Context, q queryer, workspaceID, projectID string, cases []TestCase) error {
+	if len(cases) == 0 {
+		return nil
+	}
+	caseIDs := make([]string, 0, len(cases))
+	indexByCaseID := make(map[string]int, len(cases))
+	for index, testCase := range cases {
+		caseID := strings.TrimSpace(testCase.ID)
+		if caseID == "" {
+			continue
+		}
+		caseIDs = append(caseIDs, caseID)
+		indexByCaseID[caseID] = index
+	}
+	if len(caseIDs) == 0 {
+		return nil
+	}
+	rows, err := q.Query(ctx, `
+		SELECT DISTINCT ON (i.case_id)
+			i.case_id::text,
+			i.id::text,
+			i.run_id::text,
+			r.status,
+			r.source,
+			i.status,
+			i.actual_result,
+			i.failure_summary,
+			i.updated_at
+		FROM test_run_items i
+		JOIN test_runs r ON r.id = i.run_id
+		WHERE i.workspace_id = $1
+			AND i.project_id = $2
+			AND i.case_id::text = ANY($3::text[])
+			AND i.status IN ('passed', 'failed', 'blocked', 'skipped')
+		ORDER BY i.case_id, i.updated_at DESC, r.updated_at DESC, i.id DESC
+	`, workspaceID, projectID, caseIDs)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var caseID string
+		var latest TestCaseLatestResult
+		var updatedAt time.Time
+		if err := rows.Scan(
+			&caseID,
+			&latest.ItemID,
+			&latest.RunID,
+			&latest.RunStatus,
+			&latest.RunSource,
+			&latest.Status,
+			&latest.ActualResult,
+			&latest.FailureSummary,
+			&updatedAt,
+		); err != nil {
+			return err
+		}
+		latest.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+		if index, ok := indexByCaseID[caseID]; ok {
+			copyLatest := latest
+			cases[index].LatestResult = &copyLatest
+		}
+	}
+	return rows.Err()
 }
 
 func scanTestCaseRevision(row scanner) (TestCaseRevision, error) {

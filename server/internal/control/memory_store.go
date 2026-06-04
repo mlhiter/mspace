@@ -1689,6 +1689,7 @@ func (s *MemoryStore) ListProjectTestCases(_ Context, userID, workspaceID, proje
 		}
 		cases = append(cases, testCaseSnapshot(testCase))
 	}
+	s.attachLatestTestCaseResultsLocked(cases)
 	sort.Slice(cases, func(i, j int) bool {
 		return cases[i].UpdatedAt > cases[j].UpdatedAt
 	})
@@ -1807,7 +1808,9 @@ func (s *MemoryStore) GetProjectTestCase(_ Context, userID, workspaceID, project
 	if err != nil {
 		return TestCase{}, err
 	}
-	return testCaseSnapshot(testCase), nil
+	cases := []TestCase{testCaseSnapshot(testCase)}
+	s.attachLatestTestCaseResultsLocked(cases)
+	return cases[0], nil
 }
 
 func (s *MemoryStore) UpdateProjectTestCase(_ Context, userID, workspaceID, projectID, caseID string, input TestCaseInput) (TestCase, error) {
@@ -4244,6 +4247,52 @@ func (s *MemoryStore) testCasesForPlanIDLocked(planID string) []TestCase {
 		}
 	}
 	return cases
+}
+
+func (s *MemoryStore) attachLatestTestCaseResultsLocked(cases []TestCase) {
+	if len(cases) == 0 {
+		return
+	}
+	indexByCaseID := make(map[string]int, len(cases))
+	for index, testCase := range cases {
+		if testCase.ID != "" {
+			indexByCaseID[testCase.ID] = index
+		}
+	}
+	for _, item := range s.testRunItems {
+		index, ok := indexByCaseID[item.TestCaseID]
+		if !ok || !isFinalTestRunItemStatus(item.Status) {
+			continue
+		}
+		run := s.testRuns[item.RunID]
+		latest := TestCaseLatestResult{
+			ItemID:         item.ID,
+			RunID:          item.RunID,
+			RunStatus:      run.Status,
+			RunSource:      run.Source,
+			Status:         item.Status,
+			ActualResult:   item.ActualResult,
+			FailureSummary: item.FailureSummary,
+			UpdatedAt:      item.UpdatedAt,
+		}
+		current := cases[index].LatestResult
+		if current == nil || s.isNewerTestCaseLatestResultLocked(latest, *current) {
+			copyLatest := latest
+			cases[index].LatestResult = &copyLatest
+		}
+	}
+}
+
+func (s *MemoryStore) isNewerTestCaseLatestResultLocked(candidate, current TestCaseLatestResult) bool {
+	if candidate.UpdatedAt != current.UpdatedAt {
+		return candidate.UpdatedAt > current.UpdatedAt
+	}
+	candidateRunUpdatedAt := s.testRuns[candidate.RunID].UpdatedAt
+	currentRunUpdatedAt := s.testRuns[current.RunID].UpdatedAt
+	if candidateRunUpdatedAt != currentRunUpdatedAt {
+		return candidateRunUpdatedAt > currentRunUpdatedAt
+	}
+	return candidate.ItemID > current.ItemID
 }
 
 func (s *MemoryStore) testPlanDetailLocked(planID string) (TestPlanDetail, error) {

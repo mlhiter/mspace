@@ -1956,6 +1956,15 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if completedAdHocRun.Run.Status != "needs_acceptance" || completedAdHocRun.Run.PassedCount != 1 || completedAdHocRun.Plan != nil {
 		t.Fatalf("unexpected completed direct run: %+v", completedAdHocRun)
 	}
+	casesAfterAdHocRun := listProjectTestCasesViaHTTP(t, router, sessionToken, workspaceID, project.ID)
+	caseAfterAdHocRun := findTestCase(t, casesAfterAdHocRun, existingCase.ID)
+	if caseAfterAdHocRun.LatestResult == nil || caseAfterAdHocRun.LatestResult.RunID != adHocRun.Run.ID || caseAfterAdHocRun.LatestResult.Status != "passed" || caseAfterAdHocRun.LatestResult.ActualResult != "Direct case passed." {
+		t.Fatalf("expected case list to expose latest run result, got %+v", caseAfterAdHocRun.LatestResult)
+	}
+	detailAfterAdHocRun := getProjectTestCaseViaHTTP(t, router, sessionToken, workspaceID, project.ID, existingCase.ID)
+	if detailAfterAdHocRun.LatestResult == nil || detailAfterAdHocRun.LatestResult.RunID != adHocRun.Run.ID || detailAfterAdHocRun.LatestResult.Status != "passed" {
+		t.Fatalf("expected case detail to expose latest run result, got %+v", detailAfterAdHocRun.LatestResult)
+	}
 
 	firstItem := run.Items[0]
 	secondItem := run.Items[1]
@@ -3174,6 +3183,49 @@ func createProjectTestCaseViaHTTP(t *testing.T, router http.Handler, sessionToke
 		t.Fatalf("parse test case: %v", err)
 	}
 	return testCase
+}
+
+func listProjectTestCasesViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID string) []TestCase {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-cases", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list test cases status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var testCases []TestCase
+	if err := json.Unmarshal(recorder.Body.Bytes(), &testCases); err != nil {
+		t.Fatalf("parse test cases: %v", err)
+	}
+	return testCases
+}
+
+func getProjectTestCaseViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, caseID string) TestCase {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-cases/"+caseID, nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("get test case status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var testCase TestCase
+	if err := json.Unmarshal(recorder.Body.Bytes(), &testCase); err != nil {
+		t.Fatalf("parse test case detail: %v", err)
+	}
+	return testCase
+}
+
+func findTestCase(t *testing.T, testCases []TestCase, caseID string) TestCase {
+	t.Helper()
+	for _, testCase := range testCases {
+		if testCase.ID == caseID {
+			return testCase
+		}
+	}
+	t.Fatalf("test case %s not found in %+v", caseID, testCases)
+	return TestCase{}
 }
 
 func listProjectTestCaseProposalsViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID string) []TestCaseProposal {

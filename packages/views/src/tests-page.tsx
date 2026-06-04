@@ -26,6 +26,7 @@ import {
   type RuntimeWorker,
   type TestCase,
   type TestCaseInput,
+  type TestCaseLatestResult,
   type TestCaseProposal,
   type TestCaseRevision,
   type TestCaseStep,
@@ -336,6 +337,26 @@ function runPassRate(items: TestRunItem[]) {
   if (items.length === 0) return "0%";
   const passed = items.filter((item) => item.status === "passed").length;
   return `${Math.round((passed / items.length) * 100)}%`;
+}
+
+function latestResultLabel(result: TestCaseLatestResult | undefined, t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  if (!result) return t("tests.notRun");
+  return t(`tests.runItemStatusValue.${result.status}`, { defaultValue: result.status });
+}
+
+function latestResultTone(result: TestCaseLatestResult | undefined) {
+  switch (result?.status) {
+    case "passed":
+      return "text-[color:var(--success)]";
+    case "failed":
+      return "text-[color:var(--danger)]";
+    case "blocked":
+      return "text-[color:var(--warning)]";
+    case "skipped":
+      return "text-[color:var(--muted-strong)]";
+    default:
+      return "text-[color:var(--muted)]";
+  }
 }
 
 function hasText(value?: string) {
@@ -1297,7 +1318,20 @@ export function TestsPage() {
                                 </span>
                                 <span className="text-[11px] text-[color:var(--muted)]">{executabilityIssueLabel(executability.issues, t)}</span>
                               </div>
-                              <div className="text-right text-[12px] text-[color:var(--muted)]">{t("tests.notRun")}</div>
+                              <div className="min-w-0 text-right text-[12px]">
+                                {testCase.latestResult?.runId ? (
+                                  <Link
+                                    to="/tests/runs/$runId"
+                                    params={{ runId: testCase.latestResult.runId }}
+                                    search={testsTabSearch("runs", effectiveProjectId)}
+                                    className={cn("font-medium hover:underline", latestResultTone(testCase.latestResult))}
+                                  >
+                                    {latestResultLabel(testCase.latestResult, t)}
+                                  </Link>
+                                ) : (
+                                  <span className={latestResultTone(undefined)}>{t("tests.notRun")}</span>
+                                )}
+                              </div>
                               <div className="text-right text-[12px] text-[color:var(--muted)]">
                                 <RelativeTime value={testCase.updatedAt} />
                               </div>
@@ -1874,6 +1908,33 @@ export function TestCaseDetailPage() {
 
         {testCase ? (
           <div className="grid gap-4 border-t border-[color:var(--line)] pt-4">
+            <section>
+              <h3 className="mb-2 text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("tests.latestResult")}</h3>
+              {testCase.latestResult ? (
+                <div className="rounded-[8px] bg-[color:var(--paper)] px-3 py-3 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <StatusBadge
+                      value={testCase.latestResult.status}
+                      valueLabel={latestResultLabel(testCase.latestResult, t)}
+                    />
+                    <Button type="button" variant="secondary" size="sm" asChild>
+                      <Link to="/tests/runs/$runId" params={{ runId: testCase.latestResult.runId }} search={testsTabSearch("runs", effectiveProjectId)}>
+                        <ArrowRight data-icon />
+                        {t("tests.openRun")}
+                      </Link>
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-[12px] text-[color:var(--muted)]">
+                    {testCase.latestResult.actualResult || testCase.latestResult.failureSummary || t("tests.noResultYet")}
+                  </p>
+                  <p className="mt-1 text-[11px] text-[color:var(--faint)]">
+                    {t("tests.latestResultUpdated", { time: testCase.latestResult.updatedAt ? new Date(testCase.latestResult.updatedAt).toLocaleString() : t("common.unknown") })}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-[12px] text-[color:var(--muted)]">{t("tests.notRun")}</p>
+              )}
+            </section>
             <section>
               <h3 className="mb-2 text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("tests.findings")}</h3>
               {testCase.qualityFindings.length === 0 ? (

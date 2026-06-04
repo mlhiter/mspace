@@ -298,9 +298,21 @@ type TestCase struct {
 	Tags                    []string                 `json:"tags"`
 	QualityScore            int                      `json:"qualityScore"`
 	QualityFindings         []TestCaseQualityFinding `json:"qualityFindings"`
+	LatestResult            *TestCaseLatestResult    `json:"latestResult,omitempty"`
 	CreatedByUserID         string                   `json:"createdByUserId"`
 	CreatedAt               string                   `json:"createdAt"`
 	UpdatedAt               string                   `json:"updatedAt"`
+}
+
+type TestCaseLatestResult struct {
+	ItemID         string `json:"itemId"`
+	RunID          string `json:"runId"`
+	RunStatus      string `json:"runStatus"`
+	RunSource      string `json:"runSource"`
+	Status         string `json:"status"`
+	ActualResult   string `json:"actualResult"`
+	FailureSummary string `json:"failureSummary"`
+	UpdatedAt      string `json:"updatedAt"`
 }
 
 type TestCaseRevision struct {

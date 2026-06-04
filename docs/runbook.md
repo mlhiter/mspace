@@ -96,7 +96,7 @@ Recommended smoke order:
 5. Import CSV or Excel `.xlsx` cases with `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers. Rows without `title` should appear in the skipped list. Use `functional`, `ui`, `api`, or `deployment` for `type`; common aliases such as `UI 测试`, `接口测试`, and `部署测试` normalize to the fixed values.
 6. Edit a case and verify revisions show newest first, with non-initial revisions showing changed fields and before/after values rather than only the case title.
 7. Exercise Optimize or Generate with no connected worker; the UI should surface the worker/session blocker rather than silently claiming success.
-8. Connect a Codex-capable worker, then verify `test-case-proposals.json` becomes Case suggestions and `test-result.json` updates run items.
+8. Connect a Codex-capable worker, then verify `test-case-proposals.json` becomes Case suggestions and `test-result.json` updates run items. The Cases list and Case Detail should also show the latest final run item status for each case, with a link back to the Run Detail evidence.
 9. Accept or block the run manually. A Codex-completed run is not release acceptance until a human records that decision.
 
 The current case library accepts `functional`, `ui`, `api`, and `deployment` as case types. Specialized UI/CDP automation, API harnessing, deployment orchestration, and multi-worker scheduling are still later execution work; the first loop keeps execution behind Issues, Agent Sessions, Workers, and Evidence.
