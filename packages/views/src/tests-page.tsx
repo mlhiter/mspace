@@ -529,8 +529,15 @@ function uniqueScreenshotImages(images: TestEvidenceScreenshotImage[]) {
 
 function screenshotImageSource(image: TestEvidenceScreenshotImage) {
   const source = image.dataUrl || image.url || image.artifactUrl;
+  if (isAbsoluteLocalEvidencePath(source)) return "";
   if (source.startsWith("/")) return `${getControlPlaneBaseUrl()}${source}`;
   return source;
+}
+
+function isAbsoluteLocalEvidencePath(value: string) {
+  const target = value.trim();
+  if (!target || target.startsWith("/api/") || target.startsWith("/artifacts/")) return false;
+  return /^(\/tmp\/|\/private\/|\/var\/|\/Users\/|\/home\/|\/Volumes\/|[A-Za-z]:[\\/])/.test(target);
 }
 
 function isProtectedEvidenceApiPath(value: string) {
@@ -605,6 +612,11 @@ function screenshotImageTarget(image: TestEvidenceScreenshotImage) {
 
 function screenshotImageOpenTarget(image: TestEvidenceScreenshotImage) {
   return image.artifactUrl || image.url || image.path;
+}
+
+function screenshotImageIsLegacyLocalPath(image: TestEvidenceScreenshotImage) {
+  const target = screenshotImageOpenTarget(image);
+  return Boolean(target && isAbsoluteLocalEvidencePath(target) && !image.dataUrl && !image.url && !image.artifactUrl && !image.artifactId);
 }
 
 function screenshotImageLabel(image: TestEvidenceScreenshotImage, fallback: string) {
@@ -729,6 +741,7 @@ function isHttpUrl(value: string) {
 function resolveEvidenceUrl(value: string) {
   const target = value.trim();
   if (!target) return "";
+  if (isAbsoluteLocalEvidencePath(target)) return target;
   if (target.startsWith("/")) return `${getControlPlaneBaseUrl()}${target}`;
   return target;
 }
@@ -771,6 +784,7 @@ async function openEvidenceTarget(value: string) {
     if (error) console.warn(error);
     return;
   }
+  if (isAbsoluteLocalEvidencePath(target)) return;
   window.open(target, "_blank", "noopener,noreferrer");
 }
 
@@ -3454,6 +3468,7 @@ function EvidenceScreenshotThumb(props: {
   const imageSource = useResolvedEvidenceImageSrc(props.image);
   const label = screenshotImageLabel(props.image, t("tests.openScreenshotN", { index: props.index + 1 }));
   const target = screenshotImageOpenTarget(props.image);
+  const isLegacyLocalPath = screenshotImageIsLegacyLocalPath(props.image);
 
   return (
     <div className="overflow-hidden rounded-[8px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
@@ -3467,6 +3482,8 @@ function EvidenceScreenshotThumb(props: {
           <img src={imageSource.src} alt={t("tests.screenshotAlt", { index: props.index + 1 })} className="h-full w-full object-cover object-top" />
         ) : imageSource.loading ? (
           <span className="grid h-full place-items-center px-4 text-center text-[12px] text-[color:var(--muted)]">{t("tests.screenshotLoading")}</span>
+        ) : isLegacyLocalPath ? (
+          <span className="grid h-full place-items-center px-4 text-center text-[12px] text-[color:var(--muted)]">{t("tests.screenshotLegacyLocalPath")}</span>
         ) : imageSource.error ? (
           <span className="grid h-full place-items-center px-4 text-center text-[12px] text-[color:var(--muted)]">{t("tests.screenshotUnavailable")}</span>
         ) : (
@@ -3498,6 +3515,7 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
   const imageSource = useResolvedEvidenceImageSrc(image);
   const target = screenshotImageOpenTarget(image);
   const label = screenshotImageLabel(image, t("tests.previewScreenshot"));
+  const isLegacyLocalPath = screenshotImageIsLegacyLocalPath(image);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -3539,6 +3557,10 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
           ) : imageSource.loading ? (
             <div className="grid min-h-[360px] place-items-center rounded-[8px] bg-[color:var(--surface)] px-6 text-center text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
               {t("tests.screenshotLoading")}
+            </div>
+          ) : isLegacyLocalPath ? (
+            <div className="grid min-h-[360px] place-items-center rounded-[8px] bg-[color:var(--surface)] px-6 text-center text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+              {t("tests.screenshotLegacyLocalPath")}
             </div>
           ) : imageSource.error ? (
             <div className="grid min-h-[360px] place-items-center rounded-[8px] bg-[color:var(--surface)] px-6 text-center text-[13px] leading-6 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
