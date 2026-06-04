@@ -41,6 +41,7 @@ import {
   CollectionEmptyState,
   Field,
   Input,
+  Notice,
   PageFrame,
   Select,
   SelectContent,
@@ -252,14 +253,29 @@ function useTestsSearch(): { tab?: string; project?: string } {
   return useSearch({ strict: false }) as { tab?: string; project?: string };
 }
 
-function normalizeTestCaseForView(testCase: TestCase): TestCase {
+function normalizeTestCaseForView(testCase: Partial<TestCase> | null | undefined): TestCase {
+  const value = testCase || {};
   return {
-    ...testCase,
-    type: testCase.type || "functional",
-    steps: testCase.steps ?? [],
-    dependencies: testCase.dependencies ?? [],
-    tags: testCase.tags ?? [],
-    qualityFindings: testCase.qualityFindings ?? [],
+    id: value.id || "",
+    workspaceId: value.workspaceId || "",
+    projectId: value.projectId || "",
+    title: value.title || "",
+    type: value.type || "functional",
+    area: value.area || "",
+    priority: value.priority || "",
+    status: value.status || "draft",
+    source: value.source || "manual",
+    preconditions: value.preconditions || "",
+    steps: value.steps ?? [],
+    expectedResult: value.expectedResult || "",
+    environmentRequirements: value.environmentRequirements || "",
+    dependencies: value.dependencies ?? [],
+    tags: value.tags ?? [],
+    qualityScore: value.qualityScore ?? 0,
+    qualityFindings: value.qualityFindings ?? [],
+    createdByUserId: value.createdByUserId || "",
+    createdAt: value.createdAt || "",
+    updatedAt: value.updatedAt || "",
   };
 }
 
@@ -532,6 +548,32 @@ function activeCodexWorker(workers: RuntimeWorker[], workspaceId: string, runtim
       worker.status === "online" &&
       hasCodexCapability(worker) &&
       isFreshWorkerHeartbeat(worker.lastSeenAt),
+  );
+}
+
+function TestDetailUnavailableState(props: {
+  title: string;
+  body: string;
+  error?: Error | null;
+  projectId: string;
+  tab: TabKey;
+}) {
+  const { t } = useMspaceTranslation();
+  return (
+    <PageFrame
+      title={props.title}
+      subtitle={props.body}
+      breadcrumbs={[
+        { label: t("common.mspace"), to: "/inbox" },
+        { label: t("tests.title"), to: "/tests", search: testsTabSearch(props.tab, props.projectId) },
+        { label: props.title },
+      ]}
+    >
+      <div className="grid gap-3">
+        {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
+        <CollectionEmptyState title={props.title} body={props.error ? t("tests.detailLoadFailed") : props.body} />
+      </div>
+    </PageFrame>
   );
 }
 
@@ -1770,19 +1812,17 @@ export function TestCaseDetailPage() {
     );
   }
 
+  const caseDetailError = caseQuery.error || revisionsQuery.error;
+
   if (!isNew && !testCase) {
     return (
-      <PageFrame
+      <TestDetailUnavailableState
         title={t("tests.cases")}
-        subtitle={caseQuery.isPending ? t("tests.loading") : t("tests.selectCase")}
-        breadcrumbs={[
-          { label: t("common.mspace"), to: "/inbox" },
-          { label: t("tests.title"), to: "/tests", search: testsTabSearch("cases", effectiveProjectId) },
-          { label: t("tests.cases") },
-        ]}
-      >
-        <CollectionEmptyState title={t("tests.cases")} body={caseQuery.isPending ? t("tests.loading") : t("tests.selectCase")} />
-      </PageFrame>
+        body={caseQuery.isPending || revisionsQuery.isPending ? t("tests.loading") : t("tests.selectCase")}
+        error={caseDetailError}
+        projectId={effectiveProjectId}
+        tab="cases"
+      />
     );
   }
 
@@ -1850,7 +1890,9 @@ export function TestCaseDetailPage() {
             </section>
             <section>
               <h3 className="mb-2 text-[13px] font-semibold text-[color:var(--muted-strong)]">{t("tests.revisions")}</h3>
-              {revisions.length === 0 ? (
+              {revisionsQuery.error ? (
+                <Notice tone="danger">{revisionsQuery.error.message}</Notice>
+              ) : revisions.length === 0 ? (
                 <p className="text-[12px] text-[color:var(--muted)]">{t("tests.noRevisions")}</p>
               ) : (
                 <div className="grid gap-2">
@@ -1860,7 +1902,7 @@ export function TestCaseDetailPage() {
                         <div className="min-w-0 font-medium text-[color:var(--text)]">
                           <span className="text-[color:var(--muted-strong)]">#{revision.revisionNumber}</span>
                           <span> - </span>
-                          <span className="break-words">{revision.snapshot.title}</span>
+                          <span className="break-words">{revision.snapshot.title || t("tests.untitledCase")}</span>
                         </div>
                         <div className="shrink-0 text-[11px] text-[color:var(--muted)]">
                           <RelativeTime value={revision.createdAt} />
@@ -1970,9 +2012,13 @@ export function TestPlanDetailPage() {
 
   if (!detail) {
     return (
-      <PageFrame title={t("tests.selectedPlan")} subtitle={planQuery.isPending ? t("tests.loadingPlans") : t("tests.selectPlan")}>
-        <CollectionEmptyState title={t("tests.selectedPlan")} body={planQuery.isPending ? t("tests.loadingPlans") : t("tests.selectPlan")} />
-      </PageFrame>
+      <TestDetailUnavailableState
+        title={t("tests.selectedPlan")}
+        body={planQuery.isPending ? t("tests.loadingPlans") : t("tests.selectPlan")}
+        error={planQuery.error}
+        projectId={effectiveProjectId}
+        tab="plans"
+      />
     );
   }
 
@@ -2181,9 +2227,13 @@ export function TestRunDetailPage() {
 
   if (!runQuery.data) {
     return (
-      <PageFrame title={t("tests.runs")} subtitle={runQuery.isPending ? t("tests.loadingPlans") : t("tests.noRunSelectedBody")}>
-        <CollectionEmptyState title={t("tests.noRunSelectedTitle")} body={runQuery.isPending ? t("tests.loadingPlans") : t("tests.noRunSelectedBody")} />
-      </PageFrame>
+      <TestDetailUnavailableState
+        title={t("tests.runs")}
+        body={runQuery.isPending ? t("tests.loadingRuns") : t("tests.noRunSelectedBody")}
+        error={runQuery.error}
+        projectId={effectiveProjectId}
+        tab="runs"
+      />
     );
   }
 

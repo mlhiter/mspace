@@ -449,6 +449,7 @@ const resources = {
         revisionBefore: "Before: {{value}}",
         revisionAfter: "After: {{value}}",
         revisionNoVisibleChanges: "No visible field changes in this snapshot.",
+        untitledCase: "Untitled case",
         revisionField: {
           title: "Title",
           type: "Type",
@@ -464,6 +465,7 @@ const resources = {
           qualityScore: "Executability",
         },
         selectCase: "Select a case to inspect details.",
+        detailLoadFailed: "The detail could not be loaded. Check the message above, then return to the Tests list or try again after the server reconnects.",
         created: "Created",
         updated: "Updated",
         saving: "Saving...",
@@ -1992,6 +1994,7 @@ const resources = {
         revisionBefore: "修改前：{{value}}",
         revisionAfter: "修改后：{{value}}",
         revisionNoVisibleChanges: "这个快照没有可见字段变化。",
+        untitledCase: "未命名用例",
         revisionField: {
           title: "标题",
           type: "类型",
@@ -2007,6 +2010,7 @@ const resources = {
           qualityScore: "可执行性",
         },
         selectCase: "选择一条用例查看详情。",
+        detailLoadFailed: "详情无法加载。请先查看上方错误信息，返回测试列表，或等待服务器重新连接后再试。",
         created: "创建于",
         updated: "更新于",
         saving: "保存中...",
