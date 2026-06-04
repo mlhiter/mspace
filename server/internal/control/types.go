@@ -1154,6 +1154,10 @@ type CreateIssueInput struct {
 	AttachmentIDs []string         `json:"attachmentIds"`
 }
 
+type IssueListOptions struct {
+	IncludeTestAutomation bool `json:"includeTestAutomation"`
+}
+
 type IssueTaskInput struct {
 	Title     string `json:"title"`
 	Body      string `json:"body"`
@@ -1565,7 +1569,7 @@ type Store interface {
 	DeleteCluster(ctx Context, userID, workspaceID, clusterID string) error
 	DiscoverDefaultKubeconfigs(ctx Context, userID, workspaceID string) (KubeconfigDiscoveryResult, error)
 	ImportKubeconfigs(ctx Context, userID, workspaceID string, paths []string) (KubeconfigImportResult, error)
-	ListIssues(ctx Context, userID, workspaceID string) ([]IssueListItem, error)
+	ListIssues(ctx Context, userID, workspaceID string, options IssueListOptions) ([]IssueListItem, error)
 	CreateIssue(ctx Context, user User, workspaceID string, input CreateIssueInput) (string, error)
 	GetIssue(ctx Context, userID, workspaceID, issueID string) (IssueDetail, error)
 	CreateAgentSession(ctx Context, userID, workspaceID, issueID string, input CreateAgentSessionInput) (AgentSession, error)

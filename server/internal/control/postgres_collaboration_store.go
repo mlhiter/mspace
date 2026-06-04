@@ -350,15 +350,33 @@ func (s *PostgresStore) ListIssueLabelDefinitions(ctx Context, userID, workspace
 	return definitions, rows.Err()
 }
 
-func (s *PostgresStore) ListIssues(ctx Context, userID, workspaceID string) ([]IssueListItem, error) {
+func (s *PostgresStore) ListIssues(ctx Context, userID, workspaceID string, options IssueListOptions) ([]IssueListItem, error) {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(dbctx, issueListQuery(`
+	whereClause := `
 		WHERE i.workspace_id = $1 AND i.parent_issue_id IS NULL
-	`, `
+	`
+	if !options.IncludeTestAutomation {
+		whereClause += `
+			AND NOT EXISTS (
+				SELECT 1
+				FROM test_runs tr
+				WHERE tr.workspace_id = i.workspace_id
+					AND tr.parent_issue_id = i.id
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM runtime_tasks rt
+				WHERE rt.workspace_id = i.workspace_id
+					AND rt.issue_id = i.id::text
+					AND rt.payload->>'automation' IN ('test_case_optimization', 'test_case_generation')
+			)
+		`
+	}
+	rows, err := s.pool.Query(dbctx, issueListQuery(whereClause, `
 		ORDER BY i.updated_at DESC
 	`), workspaceID)
 	if err != nil {

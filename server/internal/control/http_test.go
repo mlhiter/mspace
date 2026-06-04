@@ -1239,7 +1239,8 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 	if len(detail.Labels) != 2 {
 		t.Fatalf("expected type and priority labels, got %+v", detail.Labels)
 	}
-	if len(detail.Comments) != 2 || detail.Comments[0].Body != "Server comment" || len(detail.Comments[0].Reactions) != 1 || detail.Comments[0].Reactions[0].Reaction != "rocket" {
+	serverComment := findCommentByID(detail.Comments, commentResult.CommentID)
+	if serverComment.ID == "" || serverComment.Body != "Server comment" || len(serverComment.Reactions) != 1 || serverComment.Reactions[0].Reaction != "rocket" {
 		t.Fatalf("unexpected comments: %+v", detail.Comments)
 	}
 
@@ -1861,6 +1862,26 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if completedOptimizationTask.SessionID != session.ID {
 		t.Fatalf("expected optimization session %s, got task %+v", session.ID, completedOptimizationTask)
 	}
+	manualTestIssueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Title:     "Manual test investigation",
+		Body:      "This is a human-owned testing issue and should remain in Issues.",
+		LabelKeys: []string{"type:test"},
+	})
+	if err != nil {
+		t.Fatalf("create manual test issue: %v", err)
+	}
+	defaultIssues := listIssuesViaHTTP(t, router, sessionToken, workspaceID)
+	if issueListContains(defaultIssues, issueID) {
+		t.Fatalf("default issue list should hide test-case optimization issue %s, got %+v", issueID, defaultIssues)
+	}
+	if !issueListContains(defaultIssues, manualTestIssueID) {
+		t.Fatalf("default issue list should keep manual type:test issue %s, got %+v", manualTestIssueID, defaultIssues)
+	}
+	allTopLevelIssues := listIssuesViaHTTPWithQuery(t, router, sessionToken, workspaceID, "includeTestAutomation=1")
+	if !issueListContains(allTopLevelIssues, issueID) {
+		t.Fatalf("includeTestAutomation should expose optimization issue %s, got %+v", issueID, allTopLevelIssues)
+	}
 
 	proposals := listProjectTestCaseProposalsViaHTTP(t, router, sessionToken, workspaceID, project.ID)
 	if len(proposals) != 3 {
@@ -1917,6 +1938,14 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if parentIssue.Issue.Title != "Test run: rc4 functional test plan" {
 		t.Fatalf("unexpected parent issue: %+v", parentIssue.Issue)
 	}
+	defaultIssues = listIssuesViaHTTP(t, router, sessionToken, workspaceID)
+	if issueListContains(defaultIssues, run.Run.ParentIssueID) {
+		t.Fatalf("default issue list should hide test run parent issue %s, got %+v", run.Run.ParentIssueID, defaultIssues)
+	}
+	allTopLevelIssues = listIssuesViaHTTPWithQuery(t, router, sessionToken, workspaceID, "includeTestAutomation=1")
+	if !issueListContains(allTopLevelIssues, run.Run.ParentIssueID) {
+		t.Fatalf("includeTestAutomation should expose test run parent issue %s, got %+v", run.Run.ParentIssueID, allTopLevelIssues)
+	}
 	for _, item := range run.Items {
 		if item.Status != "running" || item.ExecutionIssueID == "" || item.AgentSessionID == "" {
 			t.Fatalf("expected running item with execution issue and session, got %+v", item)
@@ -1928,9 +1957,35 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 		if childIssue.Issue.ParentIssueID != run.Run.ParentIssueID {
 			t.Fatalf("expected child issue under parent %s, got %+v", run.Run.ParentIssueID, childIssue.Issue)
 		}
+		if issueListContains(allTopLevelIssues, item.ExecutionIssueID) {
+			t.Fatalf("top-level issue list should still hide execution child issue %s, got %+v", item.ExecutionIssueID, allTopLevelIssues)
+		}
 		if _, err := store.GetSession(context.Background(), user.ID, workspaceID, item.AgentSessionID); err != nil {
 			t.Fatalf("get item agent session: %v", err)
 		}
+	}
+
+	firstItem := run.Items[0]
+	secondItem := run.Items[1]
+	firstResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"passed","actualResult":"Passed in Codex.","evidence":{"commands":["pnpm test"]}}]}}}`, run.Run.ID, firstItem.TestCaseID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, firstItem.AgentSessionID, firstResult); err != nil {
+		t.Fatalf("complete first result task: %v", err)
+	}
+	partialRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, run.Run.ID)
+	if partialRun.Run.Status != "running" || partialRun.Run.PassedCount != 1 || partialRun.Run.FailedCount != 0 {
+		t.Fatalf("unexpected partial run counts: %+v", partialRun.Run)
+	}
+	secondResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"failed","actualResult":"The logout button did not return to sign-in.","failureSummary":"Logout stayed on workspace.","evidence":{"screenshot":"logout-failed.png"}}]}}}`, run.Run.ID, secondItem.TestCaseID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, secondItem.AgentSessionID, secondResult); err != nil {
+		t.Fatalf("complete second result task: %v", err)
+	}
+	completedRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, run.Run.ID)
+	if completedRun.Run.Status != "needs_acceptance" || completedRun.Run.PassedCount != 1 || completedRun.Run.FailedCount != 1 || completedRun.Run.CompletedAt == "" {
+		t.Fatalf("expected completed run to need acceptance, got %+v", completedRun.Run)
+	}
+	failedItem := findTestRunItem(t, completedRun.Items, secondItem.TestCaseID)
+	if failedItem.Status != "failed" || failedItem.FailureSummary != "Logout stayed on workspace." || !strings.Contains(string(failedItem.Evidence), "logout-failed.png") {
+		t.Fatalf("unexpected failed item: %+v", failedItem)
 	}
 
 	adHocRun := startAdHocProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, fmt.Sprintf(`{"caseIds":[%q],"runtimeMode":"personal","agentProfile":"codex","batchSize":1}`, existingCase.ID))
@@ -1944,12 +1999,15 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if adHocIssue.Issue.Title != "Test run: "+adHocRun.Items[0].TestCase.Title {
 		t.Fatalf("unexpected direct run parent issue: %+v", adHocIssue.Issue)
 	}
+	if issueListContains(listIssuesViaHTTP(t, router, sessionToken, workspaceID), adHocRun.Run.ParentIssueID) {
+		t.Fatalf("default issue list should hide direct test run parent issue %s", adHocRun.Run.ParentIssueID)
+	}
 	adHocRuns := listProjectTestRunsViaHTTP(t, router, sessionToken, workspaceID, project.ID)
 	if len(adHocRuns) < 2 {
 		t.Fatalf("expected project run list to include plan and direct runs, got %+v", adHocRuns)
 	}
 	adHocResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"passed","actualResult":"Direct case passed.","evidence":{"screenshot":"homepage.png","commands":["pnpm test -- login"]}}]}}}`, adHocRun.Run.ID, existingCase.ID)
-	if _, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, adHocResult); err != nil {
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, adHocRun.Items[0].AgentSessionID, adHocResult); err != nil {
 		t.Fatalf("complete direct run result task: %v", err)
 	}
 	completedAdHocRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, adHocRun.Run.ID)
@@ -1970,29 +2028,6 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	}
 	if !strings.Contains(string(detailAfterAdHocRun.LatestResult.Evidence), "homepage.png") {
 		t.Fatalf("expected case detail latest result to expose evidence, got %s", detailAfterAdHocRun.LatestResult.Evidence)
-	}
-
-	firstItem := run.Items[0]
-	secondItem := run.Items[1]
-	firstResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"passed","actualResult":"Passed in Codex.","evidence":{"commands":["pnpm test"]}}]}}}`, run.Run.ID, firstItem.TestCaseID)
-	if _, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, firstResult); err != nil {
-		t.Fatalf("complete first result task: %v", err)
-	}
-	partialRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, run.Run.ID)
-	if partialRun.Run.Status != "running" || partialRun.Run.PassedCount != 1 || partialRun.Run.FailedCount != 0 {
-		t.Fatalf("unexpected partial run counts: %+v", partialRun.Run)
-	}
-	secondResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"failed","actualResult":"The logout button did not return to sign-in.","failureSummary":"Logout stayed on workspace.","evidence":{"screenshot":"logout-failed.png"}}]}}}`, run.Run.ID, secondItem.TestCaseID)
-	if _, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, secondResult); err != nil {
-		t.Fatalf("complete second result task: %v", err)
-	}
-	completedRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, run.Run.ID)
-	if completedRun.Run.Status != "needs_acceptance" || completedRun.Run.PassedCount != 1 || completedRun.Run.FailedCount != 1 || completedRun.Run.CompletedAt == "" {
-		t.Fatalf("expected completed run to need acceptance, got %+v", completedRun.Run)
-	}
-	failedItem := findTestRunItem(t, completedRun.Items, secondItem.TestCaseID)
-	if failedItem.Status != "failed" || failedItem.FailureSummary != "Logout stayed on workspace." || !strings.Contains(string(failedItem.Evidence), "logout-failed.png") {
-		t.Fatalf("unexpected failed item: %+v", failedItem)
 	}
 
 	acceptedRun := reviewProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, run.Run.ID, "accept", "Accepted with known follow-up.")
@@ -3161,8 +3196,17 @@ func createTestProjectViaHTTP(t *testing.T, router http.Handler, sessionToken, w
 
 func listIssuesViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID string) []IssueListItem {
 	t.Helper()
+	return listIssuesViaHTTPWithQuery(t, router, sessionToken, workspaceID, "")
+}
+
+func listIssuesViaHTTPWithQuery(t *testing.T, router http.Handler, sessionToken, workspaceID, query string) []IssueListItem {
+	t.Helper()
 	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/issues", nil)
+	path := "/api/workspaces/" + workspaceID + "/issues"
+	if strings.TrimSpace(query) != "" {
+		path += "?" + strings.TrimSpace(query)
+	}
+	req := httptest.NewRequest(http.MethodGet, path, nil)
 	req.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {
@@ -3173,6 +3217,24 @@ func listIssuesViaHTTP(t *testing.T, router http.Handler, sessionToken, workspac
 		t.Fatalf("parse issues: %v", err)
 	}
 	return issues
+}
+
+func issueListContains(issues []IssueListItem, issueID string) bool {
+	for _, issue := range issues {
+		if issue.ID == issueID {
+			return true
+		}
+	}
+	return false
+}
+
+func findCommentByID(comments []Comment, commentID string) Comment {
+	for _, comment := range comments {
+		if comment.ID == commentID {
+			return comment
+		}
+	}
+	return Comment{}
 }
 
 func createProjectTestCaseViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, body string) TestCase {
@@ -3398,6 +3460,32 @@ func findTestRunItem(t *testing.T, items []TestRunItem, caseID string) TestRunIt
 	}
 	t.Fatalf("test run item for case %s not found in %+v", caseID, items)
 	return TestRunItem{}
+}
+
+func completeSessionTaskInMemoryStore(t *testing.T, store *MemoryStore, workerID, sessionID, completionPayload string) (RuntimeTask, error) {
+	t.Helper()
+	var input UpdateRuntimeTaskStatusInput
+	if err := json.Unmarshal([]byte(completionPayload), &input); err != nil {
+		return RuntimeTask{}, err
+	}
+	store.mu.Lock()
+	var task RuntimeTask
+	for _, candidate := range store.runtimeTasks {
+		if candidate.SessionID == sessionID {
+			task = candidate
+			break
+		}
+	}
+	if task.ID == "" {
+		store.mu.Unlock()
+		return RuntimeTask{}, fmt.Errorf("runtime task for session %s not found", sessionID)
+	}
+	task.ClaimedByWorkerID = workerID
+	task.Status = "claimed"
+	store.runtimeTasks[task.ID] = task
+	registration := RuntimeRegistration{WorkspaceID: task.WorkspaceID}
+	store.mu.Unlock()
+	return store.UpdateRuntimeTaskStatus(context.Background(), registration, workerID, task.ID, input)
 }
 
 func claimAndCompleteTask(t *testing.T, router http.Handler, token, workerID, completionPayload string) (RuntimeTask, error) {

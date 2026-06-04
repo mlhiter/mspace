@@ -278,6 +278,8 @@ This keeps the optimization auditable:
 - the server remains Codex-free;
 - humans control canonical test knowledge.
 
+Optimization and generation Issues are audit carriers for the Tests surface. They should stay directly reachable from their session or suggestion context, but they should not appear in the default Issues list.
+
 ### 3. Generate Test Cases From A Repository
 
 The user can select a Project and ask Codex to analyze:
@@ -312,6 +314,8 @@ The plan needs:
 ### 5. Enter Issue-Backed Execution
 
 When a test run starts, mspace creates one parent Issue for the run and execution Issues for batches.
+
+These Issues preserve the normal Issue-backed audit trail, but the Test Run remains the user-facing list and detail entry. The default Issues list should hide test run parent Issues and execution batch Issues; manually created `type:test` Issues remain ordinary user work and should still be listed.
 
 By default, mspace should not create one Issue per case. That would flood the issue list during large regression runs. Suggested batching:
 
@@ -824,6 +828,7 @@ Scope:
 - create Test Run;
 - create parent Issue and execution Issues;
 - start Codex sessions for execution Issues;
+- keep test automation Issues out of the default Issues list while preserving direct audit links;
 - parse `test-result.json`;
 - update Test Run Items;
 - persist screenshot evidence as server-owned artifacts;
@@ -838,6 +843,7 @@ Acceptance:
 - user can select ready functional, UI, API, or deployment cases;
 - user can start a test run;
 - parent Issue and execution Issues are created;
+- default Issues browsing stays focused on human work and does not show those test automation Issues;
 - Codex sessions run through the normal worker path;
 - results are written back to Test Run Items;
 - failed items can be retried or turned into defect Issues;

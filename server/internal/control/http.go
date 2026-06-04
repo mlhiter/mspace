@@ -1449,7 +1449,9 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	issues, err := s.store.ListIssues(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	issues, err := s.store.ListIssues(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), IssueListOptions{
+		IncludeTestAutomation: queryBool(r, "includeTestAutomation"),
+	})
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -1461,6 +1463,15 @@ func (s *Server) handleListIssues(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, issues)
+}
+
+func queryBool(r *http.Request, key string) bool {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {

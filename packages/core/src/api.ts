@@ -668,10 +668,12 @@ export const controlPlaneApi = {
       headers: authHeaders(token),
       body: JSON.stringify({ paths }),
     }),
-	listIssues: (token: string, workspaceId: string) =>
-		requestControlPlane<IssueListItem[]>(`/api/workspaces/${workspaceId}/issues`, {
+	listIssues: (token: string, workspaceId: string, options?: { includeTestAutomation?: boolean }) => {
+		const query = options?.includeTestAutomation ? "?includeTestAutomation=1" : "";
+		return requestControlPlane<IssueListItem[]>(`/api/workspaces/${workspaceId}/issues${query}`, {
 			headers: authHeaders(token),
-		}),
+		});
+	},
 	createIssue: (token: string, workspaceId: string, input: CreateIssueInput) =>
 		requestControlPlane<{ issueId: string }>(`/api/workspaces/${workspaceId}/issues`, {
 			method: "POST",

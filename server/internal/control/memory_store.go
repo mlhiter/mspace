@@ -2353,7 +2353,7 @@ func (s *MemoryStore) ListIssueLabelDefinitions(_ Context, userID, workspaceID s
 	return builtInIssueLabelDefinitions(), nil
 }
 
-func (s *MemoryStore) ListIssues(_ Context, userID, workspaceID string) ([]IssueListItem, error) {
+func (s *MemoryStore) ListIssues(_ Context, userID, workspaceID string, options IssueListOptions) ([]IssueListItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -2366,12 +2366,41 @@ func (s *MemoryStore) ListIssues(_ Context, userID, workspaceID string) ([]Issue
 		if issue.WorkspaceID != workspaceID || issue.ParentIssueID != "" {
 			continue
 		}
+		if !options.IncludeTestAutomation && s.isTestAutomationIssueLocked(issue.ID) {
+			continue
+		}
 		items = append(items, s.issueListItemLocked(issue))
 	}
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].UpdatedAt > items[j].UpdatedAt
 	})
 	return items, nil
+}
+
+func (s *MemoryStore) isTestAutomationIssueLocked(issueID string) bool {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return false
+	}
+	for _, run := range s.testRuns {
+		if run.ParentIssueID == issueID {
+			return true
+		}
+	}
+	for _, task := range s.runtimeTasks {
+		if task.IssueID != issueID {
+			continue
+		}
+		var payload struct {
+			Automation string `json:"automation"`
+		}
+		_ = json.Unmarshal(task.Payload, &payload)
+		switch payload.Automation {
+		case testCaseOptimizationAutomation, testCaseGenerationAutomation:
+			return true
+		}
+	}
+	return false
 }
 
 func (s *MemoryStore) CreateIssue(_ Context, user User, workspaceID string, input CreateIssueInput) (string, error) {

@@ -162,6 +162,8 @@ Current implementation:
 
 Issues is the durable list and creation surface for real work.
 
+The default Issues list should show human-owned collaboration work, not internal test automation carriers. Issues created only to support test case optimization, test case generation, or Test Run execution remain directly reachable for audit, logs, evidence, and session detail, but their primary discovery surface is Tests.
+
 ### List structure
 
 Each row should show:
