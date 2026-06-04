@@ -21,7 +21,7 @@ The product and runtime state for signed-in workspaces lives in the server store
 | `<artifact-dir>/branch-name.json` | Optional agent-proposed source branch name. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-learned project runbook artifact. |
 
-The server store records users, local password credentials, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, project test cases, test case revisions, test case suggestions, test plans, test runs, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, issue handoffs, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs. Postgres stores these in migrated tables. SQLite personal mode stores a server-owned snapshot in `store_snapshots` and persists after mutating requests plus the OAuth GET routes that create or consume login state.
+The server store records users, local password credentials, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, project test cases, test case revisions, test case suggestions, test plans, test runs, issues, comments, reactions, labels, Inbox receipts, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs. Postgres stores these in migrated tables. SQLite personal mode stores a server-owned snapshot in `store_snapshots` and persists after mutating requests plus the OAuth GET routes that create or consume login state.
 
 Docker-backed workers store target project source under the worker root volume, not in the host checkout. The dry-run worker defaults to the `mspace-worker-dev-root` Docker volume, and the Codex-capable worker defaults to `mspace-worker-codex-dev-root`; both mount that volume at `/var/lib/mspace-worker`.
 
@@ -60,7 +60,7 @@ pnpm run server
 
 For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker before it submits an agent mention. The worker uses the active desktop server URL, a short-lived workspace registration credential, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Electron writes the credential to `<Electron userData>/worker/tokens/<workspace-id>.token`, renews the 12-hour credential before expiry, and revokes the previous credential after a short grace period. The worker rereads the token file for runtime API calls, so credential renewal should be invisible during normal personal use. Workspace Settings labels these rows as automatic desktop credentials and keeps expired/replaced rows under credential history. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
 
-For team or self-hosted worker environments, connect the target environment from Workspace Settings:
+For team or self-hosted worker runtime hosts, connect a worker from Workspace Settings:
 
 1. Sign in with a local account or configured GitHub OAuth, then select the target workspace.
 2. Open Workspace Settings.
@@ -68,7 +68,7 @@ For team or self-hosted worker environments, connect the target environment from
 4. Copy the generated install command.
 5. Run it on the server, VM, DevBox, or other Docker-capable host that should execute mspace agent work.
 
-mspace creates a short-lived internal worker bootstrap credential and embeds it in the install command once. The target environment must have Docker and a usable Codex home with `auth.json` and `config.toml`. The command starts the Codex-capable worker container, and Workspace Settings refreshes the Workers list after registration.
+mspace creates a short-lived internal worker bootstrap credential and embeds it in the install command once. The worker host must have Docker and a usable Codex home with `auth.json` and `config.toml`. The command starts the Codex-capable worker container, and Workspace Settings refreshes the Workers list after registration.
 
 Run a worker manually only when debugging or recovering an external worker or terminal-only setup:
 
@@ -126,7 +126,7 @@ Workspace Settings has two automation switches:
 - Source commit capture is always on and records source changes as issue change nodes.
 - `autoDeployTestEnvironment` is opt-in and queues a deploy/test session after a successful source session captures a commit.
 
-Automatic test deploy uses the same `agent_session` path as a manual test deploy. It is intentionally conservative: the triggering task must be completed, non-dry-run, and not itself a deploy/test task; it must have a source commit and no source error; the issue must have an attached project; cluster and deploy settings must resolve; no other agent session can be active for the issue; and a matching online Codex worker must exist. If no worker is connected or deploy settings cannot be resolved, the server adds a compact system comment explaining why the deploy was skipped.
+Automatic test deploy uses the same `agent_session` path as a manual test deploy. It is intentionally conservative: the triggering task must be completed, non-dry-run, and not itself a deploy/test task; it must have a source commit and no source error; the issue must have an attached project; Kubernetes Environment and deploy settings must resolve; no other agent session can be active for the issue; and a matching online Codex worker must exist. If no worker is connected or deploy settings cannot be resolved, the server adds a compact system comment explaining why the deploy was skipped.
 
 ## Kubernetes Customer Deployment
 
@@ -239,16 +239,16 @@ If preview succeeds but returns `accepted`, `revoked`, or `expired`, the route i
 | `MSPACE_WORKER_CODEX_CLI_VERSION` | Docker Codex worker script | `0.130.0` | `@openai/codex` npm version installed into `worker/Dockerfile.codex-dev`. |
 | `MSPACE_AUTO_PERSONAL_WORKER` | Electron main process | enabled | Set to `0` to prevent the desktop from auto-starting a host-local personal worker before agent mentions. |
 
-Cluster, project, and issue test environment fields are passed into sessions as:
+Environment, project, and issue test environment fields are passed into sessions as:
 
 | Variable | Source |
 | --- | --- |
-| `MSPACE_CLUSTER_ID` | Selected issue test environment cluster id when present. |
+| `MSPACE_CLUSTER_ID` | Selected Kubernetes issue test environment cluster id when present. |
 | `MSPACE_KUBE_CONTEXT` | Selected issue test environment `kube_context`. |
 | `KUBECONFIG` / `MSPACE_KUBECONFIG` | Selected issue test environment `kubeconfig_path`. |
 | `MSPACE_KUBE_NAMESPACE` | Issue test namespace. |
 | `MSPACE_TEST_NAMESPACE` | Issue test namespace. |
-| `MSPACE_IMAGE_REGISTRY_PREFIX` | Selected cluster or issue test environment image registry prefix. |
+| `MSPACE_IMAGE_REGISTRY_PREFIX` | Selected Kubernetes environment or issue test environment image registry prefix. |
 | `MSPACE_EXPOSURE_MODE` | Selected issue test environment exposure mode. |
 | `MSPACE_PREVIEW_DOMAIN` | Optional issue preview domain. |
 | `MSPACE_INGRESS_CLASS` | Optional issue ingress class. |
@@ -328,7 +328,14 @@ curl -H "Authorization: Bearer <msp-token>" \
   http://127.0.0.1:8787/api/workspaces/<workspace-id>/agents
 ```
 
-List cluster configs:
+List environments:
+
+```bash
+curl -H "Authorization: Bearer <msp-token>" \
+  http://127.0.0.1:8787/api/workspaces/<workspace-id>/environments
+```
+
+List Kubernetes cluster compatibility records:
 
 ```bash
 curl -H "Authorization: Bearer <msp-token>" \

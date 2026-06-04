@@ -134,6 +134,10 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/workspaces/{workspaceID}/agents", s.handleListAgentProfiles)
 	r.Post("/api/workspaces/{workspaceID}/agents", s.handleCreateAgentProfile)
 	r.Put("/api/workspaces/{workspaceID}/agents/{agentID}", s.handleUpdateAgentProfile)
+	r.Get("/api/workspaces/{workspaceID}/environments", s.handleListEnvironments)
+	r.Post("/api/workspaces/{workspaceID}/environments", s.handleCreateEnvironment)
+	r.Put("/api/workspaces/{workspaceID}/environments/{environmentID}", s.handleUpdateEnvironment)
+	r.Delete("/api/workspaces/{workspaceID}/environments/{environmentID}", s.handleDeleteEnvironment)
 	r.Get("/api/workspaces/{workspaceID}/clusters", s.handleListClusters)
 	r.Post("/api/workspaces/{workspaceID}/clusters", s.handleCreateCluster)
 	r.Put("/api/workspaces/{workspaceID}/clusters/{clusterID}", s.handleUpdateCluster)
@@ -1345,6 +1349,68 @@ func (s *Server) handleUpdateAgentProfile(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, profile)
 }
 
+func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	environments, err := s.store.ListEnvironments(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, environments)
+}
+
+func (s *Server) handleCreateEnvironment(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := EnvironmentInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	environment, err := s.store.CreateEnvironment(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, environment)
+}
+
+func (s *Server) handleUpdateEnvironment(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := EnvironmentInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	environment, err := s.store.UpdateEnvironment(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "environmentID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, environment)
+}
+
+func (s *Server) handleDeleteEnvironment(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	err := s.store.DeleteEnvironment(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "environmentID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 func (s *Server) handleListClusters(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.authenticate(w, r)
 	if !ok {
@@ -2421,7 +2487,7 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	} else if errors.Is(err, ErrConflict) {
 		status = http.StatusConflict
-	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") {
+	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "requires") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") {
 		status = http.StatusBadRequest
 	}
 	writeError(w, status, err)

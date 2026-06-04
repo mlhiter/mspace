@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-06-03
+> Status: local MVP implementation snapshot, updated 2026-06-04
 
 ## IA Goal
 
@@ -17,7 +17,7 @@ The key balance is:
 
 - the issue page is the primary working surface;
 - the registered worker session is the primary development surface;
-- the Kubernetes test environment is manually triggered from the issue after agent work is ready to preview.
+- the selected Environment is manually triggered from the issue after agent work is ready to preview, with Kubernetes namespace deployment as the current issue deploy path.
 
 ## Primary Navigation
 
@@ -27,7 +27,7 @@ The first MVP should keep the navigation narrow:
 - Issues
 - Tests
 - Agents
-- Clusters
+- Environments
 - Projects
 
 Navigation rules:
@@ -37,13 +37,13 @@ Navigation rules:
 - Issues is the durable knowledge surface and issue creation home.
 - Tests is the project-level quality surface for cases, case suggestions, plans, and runs. It sits after Issues because test execution still routes through issue-backed worker sessions.
 - Agents is the managed profile surface for Codex-backed collaborators and mentions.
-- Clusters is reusable test cluster access: kubeconfig import, reachability status, registry, and exposure defaults.
+- Environments is reusable target access: Kubernetes kubeconfig import, reachability status, registry/exposure defaults, and virtual machine SSH target metadata.
 - Projects is configuration and project-level history.
 - Workspace Settings is accessed from the workspace identity menu instead of the main rail, because it controls automation, membership, and runtime worker policy for the current workspace rather than daily issue work.
 - Language switching also lives in the workspace identity menu, because English/Simplified Chinese is a global desktop preference rather than a route-specific action.
 - Session detail is deep-linked from issues and remains an operational fallback view, not a primary home.
 
-The fact that Inbox is first does not mean Kubernetes is secondary. It means the product starts from work intake, then routes that work into a worker-backed development flow plus a Kubernetes-backed validation flow.
+The fact that Inbox is first does not mean Environments are secondary. It means the product starts from work intake, then routes that work into a worker-backed development flow plus selected-environment validation.
 
 ## Object Hierarchy
 
@@ -53,6 +53,7 @@ Workspace
       -> Issue
           -> Agent Session
               -> Runtime
+              -> Environment
                   -> Evidence
   -> Project
       -> Test Case
@@ -65,7 +66,8 @@ The ownership model should be clear:
 - Inbox Item is for triage.
 - Issue is for durable collaboration.
 - Agent Session is for execution.
-- Runtime is for environment access.
+- Runtime is the worker execution surface.
+- Environment is the target being operated, currently Kubernetes or virtual machine.
 - Evidence is the result attached back to the issue.
 - Test Case and Test Plan are project-level quality knowledge; Test Run records issue-backed execution and human acceptance.
 
@@ -85,6 +87,7 @@ Current implemented desktop routes:
 /tests/plans/:planId
 /tests/runs/:runId
 /agents
+/environments
 /clusters
 /projects
 /settings
@@ -99,7 +102,7 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The current sidebar exposes Inbox, Issues, Tests, Agents, Clusters, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. The workspace menu owns workspace switching, team workspace creation, language switching, and the entry into Workspace Settings. Workspace Settings owns workspace automation, team-only access controls, and runtime worker/queue controls for the selected workspace. The invite route is a deep-link entry that resolves the target team server, shows safe invitation context, handles login or registration, accepts the invite, and lands in the invited workspace. Session detail remains deep-linked from issue work.
+The current sidebar exposes Inbox, Issues, Tests, Agents, Environments, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. `/clusters` remains a compatibility route for existing Kubernetes records, but product navigation should use `/environments`. The workspace menu owns workspace switching, team workspace creation, language switching, and the entry into Workspace Settings. Workspace Settings owns workspace automation, team-only access controls, and runtime worker/queue controls for the selected workspace. The invite route is a deep-link entry that resolves the target team server, shows safe invitation context, handles login or registration, accepts the invite, and lands in the invited workspace. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
@@ -280,7 +283,7 @@ Agent turns should appear inline in the timeline and show the currently attached
 
 - provider and model;
 - runtime mode and selected worker, with personal/team or Kubernetes-hosted fixed worker called out explicitly;
-- deployment target cluster and namespace when attached;
+- deployment target Environment and namespace when attached;
 - current state;
 - branch;
 - latest agent summary;
@@ -330,9 +333,9 @@ Current implementation:
 - renders a compact failure callout with the last meaningful runtime error when a session fails;
 - renders structured failure records as continueable timeline and Evidence entries, including failed command, error summary, namespace/resource hints, and Continue / Retry deploy / Stop affordances when applicable;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
-- shows selected cluster, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
+- shows selected Environment, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
 - automatically checks preview status in the background when Issue Detail opens or refreshes an existing test environment, updating only the Test environment sidebar state and `Checked` time instead of exposing a separate Probe button or adding timeline evidence;
-- exposes a Resources tab for the issue's current test namespace, refreshed on tab entry or manual refresh, with cluster/context/lifecycle/exposure/cleanup/preview metadata plus Pods, Services, Deployments, Ingresses, and Events;
+- exposes a Resources tab for the issue's current Kubernetes test namespace, refreshed on tab entry or manual refresh, with Environment/context/lifecycle/exposure/cleanup/preview metadata plus Pods, Services, Deployments, Ingresses, and Events;
 - separates source review, live resources, and review evidence: Commits shows code changes and diffs, Resources shows live namespace objects, and Evidence shows the current review packet with command evidence, agent summary, risks/follow-ups, source facts, plus links to full-width previous-attempt and Kubernetes-snapshot history pages;
 - shows issue-level branch / PR handoff state on the Commits tab and sidebar, with actions to record one handoff for the selected source branch and refresh the server-owned handoff record; GitHub App-backed PR creation/refresh remains a later executor step;
 - keeps raw command trails collapsed in session logs, with exploratory commands excluded from persisted review evidence;
@@ -378,7 +381,7 @@ Projects hold repository and runtime policy, not daily conversation.
 Each row should show:
 
 - project name;
-- default cluster or local fallback;
+- default Environment or local fallback;
 - runbook status;
 - local repository path;
 - active issues;
@@ -394,7 +397,7 @@ Project Settings should show:
 - runbook status and learned source metadata;
 - project name;
 - repository settings;
-- default cluster/runtime defaults;
+- default Environment/runtime defaults;
 - guarded delete action.
 
 The Project view should help operators configure the system without turning it into the primary working surface.
@@ -406,10 +409,10 @@ Current implementation:
 - creates team projects from GitHub repository URLs only, because team workers clone source into their own repo cache and cannot read a user's desktop-local folder path;
 - auto-detects GitHub metadata for repositories when a remote URL exists;
 - opens Project settings as a full page, not a modal;
-- edits project name, default cluster, and the mspace-owned Markdown runbook from that page;
+- edits project name, default Environment, and the mspace-owned Markdown runbook from that page;
 - exposes the project runbook from Issue Detail as a read-only TipTap modal so users can inspect runbook knowledge without leaving the issue;
 - only allows deletion before issues or sessions exist;
-- stores runbook history in `project_runbooks` and `project_runbook_revisions`, plus the default reusable cluster id.
+- stores runbook history in `project_runbooks` and `project_runbook_revisions`, plus the default Environment id. The current database keeps the Kubernetes compatibility field as `default_cluster_id` and exposes it as the product-facing default Environment.
 
 ## Workspace Settings
 
@@ -425,7 +428,7 @@ Workspace Settings owns workspace automation, team access, and runtime worker po
 - shows team workspace creation only to server admins, while ordinary registered users stay in personal workspaces until invited;
 - lets team owners/admins create and revoke one-time join links, with the copy action beside the link and no email field, join code, invitation id, or token debug text in the normal UI;
 - routes signed-out invite recipients through a safe preview plus login or registration, then accepts the invite and opens the invited workspace without showing another confirmation screen;
-- connects worker environments through owner/admin-only one-time install commands, keeps runtime mode fixed to the current workspace kind, and leaves raw runtime credential creation to API/debug paths;
+- connects worker runtime hosts through owner/admin-only one-time install commands, keeps runtime mode fixed to the current workspace kind, and leaves raw runtime credential creation to API/debug paths;
 - separates active worker credentials from expired or replaced credential history, with desktop personal-worker credentials labeled as automatic;
 - shows runtime tasks as issue-linked operational rows with Task, Issue, Status, Worker, Updated, and Action columns;
 - paginates runtime tasks so Workspace Settings stays bounded when the queue history grows;
@@ -527,7 +530,7 @@ Must-have for MVP:
 - Worker session startup with git worktree isolation
 - Manual cleanup for retained worker session workdirs
 - Session detail with logs and workspace evidence
-- worker session startup with cluster and namespace visibility
+- worker session startup with Environment and namespace visibility
 - manual issue test deployment with issue namespace lifecycle state
 - narrow Resources tab for the current issue namespace
 
@@ -538,7 +541,7 @@ Can wait until later:
 - complex workflow automation
 - multiple simultaneous session comparisons
 - custom dashboard analytics
-- cluster-wide observability
+- cluster-wide or VM-wide observability
 - generated scoped kubeconfig and ServiceAccount lifecycle
 - full Kubernetes namespace resource browser beyond the current issue-scoped Pods, Services, Deployments, Ingresses, and Events view
 
@@ -570,7 +573,7 @@ Implemented as of 2026-06-03:
 7. Server control plane, runtime worker registration, and git worktree isolation.
 8. Tailwind CSS 4 monorepo source detection for desktop UI packages.
 9. Issue labels, stop controls for active sessions, and manual worktree cleanup.
-10. Clusters route with desktop file picker import, first-run `~/.kube` discovery, context listing, reachability status, registry, and preview exposure defaults.
+10. Environments route with desktop file picker import for Kubernetes kubeconfigs, first-run `~/.kube` discovery, context listing, reachability status, registry/preview exposure defaults, and virtual machine SSH metadata.
 11. Issue test environment records plus manual deploy/cleanup/retain actions.
 12. Server-backed mspace sign-in: default local personal mode starts on account creation and hides GitHub, while explicitly configured team servers can offer login plus optional GitHub OAuth when `/health` reports `capabilities.githubAuth: true`.
 13. Sidebar global search and Command+K palette for issues and projects.

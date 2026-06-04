@@ -45,6 +45,7 @@ type MemoryStore struct {
 	workspaceSettings    map[string]WorkspaceSettings
 	agentProfiles        map[string]AgentProfile
 	clusters             map[string]Cluster
+	environments         map[string]Environment
 	testEnvironments     map[string]IssueTestEnvironment
 	reviewEvidence       map[string]SessionReviewEvidence
 	sessionFailures      map[string]SessionFailure
@@ -129,6 +130,7 @@ func NewMemoryStore() *MemoryStore {
 		workspaceSettings:    map[string]WorkspaceSettings{},
 		agentProfiles:        map[string]AgentProfile{},
 		clusters:             map[string]Cluster{},
+		environments:         map[string]Environment{},
 		testEnvironments:     map[string]IssueTestEnvironment{},
 		reviewEvidence:       map[string]SessionReviewEvidence{},
 		sessionFailures:      map[string]SessionFailure{},
@@ -1387,6 +1389,208 @@ func (s *MemoryStore) ListClusters(_ Context, userID, workspaceID string) ([]Clu
 	return clusters, nil
 }
 
+func (s *MemoryStore) ListEnvironments(_ Context, userID, workspaceID string) ([]Environment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	environments := []Environment{}
+	for _, cluster := range s.clusters {
+		if cluster.WorkspaceID != workspaceID {
+			continue
+		}
+		item := environmentFromCluster(cluster)
+		for _, project := range s.projects {
+			if project.WorkspaceID == workspaceID && project.DefaultClusterID == item.ID {
+				item.ProjectCount++
+			}
+		}
+		for _, issueEnvironment := range s.testEnvironments {
+			if s.issueEnvironmentWorkspaceMatchesLocked(issueEnvironment, workspaceID) && firstNonEmpty(issueEnvironment.EnvironmentID, issueEnvironment.ClusterID) == item.ID {
+				item.IssueEnvironmentCount++
+			}
+		}
+		for _, plan := range s.testPlans {
+			if plan.WorkspaceID == workspaceID && plan.EnvironmentID == item.ID {
+				item.TestPlanCount++
+			}
+		}
+		for _, run := range s.testRuns {
+			if run.WorkspaceID == workspaceID && run.EnvironmentID == item.ID {
+				item.TestRunCount++
+			}
+		}
+		environments = append(environments, item)
+	}
+	for _, environment := range s.environments {
+		if environment.WorkspaceID != workspaceID {
+			continue
+		}
+		item := environment
+		item.ProjectCount = 0
+		item.IssueEnvironmentCount = 0
+		item.TestPlanCount = 0
+		item.TestRunCount = 0
+		for _, issueEnvironment := range s.testEnvironments {
+			if s.issueEnvironmentWorkspaceMatchesLocked(issueEnvironment, workspaceID) && issueEnvironment.EnvironmentID == item.ID {
+				item.IssueEnvironmentCount++
+			}
+		}
+		for _, plan := range s.testPlans {
+			if plan.WorkspaceID == workspaceID && plan.EnvironmentID == item.ID {
+				item.TestPlanCount++
+			}
+		}
+		for _, run := range s.testRuns {
+			if run.WorkspaceID == workspaceID && run.EnvironmentID == item.ID {
+				item.TestRunCount++
+			}
+		}
+		environments = append(environments, item)
+	}
+	sort.Slice(environments, func(i, j int) bool {
+		if environments[i].UpdatedAt == environments[j].UpdatedAt {
+			return environments[i].CreatedAt > environments[j].CreatedAt
+		}
+		return environments[i].UpdatedAt > environments[j].UpdatedAt
+	})
+	return environments, nil
+}
+
+func (s *MemoryStore) CreateEnvironment(_ Context, userID, workspaceID string, input EnvironmentInput) (Environment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return Environment{}, ErrForbidden
+	}
+	kind := normalizeEnvironmentKind(input.Kind)
+	if kind == environmentKindKubernetes {
+		cluster, err := normalizeClusterInput(Cluster{}, clusterInputFromEnvironmentInput(input))
+		if err != nil {
+			return Environment{}, err
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		cluster.ID = fmt.Sprintf("cluster-%04d", s.nextMemoryIDLocked())
+		cluster.WorkspaceID = workspaceID
+		cluster.LastCheckedAt = now
+		cluster.CreatedAt = now
+		cluster.UpdatedAt = now
+		s.clusters[cluster.ID] = cluster
+		return environmentFromCluster(cluster), nil
+	}
+	normalized, err := normalizeEnvironmentInput(Environment{}, input)
+	if err != nil {
+		return Environment{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	normalized.ID = fmt.Sprintf("environment-%04d", s.nextMemoryIDLocked())
+	normalized.WorkspaceID = workspaceID
+	normalized.LastCheckedAt = now
+	normalized.CreatedAt = now
+	normalized.UpdatedAt = now
+	s.environments[normalized.ID] = normalized
+	return normalized, nil
+}
+
+func (s *MemoryStore) UpdateEnvironment(_ Context, userID, workspaceID, environmentID string, input EnvironmentInput) (Environment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	environmentID = strings.TrimSpace(environmentID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return Environment{}, ErrForbidden
+	}
+	if cluster, ok := s.clusters[environmentID]; ok && cluster.WorkspaceID == workspaceID {
+		updated, err := normalizeClusterInput(cluster, clusterInputFromEnvironmentInput(input))
+		if err != nil {
+			return Environment{}, err
+		}
+		updated.ID = cluster.ID
+		updated.WorkspaceID = cluster.WorkspaceID
+		updated.CreatedAt = cluster.CreatedAt
+		updated.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		updated.UpdatedAt = updated.LastCheckedAt
+		s.clusters[environmentID] = updated
+		return environmentFromCluster(updated), nil
+	}
+	existing, ok := s.environments[environmentID]
+	if !ok || existing.WorkspaceID != workspaceID {
+		return Environment{}, ErrNotFound
+	}
+	updated, err := normalizeEnvironmentInput(existing, input)
+	if err != nil {
+		return Environment{}, err
+	}
+	if updated.Kind != existing.Kind {
+		return Environment{}, errors.New("environment kind cannot be changed")
+	}
+	updated.ID = existing.ID
+	updated.WorkspaceID = existing.WorkspaceID
+	updated.CreatedAt = existing.CreatedAt
+	updated.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	updated.UpdatedAt = updated.LastCheckedAt
+	s.environments[environmentID] = updated
+	return updated, nil
+}
+
+func (s *MemoryStore) DeleteEnvironment(_ Context, userID, workspaceID, environmentID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	environmentID = strings.TrimSpace(environmentID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return ErrForbidden
+	}
+	if cluster, ok := s.clusters[environmentID]; ok && cluster.WorkspaceID == workspaceID {
+		for _, project := range s.projects {
+			if project.WorkspaceID == workspaceID && project.DefaultClusterID == environmentID {
+				return ErrForbidden
+			}
+		}
+		for _, issueEnvironment := range s.testEnvironments {
+			if s.issueEnvironmentWorkspaceMatchesLocked(issueEnvironment, workspaceID) && firstNonEmpty(issueEnvironment.EnvironmentID, issueEnvironment.ClusterID) == environmentID {
+				return ErrForbidden
+			}
+		}
+		for _, plan := range s.testPlans {
+			if plan.WorkspaceID == workspaceID && plan.EnvironmentID == environmentID {
+				return ErrForbidden
+			}
+		}
+		for _, run := range s.testRuns {
+			if run.WorkspaceID == workspaceID && run.EnvironmentID == environmentID {
+				return ErrForbidden
+			}
+		}
+		delete(s.clusters, environmentID)
+		return nil
+	}
+	environment, ok := s.environments[environmentID]
+	if !ok || environment.WorkspaceID != workspaceID {
+		return ErrNotFound
+	}
+	for _, issueEnvironment := range s.testEnvironments {
+		if s.issueEnvironmentWorkspaceMatchesLocked(issueEnvironment, workspaceID) && issueEnvironment.EnvironmentID == environmentID {
+			return ErrForbidden
+		}
+	}
+	for _, plan := range s.testPlans {
+		if plan.WorkspaceID == workspaceID && plan.EnvironmentID == environmentID {
+			return ErrForbidden
+		}
+	}
+	for _, run := range s.testRuns {
+		if run.WorkspaceID == workspaceID && run.EnvironmentID == environmentID {
+			return ErrForbidden
+		}
+	}
+	delete(s.environments, environmentID)
+	return nil
+}
+
 func (s *MemoryStore) CreateCluster(_ Context, userID, workspaceID string, input ClusterInput) (Cluster, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1456,8 +1660,23 @@ func (s *MemoryStore) DeleteCluster(_ Context, userID, workspaceID, clusterID st
 			return ErrForbidden
 		}
 	}
+	for _, plan := range s.testPlans {
+		if plan.WorkspaceID == workspaceID && plan.EnvironmentID == clusterID {
+			return ErrForbidden
+		}
+	}
+	for _, run := range s.testRuns {
+		if run.WorkspaceID == workspaceID && run.EnvironmentID == clusterID {
+			return ErrForbidden
+		}
+	}
 	delete(s.clusters, clusterID)
 	return nil
+}
+
+func (s *MemoryStore) issueEnvironmentWorkspaceMatchesLocked(environment IssueTestEnvironment, workspaceID string) bool {
+	issue, ok := s.issues[strings.TrimSpace(environment.IssueID)]
+	return ok && issue.WorkspaceID == strings.TrimSpace(workspaceID)
 }
 
 func (s *MemoryStore) DiscoverDefaultKubeconfigs(_ Context, userID, workspaceID string) (KubeconfigDiscoveryResult, error) {
@@ -1518,27 +1737,28 @@ func (s *MemoryStore) CreateProject(_ Context, userID, workspaceID string, input
 	s.nextID++
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	project := Project{
-		ID:                  fmt.Sprintf("project-%04d", s.nextID),
-		WorkspaceID:         workspaceID,
-		Name:                normalized.Name,
-		RepoPath:            normalized.RepoPath,
-		SourceType:          normalized.SourceType,
-		RemoteURL:           normalized.RepoURL,
-		GitProvider:         gitProviderFromURL(normalized.RepoURL),
-		GitOwner:            gitOwnerRepoFromURL(normalized.RepoURL).owner,
-		GitRepo:             gitOwnerRepoFromURL(normalized.RepoURL).repo,
-		DefaultBranch:       normalized.DefaultBranch,
-		KubeContext:         normalized.KubeContext,
-		KubeconfigPath:      normalized.KubeconfigPath,
-		Namespace:           normalized.Namespace,
-		ImageRegistryPrefix: normalized.ImageRegistryPrefix,
-		PreviewDomain:       normalized.PreviewDomain,
-		IngressClass:        normalized.IngressClass,
-		NodeHost:            normalized.NodeHost,
-		DefaultClusterID:    normalized.DefaultClusterID,
-		RunbookStatus:       "empty",
-		CreatedAt:           now,
-		UpdatedAt:           now,
+		ID:                   fmt.Sprintf("project-%04d", s.nextID),
+		WorkspaceID:          workspaceID,
+		Name:                 normalized.Name,
+		RepoPath:             normalized.RepoPath,
+		SourceType:           normalized.SourceType,
+		RemoteURL:            normalized.RepoURL,
+		GitProvider:          gitProviderFromURL(normalized.RepoURL),
+		GitOwner:             gitOwnerRepoFromURL(normalized.RepoURL).owner,
+		GitRepo:              gitOwnerRepoFromURL(normalized.RepoURL).repo,
+		DefaultBranch:        normalized.DefaultBranch,
+		KubeContext:          normalized.KubeContext,
+		KubeconfigPath:       normalized.KubeconfigPath,
+		Namespace:            normalized.Namespace,
+		ImageRegistryPrefix:  normalized.ImageRegistryPrefix,
+		PreviewDomain:        normalized.PreviewDomain,
+		IngressClass:         normalized.IngressClass,
+		NodeHost:             normalized.NodeHost,
+		DefaultClusterID:     normalized.DefaultClusterID,
+		DefaultEnvironmentID: normalized.DefaultEnvironmentID,
+		RunbookStatus:        "empty",
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
 	if project.DefaultBranch == "" {
 		project.DefaultBranch = "main"
@@ -1575,6 +1795,7 @@ func (s *MemoryStore) UpdateProject(_ Context, userID, workspaceID, projectID st
 	project.IngressClass = normalized.IngressClass
 	project.NodeHost = normalized.NodeHost
 	project.DefaultClusterID = normalized.DefaultClusterID
+	project.DefaultEnvironmentID = normalized.DefaultEnvironmentID
 	project.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.projects[project.ID] = project
 	return project, nil
@@ -2017,25 +2238,31 @@ func (s *MemoryStore) CreateProjectTestPlan(_ Context, userID, workspaceID, proj
 	if err != nil {
 		return TestPlanDetail{}, err
 	}
+	if err := s.resolveTestPlanEnvironmentLocked(workspaceID, &normalized); err != nil {
+		return TestPlanDetail{}, err
+	}
 	cases, err := s.testCasesForPlanLocked(workspaceID, projectID, normalized.CaseIDs, true)
 	if err != nil {
 		return TestPlanDetail{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	plan := TestPlan{
-		ID:              fmt.Sprintf("test-plan-%04d", s.nextMemoryIDLocked()),
-		WorkspaceID:     workspaceID,
-		ProjectID:       projectID,
-		Title:           normalized.Title,
-		Description:     normalized.Description,
-		Status:          normalized.Status,
-		TargetType:      normalized.TargetType,
-		TargetValue:     normalized.TargetValue,
-		Environment:     normalized.Environment,
-		CaseCount:       len(cases),
-		CreatedByUserID: strings.TrimSpace(userID),
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		ID:                  fmt.Sprintf("test-plan-%04d", s.nextMemoryIDLocked()),
+		WorkspaceID:         workspaceID,
+		ProjectID:           projectID,
+		Title:               normalized.Title,
+		Description:         normalized.Description,
+		Status:              normalized.Status,
+		TargetType:          normalized.TargetType,
+		TargetValue:         normalized.TargetValue,
+		Environment:         normalized.Environment,
+		EnvironmentID:       normalized.EnvironmentID,
+		EnvironmentKind:     normalized.EnvironmentKind,
+		EnvironmentSnapshot: cloneRawJSONObject(normalized.EnvironmentSnapshot),
+		CaseCount:           len(cases),
+		CreatedByUserID:     strings.TrimSpace(userID),
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 	s.testPlans[plan.ID] = plan
 	s.replaceTestPlanCasesLocked(plan, cases, now)
@@ -2064,6 +2291,9 @@ func (s *MemoryStore) UpdateProjectTestPlan(_ Context, userID, workspaceID, proj
 	if err != nil {
 		return TestPlanDetail{}, err
 	}
+	if err := s.resolveTestPlanEnvironmentLocked(plan.WorkspaceID, &normalized); err != nil {
+		return TestPlanDetail{}, err
+	}
 	cases, err := s.testCasesForPlanLocked(plan.WorkspaceID, plan.ProjectID, normalized.CaseIDs, true)
 	if err != nil {
 		return TestPlanDetail{}, err
@@ -2075,11 +2305,75 @@ func (s *MemoryStore) UpdateProjectTestPlan(_ Context, userID, workspaceID, proj
 	plan.TargetType = normalized.TargetType
 	plan.TargetValue = normalized.TargetValue
 	plan.Environment = normalized.Environment
+	plan.EnvironmentID = normalized.EnvironmentID
+	plan.EnvironmentKind = normalized.EnvironmentKind
+	plan.EnvironmentSnapshot = cloneRawJSONObject(normalized.EnvironmentSnapshot)
 	plan.CaseCount = len(cases)
 	plan.UpdatedAt = now
 	s.testPlans[plan.ID] = plan
 	s.replaceTestPlanCasesLocked(plan, cases, now)
 	return s.testPlanDetailLocked(plan.ID)
+}
+
+func (s *MemoryStore) resolveTestPlanEnvironmentLocked(workspaceID string, input *TestPlanInput) error {
+	if input == nil || strings.TrimSpace(input.EnvironmentID) == "" {
+		if input != nil {
+			input.EnvironmentKind = ""
+			input.EnvironmentSnapshot = json.RawMessage(`{}`)
+		}
+		return nil
+	}
+	environment, err := s.environmentLocked(workspaceID, input.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	if input.EnvironmentKind != "" && input.EnvironmentKind != environment.Kind {
+		return errors.New("environmentKind does not match selected environment")
+	}
+	input.EnvironmentID = environment.ID
+	input.EnvironmentKind = environment.Kind
+	input.EnvironmentSnapshot = environmentSnapshot(environment)
+	if strings.TrimSpace(input.Environment) == "" {
+		input.Environment = environment.Name
+	}
+	return nil
+}
+
+func (s *MemoryStore) resolveTestRunEnvironmentLocked(workspaceID string, input *CreateTestRunInput) error {
+	if input == nil || strings.TrimSpace(input.EnvironmentID) == "" {
+		if input != nil {
+			input.EnvironmentKind = ""
+			input.EnvironmentSnapshot = json.RawMessage(`{}`)
+		}
+		return nil
+	}
+	environment, err := s.environmentLocked(workspaceID, input.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	if input.EnvironmentKind != "" && input.EnvironmentKind != environment.Kind {
+		return errors.New("environmentKind does not match selected environment")
+	}
+	input.EnvironmentID = environment.ID
+	input.EnvironmentKind = environment.Kind
+	input.EnvironmentSnapshot = environmentSnapshot(environment)
+	if strings.TrimSpace(input.Environment) == "" {
+		input.Environment = environment.Name
+	}
+	return nil
+}
+
+func (s *MemoryStore) environmentLocked(workspaceID, environmentID string) (Environment, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	environmentID = strings.TrimSpace(environmentID)
+	if cluster, ok := s.clusters[environmentID]; ok && cluster.WorkspaceID == workspaceID {
+		return environmentFromCluster(cluster), nil
+	}
+	environment, ok := s.environments[environmentID]
+	if !ok || environment.WorkspaceID != workspaceID {
+		return Environment{}, ErrNotFound
+	}
+	return environment, nil
 }
 
 func (s *MemoryStore) StartProjectTestRun(_ Context, user User, workspaceID, projectID, planID string, input CreateTestRunInput) (TestRunDetail, error) {
@@ -2096,6 +2390,9 @@ func (s *MemoryStore) StartProjectTestRun(_ Context, user User, workspaceID, pro
 	}
 	normalized, err := normalizeCreateTestRunInput(input, plan)
 	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if err := s.resolveTestRunEnvironmentLocked(plan.WorkspaceID, &normalized); err != nil {
 		return TestRunDetail{}, err
 	}
 	return s.startProjectTestRunLocked(user, &plan, cases, normalized)
@@ -2125,12 +2422,17 @@ func (s *MemoryStore) StartAdHocProjectTestRun(_ Context, user User, workspaceID
 		return TestRunDetail{}, err
 	}
 	runInput := CreateTestRunInput{
-		TargetType:   normalized.TargetType,
-		TargetValue:  normalized.TargetValue,
-		Environment:  normalized.Environment,
-		AgentProfile: normalized.AgentProfile,
-		RuntimeMode:  normalized.RuntimeMode,
-		BatchSize:    normalized.BatchSize,
+		TargetType:      normalized.TargetType,
+		TargetValue:     normalized.TargetValue,
+		Environment:     normalized.Environment,
+		EnvironmentID:   normalized.EnvironmentID,
+		EnvironmentKind: normalized.EnvironmentKind,
+		AgentProfile:    normalized.AgentProfile,
+		RuntimeMode:     normalized.RuntimeMode,
+		BatchSize:       normalized.BatchSize,
+	}
+	if err := s.resolveTestRunEnvironmentLocked(workspaceID, &runInput); err != nil {
+		return TestRunDetail{}, err
 	}
 	return s.startProjectTestRunLocked(user, nil, cases, runInput)
 }
@@ -2159,20 +2461,23 @@ func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	run := TestRun{
-		ID:               fmt.Sprintf("test-run-%04d", s.nextMemoryIDLocked()),
-		WorkspaceID:      workspaceID,
-		ProjectID:        projectID,
-		PlanID:           planID,
-		Source:           runSource,
-		Status:           "running",
-		TargetType:       input.TargetType,
-		TargetValue:      input.TargetValue,
-		Environment:      input.Environment,
-		TotalCount:       len(cases),
-		AcceptanceStatus: "pending",
-		CreatedByUserID:  user.ID,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:                  fmt.Sprintf("test-run-%04d", s.nextMemoryIDLocked()),
+		WorkspaceID:         workspaceID,
+		ProjectID:           projectID,
+		PlanID:              planID,
+		Source:              runSource,
+		Status:              "running",
+		TargetType:          input.TargetType,
+		TargetValue:         input.TargetValue,
+		Environment:         input.Environment,
+		EnvironmentID:       input.EnvironmentID,
+		EnvironmentKind:     input.EnvironmentKind,
+		EnvironmentSnapshot: cloneRawJSONObject(input.EnvironmentSnapshot),
+		TotalCount:          len(cases),
+		AcceptanceStatus:    "pending",
+		CreatedByUserID:     user.ID,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 	parentIssueID, err := s.createIssueLocked(user, run.WorkspaceID, CreateIssueInput{
 		ProjectID: run.ProjectID,
@@ -3057,11 +3362,18 @@ func (s *MemoryStore) buildIssueTestEnvironmentLocked(detail IssueDetail, input 
 	if environment.Namespace == "" {
 		environment.Namespace = defaultIssueNamespace(detail)
 	}
-	clusterID := firstNonEmpty(input.ClusterID, environment.ClusterID, detail.Project.DefaultClusterID)
-	if clusterID == "" {
-		return environment, errors.New("cluster is required before starting a test deployment")
+	environmentID := firstNonEmpty(input.EnvironmentID, input.ClusterID, environment.EnvironmentID, environment.ClusterID, detail.Project.DefaultEnvironmentID, detail.Project.DefaultClusterID)
+	if environmentID == "" {
+		return environment, errors.New("environment is required before starting a test deployment")
 	}
-	cluster, ok := s.clusters[clusterID]
+	selectedEnvironment, err := s.environmentLocked(detail.Issue.WorkspaceID, environmentID)
+	if err != nil {
+		return environment, err
+	}
+	if selectedEnvironment.Kind != environmentKindKubernetes || selectedEnvironment.Kubernetes == nil {
+		return environment, errors.New("test deployment currently requires a Kubernetes environment")
+	}
+	cluster, ok := s.clusters[selectedEnvironment.Kubernetes.ClusterID]
 	if !ok || cluster.WorkspaceID != detail.Issue.WorkspaceID {
 		return environment, ErrNotFound
 	}
@@ -3075,6 +3387,9 @@ func (s *MemoryStore) buildIssueTestEnvironmentLocked(detail IssueDetail, input 
 	environment.NamespaceStatus = "planned"
 	environment.CleanupStatus = "retained"
 	environment.ClusterID = cluster.ID
+	environment.EnvironmentID = selectedEnvironment.ID
+	environment.EnvironmentKind = selectedEnvironment.Kind
+	environment.EnvironmentSnapshot = environmentSnapshot(selectedEnvironment)
 	environment.KubeconfigPath = cluster.KubeconfigPath
 	environment.KubeContext = cluster.KubeContext
 	environment.ImageRegistryPrefix = cluster.ImageRegistryPrefix
@@ -3091,6 +3406,11 @@ func (s *MemoryStore) buildIssueTestEnvironmentLocked(detail IssueDetail, input 
 }
 
 func (s *MemoryStore) saveTestEnvironmentLocked(environment IssueTestEnvironment) {
+	environment.EnvironmentID = firstNonEmpty(environment.EnvironmentID, environment.ClusterID)
+	environment.EnvironmentKind = firstNonEmpty(environment.EnvironmentKind, environmentKindKubernetes)
+	if len(environment.EnvironmentSnapshot) == 0 {
+		environment.EnvironmentSnapshot = json.RawMessage(`{}`)
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if environment.CreatedAt == "" {
 		environment.CreatedAt = now

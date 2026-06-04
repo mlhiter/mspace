@@ -1,11 +1,13 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cloud, Clock3, FileUp, Globe2, HardDrive, Network, Settings2, Trash2, X } from "lucide-react";
+import { Cloud, Clock3, FileUp, Globe2, HardDrive, Network, Plus, Server, Settings2, Trash2, X } from "lucide-react";
 import {
   controlPlaneApi,
   queryKeys,
   type Cluster,
   type ClusterInput,
+  type Environment,
+  type EnvironmentInput,
   type KubeconfigDiscoveryResult,
   type KubeconfigImportResult,
 } from "@mspace/core";
@@ -43,6 +45,18 @@ const emptyClusterForm: ClusterInput = {
   status: "configured",
 };
 
+const emptyVirtualMachineForm: EnvironmentInput = {
+  name: "",
+  kind: "virtual_machine",
+  status: "configured",
+  sshHost: "",
+  sshPort: 22,
+  sshUser: "",
+  sshAuthRef: "",
+  workdir: "",
+  serviceHint: "",
+};
+
 function clusterToForm(cluster: Cluster): ClusterInput {
   return {
     name: cluster.name,
@@ -57,20 +71,39 @@ function clusterToForm(cluster: Cluster): ClusterInput {
   };
 }
 
+function environmentToVMForm(environment: Environment): EnvironmentInput {
+  return {
+    name: environment.name,
+    kind: "virtual_machine",
+    status: environment.status || "configured",
+    sshHost: environment.virtualMachine?.sshHost || "",
+    sshPort: environment.virtualMachine?.sshPort || 22,
+    sshUser: environment.virtualMachine?.sshUser || "",
+    sshAuthRef: environment.virtualMachine?.sshAuthRef || "",
+    workdir: environment.virtualMachine?.workdir || "",
+    serviceHint: environment.virtualMachine?.serviceHint || "",
+    labels: environment.virtualMachine?.labels || {},
+  };
+}
+
 export function ClustersPage() {
   const { t } = useMspaceTranslation();
   const queryClient = useQueryClient();
   const auth = useMspaceAuth();
   const workspaceId = auth.workspace?.id || "";
   const workspaceReady = auth.status === "signed-in" && Boolean(auth.token && workspaceId);
+  const environmentsQueryKey = queryKeys.environments(workspaceId, auth.token);
   const clustersQueryKey = queryKeys.clusters(workspaceId, auth.token);
-  const clustersQuery = useQuery({
-    queryKey: clustersQueryKey,
-    queryFn: () => controlPlaneApi.listClusters(auth.token, workspaceId),
+  const environmentsQuery = useQuery({
+    queryKey: environmentsQueryKey,
+    queryFn: () => controlPlaneApi.listEnvironments(auth.token, workspaceId),
     enabled: workspaceReady,
   });
   const [settingsCluster, setSettingsCluster] = useState<Cluster | null>(null);
   const [settingsForm, setSettingsForm] = useState<ClusterInput>(emptyClusterForm);
+  const [settingsEnvironment, setSettingsEnvironment] = useState<Environment | null>(null);
+  const [virtualMachineForm, setVirtualMachineForm] = useState<EnvironmentInput>(emptyVirtualMachineForm);
+  const [createVirtualMachineOpen, setCreateVirtualMachineOpen] = useState(false);
   const [defaultImportOpen, setDefaultImportOpen] = useState(false);
   const [defaultDiscoveryRequested, setDefaultDiscoveryRequested] = useState(false);
   const [defaultDiscovery, setDefaultDiscovery] = useState<KubeconfigDiscoveryResult | null>(null);
@@ -81,7 +114,10 @@ export function ClustersPage() {
     mutationFn: (paths: string[]) => controlPlaneApi.importKubeconfigFiles(auth.token, workspaceId, paths),
     onSuccess: async () => {
       setImportSummary("");
-      await queryClient.invalidateQueries({ queryKey: clustersQueryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
+        queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
+      ]);
     },
   });
   const discoverDefaultKubeconfigs = useMutation({
@@ -102,6 +138,7 @@ export function ClustersPage() {
       setSettingsForm(emptyClusterForm);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
+        queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
       ]);
     },
   });
@@ -110,14 +147,53 @@ export function ClustersPage() {
     onSuccess: async () => {
       setSettingsCluster(null);
       setSettingsForm(emptyClusterForm);
-      await queryClient.invalidateQueries({ queryKey: clustersQueryKey });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
+        queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
+      ]);
+    },
+  });
+  const createEnvironment = useMutation({
+    mutationFn: (input: EnvironmentInput) => controlPlaneApi.createEnvironment(auth.token, workspaceId, input),
+    onSuccess: async () => {
+      setCreateVirtualMachineOpen(false);
+      setVirtualMachineForm(emptyVirtualMachineForm);
+      await queryClient.invalidateQueries({ queryKey: environmentsQueryKey });
+    },
+  });
+  const updateEnvironment = useMutation({
+    mutationFn: (input: EnvironmentInput) => {
+      if (!settingsEnvironment) throw new Error(t("clusters.noEnvironmentSelected"));
+      return controlPlaneApi.updateEnvironment(auth.token, workspaceId, settingsEnvironment.id, input);
+    },
+    onSuccess: async () => {
+      setSettingsEnvironment(null);
+      setVirtualMachineForm(emptyVirtualMachineForm);
+      await queryClient.invalidateQueries({ queryKey: environmentsQueryKey });
+    },
+  });
+  const deleteEnvironment = useMutation({
+    mutationFn: (environmentId: string) => controlPlaneApi.deleteEnvironment(auth.token, workspaceId, environmentId),
+    onSuccess: async () => {
+      setSettingsEnvironment(null);
+      setVirtualMachineForm(emptyVirtualMachineForm);
+      await queryClient.invalidateQueries({ queryKey: environmentsQueryKey });
     },
   });
 
-  const clusters = clustersQuery.data || [];
+  const environments = environmentsQuery.data || [];
+  const kubernetesEnvironments = environments.filter((environment) => environment.kind === "kubernetes");
+  const clusters = kubernetesEnvironments.map(clusterFromEnvironment).filter(Boolean) as Cluster[];
   const canSave = canSubmitCluster(settingsForm);
   const settingsClusterInUse = Boolean(
     settingsCluster && (settingsCluster.projectCount > 0 || settingsCluster.environmentCount > 0),
+  );
+  const canSaveVirtualMachine = canSubmitVirtualMachine(virtualMachineForm);
+  const settingsEnvironmentInUse = Boolean(
+    settingsEnvironment &&
+      (settingsEnvironment.issueEnvironmentCount > 0 ||
+        settingsEnvironment.testPlanCount > 0 ||
+        settingsEnvironment.testRunCount > 0),
   );
 
   function openSettings(cluster: Cluster) {
@@ -125,6 +201,18 @@ export function ClustersPage() {
     setSettingsForm(clusterToForm(cluster));
     updateCluster.reset();
     deleteCluster.reset();
+  }
+
+  function openEnvironmentSettings(environment: Environment) {
+    if (environment.kind === "kubernetes") {
+      const cluster = clusterFromEnvironment(environment);
+      if (cluster) openSettings(cluster);
+      return;
+    }
+    setSettingsEnvironment(environment);
+    setVirtualMachineForm(environmentToVMForm(environment));
+    updateEnvironment.reset();
+    deleteEnvironment.reset();
   }
 
   function submitSettings(event: FormEvent<HTMLFormElement>) {
@@ -149,19 +237,22 @@ export function ClustersPage() {
     importKubeconfigs.mutate(paths, {
       onSuccess: async (result) => {
         setImportSummary(formatImportResult(result));
-        await queryClient.invalidateQueries({ queryKey: clustersQueryKey });
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
+          queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
+        ]);
       },
     });
   }
 
   useEffect(() => {
     if (!workspaceReady) return;
-    if (clustersQuery.isPending || clusters.length > 0) return;
+    if (environmentsQuery.isPending || kubernetesEnvironments.length > 0) return;
     if (window.localStorage.getItem(DEFAULT_KUBE_IMPORT_PROMPT_KEY) === "1") return;
     if (defaultDiscoveryRequested || discoverDefaultKubeconfigs.isPending) return;
     setDefaultDiscoveryRequested(true);
     discoverDefaultKubeconfigs.mutate();
-  }, [clusters.length, clustersQuery.isPending, defaultDiscoveryRequested, discoverDefaultKubeconfigs, workspaceReady]);
+  }, [kubernetesEnvironments.length, environmentsQuery.isPending, defaultDiscoveryRequested, discoverDefaultKubeconfigs, workspaceReady]);
 
   function closeDefaultImportPrompt() {
     window.localStorage.setItem(DEFAULT_KUBE_IMPORT_PROMPT_KEY, "1");
@@ -173,21 +264,31 @@ export function ClustersPage() {
       title={t("clusters.title")}
       subtitle={t("clusters.subtitle")}
       actions={
-        <Button variant="secondary" onClick={importFromPicker} disabled={!workspaceReady || importKubeconfigs.isPending}>
-          <FileUp data-icon />
-          {importKubeconfigs.isPending ? t("clusters.importing") : t("clusters.importKubeconfig")}
-        </Button>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" onClick={importFromPicker} disabled={!workspaceReady || importKubeconfigs.isPending}>
+            <FileUp data-icon />
+            {importKubeconfigs.isPending ? t("clusters.importing") : t("clusters.importKubeconfig")}
+          </Button>
+          <Button onClick={() => {
+            setVirtualMachineForm(emptyVirtualMachineForm);
+            setCreateVirtualMachineOpen(true);
+            createEnvironment.reset();
+          }} disabled={!workspaceReady}>
+            <Plus data-icon />
+            {t("clusters.addVirtualMachine")}
+          </Button>
+        </div>
       }
     >
       {importSummary ? <Notice>{importSummary}</Notice> : null}
       {importKubeconfigs.error ? <Notice tone="danger">{importKubeconfigs.error.message}</Notice> : null}
       {discoverDefaultKubeconfigs.error ? <Notice tone="danger">{discoverDefaultKubeconfigs.error.message}</Notice> : null}
 
-      {clustersQuery.isPending ? (
+      {environmentsQuery.isPending ? (
         <div className="mt-4 rounded-[10px] bg-[color:var(--surface)] px-4 py-6 text-[13px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
           {t("clusters.loading")}
         </div>
-      ) : clusters.length === 0 ? (
+      ) : environments.length === 0 ? (
         <div className="mt-4">
           <CollectionEmptyState
             icon={Cloud}
@@ -204,14 +305,14 @@ export function ClustersPage() {
       ) : (
         <div className="mt-4 rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
           <div className="grid grid-cols-[minmax(180px,1fr)_minmax(220px,1.4fr)_150px_120px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
-            <span>{t("clusters.cluster")}</span>
+            <span>{t("clusters.environment")}</span>
             <span>{t("clusters.access")}</span>
             <span>{t("clusters.usage")}</span>
             <span className="text-right">{t("clusters.actions")}</span>
           </div>
           <div className="divide-y divide-[color:var(--line)]">
-            {clusters.map((cluster) => (
-              <ClusterRow key={cluster.id} cluster={cluster} onSettings={() => openSettings(cluster)} />
+            {environments.map((environment) => (
+              <EnvironmentRow key={environment.id} environment={environment} onSettings={() => openEnvironmentSettings(environment)} />
             ))}
           </div>
         </div>
@@ -243,6 +344,54 @@ export function ClustersPage() {
         />
       ) : null}
 
+      {createVirtualMachineOpen ? (
+        <VirtualMachineModal
+          title={t("clusters.createVirtualMachineTitle")}
+          description={t("clusters.virtualMachineDescription")}
+          value={virtualMachineForm}
+          error={createEnvironment.error}
+          isPending={createEnvironment.isPending}
+          canSubmit={canSaveVirtualMachine}
+          onChange={setVirtualMachineForm}
+          onClose={() => setCreateVirtualMachineOpen(false)}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!canSaveVirtualMachine) return;
+            createEnvironment.mutate(normalizeVirtualMachineForm(virtualMachineForm));
+          }}
+        />
+      ) : null}
+
+      {settingsEnvironment ? (
+        <VirtualMachineModal
+          title={t("clusters.virtualMachineSettingsTitle")}
+          description={t("clusters.virtualMachineDescription")}
+          value={virtualMachineForm}
+          error={updateEnvironment.error || deleteEnvironment.error}
+          isPending={updateEnvironment.isPending}
+          canSubmit={canSaveVirtualMachine}
+          onChange={setVirtualMachineForm}
+          onClose={() => setSettingsEnvironment(null)}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!canSaveVirtualMachine) return;
+            updateEnvironment.mutate(normalizeVirtualMachineForm(virtualMachineForm));
+          }}
+          footerStart={
+            <Button
+              type="button"
+              variant="danger"
+              disabled={settingsEnvironmentInUse || deleteEnvironment.isPending || updateEnvironment.isPending}
+              title={settingsEnvironmentInUse ? t("clusters.inUseDeleteTitle") : undefined}
+              onClick={() => deleteEnvironment.mutate(settingsEnvironment.id)}
+            >
+              <Trash2 data-icon />
+              {deleteEnvironment.isPending ? t("clusters.deleting") : t("clusters.deleteEnvironment")}
+            </Button>
+          }
+        />
+      ) : null}
+
       {defaultImportOpen ? (
         <DefaultKubeImportPrompt
           discovery={defaultDiscovery}
@@ -258,7 +407,10 @@ export function ClustersPage() {
             importKubeconfigs.mutate(selectedDefaultPaths, {
               onSuccess: async (result) => {
                 setImportSummary(formatImportResult(result));
-                await queryClient.invalidateQueries({ queryKey: clustersQueryKey });
+                await Promise.all([
+                  queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
+                  queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
+                ]);
               },
             });
           }}
@@ -300,6 +452,58 @@ function ClusterRow(props: { cluster: Cluster; onSettings: () => void }) {
       <div className="text-[13px] leading-5 text-[color:var(--muted)]">
         <div>{t("clusters.projects", { count: cluster.projectCount })}</div>
         <div>{t("clusters.envs", { count: cluster.environmentCount })}</div>
+      </div>
+
+      <div className="flex justify-end">
+        <Button variant="secondary" size="sm" onClick={props.onSettings}>
+          <Settings2 data-icon />
+          {t("clusters.settings")}
+        </Button>
+      </div>
+    </article>
+  );
+}
+
+function EnvironmentRow(props: { environment: Environment; onSettings: () => void }) {
+  const { environment } = props;
+  const { t } = useMspaceTranslation();
+  const isKubernetes = environment.kind === "kubernetes";
+  const exposure = environment.kubernetes?.exposureMode === "ingress" ? "ingress" : "nodeport";
+  const accessPrimary = isKubernetes
+    ? environment.kubernetes?.kubeconfigPath || t("clusters.notConfigured")
+    : `${environment.virtualMachine?.sshUser || "-"}@${environment.virtualMachine?.sshHost || "-"}`;
+  const accessSecondary = isKubernetes
+    ? environment.kubernetes?.imageRegistryPrefix || t("clusters.notConfigured")
+    : environment.virtualMachine?.workdir || environment.virtualMachine?.serviceHint || t("clusters.notConfigured");
+  return (
+    <article className="grid grid-cols-[minmax(180px,1fr)_minmax(220px,1.4fr)_150px_120px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
+          {isKubernetes ? <Cloud data-icon className="shrink-0 text-[color:var(--muted)]" /> : <Server data-icon className="shrink-0 text-[color:var(--muted)]" />}
+          <h3 className="truncate text-[15px] font-semibold leading-6">{environment.name}</h3>
+          <StatusBadge value={environment.status || "configured"} />
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <InlineMeta icon={Clock3}><RelativeTime value={environment.updatedAt} /></InlineMeta>
+          <InlineMeta icon={Network}>{isKubernetes ? t("clusters.kindKubernetes") : t("clusters.kindVirtualMachine")}</InlineMeta>
+          {isKubernetes ? <InlineMeta icon={Globe2}>{exposure}</InlineMeta> : null}
+        </div>
+      </div>
+
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-[13px] font-medium leading-5 text-[color:var(--muted-strong)]">
+          <HardDrive data-icon />
+          <span className="truncate">{accessPrimary}</span>
+        </div>
+        <div className="mt-1 flex items-center gap-2 text-[12px] leading-5 text-[color:var(--muted)]">
+          <Globe2 data-icon className="shrink-0" />
+          <span className="truncate">{accessSecondary}</span>
+        </div>
+      </div>
+
+      <div className="text-[13px] leading-5 text-[color:var(--muted)]">
+        <div>{t("clusters.projects", { count: environment.projectCount })}</div>
+        <div>{t("clusters.envs", { count: environment.issueEnvironmentCount + environment.testPlanCount + environment.testRunCount })}</div>
       </div>
 
       <div className="flex justify-end">
@@ -554,6 +758,129 @@ function ClusterModal(props: {
   );
 }
 
+function VirtualMachineModal(props: {
+  title: string;
+  description: string;
+  value: EnvironmentInput;
+  error?: Error | null;
+  isPending: boolean;
+  canSubmit: boolean;
+  footerStart?: ReactNode;
+  onChange: (value: EnvironmentInput) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const { t } = useMspaceTranslation();
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") props.onClose();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [props.onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
+      <button type="button" aria-label={t("clusters.closeClusterDialogBackdrop")} className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="virtual-machine-modal-title"
+        className="relative max-h-[calc(100vh-40px)] w-full max-w-[620px] overflow-auto rounded-[12px] bg-[color:var(--paper)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.18),0_0_0_1px_var(--line)]"
+      >
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 id="virtual-machine-modal-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">{props.title}</h2>
+            <p className="mt-1 max-w-[58ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
+              {props.description}
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label={t("clusters.closeModal")}
+            className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
+            onClick={props.onClose}
+          >
+            <X data-icon />
+          </button>
+        </div>
+
+        <form className="grid gap-4" onSubmit={props.onSubmit}>
+          {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
+          <Field label={t("clusters.environmentName")}>
+            <Input
+              value={props.value.name}
+              onChange={(event) => props.onChange({ ...props.value, name: event.target.value })}
+              placeholder="ubuntu-deploy-host"
+            />
+          </Field>
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_120px]">
+            <Field label={t("clusters.sshHost")}>
+              <Input
+                value={props.value.sshHost || ""}
+                onChange={(event) => props.onChange({ ...props.value, sshHost: event.target.value })}
+                placeholder="10.0.0.23"
+              />
+            </Field>
+            <Field label={t("clusters.sshPort")}>
+              <Input
+                type="number"
+                min={1}
+                max={65535}
+                value={props.value.sshPort || 22}
+                onChange={(event) => props.onChange({ ...props.value, sshPort: Number(event.target.value) || 22 })}
+              />
+            </Field>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label={t("clusters.sshUser")}>
+              <Input
+                value={props.value.sshUser || ""}
+                onChange={(event) => props.onChange({ ...props.value, sshUser: event.target.value })}
+                placeholder="root"
+              />
+            </Field>
+            <Field label={t("clusters.sshAuthRef")}>
+              <Input
+                value={props.value.sshAuthRef || ""}
+                onChange={(event) => props.onChange({ ...props.value, sshAuthRef: event.target.value })}
+                placeholder={t("clusters.optional")}
+              />
+            </Field>
+          </div>
+          <Field label={t("clusters.workdir")}>
+            <Input
+              value={props.value.workdir || ""}
+              onChange={(event) => props.onChange({ ...props.value, workdir: event.target.value })}
+              placeholder="/opt/mspace"
+            />
+          </Field>
+          <Field label={t("clusters.serviceHint")}>
+            <Input
+              value={props.value.serviceHint || ""}
+              onChange={(event) => props.onChange({ ...props.value, serviceHint: event.target.value })}
+              placeholder={t("clusters.optional")}
+            />
+          </Field>
+          <div className={cn("mt-1 flex flex-wrap gap-2", props.footerStart ? "justify-between" : "justify-end")}>
+            {props.footerStart ? <div>{props.footerStart}</div> : null}
+            <div className="flex gap-2">
+              <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isPending}>
+                {t("common.cancel")}
+              </Button>
+              <Button type="submit" disabled={!props.canSubmit || props.isPending}>
+                {props.isPending ? t("clusters.saving") : t("clusters.saveEnvironment")}
+              </Button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function normalizeClusterForm(form: ClusterInput): ClusterInput {
   return {
     ...form,
@@ -573,6 +900,56 @@ function canSubmitCluster(form: ClusterInput) {
   if (!normalized.name || !normalized.kubeconfigPath || !normalized.imageRegistryPrefix) return false;
   if (normalized.exposureMode === "ingress" && !normalized.previewDomain) return false;
   return true;
+}
+
+function normalizeVirtualMachineForm(form: EnvironmentInput): EnvironmentInput {
+  const normalized: EnvironmentInput = {
+    name: form.name.trim(),
+    kind: "virtual_machine",
+    status: form.status || "configured",
+    sshHost: (form.sshHost || "").trim(),
+    sshPort: form.sshPort || 22,
+    sshUser: (form.sshUser || "").trim(),
+    sshAuthRef: (form.sshAuthRef || "").trim(),
+    workdir: (form.workdir || "").trim(),
+    serviceHint: (form.serviceHint || "").trim(),
+  };
+  normalized.virtualMachine = {
+    sshHost: normalized.sshHost || "",
+    sshPort: normalized.sshPort || 22,
+    sshUser: normalized.sshUser || "",
+    sshAuthRef: normalized.sshAuthRef || "",
+    workdir: normalized.workdir || "",
+    serviceHint: normalized.serviceHint || "",
+    labels: {},
+  };
+  return normalized;
+}
+
+function canSubmitVirtualMachine(form: EnvironmentInput) {
+  const normalized = normalizeVirtualMachineForm(form);
+  return Boolean(normalized.name && normalized.sshHost && normalized.sshUser && (normalized.sshPort || 0) > 0);
+}
+
+function clusterFromEnvironment(environment: Environment): Cluster | null {
+  if (environment.kind !== "kubernetes" || !environment.kubernetes) return null;
+  return {
+    id: environment.kubernetes.clusterId || environment.id,
+    name: environment.name,
+    kubeconfigPath: environment.kubernetes.kubeconfigPath,
+    kubeContext: environment.kubernetes.kubeContext,
+    imageRegistryPrefix: environment.kubernetes.imageRegistryPrefix,
+    exposureMode: environment.kubernetes.exposureMode,
+    nodeHost: environment.kubernetes.nodeHost,
+    previewDomain: environment.kubernetes.previewDomain,
+    ingressClass: environment.kubernetes.ingressClass,
+    status: environment.status,
+    lastCheckedAt: environment.lastCheckedAt,
+    projectCount: environment.projectCount,
+    environmentCount: environment.issueEnvironmentCount,
+    createdAt: environment.createdAt,
+    updatedAt: environment.updatedAt,
+  };
 }
 
 function formatImportResult(result: KubeconfigImportResult) {

@@ -1146,6 +1146,7 @@ func scanProject(row scanner) (Project, error) {
 	if runbookUpdatedAt.Valid {
 		project.RunbookUpdatedAt = runbookUpdatedAt.Time.UTC().Format(time.RFC3339)
 	}
+	project.DefaultEnvironmentID = project.DefaultClusterID
 	if latestIssueUpdatedAt.Valid {
 		project.LatestIssueUpdatedAt = latestIssueUpdatedAt.Time.UTC().Format(time.RFC3339)
 	}
@@ -1913,6 +1914,7 @@ func scanIssueAndProject(row scanner) (Issue, Project, error) {
 	if runbookUpdatedAt.Valid {
 		project.RunbookUpdatedAt = runbookUpdatedAt.Time.UTC().Format(time.RFC3339)
 	}
+	project.DefaultEnvironmentID = project.DefaultClusterID
 	if latestIssueUpdatedAt.Valid {
 		project.LatestIssueUpdatedAt = latestIssueUpdatedAt.Time.UTC().Format(time.RFC3339)
 	}

@@ -55,11 +55,11 @@ Production deployment uses the root `vercel.json`:
 
 ## Features
 
-- Electron desktop app with Inbox, Issues, Tests, Agents, Clusters, Projects, Workspace Settings, Issue Detail, and Session Detail screens.
-- Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, mspace session tokens, personal/team workspaces, workspace membership, one-time team join links with safe signed-out previews, Inbox receipts, projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, comments, reactions, labels, runtime worker registration, agent profiles, clusters, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
+- Electron desktop app with Inbox, Issues, Tests, Agents, Environments, Projects, Workspace Settings, Issue Detail, and Session Detail screens.
+- Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, mspace session tokens, personal/team workspaces, workspace membership, one-time team join links with safe signed-out previews, Inbox receipts, projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, comments, reactions, labels, runtime worker registration, agent profiles, environments, Kubernetes cluster compatibility records, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
 - Runtime worker daemon in `worker/` that registers with `msw_...`, heartbeats, claims matching server tasks, prepares its own repo cache/workdir, runs `codex app-server --listen stdio://`, streams logs, captures source metadata, and reports task results.
 - Codex execution belongs to runtime workers. The server image does not install Codex or mount Codex credentials.
-- Workspace Settings for team access, worker environment installation, worker liveness, issue-linked runtime tasks, task events, task logs, and workspace automation.
+- Workspace Settings for team access, worker host installation, worker liveness, issue-linked runtime tasks, task events, task logs, and workspace automation.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, Material Icon Theme file icons, and shadcn/ui source components in `@mspace/ui`.
 - Bilingual desktop UI support for English and Simplified Chinese through `@mspace/i18n`.
 - Document-style issue creation and comments with TipTap Markdown editing, inline child issues from checklist rows, image rendering for stable attachment URLs, and lightweight comment reactions.
@@ -67,7 +67,7 @@ Production deployment uses the root `vercel.json`:
 - Per-session worker-managed git worktrees, changed file lists, diff previews, commits, and comparison against the project default branch.
 - Project-level Tests workspace with Cases, Case suggestions, Plans, and Runs tabs, dedicated detail pages, modal create/import flows, Markdown/text/CSV/Excel `.xlsx` import, readiness scoring, case-detail run history, field-level case revision summaries, and human review before Codex suggestions update canonical cases.
 - Issue-backed test run workflow where selected ready cases or formal plans create issue-linked run items, workers execute through the existing agent-session path, `test-result.json` is reconciled into run state, supported screenshot evidence is persisted as server-owned artifacts, and a human accepts or blocks the run result.
-- Reusable cluster configs imported from kubeconfig files, with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context.
+- Reusable environments for Kubernetes clusters and virtual machines. Kubernetes environments can be imported from kubeconfig files with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context; virtual machine environments store SSH target metadata and credential references.
 - Manual issue test deployment that queues an agent turn to create the namespace, build and push images, deploy resources, expose a preview, and update the issue test environment record.
 - Opt-in workspace automation that queues the same test deployment flow after a successful source session captures a commit, when the issue and runtime are ready.
 - Issue Resources tab for the current test namespace, showing Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events without accepting cross-namespace input.
@@ -86,11 +86,11 @@ mspace separates collaboration, execution, and validation:
 
 | Layer | What it owns | Current implementation |
 | --- | --- | --- |
-| Control plane | Users, workspaces, product data, membership, local password credentials, GitHub identity, explicit auth identity display, mspace auth sessions, agents, clusters, test environments, PR handoffs, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, Postgres for team/shared deployments, local SQLite for packaged personal desktop mode |
+| Control plane | Users, workspaces, product data, membership, local password credentials, GitHub identity, explicit auth identity display, mspace auth sessions, agents, environments, Kubernetes cluster compatibility records, test environments, PR handoffs, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, Postgres for team/shared deployments, local SQLite for packaged personal desktop mode |
 | Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review, language preference | Electron, React, TanStack Router, React Query, shared `@mspace/ui` and `@mspace/i18n` |
 | Runtime worker | Personal or team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
 | Agent runtime | One issue-bound turn in an isolated working directory | Worker-managed git workdir under the selected runtime mode |
-| Validation target | Build, deploy, inspect, preview, and cleanup issue test environments | Namespace-scoped Kubernetes workflow triggered from Issue Detail |
+| Environment / validation target | Reusable Kubernetes or virtual machine targets that decoupled workers can operate; current issue deploys build, deploy, inspect, preview, and cleanup Kubernetes issue test environments | Environment records in the server store; namespace-scoped Kubernetes workflow triggered from Issue Detail |
 
 The desktop process uses `MSPACE_SERVER_URL` first, then a saved Team server URL, then starts the local bundled/dev server on `127.0.0.1:8787` when no configured server is active. Execution happens through registered workers, not through a desktop-owned local product store.
 
@@ -122,7 +122,7 @@ pnpm run server
 
 Personal desktop workspaces start a host-local Codex worker automatically before an agent mention is submitted. The desktop creates a short-lived `msw_...` credential, stores it in an Electron user-data token file, renews it before expiry, and revokes the previous credential after the worker has had time to pick up the replacement. Workspace Settings labels these desktop-managed credentials as automatic and keeps expired or replaced credentials in audit history so renewals do not look like duplicate manual tokens.
 
-Team workspaces normally connect external worker environments from Workspace Settings with a one-time install command. Run that command on the server, VM, DevBox, or other Docker-capable environment that should claim agent tasks; the worker registers itself and appears online after its first heartbeat. Customer Helm installs can also enable `bootstrap.teamWorkspace.enabled=true` to create an admin-owned default team workspace and register the chart-managed fixed worker during server startup. The raw `msw_...` token flow is still available through the API for development and recovery, but it is not the product setup path.
+Team workspaces normally connect external worker runtime hosts from Workspace Settings with a one-time install command. Run that command on the server, VM, DevBox, or other Docker-capable host that should claim agent tasks; the worker registers itself and appears online after its first heartbeat. Customer Helm installs can also enable `bootstrap.teamWorkspace.enabled=true` to create an admin-owned default team workspace and register the chart-managed fixed worker during server startup. The raw `msw_...` token flow is still available through the API for development and recovery, but it is not the product setup path.
 
 Manual worker debugging:
 
@@ -154,8 +154,8 @@ The packaged desktop app includes bundled `mspace-server` and `mspace-worker` bi
 2. Create an issue in the Issues tab with a document-style note.
 3. Attach or create a project before agent execution, PR handoff, project runbook access, Tests, or test environments. Personal workspaces can use a local folder or GitHub URL; team workspaces require a GitHub URL so connected workers can clone the repository.
 4. In Tests, import or create project cases. Markdown/text imports use one non-empty line per case; CSV and `.xlsx` workbooks use the same column contract: `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags`. Valid case types are `functional`, `ui`, `api`, and `deployment`.
-5. Create/import a cluster config in Clusters if the issue needs a Kubernetes test environment.
-6. For personal desktop workspaces, let mspace start the local worker when you mention an agent. For team workspaces, connect a worker environment from Workspace Settings and run the generated install command in the target environment. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
+5. Create/import an Environment. Import kubeconfigs for Kubernetes test environments, or add a virtual machine target for SSH-oriented deployment testing.
+6. For personal desktop workspaces, let mspace start the local worker when you mention an agent. For team workspaces, connect a worker runtime host from Workspace Settings and run the generated install command on that host. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
 7. Mention an enabled agent profile, such as `@codex`, in an issue comment, or start a test run from selected ready cases or a formal test plan.
 8. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
 9. Use Commits for source review and PR handoff.

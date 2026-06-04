@@ -1,6 +1,6 @@
 # mspace API Integration Guide
 
-> Status: server-owned local MVP API guide, updated 2026-06-03
+> Status: server-owned local MVP API guide, updated 2026-06-04
 
 This guide covers the current server control-plane API used by the desktop and workers. The control plane normally runs on `http://127.0.0.1:8787`.
 
@@ -42,7 +42,7 @@ The server control plane owns:
 - local password auth, optional GitHub auth, and mspace `msp_...` sessions;
 - users, workspaces, members, invitations, and identity;
 - projects, project runbooks, project test cases, test case revisions, test case suggestions, test plans, test runs, issues, child tasks, comments, reactions, labels, Inbox events, and per-user receipts;
-- workspace settings, agent profiles, clusters, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
+- workspace settings, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
 - runtime worker registration, worker heartbeat/capability state, runtime task queue state, task events, task logs, cancellation, and task results.
 
 The desktop owns native shell behavior, local UI state, file pickers, and opening browser auth flows. Workers own execution: repository cache, per-session workdir, Codex app-server lifecycle, command execution, source capture, artifacts, and logs while running. The server never starts Codex and never requires Codex credentials; it only queues Codex-capable runtime tasks and reconciles worker results.
@@ -295,6 +295,22 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
 
 Test plans select ready cases and start issue-backed runs. Workers report results through `test-result.json`; the server reconciles run items, persists supported screenshot evidence as test artifacts, rewrites run item evidence to authenticated artifact refs, and a human must call `accept` or `block` before the run is treated as accepted.
 
+Create a test plan pinned to an Environment:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<project-id>/test-plans" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name":"Release smoke",
+    "caseIds":["<case-id>"],
+    "environmentId":"<environment-id>",
+    "environment":"Run against the selected staging target"
+  }'
+```
+
+The free-text `environment` value remains human notes for the agent. The structured environment binding is `environmentId`; when a plan or run is created, the server resolves that Environment and freezes `environmentKind` plus `environmentSnapshot` so later environment edits do not rewrite historical run context.
+
 ## Workspace Runtime Surface APIs
 
 | Method | Path | Purpose |
@@ -304,10 +320,14 @@ Test plans select ready cases and start issue-backed runs. Workers report result
 | `GET` | `/api/workspaces/{workspaceID}/agents` | List mentionable agent profiles. |
 | `POST` | `/api/workspaces/{workspaceID}/agents` | Create an agent profile. |
 | `PUT` | `/api/workspaces/{workspaceID}/agents/{agentID}` | Update an agent profile. |
-| `GET` | `/api/workspaces/{workspaceID}/clusters` | List cluster configs. |
-| `POST` | `/api/workspaces/{workspaceID}/clusters` | Create a cluster config. |
-| `PUT` | `/api/workspaces/{workspaceID}/clusters/{clusterID}` | Update a cluster config. |
-| `DELETE` | `/api/workspaces/{workspaceID}/clusters/{clusterID}` | Delete an unused cluster config. |
+| `GET` | `/api/workspaces/{workspaceID}/environments` | List Kubernetes and virtual machine Environments. Kubernetes rows are projected from cluster compatibility records. |
+| `POST` | `/api/workspaces/{workspaceID}/environments` | Create an Environment. Use `kind:"kubernetes"` or `kind:"virtual_machine"`. |
+| `PUT` | `/api/workspaces/{workspaceID}/environments/{environmentID}` | Update an Environment. |
+| `DELETE` | `/api/workspaces/{workspaceID}/environments/{environmentID}` | Delete an unused Environment. |
+| `GET` | `/api/workspaces/{workspaceID}/clusters` | Compatibility API for Kubernetes cluster records. Prefer `/environments` in product integrations. |
+| `POST` | `/api/workspaces/{workspaceID}/clusters` | Compatibility API for creating a Kubernetes cluster record. |
+| `PUT` | `/api/workspaces/{workspaceID}/clusters/{clusterID}` | Compatibility API for updating a Kubernetes cluster record. |
+| `DELETE` | `/api/workspaces/{workspaceID}/clusters/{clusterID}` | Compatibility API for deleting an unused Kubernetes cluster record. |
 | `GET` | `/api/workspaces/{workspaceID}/clusters/discover-defaults` | Discover kubeconfig candidates and contexts under `~/.kube`. |
 | `POST` | `/api/workspaces/{workspaceID}/clusters/import` | Import selected kubeconfig files. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/sessions` | Queue an `agent_session` runtime task after a supported agent mention, attached project, and active matching Codex worker. |
@@ -331,6 +351,48 @@ Workspace settings currently include:
 ```
 
 `autoDeployTestEnvironment` is opt-in. When it is `true`, the server queues a deploy/test session after a completed non-dry-run source session captures a commit and the issue has an attached project, resolvable deploy settings, no active issue session, and a matching online Codex worker. The queued deploy task uses the same `agent_session` and `issue_test_environments` contracts as a manual test deploy, with automation marker `auto_test_deploy`.
+
+Environment records are product-level targets, not workers. A worker registers separately, claims tasks by runtime mode and capabilities, and receives the selected Environment snapshot as task context.
+
+Create a virtual machine Environment:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/environments" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name":"staging-vm-01",
+    "kind":"virtual_machine",
+    "virtualMachine":{
+      "sshHost":"10.0.8.21",
+      "sshPort":22,
+      "sshUser":"ubuntu",
+      "sshAuthRef":"secret://mspace/staging-vm-01",
+      "workdir":"/srv/mspace",
+      "serviceHint":"systemd:mspace"
+    }
+  }'
+```
+
+Create a Kubernetes Environment through the product API:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/environments" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name":"staging-k8s",
+    "kind":"kubernetes",
+    "kubernetes":{
+      "kubeconfigPath":"/etc/mspace/kubeconfigs/staging.kubeconfig",
+      "kubeContext":"staging",
+      "imageRegistryPrefix":"registry.example.com/mspace",
+      "exposureMode":"nodeport"
+    }
+  }'
+```
+
+Kubernetes Environments currently use the existing `clusters` storage and remain visible through the `/clusters` compatibility API. Virtual machine Environments are stored as VM target metadata only; `sshAuthRef` points to a credential managed outside the normal product payload and must not contain private key material.
 
 ## Server Agent Sessions
 
@@ -366,14 +428,16 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues/<issue-id
   -H "Authorization: Bearer <msp-token>" \
   -H 'Content-Type: application/json' \
   -d '{
-    "clusterId":"<cluster-id>",
+    "environmentId":"<kubernetes-environment-id>",
     "sourceSessionId":"<source-session-id>",
     "sourceCommitSha":"<source-commit-sha>",
     "exposureMode":"nodeport"
   }'
 ```
 
-The server first creates the `agent_session` runtime task with Kubernetes and source metadata. After queueing succeeds, it stores or updates `issue_test_environments` with the deployment session id and `deploying` state. The worker performs the deploy/test turn and can write `test-environment.json` in its artifact directory to report preview values. Automatic test deploys follow this same path and pin `sourceSessionId` / `sourceCommitSha` to the completed source session that triggered them.
+`clusterId` is still accepted for compatibility, but new clients should send `environmentId`. The selected Environment must currently be `kind:"kubernetes"` because issue deploy, cleanup, Resources, and preview probing still operate on an issue namespace. If a VM Environment is submitted, the server rejects the deploy request instead of queueing a misleading Kubernetes task.
+
+The server first resolves the Environment, snapshots its id/kind/config, and creates the `agent_session` runtime task with Kubernetes and source metadata. After queueing succeeds, it stores or updates `issue_test_environments` with the Environment snapshot, deployment session id, and `deploying` state. The worker performs the deploy/test turn and can write `test-environment.json` in its artifact directory to report preview values. Automatic test deploys follow this same path and pin `sourceSessionId` / `sourceCommitSha` to the completed source session that triggered them.
 
 Inspect live namespace resources:
 
@@ -387,7 +451,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/install/worker` | Return the self-host worker install script used by generated install commands. |
-| `POST` | `/api/workspaces/{workspaceID}/worker-installations` | Create a short-lived worker environment install command. Owner/admin only. |
+| `POST` | `/api/workspaces/{workspaceID}/worker-installations` | Create a short-lived worker host install command. Owner/admin only. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived worker registration token. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration token metadata without raw token values. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. |
@@ -413,7 +477,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/worker-installat
   -d '{"name":"build-vm-worker","expiresInHours":1}'
 ```
 
-The response includes `installCommand`, `runtimeMode`, `workerName`, `credentialPrefix`, and `expiresAt`. Product UI should show the install command and hide the raw bootstrap credential. The target environment needs Docker plus Codex `auth.json` and `config.toml`; after running the command, the worker appears in `/runtime-workers` after its first heartbeat.
+The response includes `installCommand`, `runtimeMode`, `workerName`, `credentialPrefix`, and `expiresAt`. Product UI should show the install command and hide the raw bootstrap credential. The worker host needs Docker plus Codex `auth.json` and `config.toml`; after running the command, the worker appears in `/runtime-workers` after its first heartbeat.
 
 For Kubernetes-hosted fixed workers managed by the Helm chart, use `bootstrap.teamWorkspace.enabled=true` instead of the UI install command. Helm creates or reuses a release Secret entry named `MSPACE_RUNTIME_TOKEN`, passes it to the server as `MSPACE_BOOTSTRAP_RUNTIME_TOKEN`, and mounts the same value into the worker as its runtime registration credential. The operator still creates the worker Codex home Secret separately; that Secret must include `auth.json` plus `config.toml` and is mounted only by the worker.
 

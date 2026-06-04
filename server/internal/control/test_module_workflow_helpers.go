@@ -77,6 +77,11 @@ func normalizeTestPlanInput(input TestPlanInput) (TestPlanInput, error) {
 	}
 	input.TargetValue = strings.TrimSpace(input.TargetValue)
 	input.Environment = strings.TrimSpace(input.Environment)
+	input.EnvironmentID = strings.TrimSpace(input.EnvironmentID)
+	input.EnvironmentKind = strings.TrimSpace(input.EnvironmentKind)
+	if input.EnvironmentKind != "" {
+		input.EnvironmentKind = normalizeEnvironmentKind(input.EnvironmentKind)
+	}
 	input.CaseIDs = uniqueStrings(input.CaseIDs)
 	if input.Title == "" {
 		return TestPlanInput{}, errors.New("title is required")
@@ -125,6 +130,11 @@ func normalizeCreateTestRunInput(input CreateTestRunInput, plan TestPlan) (Creat
 	}
 	input.TargetValue = strings.TrimSpace(firstNonEmpty(input.TargetValue, plan.TargetValue))
 	input.Environment = strings.TrimSpace(firstNonEmpty(input.Environment, plan.Environment))
+	input.EnvironmentID = strings.TrimSpace(firstNonEmpty(input.EnvironmentID, plan.EnvironmentID))
+	input.EnvironmentKind = strings.TrimSpace(firstNonEmpty(input.EnvironmentKind, plan.EnvironmentKind))
+	if input.EnvironmentKind != "" {
+		input.EnvironmentKind = normalizeEnvironmentKind(input.EnvironmentKind)
+	}
 	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
 	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
 	if input.BatchSize <= 0 {
@@ -144,6 +154,11 @@ func normalizeCreateAdHocTestRunInput(input CreateAdHocTestRunInput) (CreateAdHo
 	}
 	input.TargetValue = strings.TrimSpace(input.TargetValue)
 	input.Environment = strings.TrimSpace(input.Environment)
+	input.EnvironmentID = strings.TrimSpace(input.EnvironmentID)
+	input.EnvironmentKind = strings.TrimSpace(input.EnvironmentKind)
+	if input.EnvironmentKind != "" {
+		input.EnvironmentKind = normalizeEnvironmentKind(input.EnvironmentKind)
+	}
 	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
 	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
 	if input.BatchSize <= 0 {
@@ -308,6 +323,9 @@ func buildTestRunParentIssueBody(plan *TestPlan, run TestRun, cases []TestCase) 
 	builder.WriteString("Source: `" + firstNonEmpty(run.Source, "ad_hoc") + "`\n")
 	builder.WriteString("Target: `" + run.TargetType + "` `" + firstNonEmpty(run.TargetValue, "not specified") + "`\n")
 	builder.WriteString("Environment: `" + firstNonEmpty(run.Environment, "not specified") + "`\n\n")
+	if run.EnvironmentID != "" {
+		builder.WriteString("Environment target: `" + run.EnvironmentKind + "` `" + run.EnvironmentID + "`\n\n")
+	}
 	if len(cases) > 0 {
 		builder.WriteString("Cases:\n")
 		for _, testCase := range cases {
@@ -328,6 +346,9 @@ func buildTestRunExecutionIssueBody(run TestRun, cases []TestCase) string {
 	builder.WriteString("Source: `" + firstNonEmpty(run.Source, "ad_hoc") + "`\n")
 	builder.WriteString("Target: `" + run.TargetType + "` `" + firstNonEmpty(run.TargetValue, "not specified") + "`\n")
 	builder.WriteString("Environment: `" + firstNonEmpty(run.Environment, "not specified") + "`\n\n")
+	if run.EnvironmentID != "" {
+		builder.WriteString("Environment target: `" + run.EnvironmentKind + "` `" + run.EnvironmentID + "`\n\n")
+	}
 	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with one item per case in this batch.\n\n")
 	for _, testCase := range cases {
 		builder.WriteString("## " + testCase.ID + ": " + testCase.Title + "\n")

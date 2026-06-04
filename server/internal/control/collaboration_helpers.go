@@ -39,6 +39,16 @@ func normalizeProjectInput(input ProjectInput) (ProjectInput, error) {
 	input.IngressClass = strings.TrimSpace(input.IngressClass)
 	input.NodeHost = strings.TrimSpace(input.NodeHost)
 	input.DefaultClusterID = strings.TrimSpace(input.DefaultClusterID)
+	input.DefaultEnvironmentID = strings.TrimSpace(input.DefaultEnvironmentID)
+	if input.DefaultEnvironmentID != "" && input.DefaultClusterID != "" && input.DefaultEnvironmentID != input.DefaultClusterID {
+		return ProjectInput{}, errors.New("defaultEnvironmentId must match defaultClusterId for Kubernetes project defaults")
+	}
+	if input.DefaultClusterID == "" {
+		input.DefaultClusterID = input.DefaultEnvironmentID
+	}
+	if input.DefaultEnvironmentID == "" {
+		input.DefaultEnvironmentID = input.DefaultClusterID
+	}
 
 	if input.SourceType == "" {
 		if input.RepoURL != "" && input.RepoPath == "" {

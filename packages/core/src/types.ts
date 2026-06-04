@@ -18,6 +18,7 @@ export interface Project {
   ingressClass: string;
   nodeHost: string;
   defaultClusterId: string;
+  defaultEnvironmentId: string;
   runbookStatus: string;
   runbookUpdatedAt: string;
   runbookSource: string;
@@ -197,6 +198,9 @@ export interface TestPlan {
   targetType: string;
   targetValue: string;
   environment: string;
+  environmentId: string;
+  environmentKind: EnvironmentKind | string;
+  environmentSnapshot?: Record<string, unknown>;
   caseCount: number;
   createdByUserId: string;
   createdAt: string;
@@ -226,6 +230,8 @@ export interface TestPlanInput {
   targetType?: string;
   targetValue?: string;
   environment?: string;
+  environmentId?: string;
+  environmentKind?: EnvironmentKind | string;
   caseIds: string[];
 }
 
@@ -240,6 +246,9 @@ export interface TestRun {
   targetType: string;
   targetValue: string;
   environment: string;
+  environmentId: string;
+  environmentKind: EnvironmentKind | string;
+  environmentSnapshot?: Record<string, unknown>;
   totalCount: number;
   passedCount: number;
   failedCount: number;
@@ -287,6 +296,8 @@ export interface CreateTestRunInput {
   targetType?: string;
   targetValue?: string;
   environment?: string;
+  environmentId?: string;
+  environmentKind?: EnvironmentKind | string;
   agentProfile?: string;
   runtimeMode?: string;
   batchSize?: number;
@@ -297,6 +308,8 @@ export interface CreateAdHocTestRunInput {
   targetType?: string;
   targetValue?: string;
   environment?: string;
+  environmentId?: string;
+  environmentKind?: EnvironmentKind | string;
   agentProfile?: string;
   runtimeMode?: string;
   batchSize?: number;
@@ -326,6 +339,46 @@ export interface Cluster {
   lastCheckedAt: string;
   projectCount: number;
   environmentCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EnvironmentKind = "kubernetes" | "virtual_machine";
+
+export interface KubernetesEnvironmentConfig {
+  clusterId: string;
+  kubeconfigPath: string;
+  kubeContext: string;
+  imageRegistryPrefix: string;
+  exposureMode: "nodeport" | "ingress" | string;
+  nodeHost: string;
+  previewDomain: string;
+  ingressClass: string;
+}
+
+export interface VirtualMachineEnvironmentConfig {
+  sshHost: string;
+  sshPort: number;
+  sshUser: string;
+  sshAuthRef: string;
+  workdir: string;
+  serviceHint: string;
+  labels?: Record<string, unknown>;
+}
+
+export interface Environment {
+  id: string;
+  workspaceId: string;
+  name: string;
+  kind: EnvironmentKind | string;
+  status: string;
+  projectCount: number;
+  issueEnvironmentCount: number;
+  testPlanCount: number;
+  testRunCount: number;
+  kubernetes?: KubernetesEnvironmentConfig;
+  virtualMachine?: VirtualMachineEnvironmentConfig;
+  lastCheckedAt: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -815,6 +868,9 @@ export interface IssueHandoff {
 export interface IssueTestEnvironment {
   issueId: string;
   clusterId: string;
+  environmentId: string;
+  environmentKind: EnvironmentKind | string;
+  environmentSnapshot?: Record<string, unknown>;
   namespace: string;
   namespaceStatus: string;
   cleanupStatus: string;
@@ -1075,6 +1131,21 @@ export interface ClusterInput {
   status?: string;
 }
 
+export interface EnvironmentInput {
+  name: string;
+  kind: EnvironmentKind | string;
+  status?: string;
+  kubernetes?: Partial<KubernetesEnvironmentConfig>;
+  virtualMachine?: Partial<VirtualMachineEnvironmentConfig>;
+  sshHost?: string;
+  sshPort?: number;
+  sshUser?: string;
+  sshAuthRef?: string;
+  workdir?: string;
+  serviceHint?: string;
+  labels?: Record<string, unknown>;
+}
+
 export interface KubeconfigImportSkip {
   path: string;
   context: string;
@@ -1098,7 +1169,8 @@ export interface KubeconfigImportResult {
 
 export interface StartTestDeployInput {
   agentProfile?: string;
-  clusterId: string;
+  clusterId?: string;
+  environmentId?: string;
   exposureMode?: "nodeport" | "ingress" | "";
   previewDomain?: string;
   ingressClass?: string;

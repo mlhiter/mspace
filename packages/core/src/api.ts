@@ -9,6 +9,8 @@ import type {
   Cluster,
   Comment,
   ClusterInput,
+  Environment,
+  EnvironmentInput,
   CreateCommentInput,
   CreateAgentSessionInput,
   CreateIssueInput,
@@ -139,6 +141,7 @@ export const queryKeys = {
   projectTestRun: (workspaceId: string, projectId: string, runId: string, token: string) =>
     ["project-test-run", workspaceId, projectId, runId, token] as const,
   workspaceSettings: (workspaceId: string, token: string) => ["workspace-settings", workspaceId, token] as const,
+  environments: (workspaceId: string, token: string) => ["environments", workspaceId, token] as const,
   clusters: (workspaceId: string, token: string) => ["clusters", workspaceId, token] as const,
   issueResources: (workspaceId: string, issueId: string, token: string) =>
     ["issue-resources", workspaceId, issueId, token] as const,
@@ -636,6 +639,27 @@ export const controlPlaneApi = {
       method: "PUT",
       headers: authHeaders(token),
       body: JSON.stringify(input),
+    }),
+  listEnvironments: (token: string, workspaceId: string) =>
+    requestControlPlane<Environment[]>(`/api/workspaces/${workspaceId}/environments`, {
+      headers: authHeaders(token),
+    }),
+  createEnvironment: (token: string, workspaceId: string, input: EnvironmentInput) =>
+    requestControlPlane<Environment>(`/api/workspaces/${workspaceId}/environments`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  updateEnvironment: (token: string, workspaceId: string, environmentId: string, input: EnvironmentInput) =>
+    requestControlPlane<Environment>(`/api/workspaces/${workspaceId}/environments/${environmentId}`, {
+      method: "PUT",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  deleteEnvironment: (token: string, workspaceId: string, environmentId: string) =>
+    requestControlPlane<{ ok: boolean }>(`/api/workspaces/${workspaceId}/environments/${environmentId}`, {
+      method: "DELETE",
+      headers: authHeaders(token),
     }),
   listClusters: (token: string, workspaceId: string) =>
     requestControlPlane<Cluster[]>(`/api/workspaces/${workspaceId}/clusters`, {

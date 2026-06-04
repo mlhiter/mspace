@@ -78,6 +78,258 @@ func scanWorkspaceSettings(row scanner) (WorkspaceSettings, error) {
 	return settings, nil
 }
 
+func (s *PostgresStore) ListEnvironments(ctx Context, userID, workspaceID string) ([]Environment, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
+		return nil, err
+	}
+	clusters, err := s.ListClusters(ctx, userID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	environments := make([]Environment, 0, len(clusters))
+	for _, cluster := range clusters {
+		environments = append(environments, environmentFromCluster(cluster))
+	}
+	rows, err := s.pool.Query(dbctx, `
+		SELECT
+			e.id::text,
+			e.workspace_id::text,
+			e.name,
+			e.kind,
+			e.status,
+			e.ssh_host,
+			e.ssh_port,
+			e.ssh_user,
+			e.ssh_auth_ref,
+			e.workdir,
+			e.service_hint,
+			e.labels,
+			e.last_checked_at,
+			e.created_at,
+			e.updated_at,
+			COUNT(DISTINCT p.id) FILTER (WHERE p.default_cluster_id = e.id::text),
+			COUNT(DISTINCT ite.issue_id) FILTER (WHERE ite.environment_id = e.id::text),
+			COUNT(DISTINCT tp.id) FILTER (WHERE tp.environment_id = e.id::text),
+			COUNT(DISTINCT tr.id) FILTER (WHERE tr.environment_id = e.id::text)
+		FROM environments e
+		LEFT JOIN projects p ON p.workspace_id = e.workspace_id AND p.default_cluster_id = e.id::text
+		LEFT JOIN issue_test_environments ite ON ite.workspace_id = e.workspace_id AND ite.environment_id = e.id::text
+		LEFT JOIN test_plans tp ON tp.workspace_id = e.workspace_id AND tp.environment_id = e.id::text
+		LEFT JOIN test_runs tr ON tr.workspace_id = e.workspace_id AND tr.environment_id = e.id::text
+		WHERE e.workspace_id = $1
+		GROUP BY e.id
+		ORDER BY e.updated_at DESC, e.created_at DESC
+	`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		environment, err := scanVirtualMachineEnvironment(rows)
+		if err != nil {
+			return nil, err
+		}
+		environments = append(environments, environment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.attachEnvironmentUsageCounts(dbctx, workspaceID, environments); err != nil {
+		return nil, err
+	}
+	sort.Slice(environments, func(i, j int) bool {
+		if environments[i].UpdatedAt == environments[j].UpdatedAt {
+			return environments[i].CreatedAt > environments[j].CreatedAt
+		}
+		return environments[i].UpdatedAt > environments[j].UpdatedAt
+	})
+	return environments, nil
+}
+
+func (s *PostgresStore) attachEnvironmentUsageCounts(ctx context.Context, workspaceID string, environments []Environment) error {
+	byID := map[string]*Environment{}
+	for index := range environments {
+		byID[environments[index].ID] = &environments[index]
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT environment_id, SUM(projects)::int, SUM(issue_environments)::int, SUM(test_plans)::int, SUM(test_runs)::int
+		FROM (
+			SELECT default_cluster_id AS environment_id, COUNT(*) AS projects, 0 AS issue_environments, 0 AS test_plans, 0 AS test_runs
+			FROM projects
+			WHERE workspace_id = $1 AND default_cluster_id <> ''
+			GROUP BY default_cluster_id
+			UNION ALL
+			SELECT COALESCE(NULLIF(environment_id, ''), cluster_id::text) AS environment_id, 0, COUNT(*), 0, 0
+			FROM issue_test_environments
+			WHERE workspace_id = $1 AND (environment_id <> '' OR cluster_id IS NOT NULL)
+			GROUP BY COALESCE(NULLIF(environment_id, ''), cluster_id::text)
+			UNION ALL
+			SELECT environment_id, 0, 0, COUNT(*), 0
+			FROM test_plans
+			WHERE workspace_id = $1 AND environment_id <> ''
+			GROUP BY environment_id
+			UNION ALL
+			SELECT environment_id, 0, 0, 0, COUNT(*)
+			FROM test_runs
+			WHERE workspace_id = $1 AND environment_id <> ''
+			GROUP BY environment_id
+		) refs
+		WHERE environment_id <> ''
+		GROUP BY environment_id
+	`, workspaceID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var environmentID string
+		var projectCount, issueEnvironmentCount, testPlanCount, testRunCount int
+		if err := rows.Scan(&environmentID, &projectCount, &issueEnvironmentCount, &testPlanCount, &testRunCount); err != nil {
+			return err
+		}
+		if environment := byID[environmentID]; environment != nil {
+			environment.ProjectCount = projectCount
+			environment.IssueEnvironmentCount = issueEnvironmentCount
+			environment.TestPlanCount = testPlanCount
+			environment.TestRunCount = testRunCount
+		}
+	}
+	return rows.Err()
+}
+
+func (s *PostgresStore) CreateEnvironment(ctx Context, userID, workspaceID string, input EnvironmentInput) (Environment, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	normalized, err := normalizeEnvironmentInput(Environment{}, input)
+	if err != nil {
+		return Environment{}, err
+	}
+	if normalized.Kind == "kubernetes" {
+		cluster, err := s.CreateCluster(ctx, userID, workspaceID, clusterInputFromEnvironmentInput(input))
+		if err != nil {
+			return Environment{}, err
+		}
+		return environmentFromCluster(cluster), nil
+	}
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
+		return Environment{}, err
+	}
+	row := s.pool.QueryRow(dbctx, `
+		INSERT INTO environments (workspace_id, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, now())
+		RETURNING id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
+	`, workspaceID, normalized.Name, normalized.Kind, normalized.Status, normalized.VirtualMachine.SSHHost, normalized.VirtualMachine.SSHPort, normalized.VirtualMachine.SSHUser, normalized.VirtualMachine.SSHAuthRef, normalized.VirtualMachine.Workdir, normalized.VirtualMachine.ServiceHint, jsonOrObject(normalized.VirtualMachine.Labels))
+	return scanVirtualMachineEnvironment(row)
+}
+
+func (s *PostgresStore) UpdateEnvironment(ctx Context, userID, workspaceID, environmentID string, input EnvironmentInput) (Environment, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	environmentID = strings.TrimSpace(environmentID)
+	existing, err := s.loadEnvironment(dbctx, workspaceID, environmentID)
+	if err != nil {
+		return Environment{}, err
+	}
+	if existing.Kind == "kubernetes" {
+		cluster, err := s.UpdateCluster(ctx, userID, workspaceID, environmentID, clusterInputFromEnvironmentInput(input))
+		if err != nil {
+			return Environment{}, err
+		}
+		return environmentFromCluster(cluster), nil
+	}
+	normalized, err := normalizeEnvironmentInput(existing, input)
+	if err != nil {
+		return Environment{}, err
+	}
+	if normalized.Kind != existing.Kind {
+		return Environment{}, errors.New("environment kind cannot be changed")
+	}
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
+		return Environment{}, err
+	}
+	row := s.pool.QueryRow(dbctx, `
+		UPDATE environments
+		SET name = $3,
+			status = $4,
+			ssh_host = $5,
+			ssh_port = $6,
+			ssh_user = $7,
+			ssh_auth_ref = $8,
+			workdir = $9,
+			service_hint = $10,
+			labels = $11::jsonb,
+			last_checked_at = now(),
+			updated_at = now()
+		WHERE workspace_id = $1 AND id = $2
+		RETURNING id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
+	`, workspaceID, environmentID, normalized.Name, normalized.Status, normalized.VirtualMachine.SSHHost, normalized.VirtualMachine.SSHPort, normalized.VirtualMachine.SSHUser, normalized.VirtualMachine.SSHAuthRef, normalized.VirtualMachine.Workdir, normalized.VirtualMachine.ServiceHint, jsonOrObject(normalized.VirtualMachine.Labels))
+	environment, err := scanVirtualMachineEnvironment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Environment{}, ErrNotFound
+	}
+	return environment, err
+}
+
+func (s *PostgresStore) DeleteEnvironment(ctx Context, userID, workspaceID, environmentID string) error {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	environmentID = strings.TrimSpace(environmentID)
+	environment, err := s.loadEnvironment(dbctx, workspaceID, environmentID)
+	if err != nil {
+		return err
+	}
+	if environment.Kind == "kubernetes" {
+		return s.DeleteCluster(ctx, userID, workspaceID, environmentID)
+	}
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
+		return err
+	}
+	var references int
+	if err := s.pool.QueryRow(dbctx, `
+		SELECT COUNT(*)
+		FROM (
+			SELECT environment_id FROM issue_test_environments WHERE workspace_id = $1 AND environment_id = $2
+			UNION ALL
+			SELECT environment_id FROM test_plans WHERE workspace_id = $1 AND environment_id = $2
+			UNION ALL
+			SELECT environment_id FROM test_runs WHERE workspace_id = $1 AND environment_id = $2
+		) refs
+	`, workspaceID, environmentID).Scan(&references); err != nil {
+		return err
+	}
+	if references > 0 {
+		return ErrForbidden
+	}
+	tag, err := s.pool.Exec(dbctx, `DELETE FROM environments WHERE workspace_id = $1 AND id = $2`, workspaceID, environmentID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) loadEnvironment(ctx context.Context, workspaceID, environmentID string) (Environment, error) {
+	if cluster, err := loadCluster(ctx, s.pool, workspaceID, environmentID); err == nil {
+		return environmentFromCluster(cluster), nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return Environment{}, err
+	}
+	row := s.pool.QueryRow(ctx, `
+		SELECT id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
+		FROM environments
+		WHERE workspace_id = $1 AND id = $2
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(environmentID))
+	environment, err := scanVirtualMachineEnvironment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Environment{}, ErrNotFound
+	}
+	return environment, err
+}
+
 func (s *PostgresStore) ListAgentProfiles(ctx Context, userID, workspaceID string) ([]AgentProfile, error) {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
@@ -435,6 +687,10 @@ func (s *PostgresStore) DeleteCluster(ctx Context, userID, workspaceID, clusterI
 			SELECT default_cluster_id AS cluster_id FROM projects WHERE workspace_id = $1 AND default_cluster_id = $2
 			UNION ALL
 			SELECT cluster_id::text FROM issue_test_environments WHERE workspace_id = $1 AND cluster_id::text = $2
+			UNION ALL
+			SELECT environment_id FROM test_plans WHERE workspace_id = $1 AND environment_id = $2
+			UNION ALL
+			SELECT environment_id FROM test_runs WHERE workspace_id = $1 AND environment_id = $2
 		) refs
 	`, workspaceID, clusterID).Scan(&references); err != nil {
 		return err
@@ -1098,11 +1354,18 @@ func (s *PostgresStore) buildIssueTestEnvironment(ctx context.Context, detail Is
 	if strings.TrimSpace(environment.Namespace) == "" {
 		environment.Namespace = defaultIssueNamespace(detail)
 	}
-	clusterID := firstNonEmpty(input.ClusterID, environment.ClusterID, detail.Project.DefaultClusterID)
-	if clusterID == "" {
-		return environment, errors.New("cluster is required before starting a test deployment")
+	environmentID := firstNonEmpty(input.EnvironmentID, input.ClusterID, environment.EnvironmentID, environment.ClusterID, detail.Project.DefaultEnvironmentID, detail.Project.DefaultClusterID)
+	if environmentID == "" {
+		return environment, errors.New("environment is required before starting a test deployment")
 	}
-	selectedCluster, err := loadCluster(ctx, s.pool, detail.Issue.WorkspaceID, clusterID)
+	selectedEnvironment, err := s.loadEnvironment(ctx, detail.Issue.WorkspaceID, environmentID)
+	if err != nil {
+		return environment, err
+	}
+	if selectedEnvironment.Kind != environmentKindKubernetes || selectedEnvironment.Kubernetes == nil {
+		return environment, errors.New("test deployment currently requires a Kubernetes environment")
+	}
+	selectedCluster, err := loadCluster(ctx, s.pool, detail.Issue.WorkspaceID, selectedEnvironment.Kubernetes.ClusterID)
 	if err != nil {
 		return environment, err
 	}
@@ -1119,6 +1382,9 @@ func (s *PostgresStore) buildIssueTestEnvironment(ctx context.Context, detail Is
 	environment.NamespaceStatus = "planned"
 	environment.CleanupStatus = "retained"
 	environment.ClusterID = selectedCluster.ID
+	environment.EnvironmentID = selectedEnvironment.ID
+	environment.EnvironmentKind = selectedEnvironment.Kind
+	environment.EnvironmentSnapshot = environmentSnapshot(selectedEnvironment)
 	environment.KubeconfigPath = selectedCluster.KubeconfigPath
 	environment.KubeContext = selectedCluster.KubeContext
 	environment.ImageRegistryPrefix = selectedCluster.ImageRegistryPrefix
@@ -1234,7 +1500,9 @@ func buildIssueTestDeployPrompt(detail IssueDetail, environment IssueTestEnviron
 	builder.WriteString("- The prepared session worktree is checked out at the source commit. Before building, verify `git rev-parse HEAD` matches the source commit.\n")
 	builder.WriteString("- Build and deploy exactly this commit, not the latest branch tip or another session's worktree.\n\n")
 	builder.WriteString("Deployment contract:\n")
-	builder.WriteString(fmt.Sprintf("- Cluster ID: %s\n", environment.ClusterID))
+	builder.WriteString(fmt.Sprintf("- Environment ID: %s\n", firstNonEmpty(environment.EnvironmentID, environment.ClusterID)))
+	builder.WriteString(fmt.Sprintf("- Environment kind: %s\n", firstNonEmpty(environment.EnvironmentKind, environmentKindKubernetes)))
+	builder.WriteString(fmt.Sprintf("- Kubernetes cluster ID: %s\n", environment.ClusterID))
 	builder.WriteString(fmt.Sprintf("- Kubeconfig path: %s\n", environment.KubeconfigPath))
 	if environment.KubeContext != "" {
 		builder.WriteString(fmt.Sprintf("- Kube context: %s\n", environment.KubeContext))
@@ -1337,7 +1605,7 @@ func runtimeTaskIsDryRun(task RuntimeTask) bool {
 
 func (s *PostgresStore) loadIssueTestEnvironment(ctx context.Context, workspaceID, issueID string) (IssueTestEnvironment, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT issue_id::text, COALESCE(cluster_id::text, ''), namespace, namespace_status, cleanup_status, preview_url, image_registry_prefix, kubeconfig_path, kube_context, exposure_mode, preview_domain, ingress_class, node_host, last_deploy_session_id, last_cleanup_session_id, source_session_id, source_commit_sha, created_at, updated_at
+		SELECT issue_id::text, COALESCE(cluster_id::text, ''), environment_id, environment_kind, environment_snapshot, namespace, namespace_status, cleanup_status, preview_url, image_registry_prefix, kubeconfig_path, kube_context, exposure_mode, preview_domain, ingress_class, node_host, last_deploy_session_id, last_cleanup_session_id, source_session_id, source_commit_sha, created_at, updated_at
 		FROM issue_test_environments
 		WHERE workspace_id = $1 AND issue_id = $2
 	`, workspaceID, issueID)
@@ -1360,12 +1628,20 @@ func (s *PostgresStore) loadIssueTestEnvironmentOptional(ctx context.Context, wo
 }
 
 func (s *PostgresStore) saveIssueTestEnvironment(ctx context.Context, workspaceID string, environment IssueTestEnvironment) error {
+	environment.EnvironmentID = firstNonEmpty(environment.EnvironmentID, environment.ClusterID)
+	environment.EnvironmentKind = firstNonEmpty(environment.EnvironmentKind, environmentKindKubernetes)
+	if len(environment.EnvironmentSnapshot) == 0 {
+		environment.EnvironmentSnapshot = json.RawMessage(`{}`)
+	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO issue_test_environments (workspace_id, issue_id, cluster_id, namespace, namespace_status, cleanup_status, preview_url, image_registry_prefix, kubeconfig_path, kube_context, exposure_mode, preview_domain, ingress_class, node_host, last_deploy_session_id, last_cleanup_session_id, source_session_id, source_commit_sha)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		INSERT INTO issue_test_environments (workspace_id, issue_id, cluster_id, environment_id, environment_kind, environment_snapshot, namespace, namespace_status, cleanup_status, preview_url, image_registry_prefix, kubeconfig_path, kube_context, exposure_mode, preview_domain, ingress_class, node_host, last_deploy_session_id, last_cleanup_session_id, source_session_id, source_commit_sha)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		ON CONFLICT (issue_id) DO UPDATE SET
 			workspace_id = EXCLUDED.workspace_id,
 			cluster_id = EXCLUDED.cluster_id,
+			environment_id = EXCLUDED.environment_id,
+			environment_kind = EXCLUDED.environment_kind,
+			environment_snapshot = EXCLUDED.environment_snapshot,
 			namespace = EXCLUDED.namespace,
 			namespace_status = EXCLUDED.namespace_status,
 			cleanup_status = EXCLUDED.cleanup_status,
@@ -1382,16 +1658,20 @@ func (s *PostgresStore) saveIssueTestEnvironment(ctx context.Context, workspaceI
 			source_session_id = EXCLUDED.source_session_id,
 			source_commit_sha = EXCLUDED.source_commit_sha,
 			updated_at = now()
-	`, workspaceID, environment.IssueID, environment.ClusterID, environment.Namespace, environment.NamespaceStatus, environment.CleanupStatus, environment.PreviewURL, environment.ImageRegistryPrefix, environment.KubeconfigPath, environment.KubeContext, environment.ExposureMode, environment.PreviewDomain, environment.IngressClass, environment.NodeHost, environment.LastDeploySessionID, environment.LastCleanupSessionID, environment.SourceSessionID, environment.SourceCommitSHA)
+	`, workspaceID, environment.IssueID, environment.ClusterID, environment.EnvironmentID, environment.EnvironmentKind, jsonOrObject(environment.EnvironmentSnapshot), environment.Namespace, environment.NamespaceStatus, environment.CleanupStatus, environment.PreviewURL, environment.ImageRegistryPrefix, environment.KubeconfigPath, environment.KubeContext, environment.ExposureMode, environment.PreviewDomain, environment.IngressClass, environment.NodeHost, environment.LastDeploySessionID, environment.LastCleanupSessionID, environment.SourceSessionID, environment.SourceCommitSHA)
 	return err
 }
 
 func scanIssueTestEnvironment(row scanner) (IssueTestEnvironment, error) {
 	var environment IssueTestEnvironment
+	var snapshotBytes []byte
 	var createdAt, updatedAt time.Time
-	if err := row.Scan(&environment.IssueID, &environment.ClusterID, &environment.Namespace, &environment.NamespaceStatus, &environment.CleanupStatus, &environment.PreviewURL, &environment.ImageRegistryPrefix, &environment.KubeconfigPath, &environment.KubeContext, &environment.ExposureMode, &environment.PreviewDomain, &environment.IngressClass, &environment.NodeHost, &environment.LastDeploySessionID, &environment.LastCleanupSessionID, &environment.SourceSessionID, &environment.SourceCommitSHA, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&environment.IssueID, &environment.ClusterID, &environment.EnvironmentID, &environment.EnvironmentKind, &snapshotBytes, &environment.Namespace, &environment.NamespaceStatus, &environment.CleanupStatus, &environment.PreviewURL, &environment.ImageRegistryPrefix, &environment.KubeconfigPath, &environment.KubeContext, &environment.ExposureMode, &environment.PreviewDomain, &environment.IngressClass, &environment.NodeHost, &environment.LastDeploySessionID, &environment.LastCleanupSessionID, &environment.SourceSessionID, &environment.SourceCommitSHA, &createdAt, &updatedAt); err != nil {
 		return IssueTestEnvironment{}, err
 	}
+	environment.EnvironmentID = firstNonEmpty(environment.EnvironmentID, environment.ClusterID)
+	environment.EnvironmentKind = firstNonEmpty(environment.EnvironmentKind, environmentKindKubernetes)
+	environment.EnvironmentSnapshot = copyRawMessage(json.RawMessage(snapshotBytes))
 	environment.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	environment.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 	return environment, nil
@@ -2281,7 +2561,7 @@ func (s *PostgresStore) markIssueTestEnvironmentInterrupted(ctx context.Context,
 
 func loadIssueTestEnvironmentRecord(ctx context.Context, q queryer, workspaceID, issueID string) (IssueTestEnvironment, error) {
 	row := q.QueryRow(ctx, `
-		SELECT issue_id::text, COALESCE(cluster_id::text, ''), namespace, namespace_status, cleanup_status, preview_url, image_registry_prefix, kubeconfig_path, kube_context, exposure_mode, preview_domain, ingress_class, node_host, last_deploy_session_id, last_cleanup_session_id, source_session_id, source_commit_sha, created_at, updated_at
+		SELECT issue_id::text, COALESCE(cluster_id::text, ''), environment_id, environment_kind, environment_snapshot, namespace, namespace_status, cleanup_status, preview_url, image_registry_prefix, kubeconfig_path, kube_context, exposure_mode, preview_domain, ingress_class, node_host, last_deploy_session_id, last_cleanup_session_id, source_session_id, source_commit_sha, created_at, updated_at
 		FROM issue_test_environments
 		WHERE workspace_id = $1 AND issue_id = $2
 	`, workspaceID, issueID)
@@ -2293,12 +2573,20 @@ func loadIssueTestEnvironmentRecord(ctx context.Context, q queryer, workspaceID,
 }
 
 func saveIssueTestEnvironmentRecord(ctx context.Context, q queryer, workspaceID string, environment IssueTestEnvironment) error {
+	environment.EnvironmentID = firstNonEmpty(environment.EnvironmentID, environment.ClusterID)
+	environment.EnvironmentKind = firstNonEmpty(environment.EnvironmentKind, environmentKindKubernetes)
+	if len(environment.EnvironmentSnapshot) == 0 {
+		environment.EnvironmentSnapshot = json.RawMessage(`{}`)
+	}
 	_, err := q.Exec(ctx, `
-		INSERT INTO issue_test_environments (workspace_id, issue_id, cluster_id, namespace, namespace_status, cleanup_status, preview_url, image_registry_prefix, kubeconfig_path, kube_context, exposure_mode, preview_domain, ingress_class, node_host, last_deploy_session_id, last_cleanup_session_id, source_session_id, source_commit_sha)
-		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		INSERT INTO issue_test_environments (workspace_id, issue_id, cluster_id, environment_id, environment_kind, environment_snapshot, namespace, namespace_status, cleanup_status, preview_url, image_registry_prefix, kubeconfig_path, kube_context, exposure_mode, preview_domain, ingress_class, node_host, last_deploy_session_id, last_cleanup_session_id, source_session_id, source_commit_sha)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		ON CONFLICT (issue_id) DO UPDATE SET
 			workspace_id = EXCLUDED.workspace_id,
 			cluster_id = EXCLUDED.cluster_id,
+			environment_id = EXCLUDED.environment_id,
+			environment_kind = EXCLUDED.environment_kind,
+			environment_snapshot = EXCLUDED.environment_snapshot,
 			namespace = EXCLUDED.namespace,
 			namespace_status = EXCLUDED.namespace_status,
 			cleanup_status = EXCLUDED.cleanup_status,
@@ -2315,7 +2603,7 @@ func saveIssueTestEnvironmentRecord(ctx context.Context, q queryer, workspaceID 
 			source_session_id = EXCLUDED.source_session_id,
 			source_commit_sha = EXCLUDED.source_commit_sha,
 			updated_at = now()
-	`, workspaceID, environment.IssueID, environment.ClusterID, environment.Namespace, environment.NamespaceStatus, environment.CleanupStatus, environment.PreviewURL, environment.ImageRegistryPrefix, environment.KubeconfigPath, environment.KubeContext, environment.ExposureMode, environment.PreviewDomain, environment.IngressClass, environment.NodeHost, environment.LastDeploySessionID, environment.LastCleanupSessionID, environment.SourceSessionID, environment.SourceCommitSHA)
+	`, workspaceID, environment.IssueID, environment.ClusterID, environment.EnvironmentID, environment.EnvironmentKind, jsonOrObject(environment.EnvironmentSnapshot), environment.Namespace, environment.NamespaceStatus, environment.CleanupStatus, environment.PreviewURL, environment.ImageRegistryPrefix, environment.KubeconfigPath, environment.KubeContext, environment.ExposureMode, environment.PreviewDomain, environment.IngressClass, environment.NodeHost, environment.LastDeploySessionID, environment.LastCleanupSessionID, environment.SourceSessionID, environment.SourceCommitSHA)
 	return err
 }
 

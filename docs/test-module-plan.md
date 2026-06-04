@@ -22,9 +22,9 @@ Evidence makes the result inspectable and trustworthy.
 
 The updated workflow adds or clarifies these requirements:
 
-- A test plan can be associated with a formal versioned test cluster environment.
-- A test environment is more than a URL. It can include machine details, login method, cluster, component versions, branch, image, offline package, or commit.
-- One test cluster can connect to multiple Codex workers and multiple Chrome CDP services so different cases can run in parallel.
+- A test plan can select a reusable Environment and freeze that selection into a run snapshot.
+- An Environment is not a preview URL. In the current product vocabulary it is only a Kubernetes cluster target or a virtual machine target.
+- Workers are not owned by environments. Multiple workers may have the capabilities needed to operate the same environment, and task routing stays in the runtime worker queue.
 - Test plans support multiple rounds: full run, failed-case retry, blocked-case retry, incremental test, and self-test.
 - Some cases need mock data setup.
 - Test types include functional tests, UI tests, API tests, and deployment tests.
@@ -126,48 +126,38 @@ Proposal types include:
 
 The user accepts or dismisses these suggestions in the Case Suggestions review surface.
 
-### Test Environment
+### Environment And Run Snapshot
 
-A test environment is a key part of whether a plan can run. It should not be represented as only a URL.
+An environment is a key part of whether a plan can run. It should not be represented as a URL, and preview URLs should stay as outputs of a deploy/run.
 
 Use two layers:
 
 ```text
-Project Test Environment Template
-  -> long-lived project-level environment template
+Environment
+  -> long-lived workspace target, kind=kubernetes|virtual_machine
 
 Test Run Environment Snapshot
-  -> frozen environment state for one test run
+  -> frozen selection and resolved fields for one test run
 ```
 
-The environment template can include:
+The Environment can include:
 
-- cluster;
-- kubeconfig/context;
-- registry prefix;
-- preview domain;
-- ingress class;
-- node host;
-- runtime machine;
-- login method notes;
-- component update method;
-- mock data setup notes;
-- default worker capability requirements.
+- for Kubernetes: cluster id, kubeconfig path, context, registry prefix, exposure defaults, preview domain, ingress class, and NodePort host;
+- for virtual machines: SSH host, port, user, credential reference, workdir, service hints, and labels.
 
 The run snapshot should freeze:
 
-- cluster used by the plan;
-- namespace;
+- environment id and kind;
+- resolved Kubernetes or VM fields;
 - branch;
 - commit;
 - image;
 - offline package or version URL;
-- preview URL;
-- environment creation time;
-- linked Issue Test Environment;
-- current environment state.
+- environment record update time;
+- linked Issue Test Environment when the run creates or reuses one;
+- preview URL only when it is produced by an issue deploy or test run output.
 
-In the first phase, mspace can reuse the existing `clusters` and `issue_test_environments` surfaces. It should not introduce heavy environment orchestration yet. The "formal test cluster" concept can first appear as part of Test Plan and Test Run environment snapshots.
+In the first phase, mspace keeps Kubernetes clusters as compatibility records behind the Environment API and adds virtual machine environments as SSH target metadata. It should not introduce heavy environment orchestration yet. Test Plan and Test Run store `environment_id`, `environment_kind`, and `environment_snapshot`, while the existing free-text `environment` field remains human notes for the agent.
 
 ### Test Plan
 
@@ -179,7 +169,7 @@ Recommended fields:
 - title, for example `rc4 functional test plan`
 - target type: branch, commit, source session, image, offline package, version URL, or preview URL
 - target value
-- linked test environment
+- linked Environment
 - selected cases
 - case order and dependencies
 - current round
@@ -306,7 +296,7 @@ The plan needs:
 
 - title;
 - target: branch, commit, source session, image, offline package, version URL, or preview URL;
-- environment: existing Issue Test Environment, project default cluster, or a formal test cluster environment;
+- environment: selected Environment or an existing Issue Test Environment snapshot;
 - execution scope: full, failed retry, blocked retry, incremental, or custom;
 - whether parallel execution is allowed;
 - whether human acceptance is required.
@@ -456,7 +446,7 @@ This has a higher risk profile and needs strict permission boundaries. It should
 
 The updated draft says:
 
-> One plan is associated with a formal test cluster environment. Each test cluster maps to N Codex workers and N Chrome CDP services, and each Codex worker tests a different case.
+> One plan is associated with an Environment snapshot. Workers and browser services are separate executors that may be routed to that Environment by capability, and each worker can test a different case when concurrency rules allow it.
 
 This direction is right, but it should be implemented in layers.
 
@@ -476,7 +466,7 @@ Each Test Run Item declares the capabilities it needs. The server routes the tas
 
 ### Layer 2: Concurrency Limits
 
-Test Plan or Test Environment defines:
+Test Plan, Environment policy, or later scheduler policy defines:
 
 - max Codex concurrency;
 - max browser concurrency;
@@ -849,14 +839,14 @@ Acceptance:
 - failed items can be retried or turned into defect Issues;
 - human acceptance status is saved.
 
-### Phase 4: Formal Test Environment And Parallel Scheduling
+### Phase 4: Environment Scheduling And Parallel Execution
 
-Goal: let one formal test cluster environment host one plan while multiple workers execute in parallel.
+Goal: let one selected Environment host one plan while multiple decoupled workers execute in parallel under explicit concurrency rules.
 
 Scope:
 
-- test environment template;
-- test run environment snapshot;
+- reusable Environment policy;
+- test run Environment snapshot;
 - worker capability routing;
 - concurrency limits;
 - dependency ordering;
@@ -866,7 +856,7 @@ Scope:
 
 Acceptance:
 
-- a plan can bind to a formal test cluster;
+- a plan can bind to a reusable Environment;
 - a run freezes commit/image/environment information;
 - multiple Codex workers can claim different execution Issues in parallel;
 - dependent cases do not run out of order;

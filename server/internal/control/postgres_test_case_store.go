@@ -473,6 +473,9 @@ func (s *PostgresStore) CreateProjectTestPlan(ctx Context, userID, workspaceID, 
 	if err != nil {
 		return TestPlanDetail{}, err
 	}
+	if err := s.resolveTestPlanEnvironment(dbctx, workspaceID, &normalized); err != nil {
+		return TestPlanDetail{}, err
+	}
 	tx, err := s.pool.Begin(dbctx)
 	if err != nil {
 		return TestPlanDetail{}, err
@@ -529,6 +532,9 @@ func (s *PostgresStore) UpdateProjectTestPlan(ctx Context, userID, workspaceID, 
 	if err != nil {
 		return TestPlanDetail{}, err
 	}
+	if err := s.resolveTestPlanEnvironment(dbctx, workspaceID, &normalized); err != nil {
+		return TestPlanDetail{}, err
+	}
 	tx, err := s.pool.Begin(dbctx)
 	if err != nil {
 		return TestPlanDetail{}, err
@@ -575,6 +581,9 @@ func (s *PostgresStore) StartProjectTestRun(ctx Context, user User, workspaceID,
 	if normalized.RuntimeMode != workspace.Kind {
 		return TestRunDetail{}, ErrForbidden
 	}
+	if err := s.resolveTestRunEnvironment(dbctx, workspaceID, &normalized); err != nil {
+		return TestRunDetail{}, err
+	}
 	hasActiveWorker, err := s.hasActiveCodexWorker(dbctx, workspaceID, normalized.RuntimeMode)
 	if err != nil {
 		return TestRunDetail{}, err
@@ -613,6 +622,19 @@ func (s *PostgresStore) StartAdHocProjectTestRun(ctx Context, user User, workspa
 	if normalized.RuntimeMode != workspace.Kind {
 		return TestRunDetail{}, ErrForbidden
 	}
+	runInput := CreateTestRunInput{
+		TargetType:      normalized.TargetType,
+		TargetValue:     normalized.TargetValue,
+		Environment:     normalized.Environment,
+		EnvironmentID:   normalized.EnvironmentID,
+		EnvironmentKind: normalized.EnvironmentKind,
+		AgentProfile:    normalized.AgentProfile,
+		RuntimeMode:     normalized.RuntimeMode,
+		BatchSize:       normalized.BatchSize,
+	}
+	if err := s.resolveTestRunEnvironment(dbctx, workspaceID, &runInput); err != nil {
+		return TestRunDetail{}, err
+	}
 	hasActiveWorker, err := s.hasActiveCodexWorker(dbctx, workspaceID, normalized.RuntimeMode)
 	if err != nil {
 		return TestRunDetail{}, err
@@ -623,14 +645,6 @@ func (s *PostgresStore) StartAdHocProjectTestRun(ctx Context, user User, workspa
 	cases, err := listReadyProjectTestCaseSnapshots(dbctx, s.pool, workspaceID, projectID, normalized.CaseIDs)
 	if err != nil {
 		return TestRunDetail{}, err
-	}
-	runInput := CreateTestRunInput{
-		TargetType:   normalized.TargetType,
-		TargetValue:  normalized.TargetValue,
-		Environment:  normalized.Environment,
-		AgentProfile: normalized.AgentProfile,
-		RuntimeMode:  normalized.RuntimeMode,
-		BatchSize:    normalized.BatchSize,
 	}
 	return s.startPostgresProjectTestRun(ctx, user, workspace, nil, cases, runInput)
 }
@@ -651,18 +665,21 @@ func (s *PostgresStore) startPostgresProjectTestRun(ctx Context, user User, work
 		return TestRunDetail{}, err
 	}
 	run := TestRun{
-		ID:               runID,
-		WorkspaceID:      workspace.ID,
-		ProjectID:        planCases[0].ProjectID,
-		PlanID:           planID,
-		Source:           runSource,
-		Status:           "running",
-		TargetType:       normalized.TargetType,
-		TargetValue:      normalized.TargetValue,
-		Environment:      normalized.Environment,
-		TotalCount:       len(planCases),
-		AcceptanceStatus: "pending",
-		CreatedByUserID:  user.ID,
+		ID:                  runID,
+		WorkspaceID:         workspace.ID,
+		ProjectID:           planCases[0].ProjectID,
+		PlanID:              planID,
+		Source:              runSource,
+		Status:              "running",
+		TargetType:          normalized.TargetType,
+		TargetValue:         normalized.TargetValue,
+		Environment:         normalized.Environment,
+		EnvironmentID:       normalized.EnvironmentID,
+		EnvironmentKind:     normalized.EnvironmentKind,
+		EnvironmentSnapshot: cloneRawJSONObject(normalized.EnvironmentSnapshot),
+		TotalCount:          len(planCases),
+		AcceptanceStatus:    "pending",
+		CreatedByUserID:     user.ID,
 	}
 	parentIssueID, err := s.CreateIssue(ctx, user, workspace.ID, CreateIssueInput{
 		ProjectID: run.ProjectID,
@@ -1360,6 +1377,9 @@ func testPlanSelectQuery(whereClause string) string {
 			p.target_type,
 			p.target_value,
 			p.environment,
+			p.environment_id,
+			p.environment_kind,
+			p.environment_snapshot,
 			(
 				SELECT count(*)
 				FROM test_plan_cases pc
@@ -1374,6 +1394,7 @@ func testPlanSelectQuery(whereClause string) string {
 
 func scanTestPlan(row scanner) (TestPlan, error) {
 	var plan TestPlan
+	var snapshotBytes []byte
 	var createdAt, updatedAt time.Time
 	if err := row.Scan(
 		&plan.ID,
@@ -1385,6 +1406,9 @@ func scanTestPlan(row scanner) (TestPlan, error) {
 		&plan.TargetType,
 		&plan.TargetValue,
 		&plan.Environment,
+		&plan.EnvironmentID,
+		&plan.EnvironmentKind,
+		&snapshotBytes,
 		&plan.CaseCount,
 		&plan.CreatedByUserID,
 		&createdAt,
@@ -1392,6 +1416,7 @@ func scanTestPlan(row scanner) (TestPlan, error) {
 	); err != nil {
 		return TestPlan{}, err
 	}
+	plan.EnvironmentSnapshot = copyRawMessage(json.RawMessage(snapshotBytes))
 	plan.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	plan.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 	return plan, nil
@@ -1408,13 +1433,61 @@ func loadTestPlan(ctx context.Context, q queryer, workspaceID, projectID, planID
 	return plan, err
 }
 
+func (s *PostgresStore) resolveTestPlanEnvironment(ctx context.Context, workspaceID string, input *TestPlanInput) error {
+	if input == nil || strings.TrimSpace(input.EnvironmentID) == "" {
+		if input != nil {
+			input.EnvironmentKind = ""
+			input.EnvironmentSnapshot = json.RawMessage(`{}`)
+		}
+		return nil
+	}
+	environment, err := s.loadEnvironment(ctx, workspaceID, input.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	if input.EnvironmentKind != "" && input.EnvironmentKind != environment.Kind {
+		return errors.New("environmentKind does not match selected environment")
+	}
+	input.EnvironmentID = environment.ID
+	input.EnvironmentKind = environment.Kind
+	input.EnvironmentSnapshot = environmentSnapshot(environment)
+	if strings.TrimSpace(input.Environment) == "" {
+		input.Environment = environment.Name
+	}
+	return nil
+}
+
+func (s *PostgresStore) resolveTestRunEnvironment(ctx context.Context, workspaceID string, input *CreateTestRunInput) error {
+	if input == nil || strings.TrimSpace(input.EnvironmentID) == "" {
+		if input != nil {
+			input.EnvironmentKind = ""
+			input.EnvironmentSnapshot = json.RawMessage(`{}`)
+		}
+		return nil
+	}
+	environment, err := s.loadEnvironment(ctx, workspaceID, input.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	if input.EnvironmentKind != "" && input.EnvironmentKind != environment.Kind {
+		return errors.New("environmentKind does not match selected environment")
+	}
+	input.EnvironmentID = environment.ID
+	input.EnvironmentKind = environment.Kind
+	input.EnvironmentSnapshot = environmentSnapshot(environment)
+	if strings.TrimSpace(input.Environment) == "" {
+		input.Environment = environment.Name
+	}
+	return nil
+}
+
 func insertTestPlanRecord(ctx context.Context, q queryer, workspaceID, projectID, userID string, input TestPlanInput) (TestPlan, error) {
 	var planID string
 	if err := q.QueryRow(ctx, `
-		INSERT INTO test_plans (workspace_id, project_id, title, description, status, target_type, target_value, environment, created_by_user_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, '')::uuid)
+		INSERT INTO test_plans (workspace_id, project_id, title, description, status, target_type, target_value, environment, environment_id, environment_kind, environment_snapshot, created_by_user_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, NULLIF($12, '')::uuid)
 		RETURNING id::text
-	`, workspaceID, projectID, input.Title, input.Description, input.Status, input.TargetType, input.TargetValue, input.Environment, userID).Scan(&planID); err != nil {
+	`, workspaceID, projectID, input.Title, input.Description, input.Status, input.TargetType, input.TargetValue, input.Environment, input.EnvironmentID, input.EnvironmentKind, jsonOrObject(input.EnvironmentSnapshot), userID).Scan(&planID); err != nil {
 		return TestPlan{}, err
 	}
 	return loadTestPlan(ctx, q, workspaceID, projectID, planID)
@@ -1429,9 +1502,12 @@ func updateTestPlanRecord(ctx context.Context, q queryer, workspaceID, projectID
 			target_type = $7,
 			target_value = $8,
 			environment = $9,
+			environment_id = $10,
+			environment_kind = $11,
+			environment_snapshot = $12::jsonb,
 			updated_at = now()
 		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
-	`, workspaceID, projectID, planID, input.Title, input.Description, input.Status, input.TargetType, input.TargetValue, input.Environment)
+	`, workspaceID, projectID, planID, input.Title, input.Description, input.Status, input.TargetType, input.TargetValue, input.Environment, input.EnvironmentID, input.EnvironmentKind, jsonOrObject(input.EnvironmentSnapshot))
 	if err != nil {
 		return TestPlan{}, err
 	}
@@ -1614,6 +1690,9 @@ func testRunSelectColumnsForAlias(alias string) string {
 			` + alias + `.target_type,
 			` + alias + `.target_value,
 			` + alias + `.environment,
+			` + alias + `.environment_id,
+			` + alias + `.environment_kind,
+			` + alias + `.environment_snapshot,
 			` + alias + `.total_count,
 			` + alias + `.passed_count,
 			` + alias + `.failed_count,
@@ -1631,6 +1710,7 @@ func testRunSelectColumnsForAlias(alias string) string {
 
 func scanTestRun(row scanner) (TestRun, error) {
 	var run TestRun
+	var snapshotBytes []byte
 	var completedAt, acceptedAt sql.NullTime
 	var createdAt, updatedAt time.Time
 	if err := row.Scan(
@@ -1644,6 +1724,9 @@ func scanTestRun(row scanner) (TestRun, error) {
 		&run.TargetType,
 		&run.TargetValue,
 		&run.Environment,
+		&run.EnvironmentID,
+		&run.EnvironmentKind,
+		&snapshotBytes,
 		&run.TotalCount,
 		&run.PassedCount,
 		&run.FailedCount,
@@ -1660,6 +1743,7 @@ func scanTestRun(row scanner) (TestRun, error) {
 	); err != nil {
 		return TestRun{}, err
 	}
+	run.EnvironmentSnapshot = copyRawMessage(json.RawMessage(snapshotBytes))
 	if completedAt.Valid {
 		run.CompletedAt = completedAt.Time.UTC().Format(time.RFC3339)
 	}
@@ -1696,13 +1780,16 @@ func insertTestRunRecord(ctx context.Context, q queryer, run TestRun, parentIssu
 			target_type,
 			target_value,
 			environment,
+			environment_id,
+			environment_kind,
+			environment_snapshot,
 			total_count,
 			acceptance_status,
 			created_by_user_id
 		)
-		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, NULLIF($4, '')::uuid, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, NULLIF($13, '')::uuid)
+		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, NULLIF($4, '')::uuid, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, NULLIF($16, '')::uuid)
 		RETURNING id::text
-	`, run.ID, run.WorkspaceID, run.ProjectID, run.PlanID, firstNonEmpty(run.Source, "ad_hoc"), parentIssueID, run.Status, run.TargetType, run.TargetValue, run.Environment, run.TotalCount, run.AcceptanceStatus, run.CreatedByUserID).Scan(&runID); err != nil {
+	`, run.ID, run.WorkspaceID, run.ProjectID, run.PlanID, firstNonEmpty(run.Source, "ad_hoc"), parentIssueID, run.Status, run.TargetType, run.TargetValue, run.Environment, run.EnvironmentID, run.EnvironmentKind, jsonOrObject(run.EnvironmentSnapshot), run.TotalCount, run.AcceptanceStatus, run.CreatedByUserID).Scan(&runID); err != nil {
 		return TestRun{}, err
 	}
 	return loadTestRun(ctx, q, run.WorkspaceID, run.ProjectID, runID)

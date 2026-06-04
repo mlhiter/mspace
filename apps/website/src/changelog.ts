@@ -7,6 +7,19 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-06-04",
+    title: "Environments for Kubernetes and VM targets",
+    summary:
+      "mspace evolved the Clusters module into Environments so test and deployment work can target Kubernetes clusters or SSH-managed virtual machines.",
+    items: [
+      "Added workspace Environment APIs and UI navigation while keeping the old Kubernetes cluster APIs as compatibility records.",
+      "Made Kubernetes environments project from kubeconfig-backed cluster records and added virtual machine environments with SSH host, user, port, workdir, service hint, labels, and credential references.",
+      "Let test plans and test runs select an Environment and freeze environment id, kind, and snapshot at creation time so historical runs keep their target context.",
+      "Kept workers decoupled from environments: workers claim runtime tasks, then operate the selected target through Kubernetes, SSH, or future provider-specific access.",
+      "Kept issue deploy, cleanup, Resources, and preview probing Kubernetes-only for this slice, rejecting VM environments instead of pretending namespace workflows can run there.",
+    ],
+  },
+  {
     date: "2026-06-03",
     title: "Direct selected-case test runs",
     summary:
@@ -80,12 +93,12 @@ export const changelog: ChangelogEntry[] = [
   },
   {
     date: "2026-05-27",
-    title: "Worker environment install flow",
+    title: "Worker host install flow",
     summary:
-      "mspace moved team worker setup from manual credential handling to a self-host install command that connects the target environment to the server queue.",
+      "mspace moved team worker setup from manual credential handling to a self-host install command that connects a worker host to the server queue.",
     items: [
       "Added a server endpoint that creates a short-lived worker install command for workspace owners and admins.",
-      "Added a `/install/worker` script route that starts the Docker-backed Codex worker on the target environment.",
+      "Added a `/install/worker` script route that starts the Docker-backed Codex worker on the target host.",
       "Changed Workspace Settings to lead with `Connect environment` instead of manual token creation.",
       "Added team workspace identity editing from Workspace Settings for owners and admins, covering name, selectable mark, and description.",
       "Kept worker credential rows as audit history while hiding raw bootstrap credentials from the normal product path.",

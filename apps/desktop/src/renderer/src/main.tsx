@@ -1106,6 +1106,12 @@ const clustersRoute = createRoute({
   component: ClustersPage,
 });
 
+const environmentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/environments",
+  component: ClustersPage,
+});
+
 const projectsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/projects",
@@ -1143,6 +1149,7 @@ const routeTree = rootRoute.addChildren([
   issueEvidenceHistoryRoute,
   issueDetailRoute,
   agentsRoute,
+  environmentsRoute,
   clustersRoute,
   projectsRoute,
   workspaceSettingsRoute,

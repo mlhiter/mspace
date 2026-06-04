@@ -1,6 +1,6 @@
 # mspace Product Value Thesis
 
-> Status: value thesis from product discussion, updated 2026-05-10
+> Status: value thesis from product discussion, updated 2026-06-04
 
 ## Core Judgment
 
@@ -11,7 +11,8 @@ Issue
   -> Agent session
   -> Code changes
   -> Review evidence
-  -> Issue-scoped Kubernetes test environment
+  -> Selected Environment
+  -> Issue-scoped Kubernetes test environment when applicable
   -> Preview URL
   -> Branch or PR
   -> Cleanup or retain decision
@@ -32,7 +33,7 @@ Codex can already handle much of the raw work:
 - run commands;
 - debug failures;
 - build an image;
-- deploy to a test cluster when the user provides access;
+- deploy to a test Environment when the user provides access;
 - summarize what changed.
 
 That makes a thin wrapper around Codex a weak product. A thin wrapper would add little more than a different UI for a workflow that already works from the terminal.
@@ -43,7 +44,7 @@ mspace earns its place when it owns the state that sits around the agent run:
 - the comments, decisions, and follow-up tasks around that issue;
 - the agent session attached to the issue;
 - the worktree, branch, commits, and diff;
-- the selected test cluster and issue namespace;
+- the selected Environment, plus issue namespace for Kubernetes deploys;
 - the preview URL the team can open;
 - the commands, test results, deployment resources, logs, events, and risks;
 - the cleanup or retain decision after review.
@@ -52,7 +53,7 @@ This state is difficult to reconstruct from terminal history, chat logs, and ad 
 
 ## Product Position
 
-mspace should be positioned as a Kubernetes-native issue workspace for coding agents.
+mspace should be positioned as an Environment-backed issue workspace for coding agents, with Kubernetes as the default validation target and VM targets for higher-level deployment tests.
 
 It should not be framed as a generic agent platform, a generic task manager, a Sealos API wrapper, or a replacement for Codex. Its strongest wedge is narrower:
 
@@ -60,7 +61,8 @@ It should not be framed as a generic agent platform, a generic task manager, a S
 coding agent
   + project repository
   + durable issue
-  + isolated Kubernetes namespace
+  + selected Kubernetes or VM environment
+  + isolated Kubernetes namespace when applicable
   + preview URL
   + runtime evidence
 ```
@@ -72,7 +74,7 @@ Multica and OpenAI Symphony are useful references, but mspace should not copy th
 mspace is strongest for teams that already have three habits:
 
 - they use coding agents for real project work;
-- they rely on shared Kubernetes test environments;
+- they rely on shared Kubernetes or VM-based test environments;
 - they need more than a local diff before they trust a change.
 
 This includes platform teams, infra-heavy product teams, and Sealos-like teams where repositories, runtime environments, registries, namespaces, preview URLs, and cleanup policies already matter.
@@ -87,7 +89,8 @@ The value unit is not an agent task. It is a complete issue work record:
 Issue
 + Agent session
 + Worktree or branch
-+ Kubernetes namespace
++ selected Environment
++ Kubernetes namespace when applicable
 + Preview URL
 + Review evidence
 + Cleanup decision
@@ -97,7 +100,7 @@ Each part matters:
 
 - Without the issue, mspace becomes an agent runner.
 - Without the agent session, mspace becomes a project tracker.
-- Without the namespace and preview URL, mspace becomes a Codex wrapper with notes.
+- Without the selected environment, namespace or VM target, and preview/evidence output, mspace becomes a Codex wrapper with notes.
 - Without review evidence, mspace forces users back into logs and terminals.
 - Without cleanup state, mspace leaves test environments as operational debt.
 
@@ -106,7 +109,7 @@ The issue page should let a teammate answer these questions without asking the o
 - What was the problem?
 - What did the agent change?
 - Which commands and tests ran?
-- Where is the deployed test environment?
+- Which Environment was used, and where is the deployed test output?
 - What Kubernetes resources were created?
 - Did mspace confirm the preview URL opened?
 - What risks or follow-ups remain?
@@ -118,7 +121,7 @@ Kubernetes is not decorative infrastructure in mspace. It is the validation boun
 
 The user can already give Codex a kubeconfig and ask it to deploy. mspace should turn that manual habit into a product loop:
 
-1. The user selects or inherits a project test cluster.
+1. The user selects or inherits a project Environment. In the current issue deploy path, that Environment must be Kubernetes.
 2. mspace reserves an issue namespace.
 3. The agent builds and pushes the required image.
 4. The agent deploys the changed project into the namespace.

@@ -1740,6 +1740,197 @@ func TestProjectTestCasesAreProjectScoped(t *testing.T) {
 	}
 }
 
+func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "environment-vm-user",
+		Login:          "environment-vm-user",
+		Name:           "Environment VM User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createRecorder := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/environments", strings.NewReader(`{
+		"name":"staging-vm",
+		"kind":"virtual_machine",
+		"sshHost":"10.0.0.12",
+		"sshPort":2222,
+		"sshUser":"ubuntu",
+		"sshAuthRef":"secret://mspace/staging-vm",
+		"workdir":"/srv/app",
+		"serviceHint":"systemd:mspace"
+	}`))
+	createReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createRecorder, createReq)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create vm environment status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created Environment
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("parse vm environment: %v", err)
+	}
+	if created.Kind != environmentKindVirtualMachine || created.VirtualMachine == nil || created.VirtualMachine.SSHHost != "10.0.0.12" || created.VirtualMachine.SSHPort != 2222 {
+		t.Fatalf("unexpected vm environment: %+v", created)
+	}
+
+	updateRecorder := httptest.NewRecorder()
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/environments/"+created.ID, strings.NewReader(`{
+		"name":"staging-vm-renamed",
+		"kind":"virtual_machine",
+		"sshHost":"10.0.0.13",
+		"sshUser":"ubuntu"
+	}`))
+	updateReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(updateRecorder, updateReq)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("update vm environment status=%d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	var updated Environment
+	if err := json.Unmarshal(updateRecorder.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("parse updated vm environment: %v", err)
+	}
+	if updated.Name != "staging-vm-renamed" || updated.VirtualMachine == nil || updated.VirtualMachine.SSHHost != "10.0.0.13" || updated.VirtualMachine.SSHPort != 2222 {
+		t.Fatalf("unexpected updated vm environment: %+v", updated)
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/environments", nil)
+	listReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(listRecorder, listReq)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list environments status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var environments []Environment
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &environments); err != nil {
+		t.Fatalf("parse environments: %v", err)
+	}
+	if len(environments) != 1 || environments[0].ID != created.ID || environments[0].Kind != environmentKindVirtualMachine {
+		t.Fatalf("expected vm environment in list, got %+v", environments)
+	}
+
+	deleteRecorder := httptest.NewRecorder()
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/workspaces/"+workspaceID+"/environments/"+created.ID, nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(deleteRecorder, deleteReq)
+	if deleteRecorder.Code != http.StatusOK {
+		t.Fatalf("delete vm environment status=%d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+}
+
+func TestTestPlansFreezeEnvironmentSnapshotsAndProtectReferences(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "environment-plan-user",
+		Login:          "environment-plan-user",
+		Name:           "Environment Plan User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "environment-plan-project")
+	testCase := createProjectTestCaseViaHTTP(t, router, sessionToken, workspaceID, project.ID, `{
+		"title":"Environment-bound smoke",
+		"status":"ready",
+		"steps":[{"action":"Run smoke"}],
+		"expectedResult":"Smoke passes."
+	}`)
+	environment, err := store.CreateEnvironment(context.Background(), user.ID, workspaceID, EnvironmentInput{
+		Name:       "plan-vm",
+		Kind:       environmentKindVirtualMachine,
+		SSHHost:    "10.0.0.20",
+		SSHPort:    22,
+		SSHUser:    "ubuntu",
+		SSHAuthRef: "secret://mspace/plan-vm",
+	})
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	plan, err := store.CreateProjectTestPlan(context.Background(), user.ID, workspaceID, project.ID, TestPlanInput{
+		Title:         "VM plan",
+		Status:        "ready",
+		TargetType:    "branch",
+		TargetValue:   "main",
+		EnvironmentID: environment.ID,
+		CaseIDs:       []string{testCase.ID},
+	})
+	if err != nil {
+		t.Fatalf("create plan: %v", err)
+	}
+	if plan.Plan.EnvironmentID != environment.ID || plan.Plan.EnvironmentKind != environmentKindVirtualMachine || !strings.Contains(string(plan.Plan.EnvironmentSnapshot), "plan-vm") {
+		t.Fatalf("expected plan environment snapshot, got %+v snapshot=%s", plan.Plan, string(plan.Plan.EnvironmentSnapshot))
+	}
+	if err := store.DeleteEnvironment(context.Background(), user.ID, workspaceID, environment.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("referenced environment should be protected, got %v", err)
+	}
+}
+
+func TestIssueTestDeployRejectsVirtualMachineEnvironment(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "environment-vm-deploy-user",
+		Login:          "environment-vm-deploy-user",
+		Name:           "Environment VM Deploy User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "vm-deploy-project")
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Body:      "Try to deploy against a VM environment.",
+	})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	environment, err := store.CreateEnvironment(context.Background(), user.ID, workspaceID, EnvironmentInput{
+		Name:    "deploy-vm",
+		Kind:    environmentKindVirtualMachine,
+		SSHHost: "10.0.0.21",
+		SSHUser: "ubuntu",
+	})
+	if err != nil {
+		t.Fatalf("create vm environment: %v", err)
+	}
+	registerTestRuntimeWorker(t, router, sessionToken, workspaceID)
+
+	deployRecorder := httptest.NewRecorder()
+	deployReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/test-deploy", strings.NewReader(`{
+		"environmentId":"`+environment.ID+`",
+		"sourceCommitSha":"5555555555555555555555555555555555555555"
+	}`))
+	deployReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(deployRecorder, deployReq)
+	if deployRecorder.Code != http.StatusBadRequest || !strings.Contains(deployRecorder.Body.String(), "requires a Kubernetes environment") {
+		t.Fatalf("expected vm deploy bad request, status=%d body=%s", deployRecorder.Code, deployRecorder.Body.String())
+	}
+}
+
 func TestProjectTestCaseAgentActionsRequireWorkerBeforeCreatingIssues(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{

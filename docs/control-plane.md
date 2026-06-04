@@ -1,6 +1,6 @@
 # mspace Control Plane
 
-> Status: server-owned runtime and test-module surfaces, updated 2026-06-03
+> Status: server-owned runtime and test-module surfaces, updated 2026-06-04
 
 ## Decision
 
@@ -18,7 +18,7 @@ The control plane owns:
 - GitHub identity links;
 - future GitHub App installation state;
 - workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts;
-- workspace settings, agent profiles, reusable clusters, issue test environments, issue handoffs, review/failure/source records;
+- workspace settings, agent profiles, reusable Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review/failure/source records;
 - audit and collaboration sync;
 - runtime registration tokens;
 - runtime worker identity, liveness, and capability snapshots;
@@ -103,7 +103,7 @@ The server module provides:
 - issue labels, issues, child tasks, comments, comment edits, and comment reactions;
 - workspace settings;
 - workspace agent profiles;
-- cluster configs and kubeconfig discovery/import;
+- Environment APIs plus Kubernetes cluster compatibility APIs and kubeconfig discovery/import;
 - issue test deployment, cleanup, retain, preview probe, and namespace resources;
 - issue PR handoff create/refresh records;
 - session creation/cancellation/detail derived from server runtime tasks;
@@ -113,7 +113,7 @@ The server module provides:
 - a server-owned SQLite personal store selected by `MSPACE_STORE=sqlite` or by omitting `DATABASE_URL`;
 - memory-backed store used only by tests.
 
-Workspaces have an explicit `kind`: `personal` or `team`. The first password registration or GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in the server store. Team/customer/shared deployments use Postgres. Packaged personal desktop mode can use the local SQLite store under the Electron user-data path. Team collaboration is opt-in: server admins create team workspaces through `POST /api/workspaces`, and invitation/member APIs reject personal workspaces.
+Workspaces have an explicit `kind`: `personal` or `team`. The first password registration or GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in the server store. Team/customer/shared deployments use Postgres. Packaged personal desktop mode can use the local SQLite store under the Electron user-data path. Team collaboration is opt-in: server admins create team workspaces through `POST /api/workspaces`, and invitation/member APIs reject personal workspaces.
 
 The desktop requires an mspace session before product data is available. For agent mentions, Issue Detail first verifies a matching active Codex worker; personal desktop mode may start the host-local personal worker, while team workspaces require an explicitly registered team worker. Only after that preflight does the renderer write the server comment and call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`. The server repeats the worker-liveness check and returns HTTP `409` with `no active codex worker` if the task cannot be claimed, so unsupported `@codex` comments do not sit in the queue waiting for a worker that is not there.
 
@@ -123,7 +123,7 @@ The test module follows the same ownership rule. Canonical cases, revisions, sug
 
 ## Runtime Registry
 
-The registry supports both fixed Server Worker deployments and later Kubernetes Runtime Providers without splitting the issue/session model.
+The registry supports both fixed Server Worker deployments and later Kubernetes Runtime Providers without splitting the issue/session model. Workers are registered executors; Environments are operated targets. A worker may use Kubernetes, SSH, or a future provider-specific access path to operate the selected Environment, but worker identity and environment identity are intentionally not the same record.
 
 ```text
 Workspace owner/admin
@@ -157,7 +157,11 @@ Real Codex worker sessions should prefer non-interactive validation and must not
 
 Test cases are project-scoped and can be typed as `functional`, `ui`, `api`, or `deployment`. The current product records those types and can plan against them; specialized UI/CDP, API harness, deployment orchestration, multi-worker scheduling, and formal environment templates are later execution layers behind the same runtime task protocol.
 
-Cluster configs live in server `clusters`. One issue can have one `issue_test_environments` row. Test deployment is queued through the same agent-session/runtime-task protocol as normal coding turns, with resolved cluster, namespace, source commit, registry, and exposure settings in the payload.
+Environments are the product target records and are limited to `kubernetes` and `virtual_machine`. Kubernetes environments are currently projected from server `clusters` compatibility records so old cluster APIs and deployment code keep working while the product vocabulary moves forward. Virtual machine environments live in the new Environment store with SSH host/user/port, credential reference, working directory, service hint, and labels. The store must never treat preview URLs as Environments; preview URLs are outputs from deploy/test or run evidence.
+
+Test plans and test runs can select an Environment. The server resolves that selection at create/run time and freezes `environment_id`, `environment_kind`, and `environment_snapshot` so historical plans/runs keep the target context even if the Environment record is edited later. The existing free-text `environment` field remains human-readable notes for the agent, not the structured target.
+
+One issue can have one `issue_test_environments` row. It stores the selected Environment id/kind/snapshot plus Kubernetes compatibility fields such as cluster id, namespace, source commit, registry, and exposure settings. Current issue deploy, cleanup, Resources, and preview probing are Kubernetes-only; if a VM Environment is selected for issue deploy, the server should reject the request until a VM-specific deploy provider exists.
 
 Manual deploy/test remains available from Issue Detail. Workspace owners/admins can also enable `autoDeployTestEnvironment` in Workspace Settings. When enabled, the server watches completed non-dry-run source sessions; if the task produced a source commit, is not itself a deploy/test task, the issue has an attached project, deploy settings can be resolved, no other agent session is active for the issue, and a matching active Codex worker is online, the server queues one automated deploy/test `agent_session` for that exact source commit. Skips are either silent when the issue is not deployable or recorded as a compact system comment when the user needs to reconnect a worker or fix deploy settings.
 
@@ -167,4 +171,4 @@ PR handoff records live in server `issue_handoffs`. The current implementation r
 
 ## Migration Rule
 
-New features should land in `server/` first. If a feature involves users, membership, shared issue ownership, GitHub identity, GitHub App installation credentials, audit, runtime state, tests, clusters, test environments, handoffs, evidence, or cross-device sync, do not add it to a local sidecar store. Update the server store contract and Postgres migrations; the SQLite personal store should remain a local packaged mode, not a separate product model.
+New features should land in `server/` first. If a feature involves users, membership, shared issue ownership, GitHub identity, GitHub App installation credentials, audit, runtime state, tests, environments, Kubernetes compatibility records, test environments, handoffs, evidence, or cross-device sync, do not add it to a local sidecar store. Update the server store contract and Postgres migrations; the SQLite personal store should remain a local packaged mode, not a separate product model.

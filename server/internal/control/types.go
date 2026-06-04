@@ -222,6 +222,7 @@ type Project struct {
 	IngressClass           string `json:"ingressClass"`
 	NodeHost               string `json:"nodeHost"`
 	DefaultClusterID       string `json:"defaultClusterId"`
+	DefaultEnvironmentID   string `json:"defaultEnvironmentId"`
 	RunbookStatus          string `json:"runbookStatus"`
 	RunbookUpdatedAt       string `json:"runbookUpdatedAt"`
 	RunbookSource          string `json:"runbookSource"`
@@ -245,19 +246,20 @@ type ProjectRunbook struct {
 }
 
 type ProjectInput struct {
-	Name                string `json:"name"`
-	SourceType          string `json:"sourceType"`
-	RepoPath            string `json:"repoPath"`
-	RepoURL             string `json:"repoUrl"`
-	DefaultBranch       string `json:"defaultBranch"`
-	KubeContext         string `json:"kubeContext"`
-	KubeconfigPath      string `json:"kubeconfigPath"`
-	Namespace           string `json:"namespace"`
-	ImageRegistryPrefix string `json:"imageRegistryPrefix"`
-	PreviewDomain       string `json:"previewDomain"`
-	IngressClass        string `json:"ingressClass"`
-	NodeHost            string `json:"nodeHost"`
-	DefaultClusterID    string `json:"defaultClusterId"`
+	Name                 string `json:"name"`
+	SourceType           string `json:"sourceType"`
+	RepoPath             string `json:"repoPath"`
+	RepoURL              string `json:"repoUrl"`
+	DefaultBranch        string `json:"defaultBranch"`
+	KubeContext          string `json:"kubeContext"`
+	KubeconfigPath       string `json:"kubeconfigPath"`
+	Namespace            string `json:"namespace"`
+	ImageRegistryPrefix  string `json:"imageRegistryPrefix"`
+	PreviewDomain        string `json:"previewDomain"`
+	IngressClass         string `json:"ingressClass"`
+	NodeHost             string `json:"nodeHost"`
+	DefaultClusterID     string `json:"defaultClusterId"`
+	DefaultEnvironmentID string `json:"defaultEnvironmentId"`
 }
 
 type UpdateProjectInput struct {
@@ -440,19 +442,22 @@ type ApplyTestCaseProposalResult struct {
 }
 
 type TestPlan struct {
-	ID              string `json:"id"`
-	WorkspaceID     string `json:"workspaceId"`
-	ProjectID       string `json:"projectId"`
-	Title           string `json:"title"`
-	Description     string `json:"description"`
-	Status          string `json:"status"`
-	TargetType      string `json:"targetType"`
-	TargetValue     string `json:"targetValue"`
-	Environment     string `json:"environment"`
-	CaseCount       int    `json:"caseCount"`
-	CreatedByUserID string `json:"createdByUserId"`
-	CreatedAt       string `json:"createdAt"`
-	UpdatedAt       string `json:"updatedAt"`
+	ID                  string          `json:"id"`
+	WorkspaceID         string          `json:"workspaceId"`
+	ProjectID           string          `json:"projectId"`
+	Title               string          `json:"title"`
+	Description         string          `json:"description"`
+	Status              string          `json:"status"`
+	TargetType          string          `json:"targetType"`
+	TargetValue         string          `json:"targetValue"`
+	Environment         string          `json:"environment"`
+	EnvironmentID       string          `json:"environmentId"`
+	EnvironmentKind     string          `json:"environmentKind"`
+	EnvironmentSnapshot json.RawMessage `json:"environmentSnapshot,omitempty"`
+	CaseCount           int             `json:"caseCount"`
+	CreatedByUserID     string          `json:"createdByUserId"`
+	CreatedAt           string          `json:"createdAt"`
+	UpdatedAt           string          `json:"updatedAt"`
 }
 
 type TestPlanCase struct {
@@ -472,13 +477,16 @@ type TestPlanDetail struct {
 }
 
 type TestPlanInput struct {
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Status      string   `json:"status"`
-	TargetType  string   `json:"targetType"`
-	TargetValue string   `json:"targetValue"`
-	Environment string   `json:"environment"`
-	CaseIDs     []string `json:"caseIds"`
+	Title               string          `json:"title"`
+	Description         string          `json:"description"`
+	Status              string          `json:"status"`
+	TargetType          string          `json:"targetType"`
+	TargetValue         string          `json:"targetValue"`
+	Environment         string          `json:"environment"`
+	EnvironmentID       string          `json:"environmentId"`
+	EnvironmentKind     string          `json:"environmentKind"`
+	EnvironmentSnapshot json.RawMessage `json:"environmentSnapshot,omitempty"`
+	CaseIDs             []string        `json:"caseIds"`
 }
 
 type TestPlanListOptions struct {
@@ -496,29 +504,32 @@ type TestCaseRunItem struct {
 }
 
 type TestRun struct {
-	ID               string `json:"id"`
-	WorkspaceID      string `json:"workspaceId"`
-	ProjectID        string `json:"projectId"`
-	PlanID           string `json:"planId"`
-	Source           string `json:"source"`
-	ParentIssueID    string `json:"parentIssueId"`
-	Status           string `json:"status"`
-	TargetType       string `json:"targetType"`
-	TargetValue      string `json:"targetValue"`
-	Environment      string `json:"environment"`
-	TotalCount       int    `json:"totalCount"`
-	PassedCount      int    `json:"passedCount"`
-	FailedCount      int    `json:"failedCount"`
-	BlockedCount     int    `json:"blockedCount"`
-	SkippedCount     int    `json:"skippedCount"`
-	AcceptanceStatus string `json:"acceptanceStatus"`
-	AcceptanceNote   string `json:"acceptanceNote"`
-	CreatedByUserID  string `json:"createdByUserId"`
-	AcceptedByUserID string `json:"acceptedByUserId"`
-	CompletedAt      string `json:"completedAt"`
-	AcceptedAt       string `json:"acceptedAt"`
-	CreatedAt        string `json:"createdAt"`
-	UpdatedAt        string `json:"updatedAt"`
+	ID                  string          `json:"id"`
+	WorkspaceID         string          `json:"workspaceId"`
+	ProjectID           string          `json:"projectId"`
+	PlanID              string          `json:"planId"`
+	Source              string          `json:"source"`
+	ParentIssueID       string          `json:"parentIssueId"`
+	Status              string          `json:"status"`
+	TargetType          string          `json:"targetType"`
+	TargetValue         string          `json:"targetValue"`
+	Environment         string          `json:"environment"`
+	EnvironmentID       string          `json:"environmentId"`
+	EnvironmentKind     string          `json:"environmentKind"`
+	EnvironmentSnapshot json.RawMessage `json:"environmentSnapshot,omitempty"`
+	TotalCount          int             `json:"totalCount"`
+	PassedCount         int             `json:"passedCount"`
+	FailedCount         int             `json:"failedCount"`
+	BlockedCount        int             `json:"blockedCount"`
+	SkippedCount        int             `json:"skippedCount"`
+	AcceptanceStatus    string          `json:"acceptanceStatus"`
+	AcceptanceNote      string          `json:"acceptanceNote"`
+	CreatedByUserID     string          `json:"createdByUserId"`
+	AcceptedByUserID    string          `json:"acceptedByUserId"`
+	CompletedAt         string          `json:"completedAt"`
+	AcceptedAt          string          `json:"acceptedAt"`
+	CreatedAt           string          `json:"createdAt"`
+	UpdatedAt           string          `json:"updatedAt"`
 }
 
 type TestRunItem struct {
@@ -599,22 +610,27 @@ type TestRunDetail struct {
 }
 
 type CreateTestRunInput struct {
-	TargetType   string `json:"targetType"`
-	TargetValue  string `json:"targetValue"`
-	Environment  string `json:"environment"`
-	AgentProfile string `json:"agentProfile"`
-	RuntimeMode  string `json:"runtimeMode"`
-	BatchSize    int    `json:"batchSize"`
+	TargetType          string          `json:"targetType"`
+	TargetValue         string          `json:"targetValue"`
+	Environment         string          `json:"environment"`
+	EnvironmentID       string          `json:"environmentId"`
+	EnvironmentKind     string          `json:"environmentKind"`
+	EnvironmentSnapshot json.RawMessage `json:"environmentSnapshot,omitempty"`
+	AgentProfile        string          `json:"agentProfile"`
+	RuntimeMode         string          `json:"runtimeMode"`
+	BatchSize           int             `json:"batchSize"`
 }
 
 type CreateAdHocTestRunInput struct {
-	CaseIDs      []string `json:"caseIds"`
-	TargetType   string   `json:"targetType"`
-	TargetValue  string   `json:"targetValue"`
-	Environment  string   `json:"environment"`
-	AgentProfile string   `json:"agentProfile"`
-	RuntimeMode  string   `json:"runtimeMode"`
-	BatchSize    int      `json:"batchSize"`
+	CaseIDs         []string `json:"caseIds"`
+	TargetType      string   `json:"targetType"`
+	TargetValue     string   `json:"targetValue"`
+	Environment     string   `json:"environment"`
+	EnvironmentID   string   `json:"environmentId"`
+	EnvironmentKind string   `json:"environmentKind"`
+	AgentProfile    string   `json:"agentProfile"`
+	RuntimeMode     string   `json:"runtimeMode"`
+	BatchSize       int      `json:"batchSize"`
 }
 
 type ReviewTestRunInput struct {
@@ -993,25 +1009,28 @@ type IssueHandoff struct {
 }
 
 type IssueTestEnvironment struct {
-	IssueID              string `json:"issueId"`
-	ClusterID            string `json:"clusterId"`
-	Namespace            string `json:"namespace"`
-	NamespaceStatus      string `json:"namespaceStatus"`
-	CleanupStatus        string `json:"cleanupStatus"`
-	PreviewURL           string `json:"previewUrl"`
-	ImageRegistryPrefix  string `json:"imageRegistryPrefix"`
-	KubeconfigPath       string `json:"kubeconfigPath"`
-	KubeContext          string `json:"kubeContext"`
-	ExposureMode         string `json:"exposureMode"`
-	PreviewDomain        string `json:"previewDomain"`
-	IngressClass         string `json:"ingressClass"`
-	NodeHost             string `json:"nodeHost"`
-	LastDeploySessionID  string `json:"lastDeploySessionId"`
-	LastCleanupSessionID string `json:"lastCleanupSessionId"`
-	SourceSessionID      string `json:"sourceSessionId"`
-	SourceCommitSHA      string `json:"sourceCommitSha"`
-	CreatedAt            string `json:"createdAt"`
-	UpdatedAt            string `json:"updatedAt"`
+	IssueID              string          `json:"issueId"`
+	ClusterID            string          `json:"clusterId"`
+	EnvironmentID        string          `json:"environmentId"`
+	EnvironmentKind      string          `json:"environmentKind"`
+	EnvironmentSnapshot  json.RawMessage `json:"environmentSnapshot,omitempty"`
+	Namespace            string          `json:"namespace"`
+	NamespaceStatus      string          `json:"namespaceStatus"`
+	CleanupStatus        string          `json:"cleanupStatus"`
+	PreviewURL           string          `json:"previewUrl"`
+	ImageRegistryPrefix  string          `json:"imageRegistryPrefix"`
+	KubeconfigPath       string          `json:"kubeconfigPath"`
+	KubeContext          string          `json:"kubeContext"`
+	ExposureMode         string          `json:"exposureMode"`
+	PreviewDomain        string          `json:"previewDomain"`
+	IngressClass         string          `json:"ingressClass"`
+	NodeHost             string          `json:"nodeHost"`
+	LastDeploySessionID  string          `json:"lastDeploySessionId"`
+	LastCleanupSessionID string          `json:"lastCleanupSessionId"`
+	SourceSessionID      string          `json:"sourceSessionId"`
+	SourceCommitSHA      string          `json:"sourceCommitSha"`
+	CreatedAt            string          `json:"createdAt"`
+	UpdatedAt            string          `json:"updatedAt"`
 }
 
 type IssueTestEnvironmentResources struct {
@@ -1255,6 +1274,59 @@ type ClusterInput struct {
 	Status              string `json:"status"`
 }
 
+type Environment struct {
+	ID                    string                           `json:"id"`
+	WorkspaceID           string                           `json:"workspaceId"`
+	Name                  string                           `json:"name"`
+	Kind                  string                           `json:"kind"`
+	Status                string                           `json:"status"`
+	ProjectCount          int                              `json:"projectCount"`
+	IssueEnvironmentCount int                              `json:"issueEnvironmentCount"`
+	TestPlanCount         int                              `json:"testPlanCount"`
+	TestRunCount          int                              `json:"testRunCount"`
+	Kubernetes            *KubernetesEnvironmentConfig     `json:"kubernetes,omitempty"`
+	VirtualMachine        *VirtualMachineEnvironmentConfig `json:"virtualMachine,omitempty"`
+	LastCheckedAt         string                           `json:"lastCheckedAt"`
+	CreatedAt             string                           `json:"createdAt"`
+	UpdatedAt             string                           `json:"updatedAt"`
+}
+
+type KubernetesEnvironmentConfig struct {
+	ClusterID           string `json:"clusterId"`
+	KubeconfigPath      string `json:"kubeconfigPath"`
+	KubeContext         string `json:"kubeContext"`
+	ImageRegistryPrefix string `json:"imageRegistryPrefix"`
+	ExposureMode        string `json:"exposureMode"`
+	NodeHost            string `json:"nodeHost"`
+	PreviewDomain       string `json:"previewDomain"`
+	IngressClass        string `json:"ingressClass"`
+}
+
+type VirtualMachineEnvironmentConfig struct {
+	SSHHost     string          `json:"sshHost"`
+	SSHPort     int             `json:"sshPort"`
+	SSHUser     string          `json:"sshUser"`
+	SSHAuthRef  string          `json:"sshAuthRef"`
+	Workdir     string          `json:"workdir"`
+	ServiceHint string          `json:"serviceHint"`
+	Labels      json.RawMessage `json:"labels,omitempty"`
+}
+
+type EnvironmentInput struct {
+	Name           string                           `json:"name"`
+	Kind           string                           `json:"kind"`
+	Status         string                           `json:"status"`
+	SSHHost        string                           `json:"sshHost"`
+	SSHPort        int                              `json:"sshPort"`
+	SSHUser        string                           `json:"sshUser"`
+	SSHAuthRef     string                           `json:"sshAuthRef"`
+	Workdir        string                           `json:"workdir"`
+	ServiceHint    string                           `json:"serviceHint"`
+	Labels         json.RawMessage                  `json:"labels,omitempty"`
+	Kubernetes     *KubernetesEnvironmentConfig     `json:"kubernetes,omitempty"`
+	VirtualMachine *VirtualMachineEnvironmentConfig `json:"virtualMachine,omitempty"`
+}
+
 type KubeconfigImportSkip struct {
 	Path    string `json:"path"`
 	Context string `json:"context"`
@@ -1279,6 +1351,7 @@ type KubeconfigImportResult struct {
 type StartTestDeployInput struct {
 	AgentProfile    string `json:"agentProfile"`
 	ClusterID       string `json:"clusterId"`
+	EnvironmentID   string `json:"environmentId"`
 	ExposureMode    string `json:"exposureMode"`
 	PreviewDomain   string `json:"previewDomain"`
 	IngressClass    string `json:"ingressClass"`
@@ -1563,6 +1636,10 @@ type Store interface {
 	ListAgentProfiles(ctx Context, userID, workspaceID string) ([]AgentProfile, error)
 	CreateAgentProfile(ctx Context, userID, workspaceID string, input AgentProfileInput) (AgentProfile, error)
 	UpdateAgentProfile(ctx Context, userID, workspaceID, agentID string, input AgentProfileInput) (AgentProfile, error)
+	ListEnvironments(ctx Context, userID, workspaceID string) ([]Environment, error)
+	CreateEnvironment(ctx Context, userID, workspaceID string, input EnvironmentInput) (Environment, error)
+	UpdateEnvironment(ctx Context, userID, workspaceID, environmentID string, input EnvironmentInput) (Environment, error)
+	DeleteEnvironment(ctx Context, userID, workspaceID, environmentID string) error
 	ListClusters(ctx Context, userID, workspaceID string) ([]Cluster, error)
 	CreateCluster(ctx Context, userID, workspaceID string, input ClusterInput) (Cluster, error)
 	UpdateCluster(ctx Context, userID, workspaceID, clusterID string, input ClusterInput) (Cluster, error)

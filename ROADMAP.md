@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-06-03
+> Status: milestone roadmap, updated 2026-06-04
 
 ## Purpose
 
@@ -25,7 +25,7 @@ Issue intake
 
 The roadmap intentionally keeps fixed worker workflow first. Kubernetes is the manually triggered test target for the MVP, not the first development runtime.
 
-The server control-plane slice now owns local password auth, optional GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, workspace settings, agent profiles, clusters, issue test environments, PR handoffs, runtime registration, runtime tasks, worker logs, and runtime results. Team/shared workspace data uses server Postgres; packaged personal desktop mode can use the same server contract on a local SQLite store. Runtime execution happens through registered workers that claim server tasks. Open registration stays enabled for personal workspaces, while team workspace creation and shared server runner access are gated by server admin creation plus owner/admin invitations.
+The server control-plane slice now owns local password auth, optional GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, workspace settings, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, PR handoffs, runtime registration, runtime tasks, worker logs, and runtime results. Team/shared workspace data uses server Postgres; packaged personal desktop mode can use the same server contract on a local SQLite store. Runtime execution happens through registered workers that claim server tasks; workers are decoupled from Environments and operate the selected target through Kubernetes, SSH, or a later provider path. Open registration stays enabled for personal workspaces, while team workspace creation and shared server runner access are gated by server admin creation plus owner/admin invitations.
 
 The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, opt-in automatic test deploy after captured source commits, automatic personal worker startup/credential renewal, and bilingual desktop UI support for English and Simplified Chinese. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 
@@ -50,10 +50,10 @@ Build in order:
 - Issue task lists: treat task rows as child issues, convert creation-time Markdown checklist lines into child rows, and let humans or agents update task status from the parent issue.
 - Agent mention flow: let a user manage agent profiles, write an issue comment with an enabled agent mention, save that comment, and create the server-owned session from the current turn request and selected profile.
 - Inbox realtime updates: move issue/session status changes into the Inbox review feed without relying on slow manual refreshes.
-- Worker agent context: send issue body, comments, project metadata, branch, selected cluster, kube context, and namespace into the Codex app-server turn prompt.
+- Worker agent context: send issue body, comments, project metadata, branch, selected Environment snapshot, and Kubernetes kube context/namespace when relevant into the Codex app-server turn prompt.
 - Progress comments: turn meaningful session lifecycle and status updates into issue activity, not just terminal logs.
 - Issue labels and session stop controls: keep type triage asynchronous, keep priority manual, and allow a human to interrupt queued or running work.
-- Manual test deployment: let the user select a saved cluster and optional exposure overrides before queueing a deploy/test agent turn.
+- Manual test deployment: let the user select a saved Kubernetes Environment and optional exposure overrides before queueing a deploy/test agent turn.
 - Issue namespace lifecycle: each issue can reserve one test namespace; the deploy/test agent creates it, deploys resources, mspace validates the preview URL, and writes the result back.
 - Branch and PR output: expose issue-level handoff recording from captured source evidence, with GitHub App-backed PR creation left as a server-owned executor step.
 - Cleanup controls: let the user retain or clean session worktrees now, and record retain/cleanup decisions for issue test namespaces.
@@ -155,20 +155,20 @@ Acceptance:
 - A user can understand tests, build/deploy result, preview URL, agent summary, risks, follow-ups, and cleanup/retain state without reading raw logs first.
 - Issue Detail remains the primary place to understand the work.
 
-## Milestone 3: Issue Test Namespace Deployment
+## Milestone 3: Environments And Issue Test Namespace Deployment
 
 Status: mostly implemented for the server-owned worker path; remaining work is deeper Kubernetes evidence parsing and hardening.
 
 Goal:
 
-- Move Kubernetes from configuration fields to a manually triggered issue test environment with a usable preview URL.
+- Move target access from cluster-only configuration fields to reusable Environments, while keeping Kubernetes issue test deployment manually triggered with a usable preview URL.
 
 Build:
 
-- Store reusable cluster configs with kubeconfig path, optional context, image registry prefix, and optional preview routing defaults.
-- Discover regular files under `~/.kube` on first Clusters entry, show the candidates and contexts, and let the user choose which kubeconfig files to import.
-- Store project default cluster id.
-- Store one test environment record per issue: cluster id, namespace, preview URL, deploy session, cleanup session, namespace state, and cleanup state.
+- Store reusable Environments with `kubernetes` and `virtual_machine` kinds. Kubernetes environments project from cluster compatibility records; VM environments store SSH target metadata and credential references.
+- Discover regular files under `~/.kube` on first Environments entry, show the candidates and contexts, and let the user choose which kubeconfig files to import.
+- Store project default Environment id, currently backed by the Kubernetes compatibility default for issue deploys.
+- Store one test environment record per issue: environment id/kind/snapshot, Kubernetes cluster id when applicable, namespace, preview URL, deploy session, cleanup session, namespace state, and cleanup state.
 - Show a narrow Resources tab for the current issue namespace: Pods, Services and NodePort mappings, Deployments, Ingresses, and Events.
 - Add a manual "Deploy test env" action from Issue Detail, plus opt-in workspace automation for source-session completion.
 - Queue an agent deployment turn that creates the issue namespace, builds and pushes images, deploys resources, exposes NodePort by default, uses Ingress when configured, checks the preview URL, and writes preview output back.
@@ -177,10 +177,10 @@ Build:
 
 Acceptance:
 
-- A user can configure or import kubeconfig path and image registry prefix once in Clusters.
+- A user can configure or import kubeconfig path and image registry prefix once in Environments, or record a VM SSH target for future VM-oriented deployment tests.
 - A user can trigger a test deployment manually when ready, or explicitly opt a workspace into automatic deploy after successful source sessions.
 - The agent creates and manages the issue namespace.
-- The UI shows the selected cluster, issue namespace, namespace state, cleanup state, exposure mode, and preview URL when available.
+- The UI shows the selected Environment, issue namespace for Kubernetes deploys, namespace state, cleanup state, exposure mode, and preview URL when available.
 - The user can refresh current namespace Pods, Services, Deployments, Ingresses, and Events without entering a namespace or leaving the issue.
 - Kubernetes evidence is stored and reviewable after the session exits.
 - The user does not need a separate terminal just to answer "where can the team test this?"

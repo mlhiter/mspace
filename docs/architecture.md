@@ -20,7 +20,7 @@ The control plane owns:
 
 - users, local password credentials, workspaces, membership, GitHub identity, and mspace auth sessions;
 - projects, project runbooks, project test cases, test case revisions, test case proposals, test plans, test runs, issues, child issue tasks, comments, reactions, labels, Inbox events, and per-user receipts;
-- workspace settings, agent profiles, clusters, issue test environments, issue handoffs, review evidence, failures, and source change records;
+- workspace settings, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review evidence, failures, and source change records;
 - runtime worker registration, task queue state, task logs, task events, cancellation, and task results;
 - future GitHub App installation state.
 
@@ -139,7 +139,7 @@ Main server-owned state groups:
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
 - Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`, and `test_artifacts`. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
-- Runtime surfaces: `workspace_settings`, `agent_profiles`, `clusters`, `issue_test_environments`, `issue_handoffs`.
+- Runtime surfaces: `workspace_settings`, `agent_profiles`, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`.
 - Runtime queue: `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, `runtime_task_logs`.
 - Issue type triage is represented as `runtime_tasks.kind="issue_type_triage"` and reconciled when the task reaches a final state.
 
@@ -160,7 +160,7 @@ Desktop routes:
 - `/tests/plans/:planId`
 - `/tests/runs/:runId`
 - `/agents`
-- `/clusters`
+- `/environments` plus `/clusters` compatibility
 - `/projects`
 - `/settings`
 - `/invite/:token`
@@ -173,7 +173,7 @@ Server route groups:
 - project and runbook APIs;
 - project test case, case revision, case proposal, test plan, and test run APIs;
 - issue/comment/task/label/reaction APIs;
-- workspace setting, agent profile, and cluster APIs;
+- workspace setting, agent profile, environment, and cluster compatibility APIs;
 - issue test environment deploy/cleanup/retain/resources/probe APIs;
 - issue handoff create/refresh APIs;
 - session creation/detail/cancellation APIs;
@@ -211,9 +211,11 @@ Source changes, delivery handoff, live namespace resources, review evidence, and
 
 Dry-run worker commits are diagnostic records and should not be offered as PR source branch candidates.
 
-## Test Environments
+## Environments And Test Environments
 
-Clusters are reusable workspace records with:
+Environments are reusable workspace targets with kind `kubernetes` or `virtual_machine`. They describe what a worker may operate, while workers remain independent executors that claim tasks by mode and capabilities. Preview URLs are not environments; they are outputs recorded on runs, handoffs, or issue test deployments.
+
+Kubernetes environments are currently projected from `clusters` compatibility records with:
 
 - kubeconfig path;
 - optional context;
@@ -224,7 +226,11 @@ Clusters are reusable workspace records with:
 - optional NodePort host;
 - readiness status and last check time.
 
-Each issue can have one `issue_test_environments` record. It stores selected cluster id, namespace, namespace state, cleanup state, preview URL, deployment session id, cleanup session id, selected source session/commit, registry, kubeconfig, context, exposure mode, domain, ingress class, and NodePort host.
+Virtual machine environments store SSH target metadata: host, port, user, credential reference, workdir, service hints, labels, readiness status, and timestamps. They do not store raw passwords or private keys.
+
+Test plans and test runs can select an Environment. The server stores `environment_id`, `environment_kind`, and a frozen `environment_snapshot` so historical runs keep their meaning even if the reusable environment changes later. The older free-text `environment` field remains human notes/prompt context.
+
+Each issue can have one `issue_test_environments` record. It stores selected environment id/kind/snapshot, Kubernetes cluster id, namespace, namespace state, cleanup state, preview URL, deployment session id, cleanup session id, selected source session/commit, registry, kubeconfig, context, exposure mode, domain, ingress class, and NodePort host. Current issue deploy and Resources flows are Kubernetes-only; VM deployment is a later provider-specific execution path.
 
 Workspace Settings can opt into automatic test deployment. The server queues it only after a completed, non-dry-run source session reports a source commit, and it reuses the normal deploy/test session path with the captured source session and commit. The guardrails are intentionally conservative: no recursive deploy task, no missing project, no unresolved cluster/deploy settings, no active issue session, and no queueing without a matching online Codex worker.
 
@@ -239,14 +245,14 @@ Workspace Settings is accessed from the workspace identity menu. It owns:
 - team workspace identity editing for owner/admin users: name, mark, and description;
 - workspace automation;
 - team-only members and invitations;
-- worker environment connection for owner/admin users through a short-lived install command;
+- worker runtime host connection for owner/admin users through a short-lived install command;
 - worker credential audit history, separating active bootstrap credentials from expired or replaced history;
 - worker liveness/capabilities;
 - issue-linked runtime tasks, task events, and worker logs.
 
 The runtime task table is an operations/readability surface, not a generic task creation form. Rows should lead with the user-facing task purpose, show the linked Issue title when an issue exists, link agent-session tasks back to the relevant Issue Detail session, and leave protocol kind, capabilities, payload, result, events, and logs in expanded details. Manual protocol-smoke task creation remains available through the API for debugging, but the normal Workspace Settings UI should not ask users to create raw runtime tasks.
 
-Normal worker setup should not ask users to create or copy raw `msw_...` credentials. The product path is `Connect worker environment`, which returns a one-time install command for the target server, VM, DevBox, or Docker-capable host. The command embeds the short-lived bootstrap credential once, starts the Docker-backed worker, and leaves subsequent liveness and capability inspection to the Workers list. Raw credential endpoints stay available for Electron's automatic personal worker lifecycle and API-level recovery/debugging.
+Normal worker setup should not ask users to create or copy raw `msw_...` credentials. The product path returns a one-time install command for the target server, VM, DevBox, or Docker-capable worker host. The command embeds the short-lived bootstrap credential once, starts the Docker-backed worker, and leaves subsequent liveness and capability inspection to the Workers list. Raw credential endpoints stay available for Electron's automatic personal worker lifecycle and API-level recovery/debugging.
 
 Helm-managed customer clusters are the operational exception to the UI-first setup path. The chart can create and preserve a fixed worker token in the release Secret so server and worker agree on the same workspace-scoped credential without an operator copying it from Workspace Settings. This exception does not weaken the server/worker boundary: the token is a mspace registration credential, not Codex auth material.
 

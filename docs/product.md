@@ -1,10 +1,10 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-06-03
+> Status: local MVP implementation snapshot, updated 2026-06-04
 
 ## One-Line Definition
 
-mspace is a review Inbox and Issue workspace for coding agents: a place where teams coordinate work in document-style issues, run changes through registered runtime workers, and validate those changes in a real, namespace-scoped Kubernetes test environment.
+mspace is a review Inbox and Issue workspace for coding agents: a place where teams coordinate work in document-style issues, run changes through registered runtime workers, and validate those changes against selected Environments. Environments are either Kubernetes clusters or virtual machines; preview URLs are deployment outputs, not environment records.
 
 ## Current MVP State
 
@@ -29,14 +29,14 @@ The repository now has a runnable local desktop MVP:
 - cache imported GitHub repositories inside worker-managed repository roots;
 - show a project runbook in Projects, open it from the Issue Detail sidebar as a read-only TipTap modal, and update it either from direct Markdown edits or from successful agent session artifacts;
 - manage project-level test cases, case suggestions, test plans, and issue-backed test runs from selected ready cases or formal plans in the Tests route, including modal create/import flows, Markdown/text/CSV/Excel `.xlsx` import, field-level case revision summaries, readiness scoring, and human acceptance for run outcomes;
-- keep signed-in workspace product and runtime state in the server store, including sessions, logs, evidence, clusters, issue test environments, handoffs, and execution metadata;
+- keep signed-in workspace product and runtime state in the server store, including sessions, logs, evidence, environments, Kubernetes cluster compatibility records, issue test environments, handoffs, and execution metadata;
 - keep the server control plane free of Codex runtime dependencies: no Codex CLI in the server image, no Codex home mount in the server Deployment, and no in-process Codex app-server client;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage workspace automation policy, keeping source commit capture always on while recording branch / PR handoff state from captured source commits;
 - optionally queue an automatic issue test-environment deployment after a successful source session captures a commit, using the same source commit and deploy/test path as manual deployment;
-- manage reusable test cluster configs from the Clusters route, including first-run `~/.kube` discovery, selectable kubeconfig import, read-only reachability check, image registry prefix, and preview exposure defaults;
-- choose a default cluster per project and select a cluster when manually deploying an issue test environment;
-- manually trigger an issue-scoped test deployment where the agent creates the namespace, builds and pushes images, deploys resources, and returns a preview URL;
+- manage reusable Environments from the Environments route: Kubernetes environments can be imported from kubeconfig files, and virtual machine environments store SSH target metadata plus credential references;
+- choose a default Environment per project and select a Kubernetes environment when manually deploying an issue test environment;
+- manually trigger an issue-scoped Kubernetes test deployment where the agent creates the namespace, builds and pushes images, deploys resources, and returns a preview URL;
 - record issue test namespace state, cleanup/retain state, deploy session, cleanup session, and preview URL.
 - inspect the current issue namespace from a Resources tab with Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events.
 - review structured session evidence from Issue Detail, with code changes in Commits, live namespace objects in Resources, and the current review packet plus command evidence in Evidence.
@@ -44,7 +44,7 @@ The repository now has a runnable local desktop MVP:
 - show failed sessions and failed deploy/preview/cleanup checks as structured failure evidence, with continue, retry deploy, stop, retain, or cleanup choices from Issue Detail.
 - use a Notion-like desktop workspace shell with real shadcn/ui primitives, Radix base components, lucide-react icons, Material Icon Theme file icons, and low-contrast document surfaces.
 
-Kubernetes is the deployment and test environment, not the required development runtime for the first version. The current development runtime is a registered fixed worker. Running the agent runtime inside Kubernetes remains a later option once the Server Worker loop is stable.
+Kubernetes remains the default deployment and issue test environment, but it is not the only Environment type. The current development runtime is a registered fixed worker, and workers are separate from Environments: a worker claims tasks from the server queue, then operates the selected Kubernetes or virtual machine target through the access mechanism carried by that environment. Running the agent runtime inside Kubernetes remains a later option once the Server Worker loop is stable.
 
 ## Why This Exists
 
@@ -55,14 +55,14 @@ The current high-leverage developer workflow is no longer just "ask Codex to edi
 3. Attach an agent session to the issue.
 4. Let the agent modify code in a worker-prepared development runtime.
 5. Record the source branch/PR handoff, then trigger a test deployment when the worker result is ready.
-6. For test deployment, let the agent create an issue namespace in the shared test cluster, deploy the app, and return a preview URL that mspace checks and records.
+6. For Kubernetes test deployment, let the agent create an issue namespace in the selected environment, deploy the app, and return a preview URL that mspace checks and records.
 7. Review the PR or preview URL together with logs, events, resources, and runtime evidence.
 
-This is already how advanced users work manually: Codex or Claude Code edits the code in a real checkout, the developer keeps notes in chat or docs, and then gives the agent access to a test cluster through `kubectl`. mspace turns that fragmented workflow into a repeatable team product with the issue as the center of gravity, worker execution as the development step, and Kubernetes as the validation environment.
+This is already how advanced users work manually: Codex or Claude Code edits the code in a real checkout, the developer keeps notes in chat or docs, and then gives the agent access to a test cluster through `kubectl` or to a VM through SSH. mspace turns that fragmented workflow into a repeatable team product with the issue as the center of gravity, worker execution as the development step, and the selected Environment as the validation target.
 
 ## Target Users
 
-- Platform teams that already run shared Kubernetes test clusters.
+- Platform teams that already run shared Kubernetes test clusters or VM-based deployment test hosts.
 - Engineering teams that want a shared Inbox for human and agent work.
 - Engineering teams that want agents to validate changes in realistic environments.
 - Teams using Codex, Claude Code, Cursor, Kimi, OpenCode, or similar coding agents.
@@ -70,7 +70,7 @@ This is already how advanced users work manually: Codex or Claude Code edits the
 
 ## Product Position
 
-mspace is not a general agent platform. It is a collaborative issue workspace for coding agents that are expected to validate work in Kubernetes-backed test environments.
+mspace is not a general agent platform. It is a collaborative issue workspace for coding agents that are expected to validate work against explicit team-owned Environments, with Kubernetes as the default issue deployment path and virtual machines for higher-level deployment tests.
 
 | Product | Primary Shape | mspace Difference |
 | --- | --- | --- |
@@ -88,7 +88,8 @@ Project
   -> Worker code change
   -> Inbox review updates
   -> Branch / PR handoff or manual test deploy
-  -> Issue test namespace
+  -> Selected Environment
+  -> Issue test namespace for Kubernetes deploys
   -> Preview URL
   -> Comments and progress updates
   -> Inspect logs/events/resources
@@ -103,17 +104,26 @@ A project records:
 - local repository path;
 - remote URL and detected Git provider metadata;
 - default branch;
-- default test cluster;
+- default Environment;
 - project runbook as mspace-owned Markdown with revision history, editable from Project settings and visible from the Issue Detail sidebar;
 - allowed Kubernetes resource scope.
 
-A cluster records reusable deployment access:
+An Environment records reusable deployment access. Current Environment kinds are only `kubernetes` and `virtual_machine`; a preview URL is a deployment result attached to an issue, run, or evidence packet.
+
+A Kubernetes Environment is projected from the existing `clusters` compatibility records and stores:
 
 - kubeconfig path and optional Kubernetes context;
 - image registry prefix;
 - default exposure mode;
 - optional preview domain and ingress class;
 - optional NodePort host.
+
+A virtual machine Environment stores SSH-oriented target metadata:
+
+- SSH host, port, and user;
+- SSH credential reference, not raw secret material;
+- optional working directory and service hint;
+- optional labels for future worker routing or runbook matching.
 
 ### Runtime and Environment Stance
 
@@ -125,7 +135,7 @@ The intended order is:
 - Kubernetes environment for deployment and validation;
 - Kubernetes-hosted runtimes later when the Server Worker flow is solid.
 
-The product wedge is not "agent runs in Kubernetes" on day one. The wedge is "after worker-backed agent work, the user can ask the agent to prove the change in a real issue-scoped Kubernetes environment and return a URL the team can open." Manual deployment stays the default review control; workspace owners/admins can opt into automatic test deployment after source sessions when the project, cluster, registry, and worker prerequisites are already ready.
+The product wedge is not "agent runs in Kubernetes" on day one. The wedge is "after worker-backed agent work, the user can ask the agent to prove the change in a real selected Environment and return evidence the team can review." Manual Kubernetes deployment stays the default review control; workspace owners/admins can opt into automatic test deployment after source sessions when the project, Kubernetes environment, registry, and worker prerequisites are already ready. VM execution is a later provider-specific path and should not pretend to support namespace Resources until that provider exists.
 
 ### Inbox and Issue Flow
 
@@ -169,7 +179,7 @@ A user creates a session by writing an issue comment that mentions an enabled ag
 - starts `codex app-server --listen stdio://` inside that worker-prepared worktree for Codex-backed sessions;
 - stores the selected profile in `agent_sessions.agent_profile` and injects the profile instructions from `agent_profiles` into the Codex prompt;
 - streams agent messages, command execution items, status changes, and diagnostics;
-- passes the selected cluster, Kubernetes context, issue namespace, image registry, and exposure settings into the app-server process and turn prompt.
+- passes the selected Environment plus environment-specific Kubernetes context, issue namespace, image registry, and exposure settings into the app-server process and turn prompt for deploy/test sessions.
 
 Before the trigger comment is written, mspace checks that a matching active Codex worker exists. Personal desktop workspaces can auto-start the host-local personal worker and wait for it to heartbeat; team workspaces require a connected team worker. The server enforces the same check and returns a visible conflict instead of creating an unclaimable agent session.
 
@@ -219,8 +229,8 @@ MVP features:
 - fixed Server Worker development runtime;
 - git worktree isolation per session;
 - manual session worktree cleanup controls;
-- reusable Clusters route for kubeconfig discovery/import, registry, and exposure defaults;
-- project default cluster selection;
+- reusable Environments route for Kubernetes kubeconfig discovery/import, registry/exposure defaults, and virtual machine SSH metadata;
+- project default Environment selection, currently backed by the Kubernetes compatibility default for issue deploys;
 - opt-in automatic test deploy after captured source commits;
 - terminal/progress stream;
 - session workspace inspection;
@@ -237,7 +247,7 @@ Still outside the current implemented MVP:
 - server-owned GitHub App PR automation;
 - automated namespace cleanup policy beyond the current manual cleanup/retain decision.
 
-The product architecture now uses the server control plane as the product and runtime truth for every signed-in workspace. Users, local password credentials, workspaces, membership, optional GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, clusters, issue test environments, handoffs, audit, runtime tasks, worker logs, and future GitHub App installation state live in the server.
+The product architecture now uses the server control plane as the product and runtime truth for every signed-in workspace. Users, local password credentials, workspaces, membership, optional GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, handoffs, audit, runtime tasks, worker logs, and future GitHub App installation state live in the server.
 
 Display name/avatar fields are snapshots for rendering only. They should not become a second account system; shared issue ownership, comments, and permissions belong behind the control plane.
 
@@ -261,14 +271,14 @@ The interaction should feel closer to Multica than to a terminal-only tool:
 - every issue has status, owner, comments, lightweight reactions, subscribers, and linked sessions;
 - every session has logs, blockers, and evidence;
 - a human can pause, resume, or cancel a session;
-- the UI explains what runtime, namespace, and cluster the agent can operate.
+- the UI explains which worker runtime is executing and which Environment, namespace, or VM target the task can operate.
 
 But the runtime should feel closer to Optio:
 
-- work should run through a registered worker first, then validate against Kubernetes by default;
+- work should run through a registered worker first, then validate against the selected Environment, with Kubernetes as the default deployment target;
 - isolation is expressed through namespaces, ServiceAccounts, Roles, and quotas;
 - each issue/session can later gain its own long-lived or temporary Kubernetes-hosted runtime when the product grows into that model;
-- self-hosting on a team's own cluster is a first-class deployment model.
+- self-hosting on a team's own Kubernetes cluster or VM fleet is a first-class deployment model.
 
 The current implementation borrows Optio's git worktree isolation through worker-managed workdirs and leaves Kubernetes-hosted runtime as future work.
 
@@ -276,11 +286,11 @@ The 2026-05-07 desktop UI direction borrows Notion's quiet document workspace fe
 
 ## Key Product Bet
 
-The product assumes that serious coding agents need both durable collaboration context and real deployment feedback. If agents only edit files and open PRs, existing agent dashboards are enough. If teams only want a document tool, existing issue trackers are enough. mspace becomes valuable when the issue itself is also the launch point for a real Kubernetes deployment and test environment.
+The product assumes that serious coding agents need both durable collaboration context and real deployment feedback. If agents only edit files and open PRs, existing agent dashboards are enough. If teams only want a document tool, existing issue trackers are enough. mspace becomes valuable when the issue itself is also the launch point for a real deployment/test Environment and its evidence.
 
 ## First Usability Test
 
-Use one internal project and one test cluster.
+Use one internal project and one Kubernetes test environment.
 
 The test is successful if a developer can:
 

@@ -305,7 +305,7 @@ function formatMentionPlaceholder(agents: AgentProfile[]) {
 }
 
 function testDeployDefaults(detail: IssueDetail, clusters: Cluster[]): StartTestDeployInput {
-  const clusterId = detail.testEnvironment?.clusterId || detail.project?.defaultClusterId || clusters[0]?.id || "";
+  const clusterId = detail.testEnvironment?.environmentId || detail.testEnvironment?.clusterId || detail.project?.defaultEnvironmentId || detail.project?.defaultClusterId || clusters[0]?.id || "";
   const selectedCluster = clusters.find((cluster) => cluster.id === clusterId);
   const changeNodes = listOrEmpty(detail.changeNodes);
   const selectedSource =
@@ -315,6 +315,7 @@ function testDeployDefaults(detail: IssueDetail, clusters: Cluster[]): StartTest
   return {
     agentProfile: "codex",
     clusterId,
+    environmentId: clusterId,
     exposureMode: "",
     previewDomain: selectedCluster?.previewDomain || detail.testEnvironment?.previewDomain || "",
     ingressClass: selectedCluster?.ingressClass || detail.testEnvironment?.ingressClass || "",
@@ -4605,7 +4606,7 @@ function TestDeployModal(props: {
   onSubmit: () => void;
 }) {
   const { t } = useMspaceTranslation();
-  const selectedCluster = props.clusters.find((cluster) => cluster.id === props.value.clusterId);
+  const selectedCluster = props.clusters.find((cluster) => cluster.id === (props.value.environmentId || props.value.clusterId));
   const effectiveExposure = props.value.exposureMode || selectedCluster?.exposureMode || "nodeport";
   const selectedNode = props.changeNodes.find((node) => node.commitSha === props.value.sourceCommitSha);
   const selectedSession = selectedNode ? changeNodeSession(selectedNode, props.sessions) : undefined;
@@ -4701,12 +4702,13 @@ function TestDeployModal(props: {
           ) : null}
           <Field label={t("issueDetail.testDeploy.cluster")}>
             <Select
-              value={props.value.clusterId || "__none"}
+              value={props.value.environmentId || props.value.clusterId || "__none"}
               onValueChange={(clusterId) => {
                 const nextCluster = props.clusters.find((cluster) => cluster.id === clusterId);
                 props.onChange({
                   ...props.value,
                   clusterId: clusterId === "__none" ? "" : clusterId,
+                  environmentId: clusterId === "__none" ? "" : clusterId,
                   exposureMode: "",
                   previewDomain: nextCluster?.previewDomain || "",
                   ingressClass: nextCluster?.ingressClass || "",
@@ -5749,7 +5751,7 @@ export function IssueDetailPage() {
   ]);
   const canStartTestDeploy =
     hasProject &&
-    Boolean(testDeployForm.clusterId.trim()) &&
+    Boolean((testDeployForm.environmentId || testDeployForm.clusterId || "").trim()) &&
     Boolean(testDeployForm.sourceCommitSha?.trim()) &&
     changeNodes.length > 0 &&
     !hasActiveSession &&
@@ -5814,7 +5816,7 @@ export function IssueDetailPage() {
   const creatorActor = humanActor(loadedDetail.issue.creatorName, loadedDetail.issue.creatorAvatarUrl);
   const composerActor = storedHumanActor();
   const assigneeActor = actorForAssignee(loadedDetail.issue.assigneeType, loadedDetail.issue.assignee);
-  const projectCluster = clusters.find((cluster) => cluster.id === loadedDetail.project?.defaultClusterId);
+  const projectCluster = clusters.find((cluster) => cluster.id === (loadedDetail.project?.defaultEnvironmentId || loadedDetail.project?.defaultClusterId));
   const testCluster = clusters.find((cluster) => cluster.id === loadedDetail.testEnvironment?.clusterId);
   const issueLabels = listOrEmpty(loadedDetail.labels);
   const rawComments = listOrEmpty(loadedDetail.comments);

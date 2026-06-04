@@ -142,7 +142,7 @@ const sidebarItems = [
   { to: "/issues", labelKey: "navigation.issues", icon: MessageSquareText },
   { to: "/tests", labelKey: "navigation.tests", icon: ClipboardCheck },
   { to: "/agents", labelKey: "navigation.agents", icon: Bot },
-  { to: "/clusters", labelKey: "navigation.clusters", icon: Cloud },
+  { to: "/environments", labelKey: "navigation.environments", icon: Cloud },
   { to: "/projects", labelKey: "navigation.projects", icon: FolderKanban },
 ];
 

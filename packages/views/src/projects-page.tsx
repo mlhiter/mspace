@@ -15,7 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { controlPlaneApi, queryKeys, type Cluster, type CreateProjectInput, type Project } from "@mspace/core";
+import { controlPlaneApi, queryKeys, type Environment, type CreateProjectInput, type Project } from "@mspace/core";
 import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
@@ -78,7 +78,7 @@ function projectToForm(project: Project): CreateProjectInput {
     previewDomain: project.previewDomain,
     ingressClass: project.ingressClass,
     nodeHost: project.nodeHost,
-    defaultClusterId: project.defaultClusterId,
+    defaultClusterId: project.defaultEnvironmentId || project.defaultClusterId,
   };
 }
 
@@ -90,7 +90,7 @@ export function ProjectsPage() {
   const isTeamWorkspace = auth.workspace?.kind === "team";
   const serverWorkspaceReady = Boolean(auth.token && workspaceId);
   const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
-  const clustersQueryKey = queryKeys.clusters(workspaceId, auth.token);
+  const environmentsQueryKey = queryKeys.environments(workspaceId, auth.token);
   const projectRunbookKey = (projectId: string) =>
     queryKeys.workspaceProjectRunbook(workspaceId, projectId, auth.token);
   const projectsQuery = useQuery({
@@ -98,9 +98,9 @@ export function ProjectsPage() {
     queryFn: () => controlPlaneApi.listProjects(auth.token, workspaceId),
     enabled: serverWorkspaceReady,
   });
-  const clustersQuery = useQuery({
-    queryKey: clustersQueryKey,
-    queryFn: () => controlPlaneApi.listClusters(auth.token, workspaceId),
+  const environmentsQuery = useQuery({
+    queryKey: environmentsQueryKey,
+    queryFn: () => controlPlaneApi.listEnvironments(auth.token, workspaceId),
     enabled: serverWorkspaceReady,
   });
   const [createOpen, setCreateOpen] = useState(false);
@@ -117,7 +117,7 @@ export function ProjectsPage() {
       setCreateOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
-        queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
+        queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
       ]);
     },
   });
@@ -150,7 +150,7 @@ export function ProjectsPage() {
       setSettingsForm(projectToForm(updatedProject));
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
-        queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
+        queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
         projectID ? queryClient.invalidateQueries({ queryKey: projectRunbookKey(projectID) }) : Promise.resolve(),
       ]);
     },
@@ -162,13 +162,14 @@ export function ProjectsPage() {
       setSettingsForm(emptyProjectForm);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectsQueryKey }),
-        queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
+        queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
       ]);
     },
   });
 
   const projects = projectsQuery.data || [];
-  const clusters = clustersQuery.data || [];
+  const environments = environmentsQuery.data || [];
+  const kubernetesEnvironments = environments.filter((environment) => environment.kind === "kubernetes");
   const canCreate = isTeamWorkspace ? createForm.repoUrl.trim().length > 0 : createForm.repoPath.trim().length > 0 || createForm.repoUrl.trim().length > 0;
   const settingsSaveDisabled = saveProjectSettings.isPending || settingsRunbookQuery.isLoading;
   const settingsProjectHasWork = Boolean(
@@ -245,7 +246,7 @@ export function ProjectsPage() {
   if (settingsProject) {
     const repositoryLabel = settingsProject.sourceType === "github" ? settingsProject.remoteUrl : settingsProject.repoPath;
     const runbookMeta = settingsRunbookQuery.data;
-    const defaultCluster = clusters.find((cluster) => cluster.id === settingsForm.defaultClusterId);
+    const defaultEnvironment = kubernetesEnvironments.find((environment) => environment.id === settingsForm.defaultClusterId);
 
     return (
       <PageFrame
@@ -329,10 +330,10 @@ export function ProjectsPage() {
             <section className="rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
               <div className="mb-3 text-[14px] font-semibold leading-5 text-[color:var(--text)]">{t("projects.runtime")}</div>
               <ClusterSelectField
-                clusters={clusters}
+                environments={kubernetesEnvironments}
                 value={settingsForm.defaultClusterId}
                 onChange={(defaultClusterId) => setSettingsForm({ ...settingsForm, defaultClusterId })}
-                hint={defaultCluster ? `${defaultCluster.kubeContext || defaultCluster.name}` : t("projects.noDefaultClusterSelected")}
+                hint={defaultEnvironment ? `${defaultEnvironment.kubernetes?.kubeContext || defaultEnvironment.name}` : t("projects.noDefaultClusterSelected")}
               />
             </section>
 
@@ -388,7 +389,7 @@ export function ProjectsPage() {
           </div>
           <div className="divide-y divide-[color:var(--line)]">
             {projects.map((project) => (
-              <ProjectRow key={project.id} project={project} clusters={clusters} onSettings={() => openSettings(project)} />
+              <ProjectRow key={project.id} project={project} environments={kubernetesEnvironments} onSettings={() => openSettings(project)} />
             ))}
           </div>
         </div>
@@ -454,7 +455,7 @@ export function ProjectsPage() {
             </div>
 
             <ClusterSelectField
-              clusters={clusters}
+              environments={kubernetesEnvironments}
               value={createForm.defaultClusterId}
               onChange={(defaultClusterId) => setCreateForm({ ...createForm, defaultClusterId })}
               hint={t("projects.optionalDefaultCluster")}
@@ -475,10 +476,10 @@ export function ProjectsPage() {
   );
 }
 
-function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: () => void }) {
+function ProjectRow(props: { project: Project; environments: Environment[]; onSettings: () => void }) {
   const { project } = props;
   const { t } = useMspaceTranslation();
-  const defaultCluster = props.clusters.find((cluster) => cluster.id === project.defaultClusterId);
+  const defaultEnvironment = props.environments.find((environment) => environment.id === (project.defaultEnvironmentId || project.defaultClusterId));
   const repositoryLocation = project.sourceType === "github" ? project.remoteUrl || project.repoPath : project.repoPath;
   const githubLabel =
     project.gitProvider === "github" && project.gitOwner && project.gitRepo
@@ -491,7 +492,7 @@ function ProjectRow(props: { project: Project; clusters: Cluster[]; onSettings: 
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           <h3 className="truncate text-[15px] font-semibold leading-6">{project.name}</h3>
-          <StatusBadge value={defaultCluster?.name || "local"} />
+          <StatusBadge value={defaultEnvironment?.name || "local"} />
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <InlineMeta icon={Clock3}><RelativeTime value={updatedAt} /></InlineMeta>
@@ -563,7 +564,7 @@ function runbookPlaceholder(): string {
 }
 
 function ClusterSelectField(props: {
-  clusters: Cluster[];
+  environments: Environment[];
   value: string;
   hint?: string;
   onChange: (clusterId: string) => void;
@@ -571,7 +572,7 @@ function ClusterSelectField(props: {
   const { t } = useMspaceTranslation();
   return (
     <Field label={t("projects.defaultCluster")} hint={props.hint}>
-      {props.clusters.length === 0 ? (
+      {props.environments.length === 0 ? (
         <div className="rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[13px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
           {t("projects.createClusterFirst")}
         </div>
@@ -585,9 +586,9 @@ function ClusterSelectField(props: {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__none">{t("projects.noDefaultCluster")}</SelectItem>
-            {props.clusters.map((cluster) => (
-              <SelectItem key={cluster.id} value={cluster.id}>
-                {cluster.name}
+            {props.environments.map((environment) => (
+              <SelectItem key={environment.id} value={environment.id}>
+                {environment.name}
               </SelectItem>
             ))}
           </SelectContent>

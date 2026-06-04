@@ -31,6 +31,7 @@ import {
   getStoredAuthToken,
   queryKeys,
   type Project,
+  type Environment,
   type RuntimeWorker,
   type TestCase,
   type TestCaseInput,
@@ -87,6 +88,7 @@ type PlanForm = {
   status: string;
   targetType: string;
   targetValue: string;
+  environmentId: string;
   environment: string;
 };
 
@@ -109,6 +111,7 @@ const emptyPlanForm: PlanForm = {
   status: "ready",
   targetType: "branch",
   targetValue: "",
+  environmentId: "",
   environment: "",
 };
 
@@ -124,6 +127,7 @@ const screenshotPreviewMaxZoom = 3;
 const screenshotPreviewZoomStep = 0.25;
 const targetTypeOptions = ["branch", "commit", "source_session", "image", "offline_package", "version_url", "preview_url"] as const;
 const emptyProjects: Project[] = [];
+const emptyEnvironments: Environment[] = [];
 const emptyTestCases: TestCase[] = [];
 const emptyTestCaseProposals: TestCaseProposal[] = [];
 const emptyTestPlans: TestPlan[] = [];
@@ -1161,6 +1165,7 @@ export function TestsPage() {
   const allProposalsQueryKey = queryKeys.projectTestCaseProposals(workspaceId, effectiveProjectId, auth.token);
   const allPlansQueryKey = queryKeys.projectTestPlans(workspaceId, effectiveProjectId, auth.token);
   const allRunsQueryKey = queryKeys.projectTestRuns(workspaceId, effectiveProjectId, auth.token);
+  const environmentsQueryKey = queryKeys.environments(workspaceId, auth.token);
 
   const casesQuery = useQuery({
     queryKey: casesQueryKey,
@@ -1220,11 +1225,18 @@ export function TestsPage() {
     enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
   });
 
+  const environmentsQuery = useQuery({
+    queryKey: environmentsQueryKey,
+    queryFn: () => controlPlaneApi.listEnvironments(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
+  });
+
   const cases = useMemo(() => (casesQuery.data || emptyTestCases).filter((testCase) => testCaseMatchesQuery(testCase, query)), [casesQuery.data, query]);
   const allCases = allCasesQuery.data || casesQuery.data || emptyTestCases;
   const allProposals = allProposalsQuery.data || proposalsQuery.data || emptyTestCaseProposals;
   const allPlans = allPlansQuery.data || plansQuery.data || emptyTestPlans;
   const allRuns = allRunsQuery.data || emptyTestRuns;
+  const environments = environmentsQuery.data || emptyEnvironments;
   const readyCases = useMemo(() => allCases.filter((testCase) => testCase.status === "ready"), [allCases]);
   const readyCaseIdSet = useMemo(() => new Set(readyCases.map((testCase) => testCase.id)), [readyCases]);
   const selectedReadyCaseIds = useMemo(() => selectedCaseIds.filter((caseId) => readyCaseIdSet.has(caseId)), [readyCaseIdSet, selectedCaseIds]);
@@ -1343,6 +1355,7 @@ export function TestsPage() {
     mutationFn: () =>
       controlPlaneApi.createProjectTestPlan(auth.token, workspaceId, effectiveProjectId, {
         ...planForm,
+        environmentId: planForm.environmentId || "",
         caseIds: selectedCaseIds,
       }),
     onSuccess: async (detail) => {
@@ -1363,6 +1376,7 @@ export function TestsPage() {
       await workerReadiness.ensureReady();
       return controlPlaneApi.startAdHocProjectTestRun(auth.token, workspaceId, effectiveProjectId, {
         caseIds: selectedReadyCaseIds,
+        environmentId: selectedProject?.defaultEnvironmentId || selectedProject?.defaultClusterId || "",
         runtimeMode: workerReadiness.runtimeMode,
       });
     },
@@ -1380,6 +1394,8 @@ export function TestsPage() {
         targetType: plan.targetType,
         targetValue: plan.targetValue,
         environment: plan.environment,
+        environmentId: plan.environmentId,
+        environmentKind: plan.environmentKind,
         runtimeMode: workerReadiness.runtimeMode,
       });
     },
@@ -2145,6 +2161,7 @@ export function TestsPage() {
                 <PlanFormFields
                   form={planForm}
                   onChange={setPlanForm}
+                  environments={environments}
                   readyCases={readyCases}
                   selectedCaseIds={selectedCaseIds}
                   onCaseToggle={toggleCaseSelection}
@@ -2235,6 +2252,7 @@ export function TestCaseDetailPage() {
       await workerReadiness.ensureReady();
       return controlPlaneApi.startAdHocProjectTestRun(auth.token, workspaceId, effectiveProjectId, {
         caseIds: [testCase.id],
+        environmentId: selectedProject?.defaultEnvironmentId || selectedProject?.defaultClusterId || "",
         runtimeMode: workerReadiness.runtimeMode,
       });
     },
@@ -2420,6 +2438,8 @@ export function TestPlanDetailPage() {
         targetType: plan.targetType,
         targetValue: plan.targetValue,
         environment: plan.environment,
+        environmentId: plan.environmentId,
+        environmentKind: plan.environmentKind,
         runtimeMode: workerReadiness.runtimeMode,
       });
     },
@@ -2518,6 +2538,11 @@ function TestPlanDetailContent(props: {
             <pre className="mt-4 max-h-52 overflow-auto rounded-[8px] bg-[color:var(--paper)] p-3 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
               {plan.environment}
             </pre>
+          ) : null}
+          {plan.environmentId ? (
+            <p className="mt-3 text-[12px] text-[color:var(--muted)]">
+              {t("tests.environment")}: {plan.environmentKind || "environment"} · <span className="font-mono">{plan.environmentId}</span>
+            </p>
           ) : null}
           {startRun.error ? (
             <p className="mt-3 text-[12px] text-[color:var(--danger)]">{startRun.error.message}</p>
@@ -3165,13 +3190,14 @@ function CaseFormFields(props: {
 function PlanFormFields(props: {
   form: PlanForm;
   onChange: Dispatch<SetStateAction<PlanForm>>;
+  environments: Environment[];
   readyCases: TestCase[];
   selectedCaseIds: string[];
   onCaseToggle: (caseId: string) => void;
   onSelectReadyCases: () => void;
 }) {
   const { t } = useMspaceTranslation();
-  const { form, onChange, readyCases, selectedCaseIds, onCaseToggle, onSelectReadyCases } = props;
+  const { form, onChange, environments, readyCases, selectedCaseIds, onCaseToggle, onSelectReadyCases } = props;
 
   return (
     <>
@@ -3205,9 +3231,26 @@ function PlanFormFields(props: {
         <Field label={t("tests.planDescription")}>
           <Textarea value={form.description} onChange={(event) => onChange((current) => ({ ...current, description: event.target.value }))} className="min-h-24" />
         </Field>
-        <Field label={t("tests.environment")}>
-          <Textarea value={form.environment} onChange={(event) => onChange((current) => ({ ...current, environment: event.target.value }))} className="min-h-24" />
-        </Field>
+        <div className="grid gap-3">
+          <Field label={t("tests.environment")}>
+            <Select value={form.environmentId || "__none"} onValueChange={(value) => onChange((current) => ({ ...current, environmentId: value === "__none" ? "" : value }))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">{t("tests.noEnvironment")}</SelectItem>
+                {environments.map((environment) => (
+                  <SelectItem key={environment.id} value={environment.id}>
+                    {environment.name} · {environment.kind === "virtual_machine" ? t("clusters.kindVirtualMachine") : t("clusters.kindKubernetes")}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label={t("tests.environmentNotes")}>
+            <Textarea value={form.environment} onChange={(event) => onChange((current) => ({ ...current, environment: event.target.value }))} className="min-h-16" />
+          </Field>
+        </div>
       </div>
       <div className="rounded-[8px] bg-[color:var(--paper)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
