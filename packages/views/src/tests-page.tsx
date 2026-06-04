@@ -7,7 +7,6 @@ import {
   Ban,
   Check,
   ClipboardCheck,
-  ExternalLink,
   FileUp,
   ListChecks,
   Maximize2,
@@ -22,6 +21,8 @@ import {
   TerminalSquare,
   type LucideIcon,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import {
   buildControlPlaneUrl,
@@ -118,6 +119,9 @@ const proposalStatusOptions = ["pending", "applied", "rejected", "invalid"] as c
 const planStatusOptions = ["draft", "ready", "archived"] as const;
 const testCaseTypeOptions = ["functional", "ui", "api", "deployment"] as const;
 const priorityOptions = ["", "p0", "p1", "p2", "p3"] as const;
+const screenshotPreviewMinZoom = 0.5;
+const screenshotPreviewMaxZoom = 3;
+const screenshotPreviewZoomStep = 0.25;
 const targetTypeOptions = ["branch", "commit", "source_session", "image", "offline_package", "version_url", "preview_url"] as const;
 const emptyProjects: Project[] = [];
 const emptyTestCases: TestCase[] = [];
@@ -3375,21 +3379,6 @@ function TestRunEvidencePanel(props: { evidence?: Record<string, unknown> }) {
                 ))}
               </div>
             ) : null}
-            <div className="flex flex-wrap gap-1.5">
-              {evidence.screenshots.map((path, index) => (
-                <button
-                  key={`${path}-${index}`}
-                  type="button"
-                  className="inline-flex max-w-full items-center gap-1.5 rounded-[7px] bg-[color:var(--surface)] px-2 py-1 text-left text-[12px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)] transition-colors hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]"
-                  title={path}
-                  onClick={() => void openEvidenceTarget(path)}
-                >
-                  <ExternalLink data-icon className="size-3.5 shrink-0" />
-                  <span className="truncate">{index === 0 ? t("tests.openScreenshot") : t("tests.openScreenshotN", { index: index + 1 })}</span>
-                </button>
-              ))}
-            </div>
-            <div className="break-all font-mono text-[11px] text-[color:var(--faint)]">{evidence.screenshots[0]}</div>
           </div>
         ) : null}
 
@@ -3468,7 +3457,6 @@ function EvidenceScreenshotThumb(props: {
   const imageSource = useResolvedEvidenceImageSrc(props.image);
   const [imageFailed, setImageFailed] = useState(false);
   const label = screenshotImageLabel(props.image, t("tests.openScreenshotN", { index: props.index + 1 }));
-  const target = screenshotImageOpenTarget(props.image);
   const isLegacyLocalPath = screenshotImageIsLegacyLocalPath(props.image);
   const imageUnavailable = imageFailed || Boolean(imageSource.error);
 
@@ -3505,17 +3493,8 @@ function EvidenceScreenshotThumb(props: {
           <Maximize2 data-icon className="size-3.5" />
         </span>
       </button>
-      <div className="flex min-w-0 items-center justify-between gap-2 px-2 py-1">
+      <div className="min-w-0 px-2 py-1">
         <div className="min-w-0 truncate font-mono text-[11px] text-[color:var(--faint)]" title={label}>{label}</div>
-        {target ? (
-          <button
-            type="button"
-            className="shrink-0 text-[11px] font-medium text-[color:var(--accent)] hover:underline"
-            onClick={() => void openEvidenceTarget(target)}
-          >
-            {t("tests.openScreenshot")}
-          </button>
-        ) : null}
       </div>
     </div>
   );
@@ -3526,21 +3505,43 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
   const { image, onClose } = props;
   const imageSource = useResolvedEvidenceImageSrc(image);
   const [imageFailed, setImageFailed] = useState(false);
-  const target = screenshotImageOpenTarget(image);
+  const [zoom, setZoom] = useState(1);
   const label = screenshotImageLabel(image, t("tests.previewScreenshot"));
   const isLegacyLocalPath = screenshotImageIsLegacyLocalPath(image);
   const imageUnavailable = imageFailed || Boolean(imageSource.error);
+  const canZoomOut = zoom > screenshotPreviewMinZoom;
+  const canZoomIn = zoom < screenshotPreviewMaxZoom;
+  const zoomLabel = t("tests.screenshotZoomLevel", { zoom: Math.round(zoom * 100) });
+
+  function updateZoom(nextZoom: number) {
+    setZoom(Math.min(screenshotPreviewMaxZoom, Math.max(screenshotPreviewMinZoom, nextZoom)));
+  }
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        updateZoom(zoom + screenshotPreviewZoomStep);
+      } else if (event.key === "-") {
+        event.preventDefault();
+        updateZoom(zoom - screenshotPreviewZoomStep);
+      } else if (event.key === "0") {
+        event.preventDefault();
+        updateZoom(1);
+      }
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, zoom]);
 
   useEffect(() => {
     setImageFailed(false);
+    setZoom(1);
   }, [imageSource.src]);
 
   return (
@@ -3558,12 +3559,20 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
             <p className="mt-0.5 truncate font-mono text-[11px] text-[color:var(--muted)]" title={label}>{label}</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {target ? (
-              <Button type="button" variant="secondary" size="sm" onClick={() => void openEvidenceTarget(target)}>
-                <ExternalLink data-icon />
-                {t("tests.openScreenshot")}
+            <div className="flex items-center rounded-[8px] bg-[color:var(--paper)] p-0.5 shadow-[inset_0_0_0_1px_var(--line)]">
+              <Button type="button" variant="ghost" size="icon" aria-label={t("tests.zoomOutScreenshot")} disabled={!canZoomOut} onClick={() => updateZoom(zoom - screenshotPreviewZoomStep)}>
+                <ZoomOut data-icon />
               </Button>
-            ) : null}
+              <span className="w-14 select-none text-center font-mono text-[11px] text-[color:var(--muted-strong)]" aria-live="polite" aria-label={zoomLabel}>
+                {Math.round(zoom * 100)}%
+              </span>
+              <Button type="button" variant="ghost" size="icon" aria-label={t("tests.zoomInScreenshot")} disabled={!canZoomIn} onClick={() => updateZoom(zoom + screenshotPreviewZoomStep)}>
+                <ZoomIn data-icon />
+              </Button>
+              <Button type="button" variant="ghost" size="icon" aria-label={t("tests.resetScreenshotZoom")} disabled={zoom === 1} onClick={() => updateZoom(1)}>
+                <RotateCcw data-icon />
+              </Button>
+            </div>
             <Button type="button" variant="ghost" size="icon" aria-label={t("tests.closeScreenshotPreview")} onClick={onClose}>
               <X data-icon />
             </Button>
@@ -3574,7 +3583,8 @@ function EvidenceLightbox(props: { image: TestEvidenceScreenshotImage; onClose: 
             <img
               src={imageSource.src}
               alt={t("tests.screenshotPreviewTitle")}
-              className="mx-auto max-h-[calc(100vh-168px)] w-auto max-w-full rounded-[8px] bg-[color:var(--surface)] object-contain shadow-[inset_0_0_0_1px_var(--line)]"
+              className="mx-auto w-auto max-w-none rounded-[8px] bg-[color:var(--surface)] object-contain shadow-[inset_0_0_0_1px_var(--line)]"
+              style={{ height: `calc(${Math.round(zoom * 100)}vh - ${Math.round(168 * zoom)}px)` }}
               onError={() => setImageFailed(true)}
               onLoad={() => setImageFailed(false)}
             />
