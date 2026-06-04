@@ -141,6 +141,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/workspaces/{workspaceID}/clusters", s.handleListClusters)
 	r.Post("/api/workspaces/{workspaceID}/clusters", s.handleCreateCluster)
 	r.Put("/api/workspaces/{workspaceID}/clusters/{clusterID}", s.handleUpdateCluster)
+	r.Post("/api/workspaces/{workspaceID}/clusters/{clusterID}/check", s.handleCheckCluster)
 	r.Delete("/api/workspaces/{workspaceID}/clusters/{clusterID}", s.handleDeleteCluster)
 	r.Get("/api/workspaces/{workspaceID}/clusters/discover-defaults", s.handleDiscoverDefaultKubeconfigs)
 	r.Post("/api/workspaces/{workspaceID}/clusters/import", s.handleImportKubeconfigs)
@@ -1453,6 +1454,19 @@ func (s *Server) handleUpdateCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cluster, err := s.store.UpdateCluster(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "clusterID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, cluster)
+}
+
+func (s *Server) handleCheckCluster(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	cluster, err := s.store.CheckCluster(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "clusterID")))
 	if err != nil {
 		writeStoreError(w, err)
 		return

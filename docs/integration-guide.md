@@ -327,6 +327,7 @@ The free-text `environment` value remains human notes for the agent. The structu
 | `GET` | `/api/workspaces/{workspaceID}/clusters` | Compatibility API for Kubernetes cluster records. Prefer `/environments` in product integrations. |
 | `POST` | `/api/workspaces/{workspaceID}/clusters` | Compatibility API for creating a Kubernetes cluster record. |
 | `PUT` | `/api/workspaces/{workspaceID}/clusters/{clusterID}` | Compatibility API for updating a Kubernetes cluster record. |
+| `POST` | `/api/workspaces/{workspaceID}/clusters/{clusterID}/check` | Compatibility API for refreshing Kubernetes Environment reachability. |
 | `DELETE` | `/api/workspaces/{workspaceID}/clusters/{clusterID}` | Compatibility API for deleting an unused Kubernetes cluster record. |
 | `GET` | `/api/workspaces/{workspaceID}/clusters/discover-defaults` | Discover kubeconfig candidates and contexts under `~/.kube`. |
 | `POST` | `/api/workspaces/{workspaceID}/clusters/import` | Import selected kubeconfig files. |
@@ -392,7 +393,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/environments" \
   }'
 ```
 
-Kubernetes Environments currently use the existing `clusters` storage and remain visible through the `/clusters` compatibility API. Virtual machine Environments are stored as VM target metadata only; `sshAuthRef` points to a credential managed outside the normal product payload and must not contain private key material.
+Kubernetes Environments currently use the existing `clusters` storage and remain visible through the `/clusters` compatibility API. Create, update, import, and `POST /clusters/{clusterID}/check` all refresh `status` and `lastCheckedAt` from a server-side kubeconfig check: API server discovery plus a lightweight namespace list permission probe. Virtual machine Environments are stored as VM target metadata only; `sshAuthRef` points to a credential managed outside the normal product payload and must not contain private key material.
 
 ## Server Agent Sessions
 

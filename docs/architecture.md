@@ -226,6 +226,8 @@ Kubernetes environments are currently projected from `clusters` compatibility re
 - optional NodePort host;
 - readiness status and last check time.
 
+Creating, updating, importing, or manually checking a Kubernetes Environment refreshes readiness from the server side. The check loads the selected kubeconfig/context, reaches the Kubernetes API server, and verifies lightweight namespace list permission before the Environment is marked `ready`; failures leave it `unreachable` with a refreshed check time.
+
 Virtual machine environments store SSH target metadata: host, port, user, credential reference, workdir, service hints, labels, readiness status, and timestamps. They do not store raw passwords or private keys.
 
 Test plans and test runs can select an Environment. The server stores `environment_id`, `environment_kind`, and a frozen `environment_snapshot` so historical runs keep their meaning even if the reusable environment changes later. The older free-text `environment` field remains human notes/prompt context.
@@ -260,7 +262,7 @@ Team invitation setup follows the same user-centered rule. Workspace Settings cr
 
 Open account registration creates a personal workspace and a personal runtime boundary. Only server-admin logins configured by `MSPACE_SERVER_ADMIN_LOGINS` or `MSPACE_BOOTSTRAP_ADMIN_LOGIN` can create team workspaces. Team server runners are reachable only through membership in a team workspace, and runtime worker/task mode must match the workspace kind.
 
-Tests stays focused on project-level cases, suggestions, plans, and run acceptance. Agents stays focused on mentionable Codex-backed role behavior. Clusters stays focused on reusable validation access. Projects stays focused on repository metadata and project runbooks.
+Tests stays focused on project-level cases, suggestions, plans, and run acceptance. Agents stays focused on mentionable Codex-backed role behavior. Environments stays focused on reusable Kubernetes and VM validation targets. Projects stays focused on repository metadata and project runbooks.
 
 The desktop visual language is a quiet Notion-like workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, restrained icon actions, and no decorative dashboard language.
 

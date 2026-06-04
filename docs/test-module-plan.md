@@ -334,7 +334,7 @@ For the first functional-testing phase, Codex can use:
 - project code;
 - project runbook;
 - test cases;
-- test environment snapshot;
+- Environment snapshot;
 - preview URL;
 - Kubernetes namespace information;
 - required commands.
@@ -958,7 +958,7 @@ rough case list
   -> human acceptance
 ```
 
-Formal test clusters, multiple Codex/Chrome CDP workers, deployment tests, and multi-machine scheduling should come after the first functional loop works.
+Formal Environment scheduling, multiple Codex/Chrome CDP workers, deployment tests, and multi-machine coordination should come after the first functional loop works.
 
 ## File Targets
 
@@ -1043,7 +1043,7 @@ Phase 3 manual acceptance:
 - Case refinement must go through Case Suggestions review so AI output does not pollute the canonical library.
 - Test Run Items store per-case result state; Issues store collaboration and evidence.
 - Support functional, UI, API, and deployment as case types, while keeping specialized execution harnesses behind the shared Issue/Worker loop.
-- Formal test clusters and parallel scheduling are important, but they belong in Phase 4 so the first version stays shippable.
+- Formal Environment scheduling and parallel execution are important, but they belong in Phase 4 so the first version stays shippable.
 
 **Most fragile assumption**: the existing worker-backed `agent_session` path is stable enough to support case refinement and functional test execution. If this assumption fails, ship only the Phase 1 case library first and delay Phases 2 and 3 until the worker/session loop is stable.
 

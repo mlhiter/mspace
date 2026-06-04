@@ -1,6 +1,6 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Cloud, Clock3, FileUp, Globe2, HardDrive, Network, Server, Settings2, Trash2, X } from "lucide-react";
+import { CheckCircle2, ChevronDown, Cloud, Clock3, FileUp, Globe2, HardDrive, Network, RefreshCw, Server, Settings2, Trash2, X } from "lucide-react";
 import {
   controlPlaneApi,
   queryKeys,
@@ -107,6 +107,7 @@ export function ClustersPage() {
     enabled: workspaceReady,
   });
   const [settingsCluster, setSettingsCluster] = useState<Cluster | null>(null);
+  const settingsClusterIdRef = useRef<string | null>(null);
   const [settingsForm, setSettingsForm] = useState<ClusterInput>(emptyClusterForm);
   const [settingsEnvironment, setSettingsEnvironment] = useState<Environment | null>(null);
   const [virtualMachineForm, setVirtualMachineForm] = useState<EnvironmentInput>(emptyVirtualMachineForm);
@@ -115,6 +116,10 @@ export function ClustersPage() {
   const [defaultDiscoveryRequested, setDefaultDiscoveryRequested] = useState(false);
   const [defaultDiscovery, setDefaultDiscovery] = useState<KubeconfigDiscoveryResult | null>(null);
   const [selectedDefaultPaths, setSelectedDefaultPaths] = useState<string[]>([]);
+
+  useEffect(() => {
+    settingsClusterIdRef.current = settingsCluster?.id || null;
+  }, [settingsCluster?.id]);
 
   const importKubeconfigs = useMutation({
     mutationFn: (paths: string[]) => controlPlaneApi.importKubeconfigFiles(auth.token, workspaceId, paths),
@@ -160,6 +165,29 @@ export function ClustersPage() {
         queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
         queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
       ]);
+    },
+  });
+  const checkCluster = useMutation({
+    mutationFn: (clusterId: string) => controlPlaneApi.checkCluster(auth.token, workspaceId, clusterId),
+    onSuccess: async (cluster) => {
+      if (settingsClusterIdRef.current === cluster.id) {
+        setSettingsCluster(cluster);
+        setSettingsForm(clusterToForm(cluster));
+      }
+      showToast({
+        tone: cluster.status === "ready" ? "success" : "warning",
+        description:
+          cluster.status === "ready"
+            ? t("clusters.checkSucceeded", { name: cluster.name })
+            : t("clusters.checkUnreachable", { name: cluster.name }),
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: clustersQueryKey }),
+        queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
+      ]);
+    },
+    onError: (error) => {
+      showToast({ tone: "danger", description: error.message });
     },
   });
   const createEnvironment = useMutation({
@@ -210,6 +238,7 @@ export function ClustersPage() {
     setSettingsForm(clusterToForm(cluster));
     updateCluster.reset();
     deleteCluster.reset();
+    checkCluster.reset();
   }
 
   function openEnvironmentSettings(environment: Environment) {
@@ -302,7 +331,7 @@ export function ClustersPage() {
         </div>
       ) : (
         <div className="mt-4 rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
-          <div className="grid grid-cols-[minmax(180px,1fr)_minmax(220px,1.4fr)_150px_120px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
+          <div className="grid grid-cols-[minmax(180px,1fr)_minmax(220px,1.4fr)_150px_190px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
             <span>{t("clusters.environment")}</span>
             <span>{t("clusters.access")}</span>
             <span>{t("clusters.usage")}</span>
@@ -310,7 +339,13 @@ export function ClustersPage() {
           </div>
           <div className="divide-y divide-[color:var(--line)]">
             {environments.map((environment) => (
-              <EnvironmentRow key={environment.id} environment={environment} onSettings={() => openEnvironmentSettings(environment)} />
+              <EnvironmentRow
+                key={environment.id}
+                environment={environment}
+                checking={checkCluster.isPending && checkCluster.variables === environment.id}
+                onCheck={environment.kind === "kubernetes" ? () => checkCluster.mutate(environment.id) : undefined}
+                onSettings={() => openEnvironmentSettings(environment)}
+              />
             ))}
           </div>
         </div>
@@ -322,8 +357,11 @@ export function ClustersPage() {
           description={t("clusters.settingsDescription")}
           value={settingsForm}
           error={updateCluster.error || deleteCluster.error}
-          isPending={updateCluster.isPending}
+          isPending={updateCluster.isPending || checkCluster.isPending}
           canSubmit={canSave}
+          cluster={settingsCluster}
+          checking={checkCluster.isPending && checkCluster.variables === settingsCluster.id}
+          onCheck={() => checkCluster.mutate(settingsCluster.id)}
           onChange={setSettingsForm}
           onClose={() => setSettingsCluster(null)}
           onSubmit={submitSettings}
@@ -331,7 +369,7 @@ export function ClustersPage() {
             <Button
               type="button"
               variant="danger"
-              disabled={settingsClusterInUse || deleteCluster.isPending || updateCluster.isPending}
+              disabled={settingsClusterInUse || deleteCluster.isPending || updateCluster.isPending || checkCluster.isPending}
               title={settingsClusterInUse ? t("clusters.inUseDeleteTitle") : undefined}
               onClick={() => deleteCluster.mutate(settingsCluster.id)}
             >
@@ -512,7 +550,7 @@ function ClusterRow(props: { cluster: Cluster; onSettings: () => void }) {
   const { t } = useMspaceTranslation();
   const exposure = cluster.exposureMode === "ingress" ? "ingress" : "nodeport";
   return (
-    <article className="grid grid-cols-[minmax(180px,1fr)_minmax(220px,1.4fr)_150px_120px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
+    <article className="grid grid-cols-[minmax(180px,1fr)_minmax(220px,1.4fr)_150px_220px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           <h3 className="truncate text-[15px] font-semibold leading-6">{cluster.name}</h3>
@@ -550,7 +588,7 @@ function ClusterRow(props: { cluster: Cluster; onSettings: () => void }) {
   );
 }
 
-function EnvironmentRow(props: { environment: Environment; onSettings: () => void }) {
+function EnvironmentRow(props: { environment: Environment; checking?: boolean; onCheck?: () => void; onSettings: () => void }) {
   const { environment } = props;
   const { t } = useMspaceTranslation();
   const isKubernetes = environment.kind === "kubernetes";
@@ -562,17 +600,18 @@ function EnvironmentRow(props: { environment: Environment; onSettings: () => voi
     ? environment.kubernetes?.imageRegistryPrefix || t("clusters.notConfigured")
     : environment.virtualMachine?.workdir || environment.virtualMachine?.serviceHint || t("clusters.notConfigured");
   return (
-    <article className="grid grid-cols-[minmax(180px,1fr)_minmax(220px,1.4fr)_150px_120px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
+    <article className="grid grid-cols-[minmax(180px,1fr)_minmax(220px,1.4fr)_150px_190px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           {isKubernetes ? <Cloud data-icon className="shrink-0 text-[color:var(--muted)]" /> : <Server data-icon className="shrink-0 text-[color:var(--muted)]" />}
           <h3 className="truncate text-[15px] font-semibold leading-6">{environment.name}</h3>
-          <StatusBadge value={environment.status || "configured"} />
+          <StatusBadge value={environment.status || "configured"} valueLabel={environmentStatusLabel(environment.status, t)} />
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <InlineMeta icon={Clock3}><RelativeTime value={environment.updatedAt} /></InlineMeta>
           <InlineMeta icon={Network}>{isKubernetes ? t("clusters.kindKubernetes") : t("clusters.kindVirtualMachine")}</InlineMeta>
           {isKubernetes ? <InlineMeta icon={Globe2}>{exposure}</InlineMeta> : null}
+          {isKubernetes ? <InlineMeta icon={CheckCircle2}><EnvironmentCheckTime value={environment.lastCheckedAt} /></InlineMeta> : null}
         </div>
       </div>
 
@@ -592,7 +631,13 @@ function EnvironmentRow(props: { environment: Environment; onSettings: () => voi
         <div>{t("clusters.envs", { count: environment.issueEnvironmentCount + environment.testPlanCount + environment.testRunCount })}</div>
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {props.onCheck ? (
+          <Button variant="ghost" size="sm" onClick={props.onCheck} disabled={props.checking}>
+            <RefreshCw data-icon className={props.checking ? "animate-spin" : undefined} />
+            {props.checking ? t("clusters.checking") : t("clusters.check")}
+          </Button>
+        ) : null}
         <Button variant="secondary" size="sm" onClick={props.onSettings}>
           <Settings2 data-icon />
           {t("clusters.settings")}
@@ -715,6 +760,9 @@ function ClusterModal(props: {
   error?: Error | null;
   isPending: boolean;
   canSubmit: boolean;
+  cluster?: Cluster | null;
+  checking?: boolean;
+  onCheck?: () => void;
   footerStart?: ReactNode;
   onChange: (value: ClusterInput) => void;
   onClose: () => void;
@@ -759,6 +807,25 @@ function ClusterModal(props: {
 
         <form className="grid gap-4" onSubmit={props.onSubmit}>
           {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
+          {props.cluster ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-[9px] bg-[color:var(--block)] px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge value={props.cluster.status || "configured"} valueLabel={environmentStatusLabel(props.cluster.status, t)} />
+                  <span className="text-[12px] leading-5 text-[color:var(--muted)]"><EnvironmentCheckTime value={props.cluster.lastCheckedAt} /></span>
+                </div>
+                <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)] text-pretty">
+                  {t("clusters.kubeconfigCheckDescription")}
+                </p>
+              </div>
+              {props.onCheck ? (
+                <Button type="button" variant="secondary" size="sm" onClick={props.onCheck} disabled={props.checking || props.isPending}>
+                  <RefreshCw data-icon className={props.checking ? "animate-spin" : undefined} />
+                  {props.checking ? t("clusters.checking") : t("clusters.check")}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
           <Field label={t("clusters.clusterName")}>
             <Input
               value={props.value.name}
@@ -1036,6 +1103,24 @@ function clusterFromEnvironment(environment: Environment): Cluster | null {
     createdAt: environment.createdAt,
     updatedAt: environment.updatedAt,
   };
+}
+
+function environmentStatusLabel(status: string | undefined, t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  switch (status) {
+    case "ready":
+      return t("clusters.statusReady");
+    case "unreachable":
+      return t("clusters.statusUnreachable");
+    case "configured":
+    default:
+      return t("clusters.statusConfigured");
+  }
+}
+
+function EnvironmentCheckTime(props: { value?: string }) {
+  const { t } = useMspaceTranslation();
+  if (!props.value) return <>{t("clusters.notChecked")}</>;
+  return <RelativeTime value={props.value} prefix={t("clusters.checkedAtPrefix")} />;
 }
 
 function formatImportResult(result: KubeconfigImportResult) {

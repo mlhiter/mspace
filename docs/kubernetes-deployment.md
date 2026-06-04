@@ -137,7 +137,7 @@ MSPACE_SERVER_URL=https://mspace.example.com pnpm dev:desktop
 
 Sign in with the bootstrap local admin account. The customer team workspace already exists and is owned by that admin. Ordinary self-registered accounts can use only their personal workspace and local personal runner until invited into this team workspace.
 
-For a self-hosted worker on a customer server, VM, DevBox, or Docker-capable host, open Workspace Settings, choose `Connect environment`, copy the generated install command, and run it on that worker host. The command embeds a short-lived workspace bootstrap credential once and starts the Docker-backed Codex worker. The raw `msw_...` token API remains available for recovery/debugging, but it is not the normal customer setup path.
+For a self-hosted worker on a customer server, VM, DevBox, or Docker-capable host, open Workspace Settings, choose `Install worker`, copy the generated install command, and run it on that worker host. The command embeds a short-lived workspace bootstrap credential once and starts the Docker-backed Codex worker. The raw `msw_...` token API remains available for recovery/debugging, but it is not the normal customer setup path.
 
 For custom/recovery Helm-managed fixed Worker StatefulSet installs, you may still create a runtime registration token through the API or an internal admin/debug flow and put it in a Kubernetes Secret instead of using `bootstrap.teamWorkspace.enabled`:
 

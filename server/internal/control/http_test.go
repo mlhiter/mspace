@@ -1065,6 +1065,11 @@ func TestWorkspaceMembersCannotMutateRuntimeConfiguration(t *testing.T) {
 			body:   `{"name":"mutated cluster","kubeconfigPath":"/tmp/kubeconfig","imageRegistryPrefix":"registry.example.com/member","exposureMode":"nodeport"}`,
 		},
 		{
+			name:   "check cluster",
+			method: http.MethodPost,
+			path:   "/api/workspaces/" + workspaceID + "/clusters/" + cluster.ID + "/check",
+		},
+		{
 			name:   "delete cluster",
 			method: http.MethodDelete,
 			path:   "/api/workspaces/" + workspaceID + "/clusters/" + cluster.ID,
@@ -1088,6 +1093,61 @@ func TestWorkspaceMembersCannotMutateRuntimeConfiguration(t *testing.T) {
 		if recorder.Code != http.StatusForbidden {
 			t.Fatalf("%s should be forbidden for workspace member, status=%d body=%s", item.name, recorder.Code, recorder.Body.String())
 		}
+	}
+}
+
+func TestClusterCheckRefreshesKubeconfigStatus(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "cluster-check-owner",
+		Login:          "cluster-check-owner",
+		Name:           "Cluster Check Owner",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createRecorder := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/clusters", strings.NewReader(`{
+		"name":"unreachable-k8s",
+		"kubeconfigPath":"/tmp/mspace-missing-kubeconfig",
+		"imageRegistryPrefix":"registry.example.com/team",
+		"exposureMode":"nodeport"
+	}`))
+	createReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createRecorder, createReq)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create cluster status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created Cluster
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("parse cluster: %v", err)
+	}
+	if created.Status != "unreachable" || created.LastCheckedAt == "" {
+		t.Fatalf("expected created cluster to be checked as unreachable, got %+v", created)
+	}
+
+	checkRecorder := httptest.NewRecorder()
+	checkReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/clusters/"+created.ID+"/check", nil)
+	checkReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(checkRecorder, checkReq)
+	if checkRecorder.Code != http.StatusOK {
+		t.Fatalf("check cluster status=%d body=%s", checkRecorder.Code, checkRecorder.Body.String())
+	}
+	var checked Cluster
+	if err := json.Unmarshal(checkRecorder.Body.Bytes(), &checked); err != nil {
+		t.Fatalf("parse checked cluster: %v", err)
+	}
+	if checked.Status != "unreachable" || checked.LastCheckedAt == "" {
+		t.Fatalf("expected checked cluster to stay unreachable with checked time, got %+v", checked)
 	}
 }
 

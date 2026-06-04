@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -1602,6 +1603,7 @@ func (s *MemoryStore) CreateCluster(_ Context, userID, workspaceID string, input
 	if err != nil {
 		return Cluster{}, err
 	}
+	cluster.Status = kubeconfigStatus(context.Background(), cluster.KubeconfigPath, cluster.KubeContext)
 	s.nextID++
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	cluster.ID = fmt.Sprintf("cluster-%04d", s.nextID)
@@ -1629,6 +1631,7 @@ func (s *MemoryStore) UpdateCluster(_ Context, userID, workspaceID, clusterID st
 	if err != nil {
 		return Cluster{}, err
 	}
+	updated.Status = kubeconfigStatus(context.Background(), updated.KubeconfigPath, updated.KubeContext)
 	updated.ID = existing.ID
 	updated.WorkspaceID = existing.WorkspaceID
 	updated.CreatedAt = existing.CreatedAt
@@ -1636,6 +1639,25 @@ func (s *MemoryStore) UpdateCluster(_ Context, userID, workspaceID, clusterID st
 	updated.UpdatedAt = updated.LastCheckedAt
 	s.clusters[clusterID] = updated
 	return updated, nil
+}
+
+func (s *MemoryStore) CheckCluster(_ Context, userID, workspaceID, clusterID string) (Cluster, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	clusterID = strings.TrimSpace(clusterID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return Cluster{}, ErrForbidden
+	}
+	cluster, ok := s.clusters[clusterID]
+	if !ok || cluster.WorkspaceID != workspaceID {
+		return Cluster{}, ErrNotFound
+	}
+	cluster.Status = kubeconfigStatus(context.Background(), cluster.KubeconfigPath, cluster.KubeContext)
+	cluster.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	cluster.UpdatedAt = cluster.LastCheckedAt
+	s.clusters[clusterID] = cluster
+	return cluster, nil
 }
 
 func (s *MemoryStore) DeleteCluster(_ Context, userID, workspaceID, clusterID string) error {
@@ -1704,7 +1726,7 @@ func (s *MemoryStore) ImportKubeconfigs(_ Context, userID, workspaceID string, p
 			KubeconfigPath:      path,
 			ImageRegistryPrefix: defaultImportedClusterImageRegistryPrefix,
 			ExposureMode:        "nodeport",
-			Status:              "configured",
+			Status:              kubeconfigStatus(context.Background(), path, ""),
 			LastCheckedAt:       time.Now().UTC().Format(time.RFC3339Nano),
 			CreatedAt:           time.Now().UTC().Format(time.RFC3339Nano),
 			UpdatedAt:           time.Now().UTC().Format(time.RFC3339Nano),

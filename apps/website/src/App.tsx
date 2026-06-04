@@ -33,8 +33,8 @@ const workflow = [
     detail: "Branch, commit, changed files, and diff preview remain attached to the issue.",
   },
   {
-    step: "K8s preview",
-    detail: "The issue can reserve a namespace, deploy the change, and return a probed URL.",
+    step: "Environment proof",
+    detail: "The issue can target a Kubernetes Environment today, then record preview output and evidence.",
   },
   {
     step: "Review evidence",
@@ -45,7 +45,7 @@ const workflow = [
 const proofRows = [
   ["branch", "mspace/issue-23/session-a7c", "commit captured"],
   ["namespace", "mspace-issue-23", "preview retained"],
-  ["cluster", "hangzhou-test", "reachable"],
+  ["environment", "kubernetes: hangzhou-test", "ready"],
   ["evidence", "build, deploy, pod logs", "reviewable"],
 ];
 
@@ -62,13 +62,13 @@ const controlPoints = [
   },
   {
     icon: Network,
-    title: "Kubernetes as validation",
-    body: "The test environment is an issue-scoped namespace with a preview URL and resource evidence.",
+    title: "Environments as validation targets",
+    body: "Kubernetes and virtual machines are reusable targets; preview URLs are outputs recorded after a deploy or run.",
   },
   {
     icon: ShieldCheck,
     title: "Permission boundaries stay visible",
-    body: "Cluster, namespace, kubeconfig, registry, and cleanup decisions are product data, not hidden chat context.",
+    body: "Environment, namespace, kubeconfig, registry, and cleanup decisions are product data, not hidden chat context.",
   },
 ];
 

@@ -677,6 +677,11 @@ export const controlPlaneApi = {
       headers: authHeaders(token),
       body: JSON.stringify(input),
     }),
+  checkCluster: (token: string, workspaceId: string, clusterId: string) =>
+    requestControlPlane<Cluster>(`/api/workspaces/${workspaceId}/clusters/${clusterId}/check`, {
+      method: "POST",
+      headers: authHeaders(token),
+    }),
   deleteCluster: (token: string, workspaceId: string, clusterId: string) =>
     requestControlPlane<{ ok: boolean }>(`/api/workspaces/${workspaceId}/clusters/${clusterId}`, {
       method: "DELETE",

@@ -1643,6 +1643,7 @@ type Store interface {
 	ListClusters(ctx Context, userID, workspaceID string) ([]Cluster, error)
 	CreateCluster(ctx Context, userID, workspaceID string, input ClusterInput) (Cluster, error)
 	UpdateCluster(ctx Context, userID, workspaceID, clusterID string, input ClusterInput) (Cluster, error)
+	CheckCluster(ctx Context, userID, workspaceID, clusterID string) (Cluster, error)
 	DeleteCluster(ctx Context, userID, workspaceID, clusterID string) error
 	DiscoverDefaultKubeconfigs(ctx Context, userID, workspaceID string) (KubeconfigDiscoveryResult, error)
 	ImportKubeconfigs(ctx Context, userID, workspaceID string, paths []string) (KubeconfigImportResult, error)

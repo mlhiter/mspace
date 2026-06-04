@@ -20,12 +20,12 @@
 
 ## Overview
 
-mspace is a review Inbox and Issue workspace for software teams that want coding agents to work in real repositories and validate changes in namespace-scoped Kubernetes test environments.
+mspace is a review Inbox and Issue workspace for software teams that want coding agents to work in real repositories and validate changes against explicit team-owned Environments. Current Environments are Kubernetes clusters and virtual machines; issue deploys use Kubernetes namespaces today.
 
 The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, child tasks, comments, agent sessions, source branch state, runtime logs, deployment evidence, preview URL, and cleanup decision in one place.
 
 > [!NOTE]
-> mspace is a runnable local desktop MVP with a server-owned control plane. Local username/password auth works in restricted or offline environments, and GitHub OAuth remains an optional external identity provider. Team/shared deployments store product data, runtime task state, test environment records, cluster configs, agent profiles, PR handoffs, worker logs, and results in server Postgres; packaged personal desktop mode runs the same control plane on a local server-owned SQLite store. Runtime workers claim tasks from the server queue and prepare their own repo cache/workdir.
+> mspace is a runnable local desktop MVP with a server-owned control plane. Local username/password auth works in restricted or offline environments, and GitHub OAuth remains an optional external identity provider. Team/shared deployments store product data, runtime task state, Environment records, Kubernetes compatibility configs, issue test environment records, agent profiles, PR handoffs, worker logs, and results in server Postgres; packaged personal desktop mode runs the same control plane on a local server-owned SQLite store. Runtime workers claim tasks from the server queue and prepare their own repo cache/workdir.
 
 ## Screenshots
 
@@ -76,7 +76,7 @@ Production deployment uses the root `vercel.json`:
 - Structured failure evidence for failed sessions, deploy reconciliation, preview checks, interruption, and cleanup failures.
 
 > [!IMPORTANT]
-> Generated scoped kubeconfigs, ServiceAccounts, server-owned GitHub App PR execution, and Kubernetes-hosted agent runtime are future work. The current MVP uses stored kubeconfig paths for test environments and fixed workers for execution.
+> Generated scoped kubeconfigs, ServiceAccounts, server-owned GitHub App PR execution, VM deploy providers, and Kubernetes-hosted agent runtime are future work. The current MVP uses stored kubeconfig paths for Kubernetes Environments and fixed workers for execution.
 
 ## Architecture
 
@@ -152,9 +152,9 @@ The packaged desktop app includes bundled `mspace-server` and `mspace-worker` bi
 
 1. Sign in with a local account, or use GitHub OAuth when it is configured, then select the personal or team workspace. For team access from an invitation, open the join link; the desktop switches to the invited team server, shows a safe preview, lets you sign in or create an account if needed, accepts the invitation, and opens the invited workspace.
 2. Create an issue in the Issues tab with a document-style note.
-3. Attach or create a project before agent execution, PR handoff, project runbook access, Tests, or test environments. Personal workspaces can use a local folder or GitHub URL; team workspaces require a GitHub URL so connected workers can clone the repository.
+3. Attach or create a project before agent execution, PR handoff, project runbook access, Tests, or issue test environments. Personal workspaces can use a local folder or GitHub URL; team workspaces require a GitHub URL so connected workers can clone the repository.
 4. In Tests, import or create project cases. Markdown/text imports use one non-empty line per case; CSV and `.xlsx` workbooks use the same column contract: `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags`. Valid case types are `functional`, `ui`, `api`, and `deployment`.
-5. Create/import an Environment. Import kubeconfigs for Kubernetes test environments, or add a virtual machine target for SSH-oriented deployment testing.
+5. Create/import an Environment. Import kubeconfigs for Kubernetes targets, or add a virtual machine target for SSH-oriented deployment testing.
 6. For personal desktop workspaces, let mspace start the local worker when you mention an agent. For team workspaces, connect a worker runtime host from Workspace Settings and run the generated install command on that host. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
 7. Mention an enabled agent profile, such as `@codex`, in an issue comment, or start a test run from selected ready cases or a formal test plan.
 8. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.

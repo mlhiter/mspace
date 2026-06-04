@@ -623,6 +623,7 @@ func (s *PostgresStore) CreateCluster(ctx Context, userID, workspaceID string, i
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
 		return Cluster{}, err
 	}
+	normalized.Status = kubeconfigStatus(dbctx, normalized.KubeconfigPath, normalized.KubeContext)
 	row := s.pool.QueryRow(dbctx, `
 		WITH inserted AS (
 			INSERT INTO clusters (workspace_id, name, kubeconfig_path, kube_context, image_registry_prefix, exposure_mode, node_host, preview_domain, ingress_class, status, last_checked_at)
@@ -648,6 +649,7 @@ func (s *PostgresStore) UpdateCluster(ctx Context, userID, workspaceID, clusterI
 	if err != nil {
 		return Cluster{}, err
 	}
+	updated.Status = kubeconfigStatus(dbctx, updated.KubeconfigPath, updated.KubeContext)
 	row := s.pool.QueryRow(dbctx, `
 		WITH updated AS (
 			UPDATE clusters
@@ -671,6 +673,21 @@ func (s *PostgresStore) UpdateCluster(ctx Context, userID, workspaceID, clusterI
 		return Cluster{}, ErrNotFound
 	}
 	return cluster, err
+}
+
+func (s *PostgresStore) CheckCluster(ctx Context, userID, workspaceID, clusterID string) (Cluster, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	clusterID = strings.TrimSpace(clusterID)
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
+		return Cluster{}, err
+	}
+	cluster, err := loadCluster(dbctx, s.pool, workspaceID, clusterID)
+	if err != nil {
+		return Cluster{}, err
+	}
+	cluster.Status = kubeconfigStatus(dbctx, cluster.KubeconfigPath, cluster.KubeContext)
+	return updateClusterRecord(dbctx, s.pool, cluster)
 }
 
 func (s *PostgresStore) DeleteCluster(ctx Context, userID, workspaceID, clusterID string) error {
@@ -751,10 +768,7 @@ func (s *PostgresStore) ImportKubeconfigs(ctx Context, userID, workspaceID strin
 }
 
 func (s *PostgresStore) importKubeconfigContext(ctx context.Context, workspaceID, kubeconfigPath, kubeContext string) (Cluster, error) {
-	status := "ready"
-	if err := validateKubeconfigContext(kubeconfigPath, kubeContext); err != nil {
-		status = "unreachable"
-	}
+	status := kubeconfigStatus(ctx, kubeconfigPath, kubeContext)
 	existing, err := loadClusterByKubeconfig(ctx, s.pool, workspaceID, kubeconfigPath, kubeContext)
 	if err == nil {
 		if existing.ImageRegistryPrefix == "" {
@@ -1041,7 +1055,9 @@ func kubeconfigContexts(kubeconfigPath string) ([]string, error) {
 	return contexts, nil
 }
 
-func validateKubeconfigContext(kubeconfigPath, kubeContext string) error {
+func validateKubeconfigContext(ctx context.Context, kubeconfigPath, kubeContext string) error {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
 	overrides := &clientcmd.ConfigOverrides{}
 	if strings.TrimSpace(kubeContext) != "" {
 		overrides.CurrentContext = strings.TrimSpace(kubeContext)
@@ -1054,12 +1070,24 @@ func validateKubeconfigContext(kubeconfigPath, kubeContext string) error {
 		return err
 	}
 	config.UserAgent = "mspace-server/kubeconfig-check"
+	config.Timeout = 8 * time.Second
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return err
 	}
 	_, err = clientset.Discovery().ServerVersion()
+	if err != nil {
+		return err
+	}
+	_, err = clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{Limit: 1})
 	return err
+}
+
+func kubeconfigStatus(ctx context.Context, kubeconfigPath, kubeContext string) string {
+	if err := validateKubeconfigContext(ctx, kubeconfigPath, kubeContext); err != nil {
+		return "unreachable"
+	}
+	return "ready"
 }
 
 func importedClusterName(kubeconfigPath, kubeContext string) string {

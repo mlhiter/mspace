@@ -64,7 +64,7 @@ For team or self-hosted worker runtime hosts, connect a worker from Workspace Se
 
 1. Sign in with a local account or configured GitHub OAuth, then select the target workspace.
 2. Open Workspace Settings.
-3. In Runtime, click `Connect environment`.
+3. In Runtime, click `Install worker`.
 4. Copy the generated install command.
 5. Run it on the server, VM, DevBox, or other Docker-capable host that should execute mspace agent work.
 
@@ -347,6 +347,13 @@ Discover kubeconfigs:
 ```bash
 curl -H "Authorization: Bearer <msp-token>" \
   http://127.0.0.1:8787/api/workspaces/<workspace-id>/clusters/discover-defaults
+```
+
+Refresh Kubernetes Environment readiness after editing or importing a kubeconfig:
+
+```bash
+curl -X POST -H "Authorization: Bearer <msp-token>" \
+  http://127.0.0.1:8787/api/workspaces/<workspace-id>/clusters/<cluster-id>/check
 ```
 
 List namespace resources for an issue test environment:

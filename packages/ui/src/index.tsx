@@ -140,7 +140,7 @@ export { Separator } from "./components/ui/separator";
 export { Switch } from "./components/ui/switch";
 export { Textarea as ShadcnTextarea } from "./components/ui/textarea";
 
-type MspaceToastTone = "info" | "success" | "danger";
+type MspaceToastTone = "info" | "success" | "warning" | "danger";
 
 type MspaceToastInput = {
   title?: string;
@@ -238,13 +238,14 @@ function MspaceToastItem(props: { toast: MspaceToastRecord; onDismiss: () => voi
   const { toast } = props;
   const { t } = useMspaceTranslation();
   const tone = toast.tone || "info";
-  const Icon = tone === "danger" ? CircleAlert : tone === "success" ? CheckCircle2 : MessageSquareText;
+  const Icon = tone === "danger" || tone === "warning" ? CircleAlert : tone === "success" ? CheckCircle2 : MessageSquareText;
   return (
     <section
       role={tone === "danger" ? "alert" : "status"}
       className={cn(
         "pointer-events-auto grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-3 rounded-[10px] bg-[color:var(--paper)] px-3.5 py-3 text-[13px] leading-5 shadow-[0_16px_46px_rgba(0,0,0,0.14),0_0_0_1px_var(--line)]",
         tone === "success" ? "text-[color:var(--success)]" : null,
+        tone === "warning" ? "text-[color:var(--warning)]" : null,
         tone === "danger" ? "text-[color:var(--danger)]" : null,
         tone === "info" ? "text-[color:var(--muted-strong)]" : null,
       )}
@@ -1313,11 +1314,11 @@ export function Field(props: PropsWithChildren<{ label: string; hint?: string; c
 export function StatusBadge(props: { value: string; className?: string; label?: string; valueLabel?: string }) {
   const normalizedValue = normalizeStatusValue(props.value);
   const tone =
-    normalizedValue === "open" || normalizedValue === "completed" || normalizedValue === "test_passed"
+    normalizedValue === "open" || normalizedValue === "completed" || normalizedValue === "test_passed" || normalizedValue === "ready"
       ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
       : normalizedValue === "closed"
         ? "bg-[color:var(--done-soft)] text-[color:var(--done)]"
-        : normalizedValue === "failed" || normalizedValue === "test_failed" || normalizedValue === "deploy_failed" || normalizedValue === "cleanup_failed"
+        : normalizedValue === "failed" || normalizedValue === "test_failed" || normalizedValue === "deploy_failed" || normalizedValue === "cleanup_failed" || normalizedValue === "unreachable"
         ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
         : normalizedValue === "running" || normalizedValue === "in_progress" || normalizedValue === "test_in_progress" || normalizedValue === "deploying"
           ? "bg-[color:var(--blue-soft)] text-[color:var(--accent-blue)]"
