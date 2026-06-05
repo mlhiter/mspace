@@ -582,7 +582,7 @@ Implemented as of 2026-06-03:
 16. Structured `session_failures` records that surface failed sessions, deploy-time preview verification failures, agent interruption, and cleanup failures as continueable Issue Detail timeline and Evidence entries.
 17. Preview status refreshes that update Test environment state and `Checked` time without adding healthy snapshot cards to the Overview timeline.
 18. Issue Resources tab for the fixed test namespace, using live Kubernetes resource reads without exposing cross-namespace browsing.
-19. Tests route with Cases, Case suggestions, Plans, Runs, dedicated detail pages, modal case create/import flows, Excel `.xlsx` import, and issue-backed test run execution.
+19. Tests route with Cases, Case suggestions, Plans, Runs, dedicated detail pages, modal case create/import flows, preview-before-confirm Excel `.xlsx` and text-like file import, and issue-backed test run execution.
 
 Next build steps:
 

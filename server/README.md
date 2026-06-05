@@ -107,6 +107,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Read the workspace project runbook. |
 | `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the workspace project runbook and record a revision. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | List project test cases. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import/preview` | Parse Markdown, text, CSV, or Excel `.xlsx` cases without writing them, returning import counts, skipped rows, missing field counts, quality finding counts, and sample rows. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import` | Import Markdown, text, CSV, or Excel `.xlsx` cases. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize` | Queue an issue-backed Codex case refinement session. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate` | Queue an issue-backed Codex case generation session. |
@@ -198,7 +199,7 @@ Project creation is workspace-kind aware. Personal workspaces may use `sourceTyp
 
 Test cases, revisions, suggestions, plans, runs, and run items are server-owned project data. Team/shared deployments persist them through Postgres migrations, while packaged personal desktop mode persists them through the server-owned SQLite snapshot store.
 
-Case import supports `markdown`, `text`, `csv`, and `xlsx`. Markdown/text import treats each non-empty line as one case. CSV and `.xlsx` share the `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` header contract. Excel content is base64-encoded in the JSON request; the server reads the first non-empty sheet, skips rows without a title, validates types, and opens workbooks with explicit unzip limits.
+Case import supports `markdown`, `text`, `csv`, and `xlsx`. Clients should call `/test-cases/import/preview` first, show how many cases will be imported, skipped rows, missing field counts, quality findings, and samples, then call `/test-cases/import` only after the user confirms. Markdown/text import treats each non-empty line as one case. CSV and `.xlsx` share the `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` header contract. Import is capped at 1,000 cases per request. Text-like content is capped at 2 MB; Excel content is base64-encoded in the JSON request and the decoded workbook is capped at 2 MB. The server reads the first non-empty sheet, skips rows without a title, validates types, and opens workbooks with explicit unzip limits.
 
 Valid case types are `functional`, `ui`, `api`, and `deployment`. The current product can classify those cases and plan against them; specialized UI/CDP automation, API harnessing, deployment orchestration, and multi-worker scheduling remain future execution capabilities behind the same Issue and Worker runtime path.
 

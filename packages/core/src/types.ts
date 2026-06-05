@@ -134,6 +134,34 @@ export interface ImportTestCasesResult {
   skipped: TestCaseImportSkip[];
 }
 
+export interface TestCaseImportPreviewCase {
+  title: string;
+  type: string;
+  status: string;
+  qualityScore: number;
+  missingFields: string[];
+  qualityFindings: TestCaseQualityFinding[];
+}
+
+export interface ImportTestCasesPreview {
+  format: string;
+  fileName: string;
+  contentBytes: number;
+  maxContentBytes: number;
+  maxWorkbookBytes: number;
+  maxImportableCases: number;
+  parsedCount: number;
+  importableCount: number;
+  skippedCount: number;
+  readyCount: number;
+  needsReviewCount: number;
+  reachedImportCaseLimit: boolean;
+  missingFieldCounts: Record<string, number>;
+  qualityFindingCounts: Record<string, number>;
+  importableCaseSamples: TestCaseImportPreviewCase[];
+  skippedSamples: TestCaseImportSkip[];
+}
+
 export interface OptimizeTestCasesInput {
   caseIds: string[];
   prompt?: string;

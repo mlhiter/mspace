@@ -15,15 +15,18 @@ import (
 )
 
 const (
-	maxImportedTestCases          = 100
-	maxImportedTestCaseBytes      = 256 * 1024
+	maxImportedTestCases          = 1000
+	maxImportedTestCaseBytes      = 2 * 1024 * 1024
 	maxImportedWorkbookBytes      = 2 * 1024 * 1024
 	maxImportedWorkbookUnzipBytes = 16 * 1024 * 1024
 	maxImportedWorkbookXMLBytes   = 4 * 1024 * 1024
+	maxImportPreviewSamples       = 5
 	defaultTestCaseType           = "functional"
 	defaultTestCaseSource         = "manual"
 	defaultImportedCaseSource     = "import"
 )
+
+var requiredImportPreviewFields = []string{"title", "preconditions", "steps", "expectedResult", "environmentRequirements"}
 
 var (
 	importBulletPattern = regexp.MustCompile(`^\s*(?:[-*+]\s+\[[ xX]\]|\d+[\.)]|[-*+])\s+`)
@@ -120,10 +123,10 @@ func normalizeImportTestCasesInput(input ImportTestCasesInput) (ImportTestCasesI
 		return ImportTestCasesInput{}, errors.New("content is required")
 	}
 	if input.Format == "xlsx" && len([]byte(input.Content)) > base64.StdEncoding.EncodedLen(maxImportedWorkbookBytes) {
-		return ImportTestCasesInput{}, fmt.Errorf("workbook must be smaller than %d bytes", maxImportedWorkbookBytes)
+		return ImportTestCasesInput{}, fmt.Errorf("workbook must be smaller than %d MB", maxImportedWorkbookBytes/(1024*1024))
 	}
 	if input.Format != "xlsx" && len([]byte(input.Content)) > maxImportedTestCaseBytes {
-		return ImportTestCasesInput{}, fmt.Errorf("content must be smaller than %d bytes", maxImportedTestCaseBytes)
+		return ImportTestCasesInput{}, fmt.Errorf("import file content must be smaller than %d MB", maxImportedTestCaseBytes/(1024*1024))
 	}
 	return input, nil
 }
@@ -143,6 +146,77 @@ func parseImportedTestCases(input ImportTestCasesInput) ([]TestCaseInput, []Test
 	}
 }
 
+func previewImportedTestCases(input ImportTestCasesInput) (ImportTestCasesPreview, error) {
+	normalized, err := normalizeImportTestCasesInput(input)
+	if err != nil {
+		return ImportTestCasesPreview{}, err
+	}
+	inputs, skipped, err := parseImportedTestCases(normalized)
+	if err != nil {
+		return ImportTestCasesPreview{}, err
+	}
+	contentBytes := len([]byte(normalized.Content))
+	if normalized.Format == "xlsx" {
+		if workbookBytes, decodeErr := base64.StdEncoding.DecodeString(normalized.Content); decodeErr == nil {
+			contentBytes = len(workbookBytes)
+		}
+	}
+	preview := ImportTestCasesPreview{
+		Format:                 normalized.Format,
+		FileName:               normalized.FileName,
+		ContentBytes:           contentBytes,
+		MaxContentBytes:        maxImportedTestCaseBytes,
+		MaxWorkbookBytes:       maxImportedWorkbookBytes,
+		MaxImportableCases:     maxImportedTestCases,
+		ParsedCount:            len(inputs),
+		SkippedCount:           len(skipped),
+		ReachedImportCaseLimit: len(inputs) >= maxImportedTestCases,
+		MissingFieldCounts:     map[string]int{},
+		QualityFindingCounts:   map[string]int{},
+		ImportableCaseSamples:  []TestCaseImportPreviewCase{},
+		SkippedSamples:         sampleImportSkips(skipped),
+	}
+	if normalized.Format == "xlsx" {
+		preview.MaxContentBytes = base64.StdEncoding.EncodedLen(maxImportedWorkbookBytes)
+	}
+	for _, field := range requiredImportPreviewFields {
+		preview.MissingFieldCounts[field] = 0
+	}
+	for _, imported := range inputs {
+		normalizedInput, score, findings, err := normalizeTestCaseInput(imported, defaultImportedCaseSource)
+		if err != nil {
+			preview.SkippedCount++
+			if len(preview.SkippedSamples) < maxImportPreviewSamples {
+				preview.SkippedSamples = append(preview.SkippedSamples, TestCaseImportSkip{Reason: err.Error(), Content: imported.Title})
+			}
+			continue
+		}
+		preview.ImportableCount++
+		preview.ReadyCount += boolToInt(normalizedInput.Status == "ready")
+		preview.NeedsReviewCount += boolToInt(normalizedInput.Status == "needs_review")
+		for _, field := range missingImportFields(normalizedInput) {
+			preview.MissingFieldCounts[field]++
+		}
+		for _, finding := range findings {
+			preview.QualityFindingCounts[finding.Code]++
+		}
+		if len(preview.ImportableCaseSamples) < maxImportPreviewSamples {
+			preview.ImportableCaseSamples = append(preview.ImportableCaseSamples, TestCaseImportPreviewCase{
+				Title:           normalizedInput.Title,
+				Type:            normalizedInput.Type,
+				Status:          normalizedInput.Status,
+				QualityScore:    score,
+				MissingFields:   missingImportFields(normalizedInput),
+				QualityFindings: qualityFindingsOrEmpty(findings),
+			})
+		}
+	}
+	if preview.ImportableCount == 0 {
+		return ImportTestCasesPreview{}, errors.New("content cannot be empty")
+	}
+	return normalizeImportTestCasesPreview(preview), nil
+}
+
 func parseLineBasedTestCases(content string) []TestCaseInput {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	content = strings.ReplaceAll(content, "\r", "\n")
@@ -160,6 +234,40 @@ func parseLineBasedTestCases(content string) []TestCaseInput {
 		}
 	}
 	return cases
+}
+
+func sampleImportSkips(values []TestCaseImportSkip) []TestCaseImportSkip {
+	limit := minInt(len(values), maxImportPreviewSamples)
+	result := make([]TestCaseImportSkip, 0, limit)
+	for _, value := range values[:limit] {
+		result = append(result, truncateImportSkip(value))
+	}
+	return result
+}
+
+func truncateImportSkip(value TestCaseImportSkip) TestCaseImportSkip {
+	value.Content = truncateString(value.Content, 180)
+	return value
+}
+
+func missingImportFields(input TestCaseInput) []string {
+	missing := []string{}
+	if strings.TrimSpace(input.Title) == "" {
+		missing = append(missing, "title")
+	}
+	if strings.TrimSpace(input.Preconditions) == "" {
+		missing = append(missing, "preconditions")
+	}
+	if len(input.Steps) == 0 {
+		missing = append(missing, "steps")
+	}
+	if strings.TrimSpace(input.ExpectedResult) == "" {
+		missing = append(missing, "expectedResult")
+	}
+	if strings.TrimSpace(input.EnvironmentRequirements) == "" {
+		missing = append(missing, "environmentRequirements")
+	}
+	return missing
 }
 
 func parseCSVTestCases(content string) ([]TestCaseInput, []TestCaseImportSkip, error) {
@@ -186,7 +294,7 @@ func parseExcelTestCases(content string) ([]TestCaseInput, []TestCaseImportSkip,
 		return nil, nil, errors.New("content is required")
 	}
 	if len(workbookBytes) > maxImportedWorkbookBytes {
-		return nil, nil, fmt.Errorf("workbook must be smaller than %d bytes", maxImportedWorkbookBytes)
+		return nil, nil, fmt.Errorf("workbook must be smaller than %d MB", maxImportedWorkbookBytes/(1024*1024))
 	}
 	file, err := excelize.OpenReader(bytes.NewReader(workbookBytes), excelize.Options{
 		UnzipSizeLimit:    maxImportedWorkbookUnzipBytes,

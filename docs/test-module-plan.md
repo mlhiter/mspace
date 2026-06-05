@@ -233,9 +233,10 @@ The user enters `Tests -> Cases`, selects a project, then can:
 
 The system does three things:
 
-1. converts rough input into structured draft cases;
-2. computes executability signals;
-3. highlights missing information and likely duplicates.
+1. parses rough input through a read-only import preview;
+2. reports how many cases will import, how many rows will be skipped, and whether required fields are missing;
+3. lets the user confirm before writing cases;
+4. converts confirmed input into structured draft cases and computes executability signals.
 
 Output:
 
@@ -680,6 +681,7 @@ Phase 1:
 
 ```text
 GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-cases
+POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import/preview
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-cases
 GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}
@@ -814,7 +816,7 @@ Scope:
 - add `Tests` navigation;
 - case list;
 - case detail as a dedicated page, not a side pane;
-- Markdown, text, CSV, and Excel `.xlsx` file import;
+- Markdown, text, CSV, and Excel `.xlsx` file import with read-only preview before confirmation;
 - manual create and edit;
 - case executability signal;
 - case revisions;
@@ -827,8 +829,9 @@ This phase does not depend on Codex or workers.
 Acceptance:
 
 - user can select a Project;
-- user can import a rough test list;
+- user can preview and then import a rough test list;
 - user can import `.xlsx` workbooks whose first non-empty sheet uses `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers;
+- preview shows importable count, skipped count, missing field counts, quality findings, sample cases, and skipped-row samples before any write;
 - system creates structured draft cases;
 - executability and missing fields are visible;
 - user can edit a case;

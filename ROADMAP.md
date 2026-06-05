@@ -29,7 +29,7 @@ The server control-plane slice now owns local password auth, optional GitHub sig
 
 The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, opt-in automatic test deploy after captured source commits, automatic personal worker startup/credential renewal, and bilingual desktop UI support for English and Simplified Chinese. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 
-The Tests surface is now part of the local MVP loop: project cases, case suggestions, plans, lightweight plan-level setup, runs, modal create/import, Excel `.xlsx` import, case revisions, and issue-backed test run execution are implemented. The next test-module proof point is dogfooding a real plan through setup-produced `test-setup-result.json`, worker-produced `test-result.json`, human acceptance/blocking, and follow-up case suggestions rather than expanding into CDP, SSH scheduling, templates, or multi-worker orchestration first.
+The Tests surface is now part of the local MVP loop: project cases, case suggestions, plans, lightweight plan-level setup, runs, modal create/import with preview-before-confirm, Excel `.xlsx` import, case revisions, and issue-backed test run execution are implemented. The next test-module proof point is dogfooding a real plan through setup-produced `test-setup-result.json`, worker-produced `test-result.json`, human acceptance/blocking, and follow-up case suggestions rather than expanding into CDP, SSH scheduling, templates, or multi-worker orchestration first.
 
 ## Approved Execution Plan
 

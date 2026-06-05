@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-05",
+    title: "Preview-before-confirm case imports",
+    summary:
+      "mspace made larger test-case files safer to import by parsing them on the server first and asking the user to confirm before writing cases.",
+    items: [
+      "Added a read-only import preview API for Markdown, text, CSV, and Excel `.xlsx` files.",
+      "Showed importable count, skipped rows, missing field counts, quality findings, sample cases, and skipped-row samples in the Tests import modal.",
+      "Raised the backend import guardrails to 1,000 cases per request and 2 MB content/workbook files, with the HTTP body limit sized for base64 Excel uploads.",
+      "Kept the final import call separate so users can inspect parsed results before creating project test cases.",
+    ],
+  },
+  {
+    date: "2026-06-05",
     title: "File-based test case imports",
     summary:
       "mspace made every test-case import format use the same choose-file interaction instead of mixing paste fields with workbook upload.",

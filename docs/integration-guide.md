@@ -174,6 +174,7 @@ Successful acceptance returns the joined workspace. Desktop clients should selec
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Read the project runbook. |
 | `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the project runbook and record a revision. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | List project test cases, optionally filtered by status. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import/preview` | Parse Markdown, text, CSV, or Excel `.xlsx` cases without writing them. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import` | Import Markdown, text, CSV, or Excel `.xlsx` cases. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize` | Queue an issue-backed Codex session that returns case suggestions. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate` | Queue an issue-backed Codex session that proposes baseline cases. |
@@ -259,14 +260,16 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
 Valid case types are `functional`, `ui`, `api`, and `deployment`. Status values are `draft`, `needs_review`, `ready`, and `archived`. Priority is optional and can be empty or `p0`, `p1`, `p2`, or `p3`.
 The import parser also accepts common type aliases such as `functional_test`, `ui_test`, `api_test`, `deployment_test`, `功能测试`, `UI 测试`, `接口测试`, and `部署测试`, then stores the normalized fixed value.
 
-Import cases:
+Preview cases before import:
 
 ```bash
-curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<project-id>/test-cases/import" \
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<project-id>/test-cases/import/preview" \
   -H "Authorization: Bearer <msp-token>" \
   -H 'Content-Type: application/json' \
   -d '{"format":"markdown","content":"- Invalid password shows an error\n- User can reset password from the login page"}'
 ```
+
+The preview response is read-only and returns `parsedCount`, `importableCount`, `skippedCount`, `missingFieldCounts`, `qualityFindingCounts`, `importableCaseSamples`, and `skippedSamples`. Clients should show those counts and samples, then call `/test-cases/import` with the same body only after the user confirms.
 
 `format` can be `markdown`, `text`, `csv`, or `xlsx`. Markdown and text imports treat each non-empty line as one case. CSV and `.xlsx` imports use the same header contract:
 
@@ -274,7 +277,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
 title,type,area,priority,preconditions,steps,expected_result,environment_requirements,tags
 ```
 
-For `.xlsx`, send the workbook bytes as base64 in `content` and set `format:"xlsx"`. The server reads the first non-empty worksheet, skips rows without `title`, validates `type`, records skipped rows in the response, and uses explicit workbook unzip limits.
+For `.xlsx`, send the workbook bytes as base64 in `content` and set `format:"xlsx"`. Import is capped at 1,000 cases per request. Text-like content is capped at 2 MB, and decoded `.xlsx` workbooks are capped at 2 MB before the server opens them with explicit workbook unzip limits. The server reads the first non-empty worksheet, skips rows without `title`, validates `type`, and records skipped rows in the preview and final import responses.
 
 ```json
 {

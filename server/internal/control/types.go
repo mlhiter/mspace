@@ -366,12 +366,56 @@ type ImportTestCasesResult struct {
 	Skipped []TestCaseImportSkip `json:"skipped"`
 }
 
+type TestCaseImportPreviewCase struct {
+	Title           string                   `json:"title"`
+	Type            string                   `json:"type"`
+	Status          string                   `json:"status"`
+	QualityScore    int                      `json:"qualityScore"`
+	MissingFields   []string                 `json:"missingFields"`
+	QualityFindings []TestCaseQualityFinding `json:"qualityFindings"`
+}
+
+type ImportTestCasesPreview struct {
+	Format                 string                      `json:"format"`
+	FileName               string                      `json:"fileName"`
+	ContentBytes           int                         `json:"contentBytes"`
+	MaxContentBytes        int                         `json:"maxContentBytes"`
+	MaxWorkbookBytes       int                         `json:"maxWorkbookBytes"`
+	MaxImportableCases     int                         `json:"maxImportableCases"`
+	ParsedCount            int                         `json:"parsedCount"`
+	ImportableCount        int                         `json:"importableCount"`
+	SkippedCount           int                         `json:"skippedCount"`
+	ReadyCount             int                         `json:"readyCount"`
+	NeedsReviewCount       int                         `json:"needsReviewCount"`
+	ReachedImportCaseLimit bool                        `json:"reachedImportCaseLimit"`
+	MissingFieldCounts     map[string]int              `json:"missingFieldCounts"`
+	QualityFindingCounts   map[string]int              `json:"qualityFindingCounts"`
+	ImportableCaseSamples  []TestCaseImportPreviewCase `json:"importableCaseSamples"`
+	SkippedSamples         []TestCaseImportSkip        `json:"skippedSamples"`
+}
+
 func normalizeImportTestCasesResult(value ImportTestCasesResult) ImportTestCasesResult {
 	if value.Created == nil {
 		value.Created = []TestCase{}
 	}
 	if value.Skipped == nil {
 		value.Skipped = []TestCaseImportSkip{}
+	}
+	return value
+}
+
+func normalizeImportTestCasesPreview(value ImportTestCasesPreview) ImportTestCasesPreview {
+	if value.MissingFieldCounts == nil {
+		value.MissingFieldCounts = map[string]int{}
+	}
+	if value.QualityFindingCounts == nil {
+		value.QualityFindingCounts = map[string]int{}
+	}
+	if value.ImportableCaseSamples == nil {
+		value.ImportableCaseSamples = []TestCaseImportPreviewCase{}
+	}
+	if value.SkippedSamples == nil {
+		value.SkippedSamples = []TestCaseImportSkip{}
 	}
 	return value
 }

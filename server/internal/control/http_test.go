@@ -1625,6 +1625,50 @@ func TestProjectTestCasesHTTPFlow(t *testing.T) {
 		t.Fatalf("expected no skipped markdown imports, got %+v", imported.Skipped)
 	}
 
+	previewRecorder := httptest.NewRecorder()
+	workbookContent := testCaseWorkbookBase64(t)
+	workbookBytes, err := base64.StdEncoding.DecodeString(workbookContent)
+	if err != nil {
+		t.Fatalf("decode workbook fixture: %v", err)
+	}
+	previewBody, err := json.Marshal(ImportTestCasesInput{
+		Format:   "xlsx",
+		FileName: "cases.xlsx",
+		Content:  workbookContent,
+	})
+	if err != nil {
+		t.Fatalf("marshal preview import body: %v", err)
+	}
+	previewReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/import/preview", bytes.NewReader(previewBody))
+	previewReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(previewRecorder, previewReq)
+	if previewRecorder.Code != http.StatusOK {
+		t.Fatalf("preview import test cases status=%d body=%s", previewRecorder.Code, previewRecorder.Body.String())
+	}
+	var preview ImportTestCasesPreview
+	if err := json.Unmarshal(previewRecorder.Body.Bytes(), &preview); err != nil {
+		t.Fatalf("parse import preview: %v", err)
+	}
+	if preview.ImportableCount != 2 || preview.SkippedCount != 2 || preview.ParsedCount != 3 {
+		t.Fatalf("unexpected import preview counts: %+v", preview)
+	}
+	if preview.MissingFieldCounts["preconditions"] != 0 || len(preview.ImportableCaseSamples) == 0 || preview.ImportableCaseSamples[0].Title != "Invite link opens workspace" {
+		t.Fatalf("unexpected import preview details: %+v", preview)
+	}
+	if preview.ContentBytes != len(workbookBytes) || preview.MaxImportableCases != maxImportedTestCases {
+		t.Fatalf("unexpected import preview limits: %+v", preview)
+	}
+	if preview.ReachedImportCaseLimit {
+		t.Fatalf("did not expect small preview to hit import limit: %+v", preview)
+	}
+	emptyPreviewRecorder := httptest.NewRecorder()
+	emptyPreviewReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/import/preview", strings.NewReader(`{"format":"csv","content":""}`))
+	emptyPreviewReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(emptyPreviewRecorder, emptyPreviewReq)
+	if emptyPreviewRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("empty preview status=%d body=%s", emptyPreviewRecorder.Code, emptyPreviewRecorder.Body.String())
+	}
+
 	listRecorder := httptest.NewRecorder()
 	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases?status=ready", nil)
 	listReq.Header.Set("Authorization", "Bearer "+sessionToken)

@@ -33,7 +33,7 @@ type Server struct {
 const serverProtocolVersion = 1
 const maxIssueAttachmentBytes = 10 << 20
 const maxPasswordAuthBodyBytes = 4 << 10
-const maxTestCaseImportBodyBytes = 3 << 20
+const maxTestCaseImportBodyBytes = 5 << 20
 const defaultRuntimeTaskListLimit = 10
 const maxRuntimeTaskListLimit = 100
 
@@ -104,6 +104,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleGetProjectRunbook)
 	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleUpdateProjectRunbook)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases", s.handleListProjectTestCases)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import/preview", s.handlePreviewImportProjectTestCases)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import", s.handleImportProjectTestCases)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize", s.handleOptimizeProjectTestCases)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate", s.handleGenerateProjectTestCases)
@@ -788,6 +789,43 @@ func (s *Server) handleCreateProjectTestCase(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusCreated, testCase)
+}
+
+func (s *Server) handlePreviewImportProjectTestCases(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
+	projects, err := s.store.ListProjects(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	foundProject := false
+	for _, project := range projects {
+		if project.ID == projectID {
+			foundProject = true
+			break
+		}
+	}
+	if !foundProject {
+		writeStoreError(w, ErrNotFound)
+		return
+	}
+	input := ImportTestCasesInput{}
+	body := http.MaxBytesReader(w, r.Body, maxTestCaseImportBodyBytes)
+	if err := json.NewDecoder(body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	preview, err := previewImportedTestCases(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, normalizeImportTestCasesPreview(preview))
 }
 
 func (s *Server) handleImportProjectTestCases(w http.ResponseWriter, r *http.Request) {

@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type Dispatch, type FormEvent, type ReactNode, type SetStateAction } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import {
@@ -34,7 +34,9 @@ import {
   type Environment,
   type RuntimeWorker,
   type TestCase,
+  type ImportTestCasesInput,
   type TestCaseInput,
+  type ImportTestCasesPreview,
   type TestCaseLatestResult,
   type TestCaseProposal,
   type TestCaseRevision,
@@ -69,6 +71,11 @@ import { RelativeTime } from "./time";
 type TabKey = "cases" | "proposals" | "plans" | "runs";
 type TestCaseDetailTab = "details" | "runs" | "revisions";
 type TestCaseImportFormat = "markdown" | "text" | "csv" | "xlsx";
+type ImportPreviewRequest = {
+  file: File;
+  format: TestCaseImportFormat;
+  requestId: number;
+};
 
 type CaseForm = {
   title: string;
@@ -854,6 +861,28 @@ function importFileMatchesFormat(file: File, format: TestCaseImportFormat) {
   return importFileExtensionsByFormat[format].some((extension) => name.endsWith(extension));
 }
 
+function importPreviewFieldLabel(field: string, t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  return t(`tests.importPreviewField.${field}`, { defaultValue: field });
+}
+
+function importPreviewSizeLabel(bytes: number) {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${Math.ceil(bytes / 1024)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+function importPreviewMissingEntries(preview: ImportTestCasesPreview) {
+  return Object.entries(preview.missingFieldCounts || {}).filter(([, count]) => count > 0);
+}
+
+function importPreviewQualityEntries(preview: ImportTestCasesPreview) {
+  return Object.entries(preview.qualityFindingCounts || {}).filter(([, count]) => count > 0);
+}
+
 function qualityFindingLabel(code: string, message: string, t: ReturnType<typeof useMspaceTranslation>["t"]) {
   return t(`tests.qualityFinding.${code}`, { defaultValue: message || code });
 }
@@ -1170,9 +1199,12 @@ export function TestsPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [importFormat, setImportFormat] = useState<TestCaseImportFormat>("markdown");
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importPayload, setImportPayload] = useState<ImportTestCasesInput | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportTestCasesPreview | null>(null);
   const [importFileError, setImportFileError] = useState("");
   const [importSummary, setImportSummary] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const importPreviewRequestRef = useRef(0);
   const workerReadiness = useTestsWorkerReadiness(auth, workspaceId, setActionMessage);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) || projects[0];
@@ -1289,7 +1321,7 @@ export function TestsPage() {
   const someVisibleCasesSelected = selectedVisibleCaseCount > 0 && !allVisibleCasesSelected;
   const canCreateCase = Boolean(effectiveProjectId && caseForm.title.trim());
   const canCreatePlan = Boolean(effectiveProjectId && planForm.title.trim() && selectedCaseIds.length > 0);
-  const canImportCases = Boolean(importFile && !importFileError);
+  const canImportCases = Boolean(importFile && importPayload && importPreview && !importFileError);
 
   async function invalidateCaseWorkflow() {
     await Promise.all([
@@ -1317,17 +1349,38 @@ export function TestsPage() {
     },
   });
 
+  const previewImport = useMutation({
+    mutationFn: async ({ file, format, requestId }: ImportPreviewRequest) => {
+      const content = await readImportFileContent(file, format);
+      const payload = {
+        format,
+        content,
+        fileName: file.name,
+      };
+      const preview = await controlPlaneApi.previewProjectTestCasesImport(auth.token, workspaceId, effectiveProjectId, payload);
+      return { payload, preview, requestId };
+    },
+    onSuccess: ({ payload, preview, requestId }) => {
+      if (requestId !== importPreviewRequestRef.current) return;
+      setImportPayload(payload);
+      setImportPreview(preview);
+      setImportFileError("");
+      importCases.reset();
+    },
+    onError: (error, request) => {
+      if (request.requestId !== importPreviewRequestRef.current) return;
+      setImportPayload(null);
+      setImportPreview(null);
+      setImportFileError(error instanceof Error ? error.message : t("tests.importPreviewFailed"));
+    },
+  });
+
   const importCases = useMutation({
     mutationFn: async () => {
-      if (!importFile) {
+      if (!importPayload || !importPreview) {
         throw new Error(t("tests.importFileRequired"));
       }
-      const content = await readImportFileContent(importFile, importFormat);
-      return controlPlaneApi.importProjectTestCases(auth.token, workspaceId, effectiveProjectId, {
-        format: importFormat,
-        content,
-        fileName: importFile?.name,
-      });
+      return controlPlaneApi.importProjectTestCases(auth.token, workspaceId, effectiveProjectId, importPayload);
     },
     onSuccess: async (result) => {
       const created = result.created ?? [];
@@ -1336,6 +1389,8 @@ export function TestsPage() {
       setImportSummary(summary);
       setActionMessage(summary);
       setImportFile(null);
+      setImportPayload(null);
+      setImportPreview(null);
       setImportFileError("");
       setImportOpen(false);
       if (created[0]) {
@@ -1588,31 +1643,63 @@ export function TestsPage() {
   }
 
   function closeImportDialog() {
+    importPreviewRequestRef.current += 1;
     setImportOpen(false);
+    setImportFile(null);
+    setImportPayload(null);
+    setImportPreview(null);
     setImportFileError("");
+    setImportSummary("");
+    previewImport.reset();
+    importCases.reset();
+  }
+
+  function openImportDialog() {
+    importPreviewRequestRef.current += 1;
+    setImportOpen(true);
+    setImportFile(null);
+    setImportPayload(null);
+    setImportPreview(null);
+    setImportFileError("");
+    setImportSummary("");
+    previewImport.reset();
     importCases.reset();
   }
 
   function updateImportFormat(value: string) {
+    importPreviewRequestRef.current += 1;
     setImportFormat(normalizeImportFormat(value));
     setImportFile(null);
+    setImportPayload(null);
+    setImportPreview(null);
     setImportFileError("");
+    setImportSummary("");
+    previewImport.reset();
     importCases.reset();
   }
 
   function selectImportFile(file: File | undefined) {
     setImportFileError("");
+    setImportPayload(null);
+    setImportPreview(null);
+    setImportSummary("");
+    previewImport.reset();
     importCases.reset();
     if (!file) {
+      importPreviewRequestRef.current += 1;
       setImportFile(null);
       return;
     }
     if (!importFileMatchesFormat(file, importFormat)) {
+      importPreviewRequestRef.current += 1;
       setImportFile(null);
       setImportFileError(t("tests.importInvalidFile", { format: importFormatFileLabel(importFormat, t) }));
       return;
     }
     setImportFile(file);
+    const requestId = importPreviewRequestRef.current + 1;
+    importPreviewRequestRef.current = requestId;
+    previewImport.mutate({ file, format: importFormat, requestId });
   }
 
   function submitCreateCase(event: FormEvent<HTMLFormElement>) {
@@ -1718,7 +1805,7 @@ export function TestsPage() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <Button type="button" variant="secondary" onClick={() => setImportOpen(true)} disabled={!effectiveProjectId}>
+                  <Button type="button" variant="secondary" onClick={openImportDialog} disabled={!effectiveProjectId}>
                     <FileUp data-icon />
                     {t("tests.importCases")}
                   </Button>
@@ -2166,20 +2253,22 @@ export function TestsPage() {
                       <p className="text-[12px] text-[color:var(--muted)]">{t("tests.importSelected", { name: importFile.name })}</p>
                     ) : null}
                     {importFileError ? <p className="text-[12px] text-[color:var(--danger)]">{importFileError}</p> : null}
+                    {previewImport.isPending ? <p className="text-[12px] text-[color:var(--muted)]">{t("tests.importPreviewing")}</p> : null}
                   </div>
                 </Field>
                 <div className="min-w-0 rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
                   {importFormat === "xlsx" ? t("tests.importExcelHint") : t("tests.importFormatHint")}
                 </div>
+                {importPreview ? <ImportPreviewPanel preview={importPreview} t={t} /> : null}
                 {importSummary ? <p className="text-[12px] text-[color:var(--muted)]">{importSummary}</p> : null}
                 {importCases.error ? <p className="text-[12px] text-[color:var(--danger)]">{importCases.error.message}</p> : null}
                 <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[color:var(--line)] pt-3">
                   <Button type="button" variant="secondary" onClick={closeImportDialog}>
                     {t("common.cancel")}
                   </Button>
-                  <Button type="submit" disabled={importCases.isPending || !canImportCases}>
+                  <Button type="submit" disabled={importCases.isPending || previewImport.isPending || !canImportCases}>
                     <FileUp data-icon />
-                    {importCases.isPending ? t("tests.importing") : t("tests.importCases")}
+                    {importCases.isPending ? t("tests.importing") : importPreview ? t("tests.importConfirm") : t("tests.importPreviewFirst")}
                   </Button>
                 </div>
               </form>
@@ -2900,6 +2989,82 @@ function ProposalCasePreview(props: { title: string; testCase?: TestCase; input?
         <div className="text-[color:var(--muted)]">{props.emptyText}</div>
       )}
     </div>
+  );
+}
+
+function ImportPreviewPanel(props: { preview: ImportTestCasesPreview; t: ReturnType<typeof useMspaceTranslation>["t"] }) {
+  const { preview, t } = props;
+  const missingEntries = importPreviewMissingEntries(preview);
+  const qualityEntries = importPreviewQualityEntries(preview);
+  return (
+    <section className="grid min-w-0 gap-3 rounded-[8px] bg-[color:var(--surface)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">{t("tests.importPreviewTitle")}</div>
+          <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">
+            {t("tests.importPreviewBody", {
+              count: preview.importableCount,
+              skipped: preview.skippedCount,
+              size: importPreviewSizeLabel(preview.contentBytes),
+            })}
+          </p>
+        </div>
+        {preview.reachedImportCaseLimit ? (
+          <StatusBadge value="blocked" valueLabel={t("tests.importPreviewLimit", { count: preview.maxImportableCases })} />
+        ) : null}
+      </div>
+      <div className="grid gap-2 sm:grid-cols-4">
+        <RunMetric label={t("tests.importPreviewParsed")} value={String(preview.parsedCount)} />
+        <RunMetric label={t("tests.importPreviewImportable")} value={String(preview.importableCount)} />
+        <RunMetric label={t("tests.importPreviewSkipped")} value={String(preview.skippedCount)} />
+        <RunMetric label={t("tests.importPreviewNeedsReview")} value={String(preview.needsReviewCount)} />
+      </div>
+      {missingEntries.length > 0 ? (
+        <div className="rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="font-medium text-[color:var(--muted-strong)]">{t("tests.importPreviewMissingFields")}</div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {missingEntries.map(([field, count]) => (
+              <span key={field} className="rounded-[999px] bg-[color:var(--block)] px-2 py-1 text-[color:var(--muted)]">
+                {importPreviewFieldLabel(field, t)} · {count}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {qualityEntries.length > 0 ? (
+        <div className="rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="font-medium text-[color:var(--muted-strong)]">{t("tests.importPreviewQualityFindings")}</div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {qualityEntries.map(([code, count]) => (
+              <span key={code} className="rounded-[999px] bg-[color:var(--block)] px-2 py-1 text-[color:var(--muted)]">
+                {qualityFindingLabel(code, code, t)} · {count}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {preview.importableCaseSamples.length > 0 ? (
+        <div className="grid gap-1.5">
+          <div className="text-[12px] font-medium text-[color:var(--muted-strong)]">{t("tests.importPreviewSamples")}</div>
+          {preview.importableCaseSamples.map((testCase, index) => (
+            <div key={`${testCase.title}-${index}`} className="flex min-w-0 items-center justify-between gap-2 rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 text-[12px] shadow-[inset_0_0_0_1px_var(--line)]">
+              <span className="min-w-0 truncate text-[color:var(--text)]">{testCase.title}</span>
+              <span className="shrink-0 text-[color:var(--muted)]">{testCaseTypeLabel(testCase.type, t)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {preview.skippedSamples.length > 0 ? (
+        <div className="grid gap-1.5">
+          <div className="text-[12px] font-medium text-[color:var(--muted-strong)]">{t("tests.importPreviewSkippedSamples")}</div>
+          {preview.skippedSamples.map((skip, index) => (
+            <div key={`${skip.reason}-${index}`} className="rounded-[7px] bg-[color:var(--danger-soft)] px-2.5 py-2 text-[12px] leading-5 text-[color:var(--danger)]">
+              {skip.line ? t("tests.importPreviewSkippedLine", { line: skip.line, reason: skip.reason }) : skip.reason}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
