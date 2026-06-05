@@ -1284,16 +1284,15 @@ export function TestsPage() {
     auth.token,
     proposalStatusFilter === "all" ? "" : proposalStatusFilter,
   );
-  const plansQueryKey = queryKeys.projectTestPlans(
+  const plansQueryKey = queryKeys.workspaceTestPlans(
     workspaceId,
-    effectiveProjectId,
     auth.token,
     planStatusFilter === "all" ? "" : planStatusFilter,
   );
   const allCasesQueryKey = queryKeys.projectTestCases(workspaceId, effectiveProjectId, auth.token, "", "", testCaseAuxiliaryLimit, 0);
   const allProposalsQueryKey = queryKeys.projectTestCaseProposals(workspaceId, effectiveProjectId, auth.token);
-  const allPlansQueryKey = queryKeys.projectTestPlans(workspaceId, effectiveProjectId, auth.token);
-  const allRunsQueryKey = queryKeys.projectTestRuns(workspaceId, effectiveProjectId, auth.token);
+  const allPlansQueryKey = queryKeys.workspaceTestPlans(workspaceId, auth.token);
+  const allRunsQueryKey = queryKeys.workspaceTestRuns(workspaceId, auth.token);
   const environmentsQueryKey = queryKeys.environments(workspaceId, auth.token);
 
   const casesQuery = useQuery({
@@ -1332,28 +1331,28 @@ export function TestsPage() {
   const plansQuery = useQuery({
     queryKey: plansQueryKey,
     queryFn: () =>
-      controlPlaneApi.listProjectTestPlans(auth.token, workspaceId, effectiveProjectId, {
+      controlPlaneApi.listWorkspaceTestPlans(auth.token, workspaceId, {
         status: planStatusFilter === "all" ? "" : planStatusFilter,
       }),
-    enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
+    enabled: serverWorkspaceReady,
   });
 
   const allPlansQuery = useQuery({
     queryKey: allPlansQueryKey,
-    queryFn: () => controlPlaneApi.listProjectTestPlans(auth.token, workspaceId, effectiveProjectId),
-    enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
+    queryFn: () => controlPlaneApi.listWorkspaceTestPlans(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
   });
 
   const selectedPlanQuery = useQuery({
-    queryKey: queryKeys.projectTestPlan(workspaceId, effectiveProjectId, selectedPlanId || "__none", auth.token),
-    queryFn: () => controlPlaneApi.getProjectTestPlan(auth.token, workspaceId, effectiveProjectId, selectedPlanId),
-    enabled: serverWorkspaceReady && Boolean(effectiveProjectId && selectedPlanId),
+    queryKey: queryKeys.workspaceTestPlan(workspaceId, selectedPlanId || "__none", auth.token),
+    queryFn: () => controlPlaneApi.getWorkspaceTestPlan(auth.token, workspaceId, selectedPlanId),
+    enabled: serverWorkspaceReady && Boolean(selectedPlanId),
   });
 
   const allRunsQuery = useQuery({
     queryKey: allRunsQueryKey,
-    queryFn: () => controlPlaneApi.listProjectTestRuns(auth.token, workspaceId, effectiveProjectId),
-    enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
+    queryFn: () => controlPlaneApi.listWorkspaceTestRuns(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
   });
 
   const environmentsQuery = useQuery({
@@ -1410,7 +1409,7 @@ export function TestsPage() {
       queryClient.invalidateQueries({ queryKey: allPlansQueryKey }),
       queryClient.invalidateQueries({ queryKey: allRunsQueryKey }),
       selectedPlanId
-        ? queryClient.invalidateQueries({ queryKey: queryKeys.projectTestPlan(workspaceId, effectiveProjectId, selectedPlanId, auth.token) })
+        ? queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestPlan(workspaceId, selectedPlanId, auth.token) })
         : Promise.resolve(),
     ]);
   }
@@ -1542,12 +1541,12 @@ export function TestsPage() {
 
   const createPlan = useMutation({
     mutationFn: () =>
-      controlPlaneApi.createProjectTestPlan(auth.token, workspaceId, effectiveProjectId, {
+      controlPlaneApi.createWorkspaceTestPlan(auth.token, workspaceId, {
         ...planForm,
         setupSteps: planForm.setupSteps.trim(),
         environment: "",
         environmentId: planForm.environmentId || "",
-        caseIds: selectedCaseIds,
+        cases: selectedCaseIds.map((caseId) => ({ projectId: effectiveProjectId, caseId })),
       }),
     onSuccess: async (detail) => {
       setSelectedPlanId(detail.plan.id);
@@ -1565,8 +1564,8 @@ export function TestsPage() {
         throw new Error(t("tests.readySelectedRequired"));
       }
       await workerReadiness.ensureReady();
-      return controlPlaneApi.startAdHocProjectTestRun(auth.token, workspaceId, effectiveProjectId, {
-        caseIds: selectedReadyCaseIds,
+      return controlPlaneApi.startAdHocWorkspaceTestRun(auth.token, workspaceId, {
+        cases: selectedReadyCaseIds.map((caseId) => ({ projectId: effectiveProjectId, caseId })),
         environmentId: selectedProject?.defaultEnvironmentId || selectedProject?.defaultClusterId || "",
         runtimeMode: workerReadiness.runtimeMode,
       });
@@ -1581,7 +1580,7 @@ export function TestsPage() {
   const startRun = useMutation({
     mutationFn: async (plan: TestPlan) => {
       await workerReadiness.ensureReady();
-      return controlPlaneApi.startProjectTestRun(auth.token, workspaceId, effectiveProjectId, plan.id, {
+      return controlPlaneApi.startWorkspaceTestRun(auth.token, workspaceId, plan.id, {
         targetType: plan.targetType,
         targetValue: plan.targetValue,
         environment: plan.environment,
@@ -1843,7 +1842,6 @@ export function TestsPage() {
                     setSelectedProjectId(value);
                     setSelectedCaseIds([]);
                     setCasePage(0);
-                    setSelectedPlanId("");
                     setActionMessage("");
                     void navigate({ to: "/tests", search: testsTabSearch(activeTab, value) });
                   }}
@@ -2552,8 +2550,8 @@ export function TestCaseDetailPage() {
         throw new Error(t("tests.readyCaseRequired"));
       }
       await workerReadiness.ensureReady();
-      return controlPlaneApi.startAdHocProjectTestRun(auth.token, workspaceId, effectiveProjectId, {
-        caseIds: [testCase.id],
+      return controlPlaneApi.startAdHocWorkspaceTestRun(auth.token, workspaceId, {
+        cases: [{ projectId: effectiveProjectId, caseId: testCase.id }],
         environmentId: selectedProject?.defaultEnvironmentId || selectedProject?.defaultClusterId || "",
         runtimeMode: workerReadiness.runtimeMode,
       });
@@ -2562,7 +2560,7 @@ export function TestCaseDetailPage() {
       const runningCaseId = testCase?.id || detail.items[0]?.testCaseId || caseId;
       setActionMessage(t("tests.adHocRunStarted"));
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestRuns(workspaceId, effectiveProjectId, auth.token) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestRuns(workspaceId, auth.token) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCase(workspaceId, effectiveProjectId, runningCaseId, auth.token) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCaseRunItems(workspaceId, effectiveProjectId, runningCaseId, auth.token) }),
         navigate({
@@ -2741,15 +2739,15 @@ export function TestPlanDetailPage() {
   const [actionMessage, setActionMessage] = useState("");
   const workerReadiness = useTestsWorkerReadiness(auth, workspaceId, setActionMessage);
   const planQuery = useQuery({
-    queryKey: queryKeys.projectTestPlan(workspaceId, effectiveProjectId, planId || "__none", auth.token),
-    queryFn: () => controlPlaneApi.getProjectTestPlan(auth.token, workspaceId, effectiveProjectId, planId),
-    enabled: serverWorkspaceReady && Boolean(effectiveProjectId && planId),
+    queryKey: queryKeys.workspaceTestPlan(workspaceId, planId || "__none", auth.token),
+    queryFn: () => controlPlaneApi.getWorkspaceTestPlan(auth.token, workspaceId, planId),
+    enabled: serverWorkspaceReady && Boolean(planId),
   });
   const detail = planQuery.data;
   const startRun = useMutation({
     mutationFn: async (plan: TestPlan) => {
       await workerReadiness.ensureReady();
-      return controlPlaneApi.startProjectTestRun(auth.token, workspaceId, effectiveProjectId, plan.id, {
+      return controlPlaneApi.startWorkspaceTestRun(auth.token, workspaceId, plan.id, {
         targetType: plan.targetType,
         targetValue: plan.targetValue,
         environment: plan.environment,
@@ -2761,8 +2759,8 @@ export function TestPlanDetailPage() {
     onSuccess: async (runDetail) => {
       setActionMessage(t("tests.runStarted"));
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestPlans(workspaceId, effectiveProjectId, auth.token) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestPlan(workspaceId, effectiveProjectId, planId, auth.token) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestPlans(workspaceId, auth.token) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestPlan(workspaceId, planId, auth.token) }),
       ]);
       await navigate({ to: "/tests/runs/$runId", params: { runId: runDetail.run.id }, search: testsTabSearch("runs", effectiveProjectId) });
     },
@@ -2800,6 +2798,7 @@ export function TestPlanDetailPage() {
     <TestPlanDetailContent
       detail={detail}
       projectId={effectiveProjectId}
+      projects={projects}
       actionMessage={actionMessage}
       startRun={startRun}
     />
@@ -2809,12 +2808,14 @@ export function TestPlanDetailPage() {
 function TestPlanDetailContent(props: {
   detail: TestPlanDetail;
   projectId: string;
+  projects: Project[];
   actionMessage: string;
   startRun: ReturnType<typeof useMutation<TestRunDetail, Error, TestPlan>>;
 }) {
   const { t } = useMspaceTranslation();
-  const { detail, projectId, actionMessage, startRun } = props;
+  const { detail, projectId, projects, actionMessage, startRun } = props;
   const { plan } = detail;
+  const projectNames = useMemo(() => new Map(projects.map((project) => [project.id, project.name])), [projects]);
 
   return (
     <PageFrame
@@ -2883,7 +2884,7 @@ function TestPlanDetailContent(props: {
                 key={planCase.id}
                 to="/tests/cases/$caseId"
                 params={{ caseId: planCase.testCase.id }}
-                search={testsTabSearch("cases", projectId)}
+                search={testsTabSearch("cases", planCase.projectId || planCase.testCase.projectId || projectId)}
                 className="grid gap-3 px-4 py-3 transition-colors hover:bg-[color:var(--hover)] md:grid-cols-[minmax(0,1fr)_120px_24px]"
               >
                 <div className="min-w-0">
@@ -2891,7 +2892,9 @@ function TestPlanDetailContent(props: {
                     <ClipboardCheck data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
                     <span className="truncate text-[13px] font-medium text-[color:var(--text)]">{planCase.testCase.title}</span>
                   </div>
-                  <p className="mt-1 text-[12px] text-[color:var(--muted)]">{planCase.testCase.area || t("common.unknown")}</p>
+                  <p className="mt-1 text-[12px] text-[color:var(--muted)]">
+                    {projectNames.get(planCase.projectId || planCase.testCase.projectId) || t("tests.project")} · {planCase.testCase.area || t("common.unknown")}
+                  </p>
                 </div>
                 <div className="flex items-center md:justify-end">
                   <StatusBadge value={planCase.testCase.status} valueLabel={t(`tests.statusValue.${planCase.testCase.status}`, { defaultValue: planCase.testCase.status })} />
@@ -2959,16 +2962,17 @@ export function TestRunDetailPage() {
   const [actionMessage, setActionMessage] = useState("");
   const workerReadiness = useTestsWorkerReadiness(auth, workspaceId, setActionMessage);
   const runQuery = useQuery({
-    queryKey: queryKeys.projectTestRun(workspaceId, effectiveProjectId, runId || "__none", auth.token),
-    queryFn: () => controlPlaneApi.getProjectTestRun(auth.token, workspaceId, effectiveProjectId, runId),
-    enabled: serverWorkspaceReady && Boolean(effectiveProjectId && runId),
+    queryKey: queryKeys.workspaceTestRun(workspaceId, runId || "__none", auth.token),
+    queryFn: () => controlPlaneApi.getWorkspaceTestRun(auth.token, workspaceId, runId),
+    enabled: serverWorkspaceReady && Boolean(runId),
   });
 
   async function invalidateRun() {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.projectTestRun(workspaceId, effectiveProjectId, runId, auth.token) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestRun(workspaceId, runId, auth.token) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestRuns(workspaceId, auth.token) }),
       runQuery.data?.plan?.id
-        ? queryClient.invalidateQueries({ queryKey: queryKeys.projectTestPlan(workspaceId, effectiveProjectId, runQuery.data.plan.id, auth.token) })
+        ? queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestPlan(workspaceId, runQuery.data.plan.id, auth.token) })
         : Promise.resolve(),
     ]);
   }
@@ -2976,7 +2980,7 @@ export function TestRunDetailPage() {
   const retryRun = useMutation({
     mutationFn: async () => {
       await workerReadiness.ensureReady();
-      return controlPlaneApi.retryProjectTestRun(auth.token, workspaceId, effectiveProjectId, runId, {
+      return controlPlaneApi.retryWorkspaceTestRun(auth.token, workspaceId, runId, {
         runtimeMode: workerReadiness.runtimeMode,
       });
     },
@@ -2986,14 +2990,14 @@ export function TestRunDetailPage() {
     },
   });
   const acceptRun = useMutation({
-    mutationFn: () => controlPlaneApi.acceptProjectTestRun(auth.token, workspaceId, effectiveProjectId, runId, { note: reviewNote }),
+    mutationFn: () => controlPlaneApi.acceptWorkspaceTestRun(auth.token, workspaceId, runId, { note: reviewNote }),
     onSuccess: async () => {
       setReviewNote("");
       await invalidateRun();
     },
   });
   const blockRun = useMutation({
-    mutationFn: () => controlPlaneApi.blockProjectTestRun(auth.token, workspaceId, effectiveProjectId, runId, { note: reviewNote }),
+    mutationFn: () => controlPlaneApi.blockWorkspaceTestRun(auth.token, workspaceId, runId, { note: reviewNote }),
     onSuccess: async () => {
       setReviewNote("");
       await invalidateRun();

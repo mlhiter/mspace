@@ -268,6 +268,11 @@ export interface TestPlanDetail {
   runs: TestRun[];
 }
 
+export interface TestPlanCaseInput {
+  projectId: string;
+  caseId: string;
+}
+
 export interface TestPlanInput {
   title: string;
   description?: string;
@@ -278,7 +283,8 @@ export interface TestPlanInput {
   environment?: string;
   environmentId?: string;
   environmentKind?: EnvironmentKind | string;
-  caseIds: string[];
+  caseIds?: string[];
+  cases?: TestPlanCaseInput[];
 }
 
 export interface TestRun {
@@ -356,7 +362,8 @@ export interface CreateTestRunInput {
 }
 
 export interface CreateAdHocTestRunInput {
-  caseIds: string[];
+  caseIds?: string[];
+  cases?: TestPlanCaseInput[];
   targetType?: string;
   targetValue?: string;
   environment?: string;

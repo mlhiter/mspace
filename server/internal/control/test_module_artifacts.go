@@ -191,7 +191,7 @@ func (s *PostgresStore) reconcileTestResultArtifact(ctx context.Context, q query
 	if len(artifact.Items) > maxArtifactTestResultItems {
 		return errors.New("test-result.json contains too many items")
 	}
-	run, err := loadTestRun(ctx, q, task.WorkspaceID, task.ProjectID, runID)
+	run, err := loadTestRun(ctx, q, task.WorkspaceID, runID)
 	if err != nil {
 		return err
 	}
@@ -200,7 +200,7 @@ func (s *PostgresStore) reconcileTestResultArtifact(ctx context.Context, q query
 			return err
 		}
 	}
-	return updateTestRunCounts(ctx, q, run.WorkspaceID, run.ProjectID, run.ID)
+	return updateTestRunCounts(ctx, q, run.WorkspaceID, run.ID)
 }
 
 func (s *PostgresStore) reconcileTestSetupArtifact(ctx context.Context, q queryer, task RuntimeTask, artifact *TestSetupResultArtifact) error {
@@ -214,7 +214,7 @@ func (s *PostgresStore) reconcileTestSetupArtifact(ctx context.Context, q querye
 	if runID == "" {
 		return errors.New("test-setup-result.json runId is required")
 	}
-	run, err := loadTestRun(ctx, q, task.WorkspaceID, task.ProjectID, runID)
+	run, err := loadTestRun(ctx, q, task.WorkspaceID, runID)
 	if err != nil {
 		return err
 	}
@@ -227,23 +227,23 @@ func (s *PostgresStore) reconcileTestSetupArtifact(ctx context.Context, q querye
 			UPDATE test_runs
 			SET status = 'setup_failed',
 				setup_status = 'failed',
-				setup_result = $4::jsonb,
-				run_context = $5::jsonb,
+				setup_result = $3::jsonb,
+				run_context = $4::jsonb,
 				completed_at = now(),
 				updated_at = now()
-			WHERE workspace_id = $1 AND project_id = $2 AND id = $3
-		`, run.WorkspaceID, run.ProjectID, run.ID, setupResult, runContext)
+			WHERE workspace_id = $1 AND id = $2
+		`, run.WorkspaceID, run.ID, setupResult, runContext)
 		return err
 	}
 	_, err = q.Exec(ctx, `
 		UPDATE test_runs
 		SET status = 'running',
 			setup_status = 'passed',
-			setup_result = $4::jsonb,
-			run_context = $5::jsonb,
+			setup_result = $3::jsonb,
+			run_context = $4::jsonb,
 			updated_at = now()
-		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
-	`, run.WorkspaceID, run.ProjectID, run.ID, setupResult, runContext)
+		WHERE workspace_id = $1 AND id = $2
+	`, run.WorkspaceID, run.ID, setupResult, runContext)
 	if err != nil {
 		return err
 	}
@@ -268,7 +268,7 @@ func (s *PostgresStore) updateTestRunItemFromArtifact(ctx context.Context, q que
 	if status == "" || !isFinalTestRunItemStatus(status) {
 		return errors.New("test-result.json status must be passed, failed, blocked, or skipped")
 	}
-	runItem, err := loadTestRunItemByRunAndCase(ctx, q, run.WorkspaceID, run.ProjectID, run.ID, caseID)
+	runItem, err := loadTestRunItemByRunAndCase(ctx, q, run.WorkspaceID, run.ID, caseID)
 	if err != nil {
 		return err
 	}
@@ -289,7 +289,7 @@ func (s *PostgresStore) updateTestRunItemFromArtifact(ctx context.Context, q que
 			AND project_id = $2
 			AND run_id = $3
 			AND case_id::text = $4
-	`, run.WorkspaceID, run.ProjectID, run.ID, caseID, status, strings.TrimSpace(item.ActualResult), strings.TrimSpace(item.FailureSummary), evidence)
+	`, run.WorkspaceID, runItem.ProjectID, run.ID, caseID, status, strings.TrimSpace(item.ActualResult), strings.TrimSpace(item.FailureSummary), evidence)
 	if err != nil {
 		return err
 	}
@@ -395,7 +395,7 @@ func runtimeTaskTestRunBatchSize(task RuntimeTask) int {
 	return payload.BatchSize
 }
 
-func loadTestRunItemByRunAndCase(ctx context.Context, q queryer, workspaceID, projectID, runID, caseID string) (TestRunItem, error) {
+func loadTestRunItemByRunAndCase(ctx context.Context, q queryer, workspaceID, runID, caseID string) (TestRunItem, error) {
 	rows, err := q.Query(ctx, `
 		SELECT
 			i.id::text,
@@ -415,11 +415,10 @@ func loadTestRunItemByRunAndCase(ctx context.Context, q queryer, workspaceID, pr
 		FROM test_run_items i
 		JOIN test_cases tc ON tc.id = i.case_id
 		WHERE i.workspace_id = $1
-			AND i.project_id = $2
-			AND i.run_id = $3
-			AND i.case_id::text = $4
+			AND i.run_id = $2
+			AND i.case_id::text = $3
 		LIMIT 1
-	`, workspaceID, projectID, runID, caseID)
+	`, workspaceID, runID, caseID)
 	if err != nil {
 		return TestRunItem{}, err
 	}
@@ -447,7 +446,7 @@ func (s *PostgresStore) storeTestResultEvidenceArtifacts(ctx context.Context, q 
 		metadata, _ := json.Marshal(candidate.Metadata)
 		artifact, err := s.createTestArtifact(ctx, q, CreateTestArtifactInput{
 			WorkspaceID:     run.WorkspaceID,
-			ProjectID:       run.ProjectID,
+			ProjectID:       item.ProjectID,
 			RunID:           run.ID,
 			RunItemID:       item.ID,
 			CaseID:          item.TestCaseID,
@@ -478,7 +477,7 @@ func (s *MemoryStore) reconcileTestResultArtifactLocked(task RuntimeTask, artifa
 		return
 	}
 	run, ok := s.testRuns[runID]
-	if !ok || run.WorkspaceID != task.WorkspaceID || run.ProjectID != task.ProjectID {
+	if !ok || run.WorkspaceID != task.WorkspaceID {
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -568,7 +567,7 @@ func (s *MemoryStore) storeMemoryTestResultEvidenceArtifactsLocked(task RuntimeT
 		metadata, _ := json.Marshal(candidate.Metadata)
 		artifact, err := s.createMemoryTestArtifactLocked(CreateTestArtifactInput{
 			WorkspaceID:     run.WorkspaceID,
-			ProjectID:       run.ProjectID,
+			ProjectID:       item.ProjectID,
 			RunID:           run.ID,
 			RunItemID:       item.ID,
 			CaseID:          item.TestCaseID,

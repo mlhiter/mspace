@@ -35,7 +35,7 @@ Navigation rules:
 - Inbox is the default entry screen.
 - Inbox is the unread review surface for issue and session updates.
 - Issues is the durable knowledge surface and issue creation home.
-- Tests is the project-level quality surface for cases, case suggestions, plans, and runs. It sits after Issues because test execution still routes through issue-backed worker sessions.
+- Tests is the workspace quality surface for project-level cases/suggestions and workspace-level plans/runs. It sits after Issues because test execution still routes through issue-backed worker sessions.
 - Agents is the managed profile surface for Codex-backed collaborators and mentions.
 - Environments is reusable target access: Kubernetes kubeconfig import, reachability status, registry/exposure defaults, and virtual machine SSH target metadata with password/private-key login validation.
 - Projects is configuration and project-level history.
@@ -57,8 +57,8 @@ Workspace
                   -> Evidence
   -> Project
       -> Test Case
-      -> Test Plan
-          -> Test Run
+  -> Test Plan
+      -> Test Run
 ```
 
 The ownership model should be clear:
@@ -69,7 +69,7 @@ The ownership model should be clear:
 - Runtime is the worker execution surface.
 - Environment is the target being operated, currently Kubernetes or virtual machine.
 - Evidence is the result attached back to the issue.
-- Test Case and Test Plan are project-level quality knowledge; Test Run records issue-backed execution and human acceptance.
+- Test Case is project-level quality knowledge; Test Plan and Test Run are workspace-level orchestration and acceptance records that preserve per-case project identity.
 
 ## Screen Map
 
@@ -526,7 +526,7 @@ Must-have for MVP:
 - Agent turns inline on the issue timeline
 - Evidence tab plus Test environment sidebar state, without health-check noise in the issue timeline
 - Project settings, workspace automation policy, and runtime defaults
-- Tests case library, case suggestions, plans, and issue-backed test runs
+- Tests case library, case suggestions, workspace plans, and issue-backed test runs
 - Worker session startup with git worktree isolation
 - Manual cleanup for retained worker session workdirs
 - Session detail with logs and workspace evidence
@@ -582,7 +582,7 @@ Implemented as of 2026-06-03:
 16. Structured `session_failures` records that surface failed sessions, deploy-time preview verification failures, agent interruption, and cleanup failures as continueable Issue Detail timeline and Evidence entries.
 17. Preview status refreshes that update Test environment state and `Checked` time without adding healthy snapshot cards to the Overview timeline.
 18. Issue Resources tab for the fixed test namespace, using live Kubernetes resource reads without exposing cross-namespace browsing.
-19. Tests route with Cases, Case suggestions, Plans, Runs, dedicated detail pages, modal case create/import flows, preview-before-confirm Excel `.xlsx` and text-like file import, and issue-backed test run execution.
+19. Tests route with project-level Cases and Case suggestions, workspace-level Plans and Runs, dedicated detail pages, modal case create/import flows, preview-before-confirm Excel `.xlsx` and text-like file import, and issue-backed test run execution.
 
 Next build steps:
 

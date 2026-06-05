@@ -187,15 +187,25 @@ Successful acceptance returns the joined workspace. Desktop clients should selec
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals` | List Codex case suggestions. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/apply` | Accept a case suggestion and optionally write a review note. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/reject` | Dismiss a case suggestion and optionally write a review note. |
-| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | List project test plans. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | Create a test plan from selected cases. |
-| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Read a test plan with selected cases. |
-| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Update plan metadata and selected cases. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs` | Start an issue-backed test run. |
-| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}` | Read a test run with run items. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry` | Retry failed or blocked run items. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/accept` | Human-accept a run result. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block` | Mark a run blocked with a human note. |
+| `GET` | `/api/workspaces/{workspaceID}/test-plans` | List workspace test plans. |
+| `POST` | `/api/workspaces/{workspaceID}/test-plans` | Create a workspace test plan from ready project cases. |
+| `GET` | `/api/workspaces/{workspaceID}/test-plans/{planID}` | Read a workspace test plan with selected cases. |
+| `PUT` | `/api/workspaces/{workspaceID}/test-plans/{planID}` | Update workspace plan metadata and selected cases. |
+| `POST` | `/api/workspaces/{workspaceID}/test-plans/{planID}/runs` | Start an issue-backed test run from a workspace plan. |
+| `GET` | `/api/workspaces/{workspaceID}/test-runs` | List workspace test runs. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs` | Start an ad hoc issue-backed run from selected ready project cases. |
+| `GET` | `/api/workspaces/{workspaceID}/test-runs/{runID}` | Read a workspace test run with run items. |
+| `GET` | `/api/workspaces/{workspaceID}/test-runs/{runID}/artifacts` | List artifacts for one workspace test run. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/retry` | Retry failed or blocked run items. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/accept` | Human-accept a run result. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/block` | Mark a run blocked with a human note. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | Compatibility-filter workspace plans by project. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | Compatibility-create a workspace plan using the URL project as default case project. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Compatibility-read a workspace plan that includes the project. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Compatibility-update a workspace plan using the URL project as default case project. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs` | Compatibility-start a workspace run from a plan that includes the project. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs` | Compatibility-filter workspace runs by project. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}` | Compatibility-read a workspace run that includes the project. |
 | `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List Type and Priority label options. |
 | `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level issues. |
 | `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. |
@@ -234,7 +244,7 @@ curl -X PUT "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues/<issue-id>
 
 ## Test Module APIs
 
-Test module records are project-scoped. A personal project may point at a local folder or a GitHub repository URL. A team project must use `sourceType:"github"` and a GitHub URL because team workers clone source into their own repository cache and cannot read a user's desktop-local path.
+Test cases, revisions, and Case suggestions are project-scoped. Test plans and test runs are workspace-scoped and can include ready cases from multiple projects. Each selected plan case and run item keeps its project id so execution, artifacts, and result reconciliation can still route through the correct repository. A personal project may point at a local folder or a GitHub repository URL. A team project must use `sourceType:"github"` and a GitHub URL because team workers clone source into their own repository cache and cannot read a user's desktop-local path.
 
 Create a case:
 
@@ -337,18 +347,21 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
   -d '{"note":"Looks executable after the added environment requirement."}'
 ```
 
-Test plans select ready cases and start issue-backed runs. A plan can include `setupSteps`, a free-text plan-level setup block that runs once before case execution. Setup uses the normal issue-backed agent-session path and worker artifact channel: workers write `test-setup-result.json`; the server stores the setup result, copies `outputs` into `runContext`, and starts case execution only when the setup task completed with `status:"passed"`. Failed, cancelled, or missing setup marks the run `setup_failed` and leaves items queued. Execution workers then report results through `test-result.json`; the server reconciles run items, persists supported screenshot evidence as test artifacts, rewrites run item evidence to authenticated artifact refs, and a human must call `accept` or `block` before the run is treated as accepted.
+Workspace test plans select ready project cases and start issue-backed runs. A plan can include `setupSteps`, a free-text plan-level setup block that runs once before case execution. Setup uses the normal issue-backed agent-session path and worker artifact channel: workers write `test-setup-result.json`; the server stores the setup result, copies `outputs` into `runContext`, and starts case execution only when the setup task completed with `status:"passed"`. Failed, cancelled, or missing setup marks the run `setup_failed` and leaves items queued. Execution workers then report results through `test-result.json`; the server reconciles run items, persists supported screenshot evidence as test artifacts, rewrites run item evidence to authenticated artifact refs, and a human must call `accept` or `block` before the run is treated as accepted. When a run spans projects, mspace groups queued items by project and creates separate execution Issues/agent sessions per project batch; one agent session should not span multiple repositories.
 
 Create a test plan pinned to an Environment:
 
 ```bash
-curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<project-id>/test-plans" \
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/test-plans" \
   -H "Authorization: Bearer <msp-token>" \
   -H 'Content-Type: application/json' \
   -d '{
     "title":"Release smoke",
     "setupSteps":"1. Confirm the staging Environment.\n2. Update the target deployment image.\n3. Verify the preview URL is reachable and write test-setup-result.json.",
-    "caseIds":["<case-id>"],
+    "cases":[
+      {"projectId":"<project-id>","caseId":"<case-id-1>"},
+      {"projectId":"<another-project-id>","caseId":"<case-id-2>"}
+    ],
     "environmentId":"<environment-id>",
     "environment":"Run against the selected staging target"
   }'

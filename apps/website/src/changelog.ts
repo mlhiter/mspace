@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-05",
+    title: "Workspace-level test plans and runs",
+    summary:
+      "mspace made Tests able to orchestrate one plan across multiple projects while keeping cases anchored to the repositories that execute them.",
+    items: [
+      "Added workspace-level plan and run APIs so a test plan can include ready cases from more than one project in the same workspace.",
+      "Kept test cases and case suggestions project-scoped, with each plan case and run item preserving the project that owns execution context.",
+      "Grouped test execution by project when a run spans repositories, so each Issue-backed agent session still runs against one project workdir.",
+      "Updated the desktop Tests surface to list workspace plans and runs while keeping the project selector for Cases and Case suggestions.",
+    ],
+  },
+  {
+    date: "2026-06-05",
     title: "Archived deletion and pagination for test cases",
     summary:
       "mspace made large test-case libraries easier to manage without destroying historical test evidence.",

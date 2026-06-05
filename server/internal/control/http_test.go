@@ -2712,6 +2712,114 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	}
 }
 
+func TestWorkspaceTestPlanCanSpanProjects(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "workspace-test-plan-user",
+		Login:          "workspace-test-plan-user",
+		Name:           "Workspace Test Plan User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	firstProject := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "workspace-plan-first")
+	secondProject := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "workspace-plan-second")
+	_, _ = registerTestRuntimeWorker(t, router, sessionToken, workspaceID)
+
+	firstCase := createProjectTestCaseViaHTTP(t, router, sessionToken, workspaceID, firstProject.ID, `{
+		"title":"First project smoke",
+		"area":"first",
+		"status":"ready",
+		"steps":[{"action":"Run first smoke","expected":"First project passes."}],
+		"expectedResult":"First project remains healthy."
+	}`)
+	secondCase := createProjectTestCaseViaHTTP(t, router, sessionToken, workspaceID, secondProject.ID, `{
+		"title":"Second project smoke",
+		"area":"second",
+		"status":"ready",
+		"steps":[{"action":"Run second smoke","expected":"Second project passes."}],
+		"expectedResult":"Second project remains healthy."
+	}`)
+
+	plan := createWorkspaceTestPlanViaHTTP(t, router, sessionToken, workspaceID, fmt.Sprintf(`{
+		"title":"Cross-project smoke plan",
+		"status":"ready",
+		"targetType":"branch",
+		"targetValue":"main",
+		"cases":[
+			{"projectId":%q,"caseId":%q},
+			{"projectId":%q,"caseId":%q}
+		]
+	}`, firstProject.ID, firstCase.ID, secondProject.ID, secondCase.ID))
+	if plan.Plan.CaseCount != 2 || len(plan.Cases) != 2 {
+		t.Fatalf("expected two cases in workspace plan, got %+v", plan)
+	}
+	if plan.Cases[0].ProjectID != firstProject.ID || plan.Cases[1].ProjectID != secondProject.ID {
+		t.Fatalf("expected plan cases to preserve project ids, got %+v", plan.Cases)
+	}
+
+	workspacePlans := listWorkspaceTestPlansViaHTTP(t, router, sessionToken, workspaceID)
+	if len(workspacePlans) != 1 || workspacePlans[0].ID != plan.Plan.ID {
+		t.Fatalf("workspace plan list should include cross-project plan, got %+v", workspacePlans)
+	}
+	firstProjectPlans := listProjectTestPlansViaHTTP(t, router, sessionToken, workspaceID, firstProject.ID)
+	secondProjectPlans := listProjectTestPlansViaHTTP(t, router, sessionToken, workspaceID, secondProject.ID)
+	if len(firstProjectPlans) != 1 || len(secondProjectPlans) != 1 || firstProjectPlans[0].ID != plan.Plan.ID || secondProjectPlans[0].ID != plan.Plan.ID {
+		t.Fatalf("project compatibility plan lists should include shared plan, first=%+v second=%+v", firstProjectPlans, secondProjectPlans)
+	}
+
+	run := startWorkspaceTestRunViaHTTP(t, router, sessionToken, workspaceID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":1}`)
+	if run.Run.TotalCount != 2 || len(run.Items) != 2 || run.Run.ProjectID != firstProject.ID {
+		t.Fatalf("unexpected workspace run: %+v", run)
+	}
+	firstItem := findTestRunItem(t, run.Items, firstCase.ID)
+	secondItem := findTestRunItem(t, run.Items, secondCase.ID)
+	if firstItem.ProjectID != firstProject.ID || secondItem.ProjectID != secondProject.ID {
+		t.Fatalf("run items should preserve each case project, first=%+v second=%+v", firstItem, secondItem)
+	}
+	if firstItem.ExecutionIssueID == "" || secondItem.ExecutionIssueID == "" || firstItem.AgentSessionID == "" || secondItem.AgentSessionID == "" {
+		t.Fatalf("expected execution sessions for both project batches, first=%+v second=%+v", firstItem, secondItem)
+	}
+	firstIssue, err := store.GetIssue(context.Background(), user.ID, workspaceID, firstItem.ExecutionIssueID)
+	if err != nil {
+		t.Fatalf("get first execution issue: %v", err)
+	}
+	secondIssue, err := store.GetIssue(context.Background(), user.ID, workspaceID, secondItem.ExecutionIssueID)
+	if err != nil {
+		t.Fatalf("get second execution issue: %v", err)
+	}
+	if firstIssue.Issue.ProjectID != firstProject.ID || secondIssue.Issue.ProjectID != secondProject.ID {
+		t.Fatalf("execution child issues should use batch project ids, first=%+v second=%+v", firstIssue.Issue, secondIssue.Issue)
+	}
+
+	workspaceRun := getWorkspaceTestRunViaHTTP(t, router, sessionToken, workspaceID, run.Run.ID)
+	if len(workspaceRun.Items) != 2 {
+		t.Fatalf("workspace run detail should include both projects, got %+v", workspaceRun)
+	}
+	firstProjectRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, firstProject.ID, run.Run.ID)
+	secondProjectRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, secondProject.ID, run.Run.ID)
+	if len(firstProjectRun.Items) != 2 || len(secondProjectRun.Items) != 2 {
+		t.Fatalf("project compatibility detail should return full shared run, first=%+v second=%+v", firstProjectRun, secondProjectRun)
+	}
+	workspaceRuns := listWorkspaceTestRunsViaHTTP(t, router, sessionToken, workspaceID)
+	if len(workspaceRuns) != 1 || workspaceRuns[0].ID != run.Run.ID {
+		t.Fatalf("workspace run list should include shared run, got %+v", workspaceRuns)
+	}
+	firstProjectRuns := listProjectTestRunsViaHTTP(t, router, sessionToken, workspaceID, firstProject.ID)
+	secondProjectRuns := listProjectTestRunsViaHTTP(t, router, sessionToken, workspaceID, secondProject.ID)
+	if len(firstProjectRuns) != 1 || len(secondProjectRuns) != 1 || firstProjectRuns[0].ID != run.Run.ID || secondProjectRuns[0].ID != run.Run.ID {
+		t.Fatalf("project compatibility run lists should include shared run, first=%+v second=%+v", firstProjectRuns, secondProjectRuns)
+	}
+}
+
 func TestIssueTypeTriageRuntimeTaskResultAppliesLabel(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
@@ -4051,6 +4159,54 @@ func createProjectTestPlanViaHTTP(t *testing.T, router http.Handler, sessionToke
 	return detail
 }
 
+func createWorkspaceTestPlanViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, body string) TestPlanDetail {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/test-plans", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create workspace test plan status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var detail TestPlanDetail
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("parse workspace test plan: %v", err)
+	}
+	return detail
+}
+
+func listWorkspaceTestPlansViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID string) []TestPlan {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/test-plans", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list workspace test plans status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var plans []TestPlan
+	if err := json.Unmarshal(recorder.Body.Bytes(), &plans); err != nil {
+		t.Fatalf("parse workspace test plans: %v", err)
+	}
+	return plans
+}
+
+func listProjectTestPlansViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID string) []TestPlan {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-plans", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list project test plans status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var plans []TestPlan
+	if err := json.Unmarshal(recorder.Body.Bytes(), &plans); err != nil {
+		t.Fatalf("parse project test plans: %v", err)
+	}
+	return plans
+}
+
 func startProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, planID, body string) TestRunDetail {
 	t.Helper()
 	recorder := httptest.NewRecorder()
@@ -4063,6 +4219,22 @@ func startProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken,
 	var detail TestRunDetail
 	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
 		t.Fatalf("parse test run: %v", err)
+	}
+	return detail
+}
+
+func startWorkspaceTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, planID, body string) TestRunDetail {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/test-plans/"+planID+"/runs", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("start workspace test run status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var detail TestRunDetail
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("parse workspace test run: %v", err)
 	}
 	return detail
 }
@@ -4099,6 +4271,22 @@ func listProjectTestRunsViaHTTP(t *testing.T, router http.Handler, sessionToken,
 	return runs
 }
 
+func listWorkspaceTestRunsViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID string) []TestRun {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/test-runs", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list workspace test runs status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var runs []TestRun
+	if err := json.Unmarshal(recorder.Body.Bytes(), &runs); err != nil {
+		t.Fatalf("parse workspace test runs: %v", err)
+	}
+	return runs
+}
+
 func getProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, runID string) TestRunDetail {
 	t.Helper()
 	recorder := httptest.NewRecorder()
@@ -4111,6 +4299,22 @@ func getProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, w
 	var detail TestRunDetail
 	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
 		t.Fatalf("parse test run detail: %v", err)
+	}
+	return detail
+}
+
+func getWorkspaceTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, runID string) TestRunDetail {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/test-runs/"+runID, nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("get workspace test run status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var detail TestRunDetail
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("parse workspace test run detail: %v", err)
 	}
 	return detail
 }

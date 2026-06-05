@@ -63,22 +63,21 @@ func (s *PostgresStore) createTestArtifact(ctx context.Context, q queryer, input
 	return loadTestArtifactByID(ctx, q, "", id)
 }
 
-func (s *PostgresStore) ListProjectTestRunArtifacts(ctx Context, userID, workspaceID, projectID, runID string) ([]TestArtifact, error) {
+func (s *PostgresStore) ListWorkspaceTestRunArtifacts(ctx Context, userID, workspaceID, runID string) ([]TestArtifact, error) {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
-	projectID = strings.TrimSpace(projectID)
 	runID = strings.TrimSpace(runID)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return nil, err
 	}
-	if _, err := loadTestRun(dbctx, s.pool, workspaceID, projectID, runID); err != nil {
+	if _, err := loadTestRun(dbctx, s.pool, workspaceID, runID); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(dbctx, testArtifactSelectQuery(`
-		JOIN workspace_members wm ON wm.workspace_id = a.workspace_id AND wm.user_id = $4
-		WHERE a.workspace_id = $1 AND a.project_id = $2 AND a.run_id = $3
+		JOIN workspace_members wm ON wm.workspace_id = a.workspace_id AND wm.user_id = $3
+		WHERE a.workspace_id = $1 AND a.run_id = $2
 		ORDER BY a.created_at DESC, a.id DESC
-	`), workspaceID, projectID, runID, strings.TrimSpace(userID))
+	`), workspaceID, runID, strings.TrimSpace(userID))
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +91,25 @@ func (s *PostgresStore) ListProjectTestRunArtifacts(ctx Context, userID, workspa
 		artifacts = append(artifacts, artifact)
 	}
 	return artifacts, rows.Err()
+}
+
+func (s *PostgresStore) ListProjectTestRunArtifacts(ctx Context, userID, workspaceID, projectID, runID string) ([]TestArtifact, error) {
+	detail, err := s.GetProjectTestRun(ctx, userID, workspaceID, projectID, runID)
+	if err != nil {
+		return nil, err
+	}
+	artifacts, err := s.ListWorkspaceTestRunArtifacts(ctx, userID, workspaceID, detail.Run.ID)
+	if err != nil {
+		return nil, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	filtered := []TestArtifact{}
+	for _, artifact := range artifacts {
+		if artifact.ProjectID == projectID {
+			filtered = append(filtered, artifact)
+		}
+	}
+	return filtered, nil
 }
 
 func (s *PostgresStore) GetTestArtifact(ctx Context, userID, artifactID string) (TestArtifact, error) {

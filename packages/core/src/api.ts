@@ -137,6 +137,14 @@ export const queryKeys = {
     ["project-test-case-revisions", workspaceId, projectId, caseId, token] as const,
   projectTestCaseProposals: (workspaceId: string, projectId: string, token: string, status = "") =>
     ["project-test-case-proposals", workspaceId, projectId, token, status] as const,
+  workspaceTestPlans: (workspaceId: string, token: string, status = "") =>
+    ["workspace-test-plans", workspaceId, token, status] as const,
+  workspaceTestPlan: (workspaceId: string, planId: string, token: string) =>
+    ["workspace-test-plan", workspaceId, planId, token] as const,
+  workspaceTestRuns: (workspaceId: string, token: string, status = "", source = "") =>
+    ["workspace-test-runs", workspaceId, token, status, source] as const,
+  workspaceTestRun: (workspaceId: string, runId: string, token: string) =>
+    ["workspace-test-run", workspaceId, runId, token] as const,
   projectTestPlans: (workspaceId: string, projectId: string, token: string, status = "") =>
     ["project-test-plans", workspaceId, projectId, token, status] as const,
   projectTestPlan: (workspaceId: string, projectId: string, planId: string, token: string) =>
@@ -563,6 +571,73 @@ export const controlPlaneApi = {
     input: ReviewTestCaseProposalInput = {},
   ) =>
     requestControlPlane<TestCaseProposal>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-case-proposals/${proposalId}/reject`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  listWorkspaceTestPlans: (token: string, workspaceId: string, input: { status?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (input.status) params.set("status", input.status);
+    const query = params.toString();
+    return requestControlPlane<TestPlan[]>(`/api/workspaces/${workspaceId}/test-plans${query ? `?${query}` : ""}`, {
+      headers: authHeaders(token),
+    });
+  },
+  createWorkspaceTestPlan: (token: string, workspaceId: string, input: TestPlanInput) =>
+    requestControlPlane<TestPlanDetail>(`/api/workspaces/${workspaceId}/test-plans`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  getWorkspaceTestPlan: (token: string, workspaceId: string, planId: string) =>
+    requestControlPlane<TestPlanDetail>(`/api/workspaces/${workspaceId}/test-plans/${planId}`, {
+      headers: authHeaders(token),
+    }),
+  updateWorkspaceTestPlan: (token: string, workspaceId: string, planId: string, input: TestPlanInput) =>
+    requestControlPlane<TestPlanDetail>(`/api/workspaces/${workspaceId}/test-plans/${planId}`, {
+      method: "PUT",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  startWorkspaceTestRun: (token: string, workspaceId: string, planId: string, input: CreateTestRunInput = {}) =>
+    requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/test-plans/${planId}/runs`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  listWorkspaceTestRuns: (token: string, workspaceId: string, options: { status?: string; source?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (options.status) params.set("status", options.status);
+    if (options.source) params.set("source", options.source);
+    const query = params.toString();
+    return requestControlPlane<TestRun[]>(`/api/workspaces/${workspaceId}/test-runs${query ? `?${query}` : ""}`, {
+      headers: authHeaders(token),
+    });
+  },
+  startAdHocWorkspaceTestRun: (token: string, workspaceId: string, input: CreateAdHocTestRunInput) =>
+    requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/test-runs`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  getWorkspaceTestRun: (token: string, workspaceId: string, runId: string) =>
+    requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/test-runs/${runId}`, {
+      headers: authHeaders(token),
+    }),
+  retryWorkspaceTestRun: (token: string, workspaceId: string, runId: string, input: RetryTestRunInput = {}) =>
+    requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/test-runs/${runId}/retry`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  acceptWorkspaceTestRun: (token: string, workspaceId: string, runId: string, input: ReviewTestRunInput = {}) =>
+    requestControlPlane<TestRun>(`/api/workspaces/${workspaceId}/test-runs/${runId}/accept`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  blockWorkspaceTestRun: (token: string, workspaceId: string, runId: string, input: ReviewTestRunInput = {}) =>
+    requestControlPlane<TestRun>(`/api/workspaces/${workspaceId}/test-runs/${runId}/block`, {
       method: "POST",
       headers: authHeaders(token),
       body: JSON.stringify(input),

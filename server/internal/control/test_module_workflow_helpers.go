@@ -86,16 +86,22 @@ func normalizeTestPlanInput(input TestPlanInput) (TestPlanInput, error) {
 		input.EnvironmentKind = normalizeEnvironmentKind(input.EnvironmentKind)
 	}
 	input.CaseIDs = uniqueStrings(input.CaseIDs)
+	input.Cases = uniqueTestPlanCaseInputs(input.Cases)
 	if input.Title == "" {
 		return TestPlanInput{}, errors.New("title is required")
 	}
-	if len(input.CaseIDs) == 0 {
+	caseCount := len(input.CaseIDs) + len(input.Cases)
+	if caseCount == 0 {
 		return TestPlanInput{}, errors.New("caseIds are required")
 	}
-	if len(input.CaseIDs) > maxTestPlanCases {
+	if caseCount > maxTestPlanCases {
 		return TestPlanInput{}, fmt.Errorf("caseIds must contain %d or fewer cases", maxTestPlanCases)
 	}
 	return input, nil
+}
+
+func normalizedPlanCaseInputs(input TestPlanInput, defaultProjectID string) ([]TestPlanCaseInput, error) {
+	return normalizedCaseInputs(input.Cases, input.CaseIDs, defaultProjectID, maxTestPlanCases, "caseIds")
 }
 
 func normalizeTestPlanSetupSteps(value string) string {
@@ -159,6 +165,7 @@ func normalizeCreateTestRunInput(input CreateTestRunInput, plan TestPlan) (Creat
 
 func normalizeCreateAdHocTestRunInput(input CreateAdHocTestRunInput) (CreateAdHocTestRunInput, error) {
 	input.CaseIDs = uniqueStrings(input.CaseIDs)
+	input.Cases = uniqueTestPlanCaseInputs(input.Cases)
 	input.TargetType = normalizeTestTargetType(input.TargetType)
 	if input.TargetType == "" {
 		input.TargetType = "branch"
@@ -178,13 +185,80 @@ func normalizeCreateAdHocTestRunInput(input CreateAdHocTestRunInput) (CreateAdHo
 	if input.BatchSize > maxTestRunBatchSize {
 		input.BatchSize = maxTestRunBatchSize
 	}
-	if len(input.CaseIDs) == 0 {
+	caseCount := len(input.CaseIDs) + len(input.Cases)
+	if caseCount == 0 {
 		return CreateAdHocTestRunInput{}, errors.New("caseIds are required")
 	}
-	if len(input.CaseIDs) > maxAdHocTestRunCases {
+	if caseCount > maxAdHocTestRunCases {
 		return CreateAdHocTestRunInput{}, fmt.Errorf("caseIds must contain %d or fewer cases", maxAdHocTestRunCases)
 	}
 	return input, nil
+}
+
+func normalizedAdHocRunCaseInputs(input CreateAdHocTestRunInput, defaultProjectID string) ([]TestPlanCaseInput, error) {
+	return normalizedCaseInputs(input.Cases, input.CaseIDs, defaultProjectID, maxAdHocTestRunCases, "caseIds")
+}
+
+func normalizedCaseInputs(cases []TestPlanCaseInput, caseIDs []string, defaultProjectID string, maxCount int, fieldName string) ([]TestPlanCaseInput, error) {
+	defaultProjectID = strings.TrimSpace(defaultProjectID)
+	result := make([]TestPlanCaseInput, 0, len(cases)+len(caseIDs))
+	seen := map[string]bool{}
+	add := func(projectID, caseID string) error {
+		projectID = strings.TrimSpace(projectID)
+		caseID = strings.TrimSpace(caseID)
+		if projectID == "" {
+			projectID = defaultProjectID
+		}
+		if projectID == "" || caseID == "" {
+			return errors.New(fieldName + " must include projectId and caseId")
+		}
+		key := projectID + "\x00" + caseID
+		if seen[key] {
+			return nil
+		}
+		seen[key] = true
+		result = append(result, TestPlanCaseInput{ProjectID: projectID, CaseID: caseID})
+		return nil
+	}
+	for _, item := range cases {
+		if err := add(item.ProjectID, item.CaseID); err != nil {
+			return nil, err
+		}
+	}
+	for _, caseID := range caseIDs {
+		if err := add(defaultProjectID, caseID); err != nil {
+			return nil, err
+		}
+	}
+	if len(result) == 0 {
+		return nil, errors.New(fieldName + " are required")
+	}
+	if len(result) > maxCount {
+		return nil, fmt.Errorf("%s must contain %d or fewer cases", fieldName, maxCount)
+	}
+	return result, nil
+}
+
+func uniqueTestPlanCaseInputs(values []TestPlanCaseInput) []TestPlanCaseInput {
+	if len(values) == 0 {
+		return []TestPlanCaseInput{}
+	}
+	result := make([]TestPlanCaseInput, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		projectID := strings.TrimSpace(value.ProjectID)
+		caseID := strings.TrimSpace(value.CaseID)
+		if projectID == "" && caseID == "" {
+			continue
+		}
+		key := projectID + "\x00" + caseID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, TestPlanCaseInput{ProjectID: projectID, CaseID: caseID})
+	}
+	return result
 }
 
 func normalizeRetryTestRunInput(input RetryTestRunInput) RetryTestRunInput {

@@ -120,17 +120,30 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals` | List Codex case suggestions. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/apply` | Accept a case suggestion. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/reject` | Dismiss a case suggestion. |
-| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | List project test plans. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | Create a project test plan. |
-| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Read one project test plan. |
-| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Update one project test plan. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs` | Start an issue-backed test run. |
-| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs` | List project test runs from plans, selected cases, retries, or incremental scopes. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs` | Start an issue-backed run from selected ready test cases. |
-| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}` | Read one test run. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry` | Retry blocked or failed test run items. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/accept` | Human-accept a test run result. |
-| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block` | Mark a test run blocked with a human note. |
+| `GET` | `/api/workspaces/{workspaceID}/test-plans` | List workspace test plans. |
+| `POST` | `/api/workspaces/{workspaceID}/test-plans` | Create a workspace test plan from ready project cases. |
+| `GET` | `/api/workspaces/{workspaceID}/test-plans/{planID}` | Read one workspace test plan. |
+| `PUT` | `/api/workspaces/{workspaceID}/test-plans/{planID}` | Update one workspace test plan. |
+| `POST` | `/api/workspaces/{workspaceID}/test-plans/{planID}/runs` | Start an issue-backed test run. |
+| `GET` | `/api/workspaces/{workspaceID}/test-runs` | List workspace test runs from plans, selected cases, retries, or incremental scopes. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs` | Start an issue-backed run from selected ready test cases. |
+| `GET` | `/api/workspaces/{workspaceID}/test-runs/{runID}` | Read one workspace test run. |
+| `GET` | `/api/workspaces/{workspaceID}/test-runs/{runID}/artifacts` | List artifacts for one workspace test run. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/retry` | Retry blocked or failed test run items. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/accept` | Human-accept a test run result. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/block` | Mark a test run blocked with a human note. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | Compatibility-filter workspace plans by project. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | Compatibility-create a workspace plan using the URL project as default case project. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Compatibility-read a workspace plan that includes the project. |
+| `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}` | Compatibility-update a workspace plan using the URL project as default case project. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs` | Compatibility-start a workspace run from a plan that includes the project. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs` | Compatibility-filter workspace runs by project. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs` | Compatibility-start an ad hoc workspace run using the URL project as default case project. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}` | Compatibility-read a workspace run that includes the project. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/artifacts` | Compatibility-list artifacts for a workspace run filtered to the project. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry` | Compatibility-retry blocked or failed run items when the run includes the project. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/accept` | Compatibility-accept a workspace run that includes the project. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block` | Compatibility-block a workspace run that includes the project. |
 | `GET` | `/api/workspaces/{workspaceID}/workspace/settings` | Read workspace automation settings. |
 | `PUT` | `/api/workspaces/{workspaceID}/workspace/settings` | Update workspace automation settings. |
 | `GET` | `/api/workspaces/{workspaceID}/agents` | List workspace agent profiles. |
@@ -199,7 +212,7 @@ Project creation is workspace-kind aware. Personal workspaces may use `sourceTyp
 
 ## Test Module Model
 
-Test cases, revisions, suggestions, plans, runs, and run items are server-owned project data. Team/shared deployments persist them through Postgres migrations, while packaged personal desktop mode persists them through the server-owned SQLite snapshot store.
+Test cases, revisions, and suggestions are server-owned project data. Test plans, runs, and run items are server-owned workspace data that preserve per-case/per-item project identity. Team/shared deployments persist them through Postgres migrations, while packaged personal desktop mode persists them through the server-owned SQLite snapshot store.
 
 The case list is paginated with `limit` and `offset`. Default case browsing excludes `archived` cases, and user-facing deletion is implemented as an archive status transition so revisions, plan membership, run items, artifacts, and proposal links remain auditable. Clients can inspect archived cases with `status=archived`.
 

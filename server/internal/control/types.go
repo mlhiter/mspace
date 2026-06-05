@@ -546,18 +546,24 @@ type TestPlanDetail struct {
 	Runs  []TestRun      `json:"runs"`
 }
 
+type TestPlanCaseInput struct {
+	ProjectID string `json:"projectId"`
+	CaseID    string `json:"caseId"`
+}
+
 type TestPlanInput struct {
-	Title               string          `json:"title"`
-	Description         string          `json:"description"`
-	SetupSteps          string          `json:"setupSteps"`
-	Status              string          `json:"status"`
-	TargetType          string          `json:"targetType"`
-	TargetValue         string          `json:"targetValue"`
-	Environment         string          `json:"environment"`
-	EnvironmentID       string          `json:"environmentId"`
-	EnvironmentKind     string          `json:"environmentKind"`
-	EnvironmentSnapshot json.RawMessage `json:"environmentSnapshot,omitempty"`
-	CaseIDs             []string        `json:"caseIds"`
+	Title               string              `json:"title"`
+	Description         string              `json:"description"`
+	SetupSteps          string              `json:"setupSteps"`
+	Status              string              `json:"status"`
+	TargetType          string              `json:"targetType"`
+	TargetValue         string              `json:"targetValue"`
+	Environment         string              `json:"environment"`
+	EnvironmentID       string              `json:"environmentId"`
+	EnvironmentKind     string              `json:"environmentKind"`
+	EnvironmentSnapshot json.RawMessage     `json:"environmentSnapshot,omitempty"`
+	CaseIDs             []string            `json:"caseIds"`
+	Cases               []TestPlanCaseInput `json:"cases"`
 }
 
 type TestPlanListOptions struct {
@@ -699,15 +705,16 @@ type CreateTestRunInput struct {
 }
 
 type CreateAdHocTestRunInput struct {
-	CaseIDs         []string `json:"caseIds"`
-	TargetType      string   `json:"targetType"`
-	TargetValue     string   `json:"targetValue"`
-	Environment     string   `json:"environment"`
-	EnvironmentID   string   `json:"environmentId"`
-	EnvironmentKind string   `json:"environmentKind"`
-	AgentProfile    string   `json:"agentProfile"`
-	RuntimeMode     string   `json:"runtimeMode"`
-	BatchSize       int      `json:"batchSize"`
+	CaseIDs         []string            `json:"caseIds"`
+	Cases           []TestPlanCaseInput `json:"cases"`
+	TargetType      string              `json:"targetType"`
+	TargetValue     string              `json:"targetValue"`
+	Environment     string              `json:"environment"`
+	EnvironmentID   string              `json:"environmentId"`
+	EnvironmentKind string              `json:"environmentKind"`
+	AgentProfile    string              `json:"agentProfile"`
+	RuntimeMode     string              `json:"runtimeMode"`
+	BatchSize       int                 `json:"batchSize"`
 }
 
 type ReviewTestRunInput struct {
@@ -1736,6 +1743,18 @@ type Store interface {
 	ListProjectTestCaseProposals(ctx Context, userID, workspaceID, projectID string, options TestCaseProposalListOptions) ([]TestCaseProposal, error)
 	ApplyProjectTestCaseProposal(ctx Context, userID, workspaceID, projectID, proposalID string, input ReviewTestCaseProposalInput) (ApplyTestCaseProposalResult, error)
 	RejectProjectTestCaseProposal(ctx Context, userID, workspaceID, projectID, proposalID string, input ReviewTestCaseProposalInput) (TestCaseProposal, error)
+	ListWorkspaceTestPlans(ctx Context, userID, workspaceID string, options TestPlanListOptions) ([]TestPlan, error)
+	CreateWorkspaceTestPlan(ctx Context, userID, workspaceID string, input TestPlanInput) (TestPlanDetail, error)
+	GetWorkspaceTestPlan(ctx Context, userID, workspaceID, planID string) (TestPlanDetail, error)
+	UpdateWorkspaceTestPlan(ctx Context, userID, workspaceID, planID string, input TestPlanInput) (TestPlanDetail, error)
+	ListWorkspaceTestRuns(ctx Context, userID, workspaceID string, options TestRunListOptions) ([]TestRun, error)
+	StartWorkspaceTestRun(ctx Context, user User, workspaceID, planID string, input CreateTestRunInput) (TestRunDetail, error)
+	StartAdHocWorkspaceTestRun(ctx Context, user User, workspaceID string, input CreateAdHocTestRunInput) (TestRunDetail, error)
+	GetWorkspaceTestRun(ctx Context, userID, workspaceID, runID string) (TestRunDetail, error)
+	ListWorkspaceTestRunArtifacts(ctx Context, userID, workspaceID, runID string) ([]TestArtifact, error)
+	RetryWorkspaceTestRun(ctx Context, user User, workspaceID, runID string, input RetryTestRunInput) (TestRunDetail, error)
+	AcceptWorkspaceTestRun(ctx Context, userID, workspaceID, runID string, input ReviewTestRunInput) (TestRun, error)
+	BlockWorkspaceTestRun(ctx Context, userID, workspaceID, runID string, input ReviewTestRunInput) (TestRun, error)
 	ListProjectTestPlans(ctx Context, userID, workspaceID, projectID string, options TestPlanListOptions) ([]TestPlan, error)
 	CreateProjectTestPlan(ctx Context, userID, workspaceID, projectID string, input TestPlanInput) (TestPlanDetail, error)
 	GetProjectTestPlan(ctx Context, userID, workspaceID, projectID, planID string) (TestPlanDetail, error)

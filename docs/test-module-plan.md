@@ -5,14 +5,15 @@
 
 ## Conclusion
 
-mspace should add a test module, but it should not become a standalone test management platform. The right product shape is a project-level test case library, test plans, test runs, and issue-backed execution.
+mspace should add a test module, but it should not become a standalone test management platform. The right product shape is project-level test cases and case suggestions, workspace-level test plans and test runs, and issue-backed execution.
 
 The test module owns what to test, how to test it, which version is under test, which environment is used, and what the result was. Actual execution should still go through the existing mspace chain: Issue, Agent Session, Worker, Evidence, and Issue Test Environment. This keeps testing inside the product's current source of truth instead of creating a side channel.
 
 In short:
 
 ```text
-The test module owns cases and plans.
+Projects own cases and case suggestions.
+The workspace owns plans and runs.
 Issues own execution and collaboration.
 Workers and Codex perform the actual tests.
 Evidence makes the result inspectable and trustworthy.
@@ -165,15 +166,18 @@ In the first phase, mspace keeps Kubernetes clusters as compatibility records be
 
 A test plan answers: which version are we testing, which cases are included, which environment is used, and which round is this?
 
+A test plan is a workspace-level orchestration object. It may include ready cases from multiple projects in the same workspace. The plan can still keep a primary project for compatibility and default filtering, but each included case keeps its own project identity.
+
 Recommended fields:
 
-- project
+- workspace
+- primary project, for compatibility/default filtering
 - title, for example `rc4 functional test plan`
 - target type: branch, commit, source session, image, offline package, version URL, or preview URL
 - target value
 - linked Environment
 - optional setup steps that run once before case execution
-- selected cases
+- selected cases, each with project and case id
 - case order and dependencies
 - current round
 - status: `draft`, `ready`, `running`, `needs_acceptance`, `completed`, `archived`
@@ -182,6 +186,8 @@ Recommended fields:
 ### Test Run
 
 A test run is the durable execution record. It can come from a formal test plan, a selected set of ready cases, a failed/blocked retry, or a later incremental scope.
+
+A test run is also workspace-level. Its run items preserve the project/case identity used for execution, artifacts, and result reconciliation. When a run covers multiple projects, mspace groups queued items by project and creates separate execution Issues/agent sessions per project batch; one agent session should not span multiple repositories or projects.
 
 Typical rounds:
 
@@ -192,6 +198,8 @@ Typical rounds:
 
 A Test Run stores:
 
+- workspace;
+- primary project, for compatibility/default filtering;
 - source: `ad_hoc`, `plan`, `retry`, or `incremental`;
 - round number;
 - linked Test Plan when the source is plan-based;
@@ -210,6 +218,7 @@ A Test Run Item is one case result inside one run.
 
 It stores:
 
+- linked Project;
 - linked Test Case;
 - linked execution Issue;
 - linked Agent Session;
@@ -698,7 +707,24 @@ POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{p
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/reject
 ```
 
-Phase 2:
+Phase 2 primary workspace routes:
+
+```text
+GET    /api/workspaces/{workspaceID}/test-plans
+POST   /api/workspaces/{workspaceID}/test-plans
+GET    /api/workspaces/{workspaceID}/test-plans/{planID}
+PUT    /api/workspaces/{workspaceID}/test-plans/{planID}
+POST   /api/workspaces/{workspaceID}/test-plans/{planID}/runs
+GET    /api/workspaces/{workspaceID}/test-runs
+POST   /api/workspaces/{workspaceID}/test-runs
+GET    /api/workspaces/{workspaceID}/test-runs/{runID}
+GET    /api/workspaces/{workspaceID}/test-runs/{runID}/artifacts
+POST   /api/workspaces/{workspaceID}/test-runs/{runID}/retry
+POST   /api/workspaces/{workspaceID}/test-runs/{runID}/accept
+POST   /api/workspaces/{workspaceID}/test-runs/{runID}/block
+```
+
+Project-scoped plan/run routes remain as compatibility filters for clients that are still anchored on one project:
 
 ```text
 GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-plans
@@ -1095,11 +1121,11 @@ Phase 3 manual acceptance:
 
 ## Design Summary
 
-**Building**: a project-level test module that imports, creates, and refines test cases, creates test plans, assigns cases to Codex through Issues, and stores results, evidence, failures, screenshots, and human acceptance state.
-
 **Not building**: the first version does not include a generic test platform, UI/CDP/SSH/deployment orchestration, server-side Codex, execution outside Issues, or direct Codex writes into canonical cases.
 
-**Approach**: add server-owned objects for test cases, plans, and runs. Reuse the existing Issue + Agent Session + Worker + Evidence path for execution. Codex only produces proposal/result artifacts; the server validates them, and humans approve canonical state changes.
+**Building**: a Tests module where projects own imported, created, and refined test cases; the workspace owns test plans and runs that may span multiple projects; and execution assigns project-grouped case batches to Codex through Issues while storing results, evidence, failures, screenshots, and human acceptance state.
+
+**Approach**: add server-owned objects for project-level test cases plus workspace-level plans and runs. Reuse the existing Issue + Agent Session + Worker + Evidence path for execution. Codex only produces proposal/result artifacts; the server validates them, and humans approve canonical state changes.
 
 **Key decisions**:
 

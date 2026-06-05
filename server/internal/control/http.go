@@ -103,6 +103,18 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/workspaces/{workspaceID}/projects", s.handleCreateProject)
 	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}", s.handleUpdateProject)
 	r.Delete("/api/workspaces/{workspaceID}/projects/{projectID}", s.handleDeleteProject)
+	r.Get("/api/workspaces/{workspaceID}/test-plans", s.handleListWorkspaceTestPlans)
+	r.Post("/api/workspaces/{workspaceID}/test-plans", s.handleCreateWorkspaceTestPlan)
+	r.Get("/api/workspaces/{workspaceID}/test-plans/{planID}", s.handleGetWorkspaceTestPlan)
+	r.Put("/api/workspaces/{workspaceID}/test-plans/{planID}", s.handleUpdateWorkspaceTestPlan)
+	r.Get("/api/workspaces/{workspaceID}/test-runs", s.handleListWorkspaceTestRuns)
+	r.Post("/api/workspaces/{workspaceID}/test-runs", s.handleStartAdHocWorkspaceTestRun)
+	r.Post("/api/workspaces/{workspaceID}/test-plans/{planID}/runs", s.handleStartWorkspaceTestRun)
+	r.Get("/api/workspaces/{workspaceID}/test-runs/{runID}", s.handleGetWorkspaceTestRun)
+	r.Get("/api/workspaces/{workspaceID}/test-runs/{runID}/artifacts", s.handleListWorkspaceTestRunArtifacts)
+	r.Post("/api/workspaces/{workspaceID}/test-runs/{runID}/retry", s.handleRetryWorkspaceTestRun)
+	r.Post("/api/workspaces/{workspaceID}/test-runs/{runID}/accept", s.handleAcceptWorkspaceTestRun)
+	r.Post("/api/workspaces/{workspaceID}/test-runs/{runID}/block", s.handleBlockWorkspaceTestRun)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleGetProjectRunbook)
 	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleUpdateProjectRunbook)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases", s.handleListProjectTestCases)
@@ -1060,6 +1072,203 @@ func (s *Server) handleRejectProjectTestCaseProposal(w http.ResponseWriter, r *h
 		return
 	}
 	writeJSON(w, http.StatusOK, proposal)
+}
+
+func (s *Server) handleListWorkspaceTestPlans(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	plans, err := s.store.ListWorkspaceTestPlans(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), TestPlanListOptions{
+		Status: strings.TrimSpace(r.URL.Query().Get("status")),
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, plans)
+}
+
+func (s *Server) handleCreateWorkspaceTestPlan(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := TestPlanInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.CreateWorkspaceTestPlan(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, detail)
+}
+
+func (s *Server) handleGetWorkspaceTestPlan(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	detail, err := s.store.GetWorkspaceTestPlan(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "planID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleUpdateWorkspaceTestPlan(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := TestPlanInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.UpdateWorkspaceTestPlan(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "planID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleStartWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateTestRunInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.StartWorkspaceTestRun(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "planID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, detail)
+}
+
+func (s *Server) handleListWorkspaceTestRuns(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	options := TestRunListOptions{
+		Status: strings.TrimSpace(r.URL.Query().Get("status")),
+		Source: strings.TrimSpace(r.URL.Query().Get("source")),
+	}
+	runs, err := s.store.ListWorkspaceTestRuns(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), options)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, runs)
+}
+
+func (s *Server) handleStartAdHocWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CreateAdHocTestRunInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.StartAdHocWorkspaceTestRun(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, detail)
+}
+
+func (s *Server) handleGetWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	detail, err := s.store.GetWorkspaceTestRun(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "runID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleListWorkspaceTestRunArtifacts(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	artifacts, err := s.store.ListWorkspaceTestRunArtifacts(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "runID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, testArtifactRefs(artifacts))
+}
+
+func (s *Server) handleRetryWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := RetryTestRunInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.RetryWorkspaceTestRun(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "runID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleAcceptWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
+	s.handleReviewWorkspaceTestRun(w, r, true)
+}
+
+func (s *Server) handleBlockWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
+	s.handleReviewWorkspaceTestRun(w, r, false)
+}
+
+func (s *Server) handleReviewWorkspaceTestRun(w http.ResponseWriter, r *http.Request, accepted bool) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := ReviewTestRunInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	runID := strings.TrimSpace(chi.URLParam(r, "runID"))
+	var (
+		run TestRun
+		err error
+	)
+	if accepted {
+		run, err = s.store.AcceptWorkspaceTestRun(r.Context(), user.ID, workspaceID, runID, input)
+	} else {
+		run, err = s.store.BlockWorkspaceTestRun(r.Context(), user.ID, workspaceID, runID, input)
+	}
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, run)
 }
 
 func (s *Server) handleListProjectTestPlans(w http.ResponseWriter, r *http.Request) {
