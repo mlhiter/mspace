@@ -68,6 +68,7 @@ import { RelativeTime } from "./time";
 
 type TabKey = "cases" | "proposals" | "plans" | "runs";
 type TestCaseDetailTab = "details" | "runs" | "revisions";
+type TestCaseImportFormat = "markdown" | "text" | "csv" | "xlsx";
 
 type CaseForm = {
   title: string;
@@ -118,6 +119,18 @@ const emptyPlanForm: PlanForm = {
 const tabs: TabKey[] = ["cases", "proposals", "plans", "runs"];
 const caseDetailTabs: TestCaseDetailTab[] = ["details", "runs", "revisions"];
 const statusOptions = ["draft", "needs_review", "ready", "archived"] as const;
+const importFileAcceptByFormat: Record<TestCaseImportFormat, string> = {
+  markdown: ".md,.markdown,text/markdown,text/plain",
+  text: ".txt,.text,text/plain",
+  csv: ".csv,text/csv,application/csv",
+  xlsx: ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+};
+const importFileExtensionsByFormat: Record<TestCaseImportFormat, string[]> = {
+  markdown: [".md", ".markdown"],
+  text: [".txt", ".text"],
+  csv: [".csv"],
+  xlsx: [".xlsx"],
+};
 const proposalStatusOptions = ["pending", "applied", "rejected", "invalid"] as const;
 const planStatusOptions = ["draft", "ready", "archived"] as const;
 const testCaseTypeOptions = ["functional", "ui", "api", "deployment"] as const;
@@ -818,6 +831,29 @@ async function fileToBase64(file: File) {
   return bytesToBase64(new Uint8Array(buffer));
 }
 
+async function readImportFileContent(file: File, format: TestCaseImportFormat) {
+  if (format === "xlsx") {
+    return fileToBase64(file);
+  }
+  return file.text();
+}
+
+function normalizeImportFormat(value: string): TestCaseImportFormat {
+  return value === "text" || value === "csv" || value === "xlsx" ? value : "markdown";
+}
+
+function importFormatFileLabel(format: TestCaseImportFormat, t: ReturnType<typeof useMspaceTranslation>["t"]) {
+  if (format === "xlsx") return t("tests.importExcelFormat");
+  if (format === "csv") return "CSV";
+  if (format === "text") return "Text";
+  return "Markdown";
+}
+
+function importFileMatchesFormat(file: File, format: TestCaseImportFormat) {
+  const name = file.name.toLowerCase();
+  return importFileExtensionsByFormat[format].some((extension) => name.endsWith(extension));
+}
+
 function qualityFindingLabel(code: string, message: string, t: ReturnType<typeof useMspaceTranslation>["t"]) {
   return t(`tests.qualityFinding.${code}`, { defaultValue: message || code });
 }
@@ -1132,8 +1168,7 @@ export function TestsPage() {
   const [proposalStatusFilter, setProposalStatusFilter] = useState("pending");
   const [planStatusFilter, setPlanStatusFilter] = useState("all");
   const [importOpen, setImportOpen] = useState(false);
-  const [importFormat, setImportFormat] = useState("markdown");
-  const [importContent, setImportContent] = useState("");
+  const [importFormat, setImportFormat] = useState<TestCaseImportFormat>("markdown");
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importFileError, setImportFileError] = useState("");
   const [importSummary, setImportSummary] = useState("");
@@ -1254,8 +1289,7 @@ export function TestsPage() {
   const someVisibleCasesSelected = selectedVisibleCaseCount > 0 && !allVisibleCasesSelected;
   const canCreateCase = Boolean(effectiveProjectId && caseForm.title.trim());
   const canCreatePlan = Boolean(effectiveProjectId && planForm.title.trim() && selectedCaseIds.length > 0);
-  const isExcelImport = importFormat === "xlsx";
-  const canImportCases = isExcelImport ? Boolean(importFile) : Boolean(importContent.trim());
+  const canImportCases = Boolean(importFile && !importFileError);
 
   async function invalidateCaseWorkflow() {
     await Promise.all([
@@ -1285,7 +1319,10 @@ export function TestsPage() {
 
   const importCases = useMutation({
     mutationFn: async () => {
-      const content = isExcelImport && importFile ? await fileToBase64(importFile) : importContent;
+      if (!importFile) {
+        throw new Error(t("tests.importFileRequired"));
+      }
+      const content = await readImportFileContent(importFile, importFormat);
       return controlPlaneApi.importProjectTestCases(auth.token, workspaceId, effectiveProjectId, {
         format: importFormat,
         content,
@@ -1298,7 +1335,6 @@ export function TestsPage() {
       const summary = t("tests.importedSummary", { created: created.length, skipped: skipped.length });
       setImportSummary(summary);
       setActionMessage(summary);
-      setImportContent("");
       setImportFile(null);
       setImportFileError("");
       setImportOpen(false);
@@ -1558,8 +1594,7 @@ export function TestsPage() {
   }
 
   function updateImportFormat(value: string) {
-    setImportFormat(value);
-    setImportContent("");
+    setImportFormat(normalizeImportFormat(value));
     setImportFile(null);
     setImportFileError("");
     importCases.reset();
@@ -1572,9 +1607,9 @@ export function TestsPage() {
       setImportFile(null);
       return;
     }
-    if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    if (!importFileMatchesFormat(file, importFormat)) {
       setImportFile(null);
-      setImportFileError(t("tests.importExcelInvalidFile"));
+      setImportFileError(t("tests.importInvalidFile", { format: importFormatFileLabel(importFormat, t) }));
       return;
     }
     setImportFile(file);
@@ -2117,33 +2152,24 @@ export function TestsPage() {
                     </SelectContent>
                   </Select>
                 </Field>
-                {isExcelImport ? (
-                  <Field label={t("tests.importExcelFile")}>
-                    <div className="grid gap-2">
-                      <Input
-                        type="file"
-                        accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        onChange={(event) => selectImportFile(event.target.files?.[0])}
-                      />
-                      {importFile ? (
-                        <p className="text-[12px] text-[color:var(--muted)]">{t("tests.importExcelSelected", { name: importFile.name })}</p>
-                      ) : null}
-                      {importFileError ? <p className="text-[12px] text-[color:var(--danger)]">{importFileError}</p> : null}
-                    </div>
-                  </Field>
-                ) : (
-                  <Field label={t("tests.importContent")} className="min-w-0">
-                    <Textarea
-                      value={importContent}
-                      onChange={(event) => setImportContent(event.target.value)}
-                      placeholder={t("tests.importPlaceholder")}
-                      className="field-sizing-fixed min-h-44 min-w-0 max-w-full overflow-x-auto whitespace-pre"
-                      wrap="off"
+                <Field label={t("tests.importFile")}>
+                  <div className="grid gap-2">
+                    <Input
+                      type="file"
+                      accept={importFileAcceptByFormat[importFormat]}
+                      onChange={(event) => {
+                        selectImportFile(event.target.files?.[0]);
+                        event.target.value = "";
+                      }}
                     />
-                  </Field>
-                )}
+                    {importFile ? (
+                      <p className="text-[12px] text-[color:var(--muted)]">{t("tests.importSelected", { name: importFile.name })}</p>
+                    ) : null}
+                    {importFileError ? <p className="text-[12px] text-[color:var(--danger)]">{importFileError}</p> : null}
+                  </div>
+                </Field>
                 <div className="min-w-0 rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-                  {isExcelImport ? t("tests.importExcelHint") : t("tests.importFormatHint")}
+                  {importFormat === "xlsx" ? t("tests.importExcelHint") : t("tests.importFormatHint")}
                 </div>
                 {importSummary ? <p className="text-[12px] text-[color:var(--muted)]">{importSummary}</p> : null}
                 {importCases.error ? <p className="text-[12px] text-[color:var(--danger)]">{importCases.error.message}</p> : null}

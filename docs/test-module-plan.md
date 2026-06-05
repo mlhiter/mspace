@@ -225,8 +225,7 @@ It stores:
 
 The user enters `Tests -> Cases`, selects a project, then can:
 
-- paste a rough test list;
-- import Markdown;
+- import a rough Markdown or text file;
 - import CSV;
 - import Excel `.xlsx` workbooks with the same column contract as CSV;
 - create a case manually;
@@ -815,7 +814,7 @@ Scope:
 - add `Tests` navigation;
 - case list;
 - case detail as a dedicated page, not a side pane;
-- Markdown, CSV, Excel `.xlsx`, and paste import;
+- Markdown, text, CSV, and Excel `.xlsx` file import;
 - manual create and edit;
 - case executability signal;
 - case revisions;

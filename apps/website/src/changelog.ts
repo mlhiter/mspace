@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-05",
+    title: "File-based test case imports",
+    summary:
+      "mspace made every test-case import format use the same choose-file interaction instead of mixing paste fields with workbook upload.",
+    items: [
+      "Changed Markdown, text, and CSV imports to use file selection alongside Excel `.xlsx` workbooks.",
+      "Added per-format file filtering and validation for `.md`, `.markdown`, `.txt`, `.text`, `.csv`, and `.xlsx` files.",
+      "Kept the server import contract unchanged: text-like files are read as content, while Excel workbooks still send base64 content.",
+      "Updated English and Simplified Chinese import copy so the modal now talks about choosing files instead of pasting content.",
+    ],
+  },
+  {
+    date: "2026-06-05",
     title: "Plan-level setup for test runs",
     summary:
       "mspace made formal test plans handle real preconditions before case execution, without turning setup into a heavy template system.",
