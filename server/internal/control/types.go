@@ -1335,6 +1335,10 @@ type EnvironmentInput struct {
 	VirtualMachine *VirtualMachineEnvironmentConfig `json:"virtualMachine,omitempty"`
 }
 
+type EnvironmentCheckInput struct {
+	SSHAuth *VirtualMachineSSHAuthInput `json:"sshAuth,omitempty"`
+}
+
 type KubeconfigImportSkip struct {
 	Path    string `json:"path"`
 	Context string `json:"context"`
@@ -1647,6 +1651,7 @@ type Store interface {
 	ListEnvironments(ctx Context, userID, workspaceID string) ([]Environment, error)
 	CreateEnvironment(ctx Context, userID, workspaceID string, input EnvironmentInput) (Environment, error)
 	UpdateEnvironment(ctx Context, userID, workspaceID, environmentID string, input EnvironmentInput) (Environment, error)
+	CheckEnvironment(ctx Context, userID, workspaceID, environmentID string, input EnvironmentCheckInput) (Environment, error)
 	DeleteEnvironment(ctx Context, userID, workspaceID, environmentID string) error
 	ListClusters(ctx Context, userID, workspaceID string) ([]Cluster, error)
 	CreateCluster(ctx Context, userID, workspaceID string, input ClusterInput) (Cluster, error)

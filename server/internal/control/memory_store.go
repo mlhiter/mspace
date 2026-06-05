@@ -1578,6 +1578,50 @@ func (s *MemoryStore) UpdateEnvironment(_ Context, userID, workspaceID, environm
 	return updated, nil
 }
 
+func (s *MemoryStore) CheckEnvironment(_ Context, userID, workspaceID, environmentID string, input EnvironmentCheckInput) (Environment, error) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	environmentID = strings.TrimSpace(environmentID)
+	s.mu.Lock()
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		s.mu.Unlock()
+		return Environment{}, ErrForbidden
+	}
+	if cluster, ok := s.clusters[environmentID]; ok && cluster.WorkspaceID == workspaceID {
+		cluster.Status = kubeconfigStatus(context.Background(), cluster.KubeconfigPath, cluster.KubeContext)
+		cluster.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		cluster.UpdatedAt = cluster.LastCheckedAt
+		s.clusters[environmentID] = cluster
+		s.mu.Unlock()
+		return environmentFromCluster(cluster), nil
+	}
+	existing, ok := s.environments[environmentID]
+	if !ok || existing.WorkspaceID != workspaceID {
+		s.mu.Unlock()
+		return Environment{}, ErrNotFound
+	}
+	s.mu.Unlock()
+
+	status, err := virtualMachineSSHStatus(context.Background(), existing, input.SSHAuth)
+	if err != nil {
+		return Environment{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return Environment{}, ErrForbidden
+	}
+	existing, ok = s.environments[environmentID]
+	if !ok || existing.WorkspaceID != workspaceID {
+		return Environment{}, ErrNotFound
+	}
+	existing.Status = status
+	existing.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	existing.UpdatedAt = existing.LastCheckedAt
+	s.environments[environmentID] = existing
+	return existing, nil
+}
+
 func (s *MemoryStore) DeleteEnvironment(_ Context, userID, workspaceID, environmentID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

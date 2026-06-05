@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-05",
+    title: "Virtual machine environment rechecks",
+    summary:
+      "mspace made SSH virtual machine targets re-verifiable from the Environments list instead of requiring users to reopen settings.",
+    items: [
+      "Added an Environment-level check API that refreshes Kubernetes reachability through the existing kubeconfig path and virtual machine reachability through one-time SSH auth material.",
+      "Added the missing Check action to virtual machine rows in Environments, matching the Kubernetes row affordance.",
+      "Opened a focused SSH verification dialog for VM checks so users can enter a password or private key for that check without changing saved host metadata.",
+      "Kept raw SSH passwords and private keys out of persisted Environment payloads while still updating status and last checked time.",
+    ],
+  },
+  {
+    date: "2026-06-05",
     title: "Select-all controls for test cases",
     summary:
       "mspace made the Test Case library easier to use when starting batch optimization, plans, or selected-case runs.",

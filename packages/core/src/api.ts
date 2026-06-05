@@ -10,6 +10,7 @@ import type {
   Comment,
   ClusterInput,
   Environment,
+  EnvironmentCheckInput,
   EnvironmentInput,
   CreateCommentInput,
   CreateAgentSessionInput,
@@ -653,6 +654,12 @@ export const controlPlaneApi = {
   updateEnvironment: (token: string, workspaceId: string, environmentId: string, input: EnvironmentInput) =>
     requestControlPlane<Environment>(`/api/workspaces/${workspaceId}/environments/${environmentId}`, {
       method: "PUT",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  checkEnvironment: (token: string, workspaceId: string, environmentId: string, input: EnvironmentCheckInput = {}) =>
+    requestControlPlane<Environment>(`/api/workspaces/${workspaceId}/environments/${environmentId}/check`, {
+      method: "POST",
       headers: authHeaders(token),
       body: JSON.stringify(input),
     }),

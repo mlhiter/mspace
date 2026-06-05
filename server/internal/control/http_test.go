@@ -1874,6 +1874,23 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 		t.Fatalf("expected updated vm to remain unreachable after failed ssh check, got %+v", updated)
 	}
 
+	checkRecorder := httptest.NewRecorder()
+	checkReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/environments/"+created.ID+"/check", strings.NewReader(`{
+		"sshAuth":{"method":"password","password":"still-wrong"}
+	}`))
+	checkReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(checkRecorder, checkReq)
+	if checkRecorder.Code != http.StatusOK {
+		t.Fatalf("check vm environment status=%d body=%s", checkRecorder.Code, checkRecorder.Body.String())
+	}
+	var checked Environment
+	if err := json.Unmarshal(checkRecorder.Body.Bytes(), &checked); err != nil {
+		t.Fatalf("parse checked vm environment: %v", err)
+	}
+	if checked.ID != created.ID || checked.Kind != environmentKindVirtualMachine || checked.Status != "unreachable" || checked.LastCheckedAt == "" {
+		t.Fatalf("expected checked vm to remain unreachable with checked time, got %+v", checked)
+	}
+
 	listRecorder := httptest.NewRecorder()
 	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/environments", nil)
 	listReq.Header.Set("Authorization", "Bearer "+sessionToken)
@@ -2008,6 +2025,21 @@ func TestEnvironmentAPIChecksKubernetesReachability(t *testing.T) {
 	}
 	if created.Kind != environmentKindKubernetes || created.Status != "unreachable" || created.LastCheckedAt == "" {
 		t.Fatalf("expected unreachable checked kubernetes environment, got %+v", created)
+	}
+
+	checkRecorder := httptest.NewRecorder()
+	checkReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/environments/"+created.ID+"/check", nil)
+	checkReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(checkRecorder, checkReq)
+	if checkRecorder.Code != http.StatusOK {
+		t.Fatalf("check kubernetes environment status=%d body=%s", checkRecorder.Code, checkRecorder.Body.String())
+	}
+	var checked Environment
+	if err := json.Unmarshal(checkRecorder.Body.Bytes(), &checked); err != nil {
+		t.Fatalf("parse checked kubernetes environment: %v", err)
+	}
+	if checked.ID != created.ID || checked.Kind != environmentKindKubernetes || checked.Status != "unreachable" || checked.LastCheckedAt == "" {
+		t.Fatalf("expected environment-level check to return unreachable kubernetes environment, got %+v", checked)
 	}
 }
 

@@ -282,6 +282,43 @@ func (s *PostgresStore) UpdateEnvironment(ctx Context, userID, workspaceID, envi
 	return environment, err
 }
 
+func (s *PostgresStore) CheckEnvironment(ctx Context, userID, workspaceID, environmentID string, input EnvironmentCheckInput) (Environment, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	environmentID = strings.TrimSpace(environmentID)
+	existing, err := s.loadEnvironment(dbctx, workspaceID, environmentID)
+	if err != nil {
+		return Environment{}, err
+	}
+	if existing.Kind == environmentKindKubernetes {
+		cluster, err := s.CheckCluster(ctx, userID, workspaceID, environmentID)
+		if err != nil {
+			return Environment{}, err
+		}
+		return environmentFromCluster(cluster), nil
+	}
+	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
+		return Environment{}, err
+	}
+	status, err := virtualMachineSSHStatus(dbctx, existing, input.SSHAuth)
+	if err != nil {
+		return Environment{}, err
+	}
+	row := s.pool.QueryRow(dbctx, `
+		UPDATE environments
+		SET status = $3,
+			last_checked_at = now(),
+			updated_at = now()
+		WHERE workspace_id = $1 AND id = $2
+		RETURNING id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
+	`, workspaceID, environmentID, status)
+	environment, err := scanVirtualMachineEnvironment(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Environment{}, ErrNotFound
+	}
+	return environment, err
+}
+
 func (s *PostgresStore) DeleteEnvironment(ctx Context, userID, workspaceID, environmentID string) error {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)

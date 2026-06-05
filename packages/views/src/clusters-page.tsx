@@ -7,6 +7,7 @@ import {
   type Cluster,
   type ClusterInput,
   type Environment,
+  type EnvironmentCheckInput,
   type EnvironmentInput,
   type KubeconfigDiscoveryResult,
   type KubeconfigImportResult,
@@ -127,6 +128,8 @@ export function ClustersPage() {
   const [settingsForm, setSettingsForm] = useState<ClusterInput>(emptyClusterForm);
   const [settingsEnvironment, setSettingsEnvironment] = useState<Environment | null>(null);
   const [virtualMachineForm, setVirtualMachineForm] = useState<VirtualMachineFormState>(emptyVirtualMachineForm);
+  const [checkVirtualMachineEnvironment, setCheckVirtualMachineEnvironment] = useState<Environment | null>(null);
+  const [checkVirtualMachineForm, setCheckVirtualMachineForm] = useState<VirtualMachineFormState>(emptyVirtualMachineForm);
   const [createVirtualMachineOpen, setCreateVirtualMachineOpen] = useState(false);
   const [defaultImportOpen, setDefaultImportOpen] = useState(false);
   const [defaultDiscoveryRequested, setDefaultDiscoveryRequested] = useState(false);
@@ -206,6 +209,33 @@ export function ClustersPage() {
       showToast({ tone: "danger", description: error.message });
     },
   });
+  const checkEnvironment = useMutation({
+    mutationFn: (variables: { environmentId: string; input: EnvironmentCheckInput }) =>
+      controlPlaneApi.checkEnvironment(auth.token, workspaceId, variables.environmentId, variables.input),
+    onSuccess: async (environment) => {
+      setCheckVirtualMachineEnvironment(null);
+      setCheckVirtualMachineForm(emptyVirtualMachineForm);
+      if (settingsEnvironment?.id === environment.id) {
+        setSettingsEnvironment(environment);
+        setVirtualMachineForm(environmentToVMForm(environment));
+      }
+      const isKubernetes = environment.kind === "kubernetes";
+      showToast({
+        tone: environment.status === "ready" ? "success" : "warning",
+        description:
+          environment.status === "ready"
+            ? t(isKubernetes ? "clusters.checkSucceeded" : "clusters.vmCheckSucceeded", { name: environment.name })
+            : t(isKubernetes ? "clusters.checkUnreachable" : "clusters.vmCheckUnreachable", { name: environment.name }),
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: environmentsQueryKey }),
+        isKubernetes ? queryClient.invalidateQueries({ queryKey: clustersQueryKey }) : Promise.resolve(),
+      ]);
+    },
+    onError: (error) => {
+      showToast({ tone: "danger", description: error.message });
+    },
+  });
   const createEnvironment = useMutation({
     mutationFn: (input: EnvironmentInput) => controlPlaneApi.createEnvironment(auth.token, workspaceId, input),
     onSuccess: async (environment) => {
@@ -256,6 +286,7 @@ export function ClustersPage() {
     settingsCluster && (settingsCluster.projectCount > 0 || settingsCluster.environmentCount > 0),
   );
   const canSaveVirtualMachine = canSubmitVirtualMachine(virtualMachineForm);
+  const canCheckVirtualMachine = canSubmitVirtualMachineCheck(checkVirtualMachineForm);
   const settingsEnvironmentInUse = Boolean(
     settingsEnvironment &&
       (settingsEnvironment.issueEnvironmentCount > 0 ||
@@ -281,6 +312,12 @@ export function ClustersPage() {
     setVirtualMachineForm(environmentToVMForm(environment));
     updateEnvironment.reset();
     deleteEnvironment.reset();
+  }
+
+  function openVirtualMachineCheck(environment: Environment) {
+    setCheckVirtualMachineEnvironment(environment);
+    setCheckVirtualMachineForm(environmentToVMForm(environment));
+    checkEnvironment.reset();
   }
 
   function submitSettings(event: FormEvent<HTMLFormElement>) {
@@ -372,8 +409,12 @@ export function ClustersPage() {
               <EnvironmentRow
                 key={environment.id}
                 environment={environment}
-                checking={checkCluster.isPending && checkCluster.variables === environment.id}
-                onCheck={environment.kind === "kubernetes" ? () => checkCluster.mutate(environment.id) : undefined}
+                checking={checkEnvironment.isPending && checkEnvironment.variables?.environmentId === environment.id}
+                onCheck={
+                  environment.kind === "kubernetes"
+                    ? () => checkEnvironment.mutate({ environmentId: environment.id, input: {} })
+                    : () => openVirtualMachineCheck(environment)
+                }
                 onSettings={() => openEnvironmentSettings(environment)}
               />
             ))}
@@ -455,6 +496,26 @@ export function ClustersPage() {
               {deleteEnvironment.isPending ? t("clusters.deleting") : t("clusters.deleteEnvironment")}
             </Button>
           }
+        />
+      ) : null}
+
+      {checkVirtualMachineEnvironment ? (
+        <VirtualMachineCheckModal
+          environment={checkVirtualMachineEnvironment}
+          value={checkVirtualMachineForm}
+          error={checkEnvironment.error}
+          isPending={checkEnvironment.isPending}
+          canSubmit={canCheckVirtualMachine}
+          onChange={setCheckVirtualMachineForm}
+          onClose={() => setCheckVirtualMachineEnvironment(null)}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!canCheckVirtualMachine) return;
+            checkEnvironment.mutate({
+              environmentId: checkVirtualMachineEnvironment.id,
+              input: normalizeVirtualMachineCheckForm(checkVirtualMachineForm),
+            });
+          }}
         />
       ) : null}
 
@@ -641,7 +702,7 @@ function EnvironmentRow(props: { environment: Environment; checking?: boolean; o
           <InlineMeta icon={Clock3}><RelativeTime value={environment.updatedAt} /></InlineMeta>
           <InlineMeta icon={Network}>{isKubernetes ? t("clusters.kindKubernetes") : t("clusters.kindVirtualMachine")}</InlineMeta>
           {isKubernetes ? <InlineMeta icon={Globe2}>{exposure}</InlineMeta> : null}
-          {isKubernetes ? <InlineMeta icon={CheckCircle2}><EnvironmentCheckTime value={environment.lastCheckedAt} /></InlineMeta> : null}
+          <InlineMeta icon={CheckCircle2}><EnvironmentCheckTime value={environment.lastCheckedAt} /></InlineMeta>
         </div>
       </div>
 
@@ -954,7 +1015,6 @@ function VirtualMachineModal(props: {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const { t } = useMspaceTranslation();
-  const authMethod = props.value.sshAuthMethod || "password";
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -1025,73 +1085,7 @@ function VirtualMachineModal(props: {
               placeholder="root"
             />
           </Field>
-          <div className="grid gap-3">
-            <Field label={t("clusters.vmAuthMethod")}>
-              <div className="grid grid-cols-2 gap-1 rounded-[8px] bg-[color:var(--surface)] p-1 shadow-[inset_0_0_0_1px_var(--line)]" role="group" aria-label={t("clusters.vmAuthMethod")}>
-                <button
-                  type="button"
-                  aria-pressed={authMethod === "password"}
-                  className={cn(
-                    "inline-flex min-h-9 items-center justify-center gap-2 rounded-[7px] px-3 text-[13px] font-medium text-[color:var(--muted-strong)] transition-[background-color,color,box-shadow,transform] duration-150 ease-out active:scale-[0.99]",
-                    authMethod === "password"
-                      ? "bg-[color:var(--paper)] text-[color:var(--text)] shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_var(--line)]"
-                      : "hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
-                  )}
-                  onClick={() => props.onChange({ ...props.value, sshAuthMethod: "password" })}
-                >
-                  <KeyRound data-icon className="size-4" />
-                  {t("clusters.vmAuthPassword")}
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={authMethod === "private_key"}
-                  className={cn(
-                    "inline-flex min-h-9 items-center justify-center gap-2 rounded-[7px] px-3 text-[13px] font-medium text-[color:var(--muted-strong)] transition-[background-color,color,box-shadow,transform] duration-150 ease-out active:scale-[0.99]",
-                    authMethod === "private_key"
-                      ? "bg-[color:var(--paper)] text-[color:var(--text)] shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_var(--line)]"
-                      : "hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
-                  )}
-                  onClick={() => props.onChange({ ...props.value, sshAuthMethod: "private_key" })}
-                >
-                  <FileKey2 data-icon className="size-4" />
-                  {t("clusters.vmAuthPrivateKey")}
-                </button>
-              </div>
-            </Field>
-            {authMethod === "password" ? (
-              <Field label={t("clusters.sshPassword")}>
-                <Input
-                  type="password"
-                  autoComplete="new-password"
-                  value={props.value.sshPassword || ""}
-                  onChange={(event) => props.onChange({ ...props.value, sshPassword: event.target.value })}
-                  placeholder={t("clusters.sshPasswordPlaceholder")}
-                />
-              </Field>
-            ) : (
-              <div className="grid gap-3">
-                <Field label={t("clusters.sshPrivateKey")}>
-                  <Textarea
-                    value={props.value.sshPrivateKey || ""}
-                    onChange={(event) => props.onChange({ ...props.value, sshPrivateKey: event.target.value })}
-                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                    className="min-h-32 font-mono text-[12px] leading-5"
-                    spellCheck={false}
-                  />
-                </Field>
-                <Field label={t("clusters.sshPassphrase")}>
-                  <Input
-                    type="password"
-                    autoComplete="new-password"
-                    value={props.value.sshPassphrase || ""}
-                    onChange={(event) => props.onChange({ ...props.value, sshPassphrase: event.target.value })}
-                    placeholder={t("clusters.optional")}
-                  />
-                </Field>
-              </div>
-            )}
-            <Notice>{t("clusters.vmCheckDescription")}</Notice>
-          </div>
+          <VirtualMachineAuthFields value={props.value} onChange={props.onChange} notice={t("clusters.vmCheckDescription")} />
           <Field label={t("clusters.workdir")}>
             <Input
               value={props.value.workdir || ""}
@@ -1119,6 +1113,170 @@ function VirtualMachineModal(props: {
           </div>
         </form>
       </section>
+    </div>
+  );
+}
+
+function VirtualMachineCheckModal(props: {
+  environment: Environment;
+  value: VirtualMachineFormState;
+  error?: Error | null;
+  isPending: boolean;
+  canSubmit: boolean;
+  onChange: (value: VirtualMachineFormState) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const { t } = useMspaceTranslation();
+  const vm = props.environment.virtualMachine;
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") props.onClose();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [props.onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-[rgba(31,31,31,0.18)] px-5 py-8">
+      <button type="button" aria-label={t("clusters.closeVirtualMachineCheckBackdrop")} className="absolute inset-0 cursor-default" onClick={props.onClose} />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="virtual-machine-check-modal-title"
+        className="relative max-h-[calc(100vh-40px)] w-full max-w-[520px] overflow-auto rounded-[12px] bg-[color:var(--paper)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.18),0_0_0_1px_var(--line)]"
+      >
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h2 id="virtual-machine-check-modal-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">
+              {t("clusters.verifyVirtualMachineTitle")}
+            </h2>
+            <p className="mt-1 max-w-[56ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
+              {t("clusters.verifyVirtualMachineDescription")}
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label={t("clusters.closeModal")}
+            className="grid size-9 shrink-0 place-items-center rounded-[7px] text-[color:var(--muted)] transition-[background-color,color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] active:scale-95"
+            onClick={props.onClose}
+          >
+            <X data-icon />
+          </button>
+        </div>
+
+        <form className="grid gap-4" onSubmit={props.onSubmit}>
+          {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
+          <div className="rounded-[9px] bg-[color:var(--block)] px-3 py-2.5 shadow-[inset_0_0_0_1px_var(--line)]">
+            <div className="flex min-w-0 items-center gap-2">
+              <Server data-icon className="shrink-0 text-[color:var(--muted)]" />
+              <span className="truncate text-[14px] font-semibold leading-5 text-[color:var(--text)]">
+                {props.environment.name}
+              </span>
+              <StatusBadge value={props.environment.status || "configured"} valueLabel={environmentStatusLabel(props.environment.status, t)} />
+            </div>
+            <div className="mt-2 grid gap-1 text-[12px] leading-5 text-[color:var(--muted)]">
+              <span className="truncate">
+                {vm?.sshUser || "-"}@{vm?.sshHost || "-"}:{vm?.sshPort || 22}
+              </span>
+              <span>
+                <EnvironmentCheckTime value={props.environment.lastCheckedAt} />
+              </span>
+            </div>
+          </div>
+          <VirtualMachineAuthFields value={props.value} onChange={props.onChange} notice={t("clusters.vmRecheckDescription")} />
+          <div className="mt-1 flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isPending}>
+              {t("common.cancel")}
+            </Button>
+            <Button type="submit" disabled={!props.canSubmit || props.isPending}>
+              <RefreshCw data-icon className={props.isPending ? "animate-spin" : undefined} />
+              {props.isPending ? t("clusters.checking") : t("clusters.check")}
+            </Button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function VirtualMachineAuthFields(props: {
+  value: VirtualMachineFormState;
+  notice: string;
+  onChange: (value: VirtualMachineFormState) => void;
+}) {
+  const { t } = useMspaceTranslation();
+  const authMethod = props.value.sshAuthMethod || "password";
+
+  return (
+    <div className="grid gap-3">
+      <Field label={t("clusters.vmAuthMethod")}>
+        <div className="grid grid-cols-2 gap-1 rounded-[8px] bg-[color:var(--surface)] p-1 shadow-[inset_0_0_0_1px_var(--line)]" role="group" aria-label={t("clusters.vmAuthMethod")}>
+          <button
+            type="button"
+            aria-pressed={authMethod === "password"}
+            className={cn(
+              "inline-flex min-h-9 items-center justify-center gap-2 rounded-[7px] px-3 text-[13px] font-medium text-[color:var(--muted-strong)] transition-[background-color,color,box-shadow,transform] duration-150 ease-out active:scale-[0.99]",
+              authMethod === "password"
+                ? "bg-[color:var(--paper)] text-[color:var(--text)] shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_var(--line)]"
+                : "hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
+            )}
+            onClick={() => props.onChange({ ...props.value, sshAuthMethod: "password" })}
+          >
+            <KeyRound data-icon className="size-4" />
+            {t("clusters.vmAuthPassword")}
+          </button>
+          <button
+            type="button"
+            aria-pressed={authMethod === "private_key"}
+            className={cn(
+              "inline-flex min-h-9 items-center justify-center gap-2 rounded-[7px] px-3 text-[13px] font-medium text-[color:var(--muted-strong)] transition-[background-color,color,box-shadow,transform] duration-150 ease-out active:scale-[0.99]",
+              authMethod === "private_key"
+                ? "bg-[color:var(--paper)] text-[color:var(--text)] shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_var(--line)]"
+                : "hover:bg-[color:var(--hover)] hover:text-[color:var(--text)]",
+            )}
+            onClick={() => props.onChange({ ...props.value, sshAuthMethod: "private_key" })}
+          >
+            <FileKey2 data-icon className="size-4" />
+            {t("clusters.vmAuthPrivateKey")}
+          </button>
+        </div>
+      </Field>
+      {authMethod === "password" ? (
+        <Field label={t("clusters.sshPassword")}>
+          <Input
+            type="password"
+            autoComplete="new-password"
+            value={props.value.sshPassword || ""}
+            onChange={(event) => props.onChange({ ...props.value, sshPassword: event.target.value })}
+            placeholder={t("clusters.sshPasswordPlaceholder")}
+          />
+        </Field>
+      ) : (
+        <div className="grid gap-3">
+          <Field label={t("clusters.sshPrivateKey")}>
+            <Textarea
+              value={props.value.sshPrivateKey || ""}
+              onChange={(event) => props.onChange({ ...props.value, sshPrivateKey: event.target.value })}
+              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+              className="min-h-32 font-mono text-[12px] leading-5"
+              spellCheck={false}
+            />
+          </Field>
+          <Field label={t("clusters.sshPassphrase")}>
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={props.value.sshPassphrase || ""}
+              onChange={(event) => props.onChange({ ...props.value, sshPassphrase: event.target.value })}
+              placeholder={t("clusters.optional")}
+            />
+          </Field>
+        </div>
+      )}
+      <Notice>{props.notice}</Notice>
     </div>
   );
 }
@@ -1180,12 +1338,39 @@ function normalizeVirtualMachineForm(form: VirtualMachineFormState): Environment
   return normalized;
 }
 
+function normalizeVirtualMachineCheckForm(form: VirtualMachineFormState): EnvironmentCheckInput {
+  const authMethod = form.sshAuthMethod || "password";
+  return {
+    sshAuth:
+      authMethod === "private_key"
+        ? {
+            method: "private_key",
+            privateKey: (form.sshPrivateKey || "").trim(),
+            passphrase: form.sshPassphrase || "",
+          }
+        : {
+            method: "password",
+            password: form.sshPassword || "",
+          },
+  };
+}
+
 function canSubmitVirtualMachine(form: VirtualMachineFormState) {
   const normalized = normalizeVirtualMachineForm(form);
+  return Boolean(
+    normalized.name &&
+      normalized.sshHost &&
+      normalized.sshUser &&
+      (normalized.sshPort || 0) > 0 &&
+      canSubmitVirtualMachineCheck(form),
+  );
+}
+
+function canSubmitVirtualMachineCheck(form: VirtualMachineFormState) {
   const authMethod = form.sshAuthMethod || "password";
   const hasAuthMaterial =
     authMethod === "private_key" ? Boolean((form.sshPrivateKey || "").trim()) : Boolean(form.sshPassword || "");
-  return Boolean(normalized.name && normalized.sshHost && normalized.sshUser && (normalized.sshPort || 0) > 0 && hasAuthMaterial);
+  return hasAuthMaterial;
 }
 
 function clusterFromEnvironment(environment: Environment): Cluster | null {

@@ -1154,6 +1154,10 @@ export interface EnvironmentInput {
   sshAuth?: VirtualMachineSSHAuthInput;
 }
 
+export interface EnvironmentCheckInput {
+  sshAuth?: VirtualMachineSSHAuthInput;
+}
+
 export interface KubeconfigImportSkip {
   path: string;
   context: string;

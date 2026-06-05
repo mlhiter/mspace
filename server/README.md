@@ -136,6 +136,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `GET` | `/api/workspaces/{workspaceID}/environments` | List Kubernetes and virtual machine Environments. Kubernetes rows are projected from cluster compatibility records. |
 | `POST` | `/api/workspaces/{workspaceID}/environments` | Create an Environment with `kind:"kubernetes"` or `kind:"virtual_machine"`. Kubernetes create checks kubeconfig reachability; VM create requires one-time `sshAuth` password/private-key material for SSH login validation. |
 | `PUT` | `/api/workspaces/{workspaceID}/environments/{environmentID}` | Update an Environment. Kubernetes update refreshes kubeconfig reachability; VM update requires one-time `sshAuth` password/private-key material and derives status from SSH login validation. |
+| `POST` | `/api/workspaces/{workspaceID}/environments/{environmentID}/check` | Refresh Environment reachability. Kubernetes delegates to the kubeconfig check; VM checks SSH login with one-time `sshAuth` material without persisting raw credentials. |
 | `DELETE` | `/api/workspaces/{workspaceID}/environments/{environmentID}` | Delete an unused Environment. |
 | `GET` | `/api/workspaces/{workspaceID}/clusters` | Compatibility API for Kubernetes cluster configs. Prefer `/environments` in product integrations. |
 | `POST` | `/api/workspaces/{workspaceID}/clusters` | Compatibility API for creating a Kubernetes cluster config. |

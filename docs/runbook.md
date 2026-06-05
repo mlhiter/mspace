@@ -349,7 +349,23 @@ curl -H "Authorization: Bearer <msp-token>" \
   http://127.0.0.1:8787/api/workspaces/<workspace-id>/clusters/discover-defaults
 ```
 
-Refresh Kubernetes Environment readiness after editing or importing a kubeconfig:
+Refresh Environment readiness after editing, importing, or changing credentials:
+
+```bash
+curl -X POST -H "Authorization: Bearer <msp-token>" \
+  http://127.0.0.1:8787/api/workspaces/<workspace-id>/environments/<environment-id>/check
+```
+
+For virtual machine Environments, include one-time SSH auth material in the check body:
+
+```bash
+curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/environments/<environment-id>/check" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"sshAuth":{"method":"password","password":"<one-time-password-for-validation>"}}'
+```
+
+The older Kubernetes compatibility endpoint remains available for cluster records:
 
 ```bash
 curl -X POST -H "Authorization: Bearer <msp-token>" \
@@ -459,7 +475,7 @@ Virtual machine Environments run an SSH login check on create/update. `ready` on
 ssh -p <port> <user>@<host>
 ```
 
-Then retry saving the VM Environment with the corrected password or private key. Missing password/private key input is rejected before saving; connection and authentication failures keep the record for repair as `unreachable`.
+Then retry the VM Environment check, or save the VM Environment with corrected metadata and password/private key. Missing password/private key input is rejected before validation; connection and authentication failures keep the record for repair as `unreachable`.
 
 ### Personal worker credential expires
 

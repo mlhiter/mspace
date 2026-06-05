@@ -137,6 +137,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/workspaces/{workspaceID}/environments", s.handleListEnvironments)
 	r.Post("/api/workspaces/{workspaceID}/environments", s.handleCreateEnvironment)
 	r.Put("/api/workspaces/{workspaceID}/environments/{environmentID}", s.handleUpdateEnvironment)
+	r.Post("/api/workspaces/{workspaceID}/environments/{environmentID}/check", s.handleCheckEnvironment)
 	r.Delete("/api/workspaces/{workspaceID}/environments/{environmentID}", s.handleDeleteEnvironment)
 	r.Get("/api/workspaces/{workspaceID}/clusters", s.handleListClusters)
 	r.Post("/api/workspaces/{workspaceID}/clusters", s.handleCreateCluster)
@@ -1392,6 +1393,24 @@ func (s *Server) handleUpdateEnvironment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	environment, err := s.store.UpdateEnvironment(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "environmentID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, environment)
+}
+
+func (s *Server) handleCheckEnvironment(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := EnvironmentCheckInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	environment, err := s.store.CheckEnvironment(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "environmentID")), input)
 	if err != nil {
 		writeStoreError(w, err)
 		return
