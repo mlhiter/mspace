@@ -269,13 +269,15 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
   -d '{"format":"markdown","content":"- Invalid password shows an error\n- User can reset password from the login page"}'
 ```
 
-The preview response is read-only and returns `parsedCount`, `importableCount`, `skippedCount`, `missingFieldCounts`, `qualityFindingCounts`, `importableCaseSamples`, and `skippedSamples`. Clients should show those counts and samples, then call `/test-cases/import` with the same body only after the user confirms.
+The preview response is read-only and returns `parsedCount`, `importableCount`, `skippedCount`, `missingFieldCounts`, `qualityFindingCounts`, `columnMappings`, `importableCaseSamples`, and `skippedSamples`. Clients should show those counts, source-column mappings, and samples, then call `/test-cases/import` with the same body only after the user confirms.
 
 `format` can be `markdown`, `text`, `csv`, or `xlsx`. Markdown and text imports treat each non-empty line as one case. CSV and `.xlsx` imports use the same header contract:
 
 ```text
 title,type,area,priority,preconditions,steps,expected_result,environment_requirements,tags
 ```
+
+The parser also recognizes deterministic aliases for common Chinese case-library exports: `用例ID` maps to `external_id` and is preserved as a tag, `用例名称` to `title`, `所属模块` to `area`, `测试类别` to `tags`, `前置条件` to `preconditions`, `步骤描述` to `steps`, `预期结果` to `expected_result`, `备注` to `environment_requirements`, and `用例等级` to `priority`. `测试类别` is a business classification column in these imports, so it must not be treated as mspace's fixed `type` unless a real type column is present. Columns the server cannot match remain visible as unmatched `columnMappings` entries for a future worker-assisted mapping layer.
 
 For `.xlsx`, send the workbook bytes as base64 in `content` and set `format:"xlsx"`. Import is capped at 1,000 cases per request. Text-like content is capped at 2 MB, and decoded `.xlsx` workbooks are capped at 2 MB before the server opens them with explicit workbook unzip limits. The server reads the first non-empty worksheet, skips rows without `title`, validates `type`, and records skipped rows in the preview and final import responses.
 

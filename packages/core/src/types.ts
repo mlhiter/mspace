@@ -143,6 +143,14 @@ export interface TestCaseImportPreviewCase {
   qualityFindings: TestCaseQualityFinding[];
 }
 
+export interface TestCaseImportColumnMapping {
+  source: string;
+  field: string;
+  index: number;
+  matched: boolean;
+  required: boolean;
+}
+
 export interface ImportTestCasesPreview {
   format: string;
   fileName: string;
@@ -158,6 +166,7 @@ export interface ImportTestCasesPreview {
   reachedImportCaseLimit: boolean;
   missingFieldCounts: Record<string, number>;
   qualityFindingCounts: Record<string, number>;
+  columnMappings: TestCaseImportColumnMapping[];
   importableCaseSamples: TestCaseImportPreviewCase[];
   skippedSamples: TestCaseImportSkip[];
 }

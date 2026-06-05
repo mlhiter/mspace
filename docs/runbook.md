@@ -94,7 +94,7 @@ Recommended smoke order:
 2. Verify the Cases list shows compact operational columns: title, type, status, priority, executability, latest result, and updated time.
 3. Create one case from the modal and verify the case detail page opens.
 4. Import Markdown/text cases and confirm the modal previews the parsed count, importable count, skipped rows, missing field counts, and sample cases before the user confirms import.
-5. Import CSV or Excel `.xlsx` cases with `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers. Rows without `title` should appear in the preview skipped list. Use `functional`, `ui`, `api`, or `deployment` for `type`; common aliases such as `UI 测试`, `接口测试`, and `部署测试` normalize to the fixed values.
+5. Import CSV or Excel `.xlsx` cases with `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers, or common Chinese headers such as `用例ID`, `用例名称`, `所属模块`, `测试类别`, `前置条件`, `步骤描述`, `预期结果`, `备注`, and `用例等级`. The preview should show source-column mappings before confirmation. Rows without `title` should appear in the preview skipped list. Use `functional`, `ui`, `api`, or `deployment` for `type`; common aliases such as `UI 测试`, `接口测试`, and `部署测试` normalize to the fixed values. `测试类别` from case-library exports is treated as a tag, not the fixed system type.
 6. Edit a case and verify revisions show newest first, with non-initial revisions showing changed fields and before/after values rather than only the case title.
 7. Exercise Optimize or Generate with no connected worker; the UI should surface the worker/session blocker rather than silently claiming success.
 8. Create a formal plan with setup steps, such as confirming the target Environment, updating a Deployment image, SSHing into a VM, or logging into Sealos before opening Object Storage. Starting that plan should create one setup Issue/Session and keep run items queued while the run is `setup_running`.
@@ -400,7 +400,7 @@ curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/projects/<proj
   -d '{"format":"markdown","content":"- Invalid password shows an error\n- Invite link opens the workspace"}'
 ```
 
-The preview is read-only. It returns `parsedCount`, `importableCount`, `skippedCount`, `missingFieldCounts`, `qualityFindingCounts`, `importableCaseSamples`, and `skippedSamples`. The current request limits are 1,000 importable cases, 2 MB for Markdown/text/CSV content, and a 2 MB decoded workbook for `.xlsx`.
+The preview is read-only. It returns `parsedCount`, `importableCount`, `skippedCount`, `missingFieldCounts`, `qualityFindingCounts`, `columnMappings`, `importableCaseSamples`, and `skippedSamples`. The current request limits are 1,000 importable cases, 2 MB for Markdown/text/CSV content, and a 2 MB decoded workbook for `.xlsx`.
 
 Import `.xlsx` cases by base64-encoding the workbook bytes:
 

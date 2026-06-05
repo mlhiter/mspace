@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-05",
+    title: "Safer CSV column mapping for case imports",
+    summary:
+      "mspace made imported case files explain how source columns will map before the user confirms the write.",
+    items: [
+      "Added column mapping data to the read-only import preview response for CSV and Excel `.xlsx` files.",
+      "Recognized common Chinese case-library headers such as `用例ID`, `用例名称`, `所属模块`, `步骤描述`, `预期结果`, `备注`, and `用例等级`.",
+      "Treated business categories from `测试类别` as tags instead of forcing them into the fixed `functional`, `ui`, `api`, or `deployment` type field.",
+      "Split inline numbered steps such as `[1] ... [2] ...` into separate runnable steps during import.",
+    ],
+  },
+  {
+    date: "2026-06-05",
     title: "Preview-before-confirm case imports",
     summary:
       "mspace made larger test-case files safer to import by parsing them on the server first and asking the user to confirm before writing cases.",

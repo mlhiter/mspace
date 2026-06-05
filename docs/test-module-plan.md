@@ -234,7 +234,7 @@ The user enters `Tests -> Cases`, selects a project, then can:
 The system does three things:
 
 1. parses rough input through a read-only import preview;
-2. reports how many cases will import, how many rows will be skipped, and whether required fields are missing;
+2. reports how many cases will import, how many rows will be skipped, how source columns map to system fields, and whether required fields are missing;
 3. lets the user confirm before writing cases;
 4. converts confirmed input into structured draft cases and computes executability signals.
 

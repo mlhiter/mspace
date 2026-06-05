@@ -883,6 +883,10 @@ function importPreviewQualityEntries(preview: ImportTestCasesPreview) {
   return Object.entries(preview.qualityFindingCounts || {}).filter(([, count]) => count > 0);
 }
 
+function importPreviewColumnMappings(preview: ImportTestCasesPreview) {
+  return (preview.columnMappings || []).filter((mapping) => mapping.source || mapping.required);
+}
+
 function qualityFindingLabel(code: string, message: string, t: ReturnType<typeof useMspaceTranslation>["t"]) {
   return t(`tests.qualityFinding.${code}`, { defaultValue: message || code });
 }
@@ -2996,6 +3000,7 @@ function ImportPreviewPanel(props: { preview: ImportTestCasesPreview; t: ReturnT
   const { preview, t } = props;
   const missingEntries = importPreviewMissingEntries(preview);
   const qualityEntries = importPreviewQualityEntries(preview);
+  const columnMappings = importPreviewColumnMappings(preview);
   return (
     <section className="grid min-w-0 gap-3 rounded-[8px] bg-[color:var(--surface)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -3039,6 +3044,27 @@ function ImportPreviewPanel(props: { preview: ImportTestCasesPreview; t: ReturnT
               <span key={code} className="rounded-[999px] bg-[color:var(--block)] px-2 py-1 text-[color:var(--muted)]">
                 {qualityFindingLabel(code, code, t)} · {count}
               </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {columnMappings.length > 0 ? (
+        <div className="rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="font-medium text-[color:var(--muted-strong)]">{t("tests.importPreviewColumnMappings")}</div>
+          <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
+            {columnMappings.map((mapping) => (
+              <div
+                key={`${mapping.source || mapping.field}-${mapping.index}`}
+                className={cn(
+                  "flex min-w-0 items-center justify-between gap-2 rounded-[7px] px-2 py-1.5 shadow-[inset_0_0_0_1px_var(--line)]",
+                  mapping.matched ? "bg-[color:var(--block)] text-[color:var(--muted)]" : "bg-[color:var(--warning-soft)] text-[color:var(--warning)]",
+                )}
+              >
+                <span className="min-w-0 truncate">{mapping.source || t("tests.importPreviewMissingColumn")}</span>
+                <span className="shrink-0 text-[color:var(--muted-strong)]">
+                  {mapping.matched ? importPreviewFieldLabel(mapping.field, t) : t("tests.importPreviewUnmatchedColumn")}
+                </span>
+              </div>
             ))}
           </div>
         </div>

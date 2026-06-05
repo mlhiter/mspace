@@ -30,6 +30,7 @@ var requiredImportPreviewFields = []string{"title", "preconditions", "steps", "e
 
 var (
 	importBulletPattern = regexp.MustCompile(`^\s*(?:[-*+]\s+\[[ xX]\]|\d+[\.)]|[-*+])\s+`)
+	importStepPattern   = regexp.MustCompile(`(?:^|\s+)\[(\d+)\]\s*`)
 	vagueCasePatterns   = []string{
 		"verify it works",
 		"check it works",
@@ -47,6 +48,38 @@ var (
 		"deployment": {},
 	}
 )
+
+type importColumnDefinition struct {
+	field    string
+	required bool
+	aliases  []string
+}
+
+var importColumnDefinitions = []importColumnDefinition{
+	{field: "title", required: true, aliases: []string{"case", "test_case", "name", "title/name", "标题", "用例标题", "用例名称", "测试用例", "测试用例名称", "case_name"}},
+	{field: "type", aliases: []string{"test_type", "case_type", "test_kind", "kind", "用例类型", "测试类型", "类型"}},
+	{field: "area", aliases: []string{"area", "module", "feature", "belonging_module", "所属模块", "模块", "功能模块", "业务模块", "所属功能"}},
+	{field: "priority", aliases: []string{"priority", "level", "severity", "用例等级", "优先级", "等级", "重要级别", "重要性"}},
+	{field: "preconditions", required: true, aliases: []string{"precondition", "preconditions", "setup", "前置条件", "前置", "前提条件", "准备条件"}},
+	{field: "steps", required: true, aliases: []string{"step", "steps", "actions", "test_steps", "步骤", "操作步骤", "步骤描述", "测试步骤", "执行步骤"}},
+	{field: "expected_result", required: true, aliases: []string{"expected", "expected_result", "expectedresults", "expectation", "预期结果", "期望结果", "预期", "期望"}},
+	{field: "environment_requirements", required: true, aliases: []string{"env", "environment", "environment_requirements", "environment_requirement", "test_environment", "环境", "环境要求", "测试环境", "备注", "说明"}},
+	{field: "tags", aliases: []string{"tag", "tags", "labels", "标签", "标记", "测试类别", "测试分类", "类别"}},
+	{field: "external_id", aliases: []string{"id", "case_id", "test_case_id", "用例id", "用例_id", "用例编号", "编号"}},
+}
+
+var importColumnAliasToField = buildImportColumnAliasToField()
+
+func buildImportColumnAliasToField() map[string]string {
+	result := map[string]string{}
+	for _, definition := range importColumnDefinitions {
+		result[definition.field] = definition.field
+		for _, alias := range definition.aliases {
+			result[normalizeImportColumnKey(alias)] = definition.field
+		}
+	}
+	return result
+}
 
 func normalizeTestCaseInput(input TestCaseInput, sourceFallback string) (TestCaseInput, int, []TestCaseQualityFinding, error) {
 	input.Title = collapseWhitespace(input.Title)
@@ -175,6 +208,9 @@ func previewImportedTestCases(input ImportTestCasesInput) (ImportTestCasesPrevie
 		QualityFindingCounts:   map[string]int{},
 		ImportableCaseSamples:  []TestCaseImportPreviewCase{},
 		SkippedSamples:         sampleImportSkips(skipped),
+	}
+	if normalized.Format == "csv" || normalized.Format == "xlsx" {
+		preview.ColumnMappings = importColumnMappings(normalized)
 	}
 	if normalized.Format == "xlsx" {
 		preview.MaxContentBytes = base64.StdEncoding.EncodedLen(maxImportedWorkbookBytes)
@@ -328,11 +364,7 @@ func parseExcelTestCases(content string) ([]TestCaseInput, []TestCaseImportSkip,
 }
 
 func recordsToTestCaseInputs(records [][]string) ([]TestCaseInput, []TestCaseImportSkip) {
-	importRecords := make([]importRecord, 0, len(records))
-	for index, record := range records {
-		importRecords = append(importRecords, importRecord{line: index + 1, values: record})
-	}
-	return importRecordsToTestCaseInputs(importRecords)
+	return importRecordsToTestCaseInputs(recordsToImportRecords(records))
 }
 
 type importRecord struct {
@@ -341,17 +373,7 @@ type importRecord struct {
 }
 
 func importRecordsToTestCaseInputs(records []importRecord) ([]TestCaseInput, []TestCaseImportSkip) {
-	header := map[string]int{}
-	start := 0
-	for index, name := range records[0].values {
-		key := normalizeCSVHeader(name)
-		if key != "" {
-			header[key] = index
-		}
-	}
-	if _, ok := header["title"]; ok {
-		start = 1
-	}
+	header, start := importHeader(records)
 	cases := make([]TestCaseInput, 0, minInt(len(records), maxImportedTestCases))
 	skipped := []TestCaseImportSkip{}
 	for lineIndex, record := range records[start:] {
@@ -370,6 +392,135 @@ func importRecordsToTestCaseInputs(records []importRecord) ([]TestCaseInput, []T
 		}
 	}
 	return cases, skipped
+}
+
+func importHeader(records []importRecord) (map[string]int, int) {
+	header := map[string]int{}
+	start := 0
+	if len(records) == 0 {
+		return header, start
+	}
+	matchedColumns := 0
+	matchedRequiredColumn := false
+	for index, name := range records[0].values {
+		key := normalizeCSVHeader(name)
+		if key != "" {
+			if _, exists := header[key]; exists {
+				continue
+			}
+			header[key] = index
+			matchedColumns++
+			if isRequiredImportColumn(key) {
+				matchedRequiredColumn = true
+			}
+		}
+	}
+	if _, ok := header["title"]; ok || (matchedColumns >= 2 && matchedRequiredColumn) {
+		start = 1
+	}
+	return header, start
+}
+
+func isRequiredImportColumn(field string) bool {
+	for _, definition := range importColumnDefinitions {
+		if definition.field == field {
+			return definition.required
+		}
+	}
+	return false
+}
+
+func recordsToImportRecords(records [][]string) []importRecord {
+	importRecords := make([]importRecord, 0, len(records))
+	for index, record := range records {
+		importRecords = append(importRecords, importRecord{line: index + 1, values: record})
+	}
+	return importRecords
+}
+
+func importColumnMappings(input ImportTestCasesInput) []TestCaseImportColumnMapping {
+	records, err := importPreviewRecords(input)
+	if err != nil || len(records) == 0 {
+		return []TestCaseImportColumnMapping{}
+	}
+	header, start := importHeader(records)
+	if start == 0 {
+		return []TestCaseImportColumnMapping{}
+	}
+	required := map[string]bool{}
+	for _, definition := range importColumnDefinitions {
+		required[definition.field] = definition.required
+	}
+	result := make([]TestCaseImportColumnMapping, 0, len(records[0].values))
+	for index, name := range records[0].values {
+		source := strings.TrimPrefix(strings.TrimSpace(name), "\ufeff")
+		field := normalizeCSVHeader(source)
+		result = append(result, TestCaseImportColumnMapping{
+			Source:   source,
+			Field:    field,
+			Index:    index,
+			Matched:  field != "",
+			Required: field != "" && required[field],
+		})
+	}
+	for _, definition := range importColumnDefinitions {
+		if !definition.required {
+			continue
+		}
+		if _, ok := header[definition.field]; ok {
+			continue
+		}
+		result = append(result, TestCaseImportColumnMapping{
+			Field:    definition.field,
+			Index:    -1,
+			Matched:  false,
+			Required: true,
+		})
+	}
+	return result
+}
+
+func importPreviewRecords(input ImportTestCasesInput) ([]importRecord, error) {
+	switch input.Format {
+	case "csv":
+		reader := csv.NewReader(strings.NewReader(input.Content))
+		reader.TrimLeadingSpace = true
+		reader.FieldsPerRecord = -1
+		records, err := reader.ReadAll()
+		if err != nil {
+			return nil, err
+		}
+		return recordsToImportRecords(records), nil
+	case "xlsx":
+		workbookBytes, err := base64.StdEncoding.DecodeString(input.Content)
+		if err != nil {
+			return nil, err
+		}
+		file, err := excelize.OpenReader(bytes.NewReader(workbookBytes), excelize.Options{
+			UnzipSizeLimit:    maxImportedWorkbookUnzipBytes,
+			UnzipXMLSizeLimit: maxImportedWorkbookXMLBytes,
+		})
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			_ = file.Close()
+		}()
+		for _, sheet := range file.GetSheetList() {
+			rows, err := file.GetRows(sheet)
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					continue
+				}
+				return nil, err
+			}
+			records := nonEmptyImportRecords(rows)
+			if len(records) > 0 {
+				return records, nil
+			}
+		}
+	}
+	return []importRecord{}, nil
 }
 
 func nonEmptyImportRecords(records [][]string) []importRecord {
@@ -410,6 +561,9 @@ func csvRecordToTestCaseInput(record []string, header map[string]int) TestCaseIn
 		ExpectedResult:          value("expected_result", -1),
 		EnvironmentRequirements: value("environment_requirements", -1),
 		Tags:                    splitCSVList(value("tags", -1)),
+	}
+	if externalID := value("external_id", -1); externalID != "" {
+		input.Tags = append(input.Tags, externalID)
 	}
 	stepText := value("steps", -1)
 	if stepText != "" {
@@ -456,23 +610,17 @@ func cleanImportedCaseTitle(line string) string {
 }
 
 func normalizeCSVHeader(value string) string {
+	return importColumnAliasToField[normalizeImportColumnKey(value)]
+}
+
+func normalizeImportColumnKey(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "\ufeff")
 	value = strings.ReplaceAll(value, " ", "_")
 	value = strings.ReplaceAll(value, "-", "_")
-	switch value {
-	case "case", "test_case", "name", "title/name", "标题", "用例标题":
-		return "title"
-	case "test_type", "case_type", "test_kind", "kind", "用例类型", "测试类型", "类型":
-		return "type"
-	case "expected_result", "expectedresults":
-		return "expected_result"
-	case "expected":
-		return "expected"
-	case "env", "environment", "environment_requirements":
-		return "environment_requirements"
-	default:
-		return value
-	}
+	value = strings.ReplaceAll(value, "（", "(")
+	value = strings.ReplaceAll(value, "）", ")")
+	return value
 }
 
 func isAllowedTestCaseType(value string) bool {
@@ -573,6 +721,9 @@ func textToTestCaseSteps(value string) []TestCaseStep {
 	value = strings.ReplaceAll(value, "\r\n", "\n")
 	value = strings.ReplaceAll(value, "\r", "\n")
 	parts := strings.Split(value, "\n")
+	if len(parts) == 1 {
+		parts = splitNumberedInlineSteps(value)
+	}
 	steps := make([]TestCaseStep, 0, len(parts))
 	for _, part := range parts {
 		action := cleanImportedCaseTitle(part)
@@ -584,6 +735,29 @@ func textToTestCaseSteps(value string) []TestCaseStep {
 		steps = []TestCaseStep{{Action: collapseWhitespace(value)}}
 	}
 	return steps
+}
+
+func splitNumberedInlineSteps(value string) []string {
+	matches := importStepPattern.FindAllStringSubmatchIndex(value, -1)
+	if len(matches) == 0 {
+		return []string{value}
+	}
+	parts := make([]string, 0, len(matches))
+	for index, match := range matches {
+		start := match[1]
+		end := len(value)
+		if index+1 < len(matches) {
+			end = matches[index+1][0]
+		}
+		part := strings.TrimSpace(value[start:end])
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
+		return []string{value}
+	}
+	return parts
 }
 
 func stepsToText(steps []TestCaseStep) string {

@@ -375,23 +375,32 @@ type TestCaseImportPreviewCase struct {
 	QualityFindings []TestCaseQualityFinding `json:"qualityFindings"`
 }
 
+type TestCaseImportColumnMapping struct {
+	Source   string `json:"source"`
+	Field    string `json:"field"`
+	Index    int    `json:"index"`
+	Matched  bool   `json:"matched"`
+	Required bool   `json:"required"`
+}
+
 type ImportTestCasesPreview struct {
-	Format                 string                      `json:"format"`
-	FileName               string                      `json:"fileName"`
-	ContentBytes           int                         `json:"contentBytes"`
-	MaxContentBytes        int                         `json:"maxContentBytes"`
-	MaxWorkbookBytes       int                         `json:"maxWorkbookBytes"`
-	MaxImportableCases     int                         `json:"maxImportableCases"`
-	ParsedCount            int                         `json:"parsedCount"`
-	ImportableCount        int                         `json:"importableCount"`
-	SkippedCount           int                         `json:"skippedCount"`
-	ReadyCount             int                         `json:"readyCount"`
-	NeedsReviewCount       int                         `json:"needsReviewCount"`
-	ReachedImportCaseLimit bool                        `json:"reachedImportCaseLimit"`
-	MissingFieldCounts     map[string]int              `json:"missingFieldCounts"`
-	QualityFindingCounts   map[string]int              `json:"qualityFindingCounts"`
-	ImportableCaseSamples  []TestCaseImportPreviewCase `json:"importableCaseSamples"`
-	SkippedSamples         []TestCaseImportSkip        `json:"skippedSamples"`
+	Format                 string                        `json:"format"`
+	FileName               string                        `json:"fileName"`
+	ContentBytes           int                           `json:"contentBytes"`
+	MaxContentBytes        int                           `json:"maxContentBytes"`
+	MaxWorkbookBytes       int                           `json:"maxWorkbookBytes"`
+	MaxImportableCases     int                           `json:"maxImportableCases"`
+	ParsedCount            int                           `json:"parsedCount"`
+	ImportableCount        int                           `json:"importableCount"`
+	SkippedCount           int                           `json:"skippedCount"`
+	ReadyCount             int                           `json:"readyCount"`
+	NeedsReviewCount       int                           `json:"needsReviewCount"`
+	ReachedImportCaseLimit bool                          `json:"reachedImportCaseLimit"`
+	MissingFieldCounts     map[string]int                `json:"missingFieldCounts"`
+	QualityFindingCounts   map[string]int                `json:"qualityFindingCounts"`
+	ColumnMappings         []TestCaseImportColumnMapping `json:"columnMappings"`
+	ImportableCaseSamples  []TestCaseImportPreviewCase   `json:"importableCaseSamples"`
+	SkippedSamples         []TestCaseImportSkip          `json:"skippedSamples"`
 }
 
 func normalizeImportTestCasesResult(value ImportTestCasesResult) ImportTestCasesResult {
@@ -410,6 +419,9 @@ func normalizeImportTestCasesPreview(value ImportTestCasesPreview) ImportTestCas
 	}
 	if value.QualityFindingCounts == nil {
 		value.QualityFindingCounts = map[string]int{}
+	}
+	if value.ColumnMappings == nil {
+		value.ColumnMappings = []TestCaseImportColumnMapping{}
 	}
 	if value.ImportableCaseSamples == nil {
 		value.ImportableCaseSamples = []TestCaseImportPreviewCase{}
