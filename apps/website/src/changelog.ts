@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-05",
+    title: "Archived deletion and pagination for test cases",
+    summary:
+      "mspace made large test-case libraries easier to manage without destroying historical test evidence.",
+    items: [
+      "Changed the Tests case list to use server-backed `limit` and `offset` pagination with total counts.",
+      "Added single-case and selected-case archive actions so users can remove cases from normal browsing in bulk.",
+      "Kept archived cases, revisions, run history, plan references, and evidence readable instead of hard-deleting records.",
+      "Updated the API contract so clients can inspect archived cases with `status=archived` while default case browsing hides them.",
+    ],
+  },
+  {
+    date: "2026-06-05",
     title: "Safer CSV column mapping for case imports",
     summary:
       "mspace made imported case files explain how source columns will map before the user confirms the write.",

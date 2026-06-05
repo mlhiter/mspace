@@ -106,14 +106,16 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `DELETE` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Delete a project when no issues reference it. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Read the workspace project runbook. |
 | `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the workspace project runbook and record a revision. |
-| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | List project test cases. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | List project test cases as `{ cases, total, limit, offset }`; supports `status`, `q`, `limit`, and `offset`, and hides archived cases unless `status=archived`. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import/preview` | Parse Markdown, text, CSV, or Excel `.xlsx` cases without writing them, returning import counts, skipped rows, missing field counts, quality finding counts, and sample rows. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import` | Import Markdown, text, CSV, or Excel `.xlsx` cases. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize` | Queue an issue-backed Codex case refinement session. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate` | Queue an issue-backed Codex case generation session. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | Create a project test case. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/delete` | Archive multiple project test cases by id. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}` | Read one project test case. |
 | `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}` | Update one project test case and record a revision. |
+| `DELETE` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}` | Archive one project test case and record a revision. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}/revisions` | List project test case revisions. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals` | List Codex case suggestions. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/apply` | Accept a case suggestion. |
@@ -198,6 +200,8 @@ Project creation is workspace-kind aware. Personal workspaces may use `sourceTyp
 ## Test Module Model
 
 Test cases, revisions, suggestions, plans, runs, and run items are server-owned project data. Team/shared deployments persist them through Postgres migrations, while packaged personal desktop mode persists them through the server-owned SQLite snapshot store.
+
+The case list is paginated with `limit` and `offset`. Default case browsing excludes `archived` cases, and user-facing deletion is implemented as an archive status transition so revisions, plan membership, run items, artifacts, and proposal links remain auditable. Clients can inspect archived cases with `status=archived`.
 
 Case import supports `markdown`, `text`, `csv`, and `xlsx`. Clients should call `/test-cases/import/preview` first, show how many cases will be imported, skipped rows, missing field counts, quality findings, source-column mappings, and samples, then call `/test-cases/import` only after the user confirms. Markdown/text import treats each non-empty line as one case. CSV and `.xlsx` share the `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` header contract, with deterministic aliases for common Chinese columns such as `用例ID`, `用例名称`, `所属模块`, `测试类别`, `前置条件`, `步骤描述`, `预期结果`, `备注`, and `用例等级`. `测试类别` is treated as a business tag unless the source provides a real system type column. Import is capped at 1,000 cases per request. Text-like content is capped at 2 MB; Excel content is base64-encoded in the JSON request and the decoded workbook is capped at 2 MB. The server reads the first non-empty sheet, skips rows without a title, validates types, and opens workbooks with explicit unzip limits.
 

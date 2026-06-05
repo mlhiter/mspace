@@ -127,6 +127,8 @@ Plan setup is the first compatibility layer for real-world preconditions such as
 
 Case creation and import use modal flows. Import first calls a read-only preview endpoint so users can see importable count, skipped rows, missing field counts, quality findings, source-column mappings, and samples before confirming the write. Markdown and text imports treat each non-empty line as a case. CSV and Excel `.xlsx` imports share a column contract: `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags`. The server also recognizes common Chinese aliases such as `用例ID`, `用例名称`, `所属模块`, `测试类别`, `前置条件`, `步骤描述`, `预期结果`, `备注`, and `用例等级`; business categories from `测试类别` become tags, not fixed system types. Import is capped at 1,000 cases per request; text-like content is capped at 2 MB, while Excel workbooks are base64-encoded in the API request and capped at a 2 MB decoded workbook. The server reads the first non-empty sheet, skips rows without a title, validates case types, and opens the workbook with explicit unzip limits.
 
+Case browsing is server-paginated with `limit` and `offset` because projects can accumulate large case libraries. The default list hides archived cases; user-facing deletion is an archive status transition that records a revision and preserves detail views, run history, plan membership, artifacts, and proposal links. Clients can inspect archived cases explicitly with `status=archived`.
+
 ## Storage Modes
 
 The store boundary stays inside `server/`.

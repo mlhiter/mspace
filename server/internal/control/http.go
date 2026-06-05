@@ -34,6 +34,8 @@ const serverProtocolVersion = 1
 const maxIssueAttachmentBytes = 10 << 20
 const maxPasswordAuthBodyBytes = 4 << 10
 const maxTestCaseImportBodyBytes = 5 << 20
+const defaultTestCaseListLimit = 50
+const maxTestCaseListLimit = 200
 const defaultRuntimeTaskListLimit = 10
 const maxRuntimeTaskListLimit = 100
 
@@ -108,6 +110,7 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import", s.handleImportProjectTestCases)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize", s.handleOptimizeProjectTestCases)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate", s.handleGenerateProjectTestCases)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/delete", s.handleDeleteProjectTestCases)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases", s.handleCreateProjectTestCase)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals", s.handleListProjectTestCaseProposals)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/apply", s.handleApplyProjectTestCaseProposal)
@@ -126,6 +129,7 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block", s.handleBlockProjectTestRun)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}", s.handleGetProjectTestCase)
 	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}", s.handleUpdateProjectTestCase)
+	r.Delete("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}", s.handleDeleteProjectTestCase)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}/runs", s.handleListProjectTestCaseRunItems)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}/revisions", s.handleListProjectTestCaseRevisions)
 	r.Get("/api/test-artifacts/{artifactID}", s.handleGetTestArtifact)
@@ -765,12 +769,13 @@ func (s *Server) handleListProjectTestCases(w http.ResponseWriter, r *http.Reque
 		Status: strings.TrimSpace(r.URL.Query().Get("status")),
 		Query:  strings.TrimSpace(r.URL.Query().Get("q")),
 	}
-	testCases, err := s.store.ListProjectTestCases(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), options)
+	options = parseTestCaseListOptions(r.URL.Query(), options)
+	result, err := s.store.ListProjectTestCases(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), options)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, testCases)
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleCreateProjectTestCase(w http.ResponseWriter, r *http.Request) {
@@ -789,6 +794,49 @@ func (s *Server) handleCreateProjectTestCase(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusCreated, testCase)
+}
+
+func (s *Server) handleDeleteProjectTestCase(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	testCase, err := s.store.DeleteProjectTestCase(
+		r.Context(),
+		user.ID,
+		strings.TrimSpace(chi.URLParam(r, "workspaceID")),
+		strings.TrimSpace(chi.URLParam(r, "projectID")),
+		strings.TrimSpace(chi.URLParam(r, "caseID")),
+	)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, testCase)
+}
+
+func (s *Server) handleDeleteProjectTestCases(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := DeleteProjectTestCasesInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	testCases, err := s.store.DeleteProjectTestCases(
+		r.Context(),
+		user.ID,
+		strings.TrimSpace(chi.URLParam(r, "workspaceID")),
+		strings.TrimSpace(chi.URLParam(r, "projectID")),
+		input,
+	)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, testCases)
 }
 
 func (s *Server) handlePreviewImportProjectTestCases(w http.ResponseWriter, r *http.Request) {
@@ -2191,6 +2239,33 @@ func parseRuntimeTaskListOptions(values url.Values) RuntimeTaskListOptions {
 		}
 	}
 	return normalizeRuntimeTaskListOptions(options)
+}
+
+func parseTestCaseListOptions(values url.Values, options TestCaseListOptions) TestCaseListOptions {
+	if raw := strings.TrimSpace(values.Get("limit")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			options.Limit = parsed
+		}
+	}
+	if raw := strings.TrimSpace(values.Get("offset")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil {
+			options.Offset = parsed
+		}
+	}
+	return normalizeTestCaseListOptions(options)
+}
+
+func normalizeTestCaseListOptions(options TestCaseListOptions) TestCaseListOptions {
+	if options.Limit <= 0 {
+		options.Limit = defaultTestCaseListLimit
+	}
+	if options.Limit > maxTestCaseListLimit {
+		options.Limit = maxTestCaseListLimit
+	}
+	if options.Offset < 0 {
+		options.Offset = 0
+	}
+	return options
 }
 
 func (s *Server) handleListRuntimeTaskEvents(w http.ResponseWriter, r *http.Request) {

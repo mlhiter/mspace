@@ -544,6 +544,7 @@ Main actions:
 - filter by Project;
 - import;
 - create;
+- archive selected cases;
 - batch optimize;
 - generate from project;
 - filter by executability;
@@ -562,6 +563,8 @@ List columns:
 - updated time.
 
 The compact Cases list should currently show `title`, `type`, `status`, `priority`, `executability`, `latest run result`, and `updated time`; `area` can remain secondary metadata under the title instead of consuming its own column.
+
+The Cases list must stay server-paginated because a project can carry many cases. The list API returns `{ cases, total, limit, offset }`, defaults to hiding `archived` cases, and treats user-facing deletion as archiving. Archived cases remain available through the archived status filter so run history, revisions, plan references, and evidence are not destroyed.
 
 ### Case Detail
 
@@ -684,8 +687,10 @@ GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-cases
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import/preview
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-cases
+POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/delete
 GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}
 PUT    /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}
+DELETE /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate
 GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals

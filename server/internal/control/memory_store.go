@@ -2024,23 +2024,27 @@ func (s *MemoryStore) UpdateProjectRunbook(_ Context, userID, workspaceID, proje
 	return runbook, nil
 }
 
-func (s *MemoryStore) ListProjectTestCases(_ Context, userID, workspaceID, projectID string, options TestCaseListOptions) ([]TestCase, error) {
+func (s *MemoryStore) ListProjectTestCases(_ Context, userID, workspaceID, projectID string, options TestCaseListOptions) (TestCaseListResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	options = normalizeTestCaseListOptions(options)
 	workspaceID = strings.TrimSpace(workspaceID)
 	projectID = strings.TrimSpace(projectID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
-		return nil, ErrNotFound
+		return TestCaseListResult{}, ErrNotFound
 	}
 	if _, err := s.projectForTestCasesLocked(workspaceID, projectID); err != nil {
-		return nil, err
+		return TestCaseListResult{}, err
 	}
 	status := strings.ToLower(strings.TrimSpace(options.Status))
 	query := strings.ToLower(strings.TrimSpace(options.Query))
 	cases := []TestCase{}
 	for _, testCase := range s.testCases {
 		if testCase.WorkspaceID != workspaceID || testCase.ProjectID != projectID {
+			continue
+		}
+		if status == "" && testCase.Status == "archived" {
 			continue
 		}
 		if status != "" && testCase.Status != status {
@@ -2058,7 +2062,21 @@ func (s *MemoryStore) ListProjectTestCases(_ Context, userID, workspaceID, proje
 	sort.Slice(cases, func(i, j int) bool {
 		return cases[i].UpdatedAt > cases[j].UpdatedAt
 	})
-	return cases, nil
+	total := len(cases)
+	start := options.Offset
+	if start > total {
+		start = total
+	}
+	end := start + options.Limit
+	if end > total {
+		end = total
+	}
+	return TestCaseListResult{
+		Cases:  cases[start:end],
+		Total:  total,
+		Limit:  options.Limit,
+		Offset: options.Offset,
+	}, nil
 }
 
 func (s *MemoryStore) CreateProjectTestCase(_ Context, userID, workspaceID, projectID string, input TestCaseInput) (TestCase, error) {
@@ -2189,6 +2207,56 @@ func (s *MemoryStore) UpdateProjectTestCase(_ Context, userID, workspaceID, proj
 	_ = existing
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	return s.updateProjectTestCaseLocked(userID, workspaceID, projectID, caseID, input, now)
+}
+
+func (s *MemoryStore) DeleteProjectTestCase(_ Context, userID, workspaceID, projectID, caseID string) (TestCase, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	caseID = strings.TrimSpace(caseID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return TestCase{}, ErrNotFound
+	}
+	existing, err := s.testCaseForProjectLocked(userID, workspaceID, projectID, caseID)
+	if err != nil {
+		return TestCase{}, err
+	}
+	return s.archiveProjectTestCaseLocked(userID, workspaceID, projectID, existing.ID, time.Now().UTC().Format(time.RFC3339Nano))
+}
+
+func (s *MemoryStore) DeleteProjectTestCases(_ Context, userID, workspaceID, projectID string, input DeleteProjectTestCasesInput) ([]TestCase, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	if _, err := s.projectForTestCasesLocked(workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	caseIDs := normalizeTestCaseIDList(input.CaseIDs)
+	if len(caseIDs) == 0 {
+		return nil, errors.New("caseIds is required")
+	}
+	for _, caseID := range caseIDs {
+		if _, err := s.testCaseForProjectLocked(userID, workspaceID, projectID, caseID); err != nil {
+			return nil, err
+		}
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	archived := make([]TestCase, 0, len(caseIDs))
+	for _, caseID := range caseIDs {
+		testCase, err := s.archiveProjectTestCaseLocked(userID, workspaceID, projectID, caseID, now)
+		if err != nil {
+			return nil, err
+		}
+		archived = append(archived, testCase)
+	}
+	return archived, nil
 }
 
 func (s *MemoryStore) ListProjectTestCaseRevisions(_ Context, userID, workspaceID, projectID, caseID string) ([]TestCaseRevision, error) {
@@ -4716,6 +4784,48 @@ func (s *MemoryStore) updateProjectTestCaseLocked(userID, workspaceID, projectID
 	s.testCases[existing.ID] = existing
 	s.appendTestCaseRevisionLocked(existing, userID, now)
 	return testCaseSnapshot(existing), nil
+}
+
+func (s *MemoryStore) archiveProjectTestCaseLocked(userID, workspaceID, projectID, caseID, now string) (TestCase, error) {
+	existing, err := s.testCaseForProjectLocked(userID, workspaceID, projectID, caseID)
+	if err != nil {
+		return TestCase{}, err
+	}
+	if existing.Status == "archived" {
+		return existing, nil
+	}
+	input := TestCaseInput{
+		Title:                   existing.Title,
+		Type:                    existing.Type,
+		Area:                    existing.Area,
+		Priority:                existing.Priority,
+		Status:                  "archived",
+		Source:                  existing.Source,
+		Preconditions:           existing.Preconditions,
+		Steps:                   existing.Steps,
+		ExpectedResult:          existing.ExpectedResult,
+		EnvironmentRequirements: existing.EnvironmentRequirements,
+		Dependencies:            existing.Dependencies,
+		Tags:                    existing.Tags,
+	}
+	return s.updateProjectTestCaseLocked(userID, workspaceID, projectID, caseID, input, now)
+}
+
+func normalizeTestCaseIDList(values []string) []string {
+	seen := map[string]struct{}{}
+	result := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func (s *MemoryStore) testCaseForProjectLocked(userID, workspaceID, projectID, caseID string) (TestCase, error) {

@@ -173,14 +173,16 @@ Successful acceptance returns the joined workspace. Desktop clients should selec
 | `DELETE` | `/api/workspaces/{workspaceID}/projects/{projectID}` | Delete a project when no issues reference it. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Read the project runbook. |
 | `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/runbook` | Replace the project runbook and record a revision. |
-| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | List project test cases, optionally filtered by status. |
+| `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | List project test cases as `{ cases, total, limit, offset }`; supports `status`, `q`, `limit`, and `offset`, and hides archived cases unless `status=archived`. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import/preview` | Parse Markdown, text, CSV, or Excel `.xlsx` cases without writing them. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import` | Import Markdown, text, CSV, or Excel `.xlsx` cases. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize` | Queue an issue-backed Codex session that returns case suggestions. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate` | Queue an issue-backed Codex session that proposes baseline cases. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases` | Create one test case. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/delete` | Archive multiple test cases by id and record revisions. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}` | Read one test case. |
 | `PUT` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}` | Update one test case and record a revision. |
+| `DELETE` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}` | Archive one test case and record a revision. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}/revisions` | List case revisions newest first. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals` | List Codex case suggestions. |
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-case-proposals/{proposalID}/apply` | Accept a case suggestion and optionally write a review note. |
@@ -258,6 +260,43 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
 ```
 
 Valid case types are `functional`, `ui`, `api`, and `deployment`. Status values are `draft`, `needs_review`, `ready`, and `archived`. Priority is optional and can be empty or `p0`, `p1`, `p2`, or `p3`.
+
+List cases with server-backed pagination:
+
+```bash
+curl "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<project-id>/test-cases?limit=50&offset=0" \
+  -H "Authorization: Bearer <msp-token>"
+```
+
+The response shape is:
+
+```json
+{
+  "cases": [],
+  "total": 0,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+Default listing excludes archived cases. Use `status=archived` to inspect archived cases. User-facing deletion archives cases so revisions, plan membership, run items, artifacts, and proposal links remain auditable.
+
+Archive selected cases:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<project-id>/test-cases/delete" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"caseIds":["<case-id-1>","<case-id-2>"]}'
+```
+
+Archive one case:
+
+```bash
+curl -X DELETE "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<project-id>/test-cases/<case-id>" \
+  -H "Authorization: Bearer <msp-token>"
+```
+
 The import parser also accepts common type aliases such as `functional_test`, `ui_test`, `api_test`, `deployment_test`, `功能测试`, `UI 测试`, `接口测试`, and `部署测试`, then stores the normalized fixed value.
 
 Preview cases before import:

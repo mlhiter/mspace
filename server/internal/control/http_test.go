@@ -1677,11 +1677,19 @@ func TestProjectTestCasesHTTPFlow(t *testing.T) {
 		t.Fatalf("list test cases status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
 	}
 	var listed []TestCase
-	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listed); err != nil {
+	var listedPage TestCaseListResult
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listedPage); err != nil {
 		t.Fatalf("parse listed test cases: %v", err)
 	}
-	if len(listed) != 1 || listed[0].ID != created.ID {
-		t.Fatalf("expected only ready created case, got %+v", listed)
+	listed = listedPage.Cases
+	if len(listed) == 0 {
+		t.Fatalf("expected ready cases, got %+v", listed)
+	}
+	if findTestCase(t, listed, created.ID).ID != created.ID {
+		t.Fatalf("expected ready list to include created case, got %+v", listed)
+	}
+	if listedPage.Total < 1 || listedPage.Limit != defaultTestCaseListLimit || listedPage.Offset != 0 {
+		t.Fatalf("unexpected ready list pagination: %+v", listedPage)
 	}
 
 	excelRecorder := httptest.NewRecorder()
@@ -1759,6 +1767,70 @@ func TestProjectTestCasesHTTPFlow(t *testing.T) {
 	}
 	if len(revisions) != 2 || revisions[0].RevisionNumber != 2 || revisions[1].RevisionNumber != 1 {
 		t.Fatalf("expected two descending revisions, got %+v", revisions)
+	}
+
+	pagedCases := listProjectTestCasesPageViaHTTP(t, router, sessionToken, workspaceID, project.ID, "limit=2&offset=1")
+	if pagedCases.Total < pagedCases.Offset+len(pagedCases.Cases) || pagedCases.Limit != 2 || pagedCases.Offset != 1 || len(pagedCases.Cases) != 2 {
+		t.Fatalf("unexpected paged cases: %+v", pagedCases)
+	}
+
+	deleteRecorder := httptest.NewRecorder()
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/"+created.ID, nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(deleteRecorder, deleteReq)
+	if deleteRecorder.Code != http.StatusOK {
+		t.Fatalf("delete test case status=%d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+	var archived TestCase
+	if err := json.Unmarshal(deleteRecorder.Body.Bytes(), &archived); err != nil {
+		t.Fatalf("parse archived test case: %v", err)
+	}
+	if archived.ID != created.ID || archived.Status != "archived" {
+		t.Fatalf("expected delete to archive the case, got %+v", archived)
+	}
+	defaultAfterArchive := listProjectTestCasesPageViaHTTP(t, router, sessionToken, workspaceID, project.ID, "")
+	for _, testCase := range defaultAfterArchive.Cases {
+		if testCase.ID == created.ID {
+			t.Fatalf("default list should hide archived case, got %+v", defaultAfterArchive)
+		}
+	}
+	archivedPage := listProjectTestCasesPageViaHTTP(t, router, sessionToken, workspaceID, project.ID, "status=archived")
+	if archivedPage.Total != 1 || len(archivedPage.Cases) != 1 || archivedPage.Cases[0].ID != created.ID {
+		t.Fatalf("expected archived list to contain deleted case, got %+v", archivedPage)
+	}
+	archivedDetail := getProjectTestCaseViaHTTP(t, router, sessionToken, workspaceID, project.ID, created.ID)
+	if archivedDetail.Status != "archived" {
+		t.Fatalf("expected archived detail to remain readable, got %+v", archivedDetail)
+	}
+	archivedRevisions := listProjectTestCaseRevisionsViaHTTP(t, router, sessionToken, workspaceID, project.ID, created.ID)
+	if len(archivedRevisions) != 3 || archivedRevisions[0].Snapshot.Status != "archived" {
+		t.Fatalf("expected archive revision to be retained, got %+v", archivedRevisions)
+	}
+
+	bulkBody, err := json.Marshal(DeleteProjectTestCasesInput{CaseIDs: []string{imported.Created[0].ID, imported.Created[0].ID, imported.Created[1].ID}})
+	if err != nil {
+		t.Fatalf("marshal bulk delete body: %v", err)
+	}
+	bulkRecorder := httptest.NewRecorder()
+	bulkReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/delete", bytes.NewReader(bulkBody))
+	bulkReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(bulkRecorder, bulkReq)
+	if bulkRecorder.Code != http.StatusOK {
+		t.Fatalf("bulk delete test cases status=%d body=%s", bulkRecorder.Code, bulkRecorder.Body.String())
+	}
+	var bulkArchived []TestCase
+	if err := json.Unmarshal(bulkRecorder.Body.Bytes(), &bulkArchived); err != nil {
+		t.Fatalf("parse bulk archived test cases: %v", err)
+	}
+	if len(bulkArchived) != 2 || bulkArchived[0].Status != "archived" || bulkArchived[1].Status != "archived" {
+		t.Fatalf("expected bulk delete to archive unique cases, got %+v", bulkArchived)
+	}
+	emptyBulkRecorder := httptest.NewRecorder()
+	emptyBulkReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/delete", strings.NewReader(`{"caseIds":[]}`))
+	emptyBulkReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(emptyBulkRecorder, emptyBulkReq)
+	if emptyBulkRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("empty bulk delete status=%d body=%s", emptyBulkRecorder.Code, emptyBulkRecorder.Body.String())
 	}
 }
 
@@ -3854,18 +3926,27 @@ func createProjectTestCaseViaHTTP(t *testing.T, router http.Handler, sessionToke
 
 func listProjectTestCasesViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID string) []TestCase {
 	t.Helper()
+	return listProjectTestCasesPageViaHTTP(t, router, sessionToken, workspaceID, projectID, "").Cases
+}
+
+func listProjectTestCasesPageViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, query string) TestCaseListResult {
+	t.Helper()
 	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-cases", nil)
+	path := "/api/workspaces/" + workspaceID + "/projects/" + projectID + "/test-cases"
+	if strings.TrimSpace(query) != "" {
+		path += "?" + strings.TrimSpace(query)
+	}
+	req := httptest.NewRequest(http.MethodGet, path, nil)
 	req.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("list test cases status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var testCases []TestCase
-	if err := json.Unmarshal(recorder.Body.Bytes(), &testCases); err != nil {
+	var result TestCaseListResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
 		t.Fatalf("parse test cases: %v", err)
 	}
-	return testCases
+	return result
 }
 
 func getProjectTestCaseViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, caseID string) TestCase {

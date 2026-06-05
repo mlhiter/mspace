@@ -12,18 +12,30 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (s *PostgresStore) ListProjectTestCases(ctx Context, userID, workspaceID, projectID string, options TestCaseListOptions) ([]TestCase, error) {
+func (s *PostgresStore) ListProjectTestCases(ctx Context, userID, workspaceID, projectID string, options TestCaseListOptions) (TestCaseListResult, error) {
 	dbctx := asContext(ctx)
+	options = normalizeTestCaseListOptions(options)
 	workspaceID = strings.TrimSpace(workspaceID)
 	projectID = strings.TrimSpace(projectID)
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
-		return nil, err
+		return TestCaseListResult{}, err
 	}
 	if err := ensureProjectInWorkspace(dbctx, s.pool, workspaceID, projectID); err != nil {
-		return nil, err
+		return TestCaseListResult{}, err
 	}
 	status := strings.ToLower(strings.TrimSpace(options.Status))
 	query := strings.ToLower(strings.TrimSpace(options.Query))
+	var total int
+	if err := s.pool.QueryRow(dbctx, `
+		SELECT COUNT(*)::int
+		FROM test_cases
+		WHERE workspace_id = $1
+			AND project_id = $2
+			AND (($3 = '' AND status <> 'archived') OR ($3 <> '' AND status = $3))
+			AND ($4 = '' OR lower(title || ' ' || type || ' ' || area || ' ' || tags::text) LIKE '%' || $4 || '%')
+	`, workspaceID, projectID, status, query).Scan(&total); err != nil {
+		return TestCaseListResult{}, err
+	}
 	rows, err := s.pool.Query(dbctx, `
 		SELECT
 			id::text,
@@ -49,12 +61,13 @@ func (s *PostgresStore) ListProjectTestCases(ctx Context, userID, workspaceID, p
 		FROM test_cases
 		WHERE workspace_id = $1
 			AND project_id = $2
-			AND ($3 = '' OR status = $3)
+			AND (($3 = '' AND status <> 'archived') OR ($3 <> '' AND status = $3))
 			AND ($4 = '' OR lower(title || ' ' || type || ' ' || area || ' ' || tags::text) LIKE '%' || $4 || '%')
 		ORDER BY updated_at DESC, created_at DESC
-	`, workspaceID, projectID, status, query)
+		LIMIT $5 OFFSET $6
+	`, workspaceID, projectID, status, query, options.Limit, options.Offset)
 	if err != nil {
-		return nil, err
+		return TestCaseListResult{}, err
 	}
 	defer rows.Close()
 
@@ -62,17 +75,22 @@ func (s *PostgresStore) ListProjectTestCases(ctx Context, userID, workspaceID, p
 	for rows.Next() {
 		testCase, err := scanTestCase(rows)
 		if err != nil {
-			return nil, err
+			return TestCaseListResult{}, err
 		}
 		cases = append(cases, testCase)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return TestCaseListResult{}, err
 	}
 	if err := attachLatestTestCaseResults(dbctx, s.pool, workspaceID, projectID, cases); err != nil {
-		return nil, err
+		return TestCaseListResult{}, err
 	}
-	return cases, nil
+	return TestCaseListResult{
+		Cases:  cases,
+		Total:  total,
+		Limit:  options.Limit,
+		Offset: options.Offset,
+	}, nil
 }
 
 func (s *PostgresStore) CreateProjectTestCase(ctx Context, userID, workspaceID, projectID string, input TestCaseInput) (TestCase, error) {
@@ -246,6 +264,56 @@ func (s *PostgresStore) UpdateProjectTestCase(ctx Context, userID, workspaceID, 
 		return TestCase{}, err
 	}
 	return updated, nil
+}
+
+func (s *PostgresStore) DeleteProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string) (TestCase, error) {
+	result, err := s.DeleteProjectTestCases(ctx, userID, workspaceID, projectID, DeleteProjectTestCasesInput{CaseIDs: []string{caseID}})
+	if err != nil {
+		return TestCase{}, err
+	}
+	if len(result) == 0 {
+		return TestCase{}, ErrNotFound
+	}
+	return result[0], nil
+}
+
+func (s *PostgresStore) DeleteProjectTestCases(ctx Context, userID, workspaceID, projectID string, input DeleteProjectTestCasesInput) ([]TestCase, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	projectID = strings.TrimSpace(projectID)
+	caseIDs := normalizeTestCaseIDList(input.CaseIDs)
+	if len(caseIDs) == 0 {
+		return nil, errors.New("caseIds is required")
+	}
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
+		return nil, err
+	}
+	if err := ensureProjectInWorkspace(dbctx, s.pool, workspaceID, projectID); err != nil {
+		return nil, err
+	}
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(dbctx)
+
+	for _, caseID := range caseIDs {
+		if _, err := loadProjectTestCase(dbctx, tx, workspaceID, projectID, caseID); err != nil {
+			return nil, err
+		}
+	}
+	archived := make([]TestCase, 0, len(caseIDs))
+	for _, caseID := range caseIDs {
+		testCase, err := archiveProjectTestCase(dbctx, tx, workspaceID, projectID, caseID, userID)
+		if err != nil {
+			return nil, err
+		}
+		archived = append(archived, testCase)
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return nil, err
+	}
+	return archived, nil
 }
 
 func (s *PostgresStore) ListProjectTestCaseRevisions(ctx Context, userID, workspaceID, projectID, caseID string) ([]TestCaseRevision, error) {
@@ -1003,6 +1071,30 @@ func updateProjectTestCase(ctx context.Context, q queryer, workspaceID, projectI
 		return TestCase{}, ErrNotFound
 	}
 	return testCase, err
+}
+
+func archiveProjectTestCase(ctx context.Context, q queryer, workspaceID, projectID, caseID, userID string) (TestCase, error) {
+	existing, err := loadProjectTestCase(ctx, q, workspaceID, projectID, caseID)
+	if err != nil {
+		return TestCase{}, err
+	}
+	if existing.Status == "archived" {
+		return existing, nil
+	}
+	next := testCaseToInput(existing)
+	next.Status = "archived"
+	normalized, score, findings, err := normalizeTestCaseInput(next, existing.Source)
+	if err != nil {
+		return TestCase{}, err
+	}
+	updated, err := updateProjectTestCase(ctx, q, workspaceID, projectID, existing.ID, normalized, score, findings)
+	if err != nil {
+		return TestCase{}, err
+	}
+	if err := insertProjectTestCaseRevision(ctx, q, updated, userID); err != nil {
+		return TestCase{}, err
+	}
+	return updated, nil
 }
 
 func loadProjectTestCase(ctx context.Context, q queryer, workspaceID, projectID, caseID string) (TestCase, error) {

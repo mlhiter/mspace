@@ -64,6 +64,7 @@ import type {
   TestCase,
   TestCaseAgentSessionResult,
   TestCaseInput,
+  TestCaseListResult,
   TestCaseProposal,
   TestCaseRevision,
   TestCaseRunItem,
@@ -124,8 +125,10 @@ export const queryKeys = {
   workspaceProjects: (workspaceId: string, token: string) => ["workspace-projects", workspaceId, token] as const,
   workspaceProjectRunbook: (workspaceId: string, projectId: string, token: string) =>
     ["workspace-project-runbook", workspaceId, projectId, token] as const,
-  projectTestCases: (workspaceId: string, projectId: string, token: string, status = "", query = "") =>
-    ["project-test-cases", workspaceId, projectId, token, status, query] as const,
+  projectTestCasesBase: (workspaceId: string, projectId: string, token: string) =>
+    ["project-test-cases", workspaceId, projectId, token] as const,
+  projectTestCases: (workspaceId: string, projectId: string, token: string, status = "", query = "", limit = 0, offset = 0) =>
+    ["project-test-cases", workspaceId, projectId, token, status, query, limit, offset] as const,
   projectTestCase: (workspaceId: string, projectId: string, caseId: string, token: string) =>
     ["project-test-case", workspaceId, projectId, caseId, token] as const,
   projectTestCaseRunItems: (workspaceId: string, projectId: string, caseId: string, token: string) =>
@@ -462,12 +465,14 @@ export const controlPlaneApi = {
 			headers: authHeaders(token),
 			body: JSON.stringify(input),
 		}),
-  listProjectTestCases: (token: string, workspaceId: string, projectId: string, input: { status?: string; query?: string } = {}) => {
+  listProjectTestCases: (token: string, workspaceId: string, projectId: string, input: { status?: string; query?: string; limit?: number; offset?: number } = {}) => {
     const params = new URLSearchParams();
     if (input.status) params.set("status", input.status);
     if (input.query) params.set("q", input.query);
+    if (input.limit) params.set("limit", String(input.limit));
+    if (input.offset) params.set("offset", String(input.offset));
     const query = params.toString();
-    return requestControlPlane<TestCase[]>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases${query ? `?${query}` : ""}`, {
+    return requestControlPlane<TestCaseListResult>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases${query ? `?${query}` : ""}`, {
       headers: authHeaders(token),
     });
   },
@@ -510,6 +515,17 @@ export const controlPlaneApi = {
       method: "PUT",
       headers: authHeaders(token),
       body: JSON.stringify(input),
+    }),
+  deleteProjectTestCase: (token: string, workspaceId: string, projectId: string, caseId: string) =>
+    requestControlPlane<TestCase>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/${caseId}`, {
+      method: "DELETE",
+      headers: authHeaders(token),
+    }),
+  deleteProjectTestCases: (token: string, workspaceId: string, projectId: string, caseIds: string[]) =>
+    requestControlPlane<TestCase[]>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/delete`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ caseIds }),
     }),
   listProjectTestCaseRevisions: (token: string, workspaceId: string, projectId: string, caseId: string) =>
     requestControlPlane<TestCaseRevision[]>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/${caseId}/revisions`, {

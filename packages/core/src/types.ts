@@ -134,6 +134,13 @@ export interface ImportTestCasesResult {
   skipped: TestCaseImportSkip[];
 }
 
+export interface TestCaseListResult {
+  cases: TestCase[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface TestCaseImportPreviewCase {
   title: string;
   type: string;

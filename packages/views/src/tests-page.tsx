@@ -6,6 +6,8 @@ import {
   ArrowRight,
   Ban,
   Check,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   FileUp,
   ListChecks,
@@ -19,6 +21,7 @@ import {
   Search,
   Sparkles,
   TerminalSquare,
+  Trash2,
   type LucideIcon,
   X,
   ZoomIn,
@@ -146,9 +149,12 @@ const screenshotPreviewMinZoom = 0.5;
 const screenshotPreviewMaxZoom = 3;
 const screenshotPreviewZoomStep = 0.25;
 const targetTypeOptions = ["branch", "commit", "source_session", "image", "offline_package", "version_url", "preview_url"] as const;
+const testCasePageSize = 50;
+const testCaseAuxiliaryLimit = 1000;
 const emptyProjects: Project[] = [];
 const emptyEnvironments: Environment[] = [];
 const emptyTestCases: TestCase[] = [];
+const emptyTestCaseListResult = { cases: emptyTestCases, total: 0, limit: testCasePageSize, offset: 0 };
 const emptyTestCaseProposals: TestCaseProposal[] = [];
 const emptyTestPlans: TestPlan[] = [];
 const emptyTestRuns: TestRun[] = [];
@@ -207,6 +213,52 @@ function TestsLoadingRows(props: { label: string }) {
           <div className="hidden h-6 rounded-[4px] bg-[color:var(--block)] md:block" />
         </div>
       ))}
+    </div>
+  );
+}
+
+function TestCasePagination(props: {
+  page: number;
+  pageSize: number;
+  total: number;
+  canGoPrevious: boolean;
+  canGoNext: boolean;
+  onPageChange: (page: number) => void;
+}) {
+  const { t } = useMspaceTranslation();
+  const totalPages = Math.max(1, Math.ceil(props.total / props.pageSize));
+  const start = props.total === 0 ? 0 : props.page * props.pageSize + 1;
+  const end = Math.min(props.total, start + props.pageSize - 1);
+  return (
+    <div className="flex min-w-0 flex-col gap-3 border-t border-[color:var(--line)] bg-[color:var(--block)] px-4 py-3 md:flex-row md:items-center md:justify-between">
+      <div className="text-[12px] leading-5 text-[color:var(--muted)]">
+        {t("tests.casePageRange", { start, end, total: props.total })}
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={!props.canGoPrevious}
+          onClick={() => props.onPageChange(Math.max(0, props.page - 1))}
+        >
+          <ChevronLeft data-icon />
+          {t("tests.previousPage")}
+        </Button>
+        <span className="min-w-[72px] text-center text-[12px] leading-5 text-[color:var(--muted)]">
+          {t("tests.pageIndicator", { page: props.page + 1, totalPages })}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={!props.canGoNext}
+          onClick={() => props.onPageChange(Math.min(totalPages - 1, props.page + 1))}
+        >
+          {t("tests.nextPage")}
+          <ChevronRight data-icon />
+        </Button>
+      </div>
     </div>
   );
 }
@@ -1198,6 +1250,7 @@ export function TestsPage() {
   const [planForm, setPlanForm] = useState<PlanForm>(emptyPlanForm);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [casePage, setCasePage] = useState(0);
   const [proposalStatusFilter, setProposalStatusFilter] = useState("pending");
   const [planStatusFilter, setPlanStatusFilter] = useState("all");
   const [importOpen, setImportOpen] = useState(false);
@@ -1213,12 +1266,17 @@ export function TestsPage() {
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) || projects[0];
   const effectiveProjectId = selectedProject?.id || "";
+  const caseStatus = statusFilter === "all" ? "" : statusFilter;
+  const caseOffset = casePage * testCasePageSize;
+  const caseQueriesBaseKey = queryKeys.projectTestCasesBase(workspaceId, effectiveProjectId, auth.token);
   const casesQueryKey = queryKeys.projectTestCases(
     workspaceId,
     effectiveProjectId,
     auth.token,
-    statusFilter === "all" ? "" : statusFilter,
+    caseStatus,
     query,
+    testCasePageSize,
+    caseOffset,
   );
   const proposalQueryKey = queryKeys.projectTestCaseProposals(
     workspaceId,
@@ -1232,7 +1290,7 @@ export function TestsPage() {
     auth.token,
     planStatusFilter === "all" ? "" : planStatusFilter,
   );
-  const allCasesQueryKey = queryKeys.projectTestCases(workspaceId, effectiveProjectId, auth.token);
+  const allCasesQueryKey = queryKeys.projectTestCases(workspaceId, effectiveProjectId, auth.token, "", "", testCaseAuxiliaryLimit, 0);
   const allProposalsQueryKey = queryKeys.projectTestCaseProposals(workspaceId, effectiveProjectId, auth.token);
   const allPlansQueryKey = queryKeys.projectTestPlans(workspaceId, effectiveProjectId, auth.token);
   const allRunsQueryKey = queryKeys.projectTestRuns(workspaceId, effectiveProjectId, auth.token);
@@ -1242,15 +1300,17 @@ export function TestsPage() {
     queryKey: casesQueryKey,
     queryFn: () =>
       controlPlaneApi.listProjectTestCases(auth.token, workspaceId, effectiveProjectId, {
-        status: statusFilter === "all" ? "" : statusFilter,
+        status: caseStatus,
         query,
+        limit: testCasePageSize,
+        offset: caseOffset,
       }),
     enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
   });
 
   const allCasesQuery = useQuery({
     queryKey: allCasesQueryKey,
-    queryFn: () => controlPlaneApi.listProjectTestCases(auth.token, workspaceId, effectiveProjectId),
+    queryFn: () => controlPlaneApi.listProjectTestCases(auth.token, workspaceId, effectiveProjectId, { limit: testCaseAuxiliaryLimit }),
     enabled: serverWorkspaceReady && Boolean(effectiveProjectId),
   });
 
@@ -1302,14 +1362,23 @@ export function TestsPage() {
     enabled: serverWorkspaceReady,
   });
 
-  const cases = useMemo(() => (casesQuery.data || emptyTestCases).filter((testCase) => testCaseMatchesQuery(testCase, query)), [casesQuery.data, query]);
-  const allCases = allCasesQuery.data || casesQuery.data || emptyTestCases;
+  const caseList = casesQuery.data || emptyTestCaseListResult;
+  const cases = caseList.cases || emptyTestCases;
+  const caseTotal = caseList.total || 0;
+  const allCases = allCasesQuery.data?.cases || casesQuery.data?.cases || emptyTestCases;
+  const allCaseTotal = allCasesQuery.data?.total ?? caseTotal;
   const allProposals = allProposalsQuery.data || proposalsQuery.data || emptyTestCaseProposals;
   const allPlans = allPlansQuery.data || plansQuery.data || emptyTestPlans;
   const allRuns = allRunsQuery.data || emptyTestRuns;
   const environments = environmentsQuery.data || emptyEnvironments;
   const readyCases = useMemo(() => allCases.filter((testCase) => testCase.status === "ready"), [allCases]);
-  const readyCaseIdSet = useMemo(() => new Set(readyCases.map((testCase) => testCase.id)), [readyCases]);
+  const loadedCases = useMemo(() => {
+    const byId = new Map<string, TestCase>();
+    allCases.forEach((testCase) => byId.set(testCase.id, testCase));
+    cases.forEach((testCase) => byId.set(testCase.id, testCase));
+    return Array.from(byId.values());
+  }, [allCases, cases]);
+  const readyCaseIdSet = useMemo(() => new Set(loadedCases.filter((testCase) => testCase.status === "ready").map((testCase) => testCase.id)), [loadedCases]);
   const selectedReadyCaseIds = useMemo(() => selectedCaseIds.filter((caseId) => readyCaseIdSet.has(caseId)), [readyCaseIdSet, selectedCaseIds]);
   const pendingProposals = useMemo(() => allProposals.filter((proposal) => proposal.status === "pending"), [allProposals]);
   const readyPlans = useMemo(() => allPlans.filter((plan) => plan.status === "ready"), [allPlans]);
@@ -1323,6 +1392,9 @@ export function TestsPage() {
   const selectedVisibleCaseCount = useMemo(() => selectedCaseIds.filter((caseId) => visibleCaseIdSet.has(caseId)).length, [selectedCaseIds, visibleCaseIdSet]);
   const allVisibleCasesSelected = cases.length > 0 && selectedVisibleCaseCount === cases.length;
   const someVisibleCasesSelected = selectedVisibleCaseCount > 0 && !allVisibleCasesSelected;
+  const totalCasePages = Math.max(1, Math.ceil(caseTotal / testCasePageSize));
+  const canGoPreviousCasePage = casePage > 0;
+  const canGoNextCasePage = casePage < totalCasePages - 1;
   const canCreateCase = Boolean(effectiveProjectId && caseForm.title.trim());
   const canCreatePlan = Boolean(effectiveProjectId && planForm.title.trim() && selectedCaseIds.length > 0);
   const canImportCases = Boolean(importFile && importPayload && importPreview && !importFileError);
@@ -1330,6 +1402,7 @@ export function TestsPage() {
   async function invalidateCaseWorkflow() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: casesQueryKey }),
+      queryClient.invalidateQueries({ queryKey: caseQueriesBaseKey }),
       queryClient.invalidateQueries({ queryKey: proposalQueryKey }),
       queryClient.invalidateQueries({ queryKey: plansQueryKey }),
       queryClient.invalidateQueries({ queryKey: allCasesQueryKey }),
@@ -1400,6 +1473,22 @@ export function TestsPage() {
       if (created[0]) {
         setSelectedCaseIds([created[0].id]);
       }
+      await invalidateCaseWorkflow();
+    },
+  });
+
+  const archiveCases = useMutation({
+    mutationFn: async (caseIds: string[]) => {
+      const uniqueCaseIds = Array.from(new Set(caseIds.map((caseId) => caseId.trim()).filter(Boolean)));
+      if (uniqueCaseIds.length === 0) {
+        throw new Error(t("tests.archiveSelectionRequired"));
+      }
+      return controlPlaneApi.deleteProjectTestCases(auth.token, workspaceId, effectiveProjectId, uniqueCaseIds);
+    },
+    onSuccess: async (archived) => {
+      const archivedIds = new Set(archived.map((testCase) => testCase.id));
+      setSelectedCaseIds((current) => current.filter((caseId) => !archivedIds.has(caseId)));
+      setActionMessage(t("tests.archiveCasesSuccess", { count: archived.length }));
       await invalidateCaseWorkflow();
     },
   });
@@ -1519,25 +1608,25 @@ export function TestsPage() {
       {
         key: "cases" as const,
         icon: ClipboardCheck,
-        count: t("tests.workflow.caseCount", { count: allCases.length }),
-        status: allCases.length > 0 ? ("ready" as const) : ("active" as const),
-        statusLabel: allCases.length > 0 ? t("tests.workflow.caseReady") : t("tests.workflow.caseStart"),
+        count: t("tests.workflow.caseCount", { count: allCaseTotal }),
+        status: allCaseTotal > 0 ? ("ready" as const) : ("active" as const),
+        statusLabel: allCaseTotal > 0 ? t("tests.workflow.caseReady") : t("tests.workflow.caseStart"),
         body: t("tests.workflow.caseBody"),
-        dependency: allCases.length > 0 ? t("tests.workflow.caseDependencyDone") : t("tests.workflow.caseDependency"),
+        dependency: allCaseTotal > 0 ? t("tests.workflow.caseDependencyDone") : t("tests.workflow.caseDependency"),
       },
       {
         key: "proposals" as const,
         icon: Sparkles,
         count: t("tests.workflow.suggestionCount", { count: pendingProposals.length }),
-        status: pendingProposals.length > 0 ? ("waiting" as const) : allCases.length > 0 ? ("ready" as const) : ("blocked" as const),
+        status: pendingProposals.length > 0 ? ("waiting" as const) : allCaseTotal > 0 ? ("ready" as const) : ("blocked" as const),
         statusLabel:
           pendingProposals.length > 0
             ? t("tests.workflow.suggestionWaiting")
-            : allCases.length > 0
+            : allCaseTotal > 0
               ? t("tests.workflow.suggestionReady")
               : t("tests.workflow.blocked"),
         body: t("tests.workflow.suggestionBody"),
-        dependency: allCases.length > 0 ? t("tests.workflow.suggestionDependencyDone") : t("tests.workflow.suggestionDependency"),
+        dependency: allCaseTotal > 0 ? t("tests.workflow.suggestionDependencyDone") : t("tests.workflow.suggestionDependency"),
       },
       {
         key: "plans" as const,
@@ -1563,7 +1652,7 @@ export function TestsPage() {
         dependency: readyCases.length > 0 ? t("tests.workflow.runDependencyDone", { count: readyCases.length }) : t("tests.workflow.runDependency"),
       },
     ],
-    [allCases.length, allPlans.length, latestRun, pendingProposals.length, readyCases.length, t],
+    [allCaseTotal, allPlans.length, latestRun, pendingProposals.length, readyCases.length, t],
   );
   const activeStage = workflowStages.find((stage) => stage.key === activeTab) || workflowStages[0];
   const workflowNextAction =
@@ -1571,7 +1660,7 @@ export function TestsPage() {
       ? t("tests.workflow.nextReview", { count: pendingProposals.length })
       : readyCases.length > 0
         ? t("tests.workflow.nextRunOrPlan", { count: readyCases.length })
-          : allCases.length > 0
+          : allCaseTotal > 0
             ? t("tests.workflow.nextOptimize")
             : t("tests.workflow.nextCases");
 
@@ -1586,11 +1675,14 @@ export function TestsPage() {
   }, [projects, search.project, selectedProjectId]);
 
   useEffect(() => {
-    setSelectedCaseIds((current) => {
-      const next = current.filter((caseId) => allCases.some((testCase) => testCase.id === caseId));
-      return next.length === current.length ? current : next;
-    });
-  }, [allCases]);
+    setCasePage(0);
+  }, [effectiveProjectId, query, statusFilter]);
+
+  useEffect(() => {
+    if (casePage > 0 && casePage >= totalCasePages) {
+      setCasePage(totalCasePages - 1);
+    }
+  }, [casePage, totalCasePages]);
 
   useEffect(() => {
     if (!selectedPlanId && plans[0]) {
@@ -1615,6 +1707,21 @@ export function TestsPage() {
       visibleCaseIds.forEach((caseId) => next.add(caseId));
       return Array.from(next);
     });
+  }
+
+  function archiveSelectedCases() {
+    const selected = selectedCaseIds.filter((caseId) => caseId.trim());
+    if (selected.length === 0 || archiveCases.isPending) return;
+    const confirmed = window.confirm(`${t("tests.archiveCasesConfirmTitle", { count: selected.length })}\n\n${t("tests.archiveCasesConfirmBody")}`);
+    if (!confirmed) return;
+    archiveCases.mutate(selected);
+  }
+
+  function archiveSingleCase(testCase: TestCase) {
+    if (archiveCases.isPending) return;
+    const confirmed = window.confirm(`${t("tests.archiveCaseConfirmTitle", { title: testCase.title })}\n\n${t("tests.archiveCasesConfirmBody")}`);
+    if (!confirmed) return;
+    archiveCases.mutate([testCase.id]);
   }
 
   function updateCreateStep(index: number, patch: Partial<TestCaseStep>) {
@@ -1735,6 +1842,7 @@ export function TestsPage() {
                   onValueChange={(value) => {
                     setSelectedProjectId(value);
                     setSelectedCaseIds([]);
+                    setCasePage(0);
                     setSelectedPlanId("");
                     setActionMessage("");
                     void navigate({ to: "/tests", search: testsTabSearch(activeTab, value) });
@@ -1832,8 +1940,11 @@ export function TestsPage() {
                   </p>
                 ) : null}
 
-                <div className="flex items-center justify-between border-b border-[color:var(--line)] px-4 py-2 text-[12px] text-[color:var(--muted)]">
-                  <span>{t("tests.selectedSummary", { selected: selectedCaseIds.length, total: cases.length })}</span>
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[color:var(--line)] px-4 py-2 text-[12px] text-[color:var(--muted)]">
+                  <span>
+                    {t("tests.selectedSummary", { selected: selectedCaseIds.length, total: caseTotal })}
+                    {cases.length > 0 ? <span className="ml-2 text-[color:var(--faint)]">{t("tests.visibleCaseSummary", { count: cases.length })}</span> : null}
+                  </span>
                   <div className="flex items-center gap-2">
                     <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={toggleVisibleCasesSelection} disabled={cases.length === 0 || allVisibleCasesSelected}>
                       {t("tests.selectAll")}
@@ -1844,8 +1955,16 @@ export function TestsPage() {
                     <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={() => setSelectedCaseIds([])} disabled={selectedCaseIds.length === 0}>
                       {t("tests.clearSelection")}
                     </Button>
+                    <Button type="button" variant="danger" size="sm" className="h-7 px-2 text-[12px]" onClick={archiveSelectedCases} disabled={selectedCaseIds.length === 0 || archiveCases.isPending}>
+                      <Trash2 data-icon />
+                      {archiveCases.isPending ? t("tests.archivingCases") : t("tests.archiveSelected")}
+                    </Button>
                   </div>
                 </div>
+
+                {archiveCases.error ? (
+                  <p className="border-b border-[color:var(--line)] bg-[color:var(--danger-soft)] px-4 py-2 text-[12px] text-[color:var(--danger)]">{archiveCases.error.message}</p>
+                ) : null}
 
                 {casesQuery.isLoading ? (
                   <div className="divide-y divide-[color:var(--line)]">
@@ -1859,8 +1978,8 @@ export function TestsPage() {
                   />
                 ) : (
                   <div className="overflow-x-auto">
-                    <div className="min-w-[940px]">
-                      <div className="grid grid-cols-[24px_minmax(260px,1fr)_96px_120px_88px_132px_108px_88px_24px] items-center gap-3 border-b border-[color:var(--line)] px-4 py-2 text-[11px] font-medium text-[color:var(--muted)]">
+                    <div className="min-w-[980px]">
+                      <div className="grid grid-cols-[24px_minmax(260px,1fr)_96px_120px_88px_132px_108px_88px_64px] items-center gap-3 border-b border-[color:var(--line)] px-4 py-2 text-[11px] font-medium text-[color:var(--muted)]">
                         <input
                           type="checkbox"
                           className="size-4 accent-[color:var(--accent)]"
@@ -1879,7 +1998,7 @@ export function TestsPage() {
                         <span className="text-right">{t("tests.quality")}</span>
                         <span className="text-right">{t("tests.latestResult")}</span>
                         <span className="text-right">{t("tests.updated")}</span>
-                        <span className="sr-only">{t("tests.selectCase")}</span>
+                        <span className="text-right">{t("tests.actions")}</span>
                       </div>
                       <div className="divide-y divide-[color:var(--line)]">
                         {cases.map((testCase) => {
@@ -1887,7 +2006,7 @@ export function TestsPage() {
                           return (
                             <div
                               key={testCase.id}
-                              className="grid w-full grid-cols-[24px_minmax(260px,1fr)_96px_120px_88px_132px_108px_88px_24px] items-center gap-3 px-4 py-3 transition-colors hover:bg-[color:var(--hover)]"
+                              className="grid w-full grid-cols-[24px_minmax(260px,1fr)_96px_120px_88px_132px_108px_88px_64px] items-center gap-3 px-4 py-3 transition-colors hover:bg-[color:var(--hover)]"
                             >
                               <input
                                 type="checkbox"
@@ -1943,8 +2062,28 @@ export function TestsPage() {
                               <div className="text-right text-[12px] text-[color:var(--muted)]">
                                 <RelativeTime value={testCase.updatedAt} />
                               </div>
-                              <div className="flex items-center justify-end">
-                                <ArrowRight data-icon className="text-[color:var(--faint)]" />
+                              <div className="flex items-center justify-end gap-1">
+                                <Button type="button" variant="ghost" size="icon" className="size-7 min-h-7" asChild>
+                                  <Link
+                                    to="/tests/cases/$caseId"
+                                    params={{ caseId: testCase.id }}
+                                    search={testsTabSearch("cases", effectiveProjectId)}
+                                    aria-label={t("tests.openCaseAria", { title: testCase.title })}
+                                  >
+                                    <ArrowRight data-icon className="text-[color:var(--faint)]" />
+                                  </Link>
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="size-7 min-h-7 text-[color:var(--danger)] hover:bg-[color:var(--danger-soft)]"
+                                  onClick={() => archiveSingleCase(testCase)}
+                                  disabled={archiveCases.isPending || testCase.status === "archived"}
+                                  aria-label={t("tests.archiveCaseAria", { title: testCase.title })}
+                                >
+                                  <Trash2 data-icon />
+                                </Button>
                               </div>
                             </div>
                           );
@@ -1953,6 +2092,16 @@ export function TestsPage() {
                     </div>
                   </div>
                 )}
+                {caseTotal > testCasePageSize ? (
+                  <TestCasePagination
+                    page={casePage}
+                    pageSize={testCasePageSize}
+                    total={caseTotal}
+                    canGoPrevious={canGoPreviousCasePage}
+                    canGoNext={canGoNextCasePage}
+                    onPageChange={setCasePage}
+                  />
+                ) : null}
               </section>
             </div>
           ) : null}
@@ -1992,7 +2141,7 @@ export function TestsPage() {
                     </Select>
                   </div>
                   <span className="text-[12px] text-[color:var(--muted)]">
-                    {t("tests.selectedSummary", { selected: selectedCaseIds.length, total: casesQuery.data?.length || 0 })}
+                    {t("tests.selectedSummary", { selected: selectedCaseIds.length, total: allCaseTotal })}
                   </span>
                 </div>
                 {agentActionMessage ? (
@@ -2381,7 +2530,7 @@ export function TestCaseDetailPage() {
   const createCase = useMutation({
     mutationFn: (input: TestCaseInput) => controlPlaneApi.createProjectTestCase(auth.token, workspaceId, effectiveProjectId, input),
     onSuccess: async (created) => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCases(workspaceId, effectiveProjectId, auth.token) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCasesBase(workspaceId, effectiveProjectId, auth.token) });
       await navigate({ to: "/tests/cases/$caseId", params: { caseId: created.id }, search: testCaseDetailSearch(effectiveProjectId, "details") });
     },
   });
@@ -2390,7 +2539,7 @@ export function TestCaseDetailPage() {
     onSuccess: async (updated) => {
       setCaseForm(caseToForm(updated));
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCases(workspaceId, effectiveProjectId, auth.token) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCasesBase(workspaceId, effectiveProjectId, auth.token) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCase(workspaceId, effectiveProjectId, updated.id, auth.token) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCaseRevisions(workspaceId, effectiveProjectId, updated.id, auth.token) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCaseRunItems(workspaceId, effectiveProjectId, updated.id, auth.token) }),

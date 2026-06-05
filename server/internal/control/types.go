@@ -347,6 +347,19 @@ type TestCaseInput struct {
 type TestCaseListOptions struct {
 	Status string `json:"status"`
 	Query  string `json:"query"`
+	Limit  int    `json:"limit"`
+	Offset int    `json:"offset"`
+}
+
+type TestCaseListResult struct {
+	Cases  []TestCase `json:"cases"`
+	Total  int        `json:"total"`
+	Limit  int        `json:"limit"`
+	Offset int        `json:"offset"`
+}
+
+type DeleteProjectTestCasesInput struct {
+	CaseIDs []string `json:"caseIds"`
 }
 
 type ImportTestCasesInput struct {
@@ -1711,12 +1724,14 @@ type Store interface {
 	DeleteProject(ctx Context, userID, workspaceID, projectID string) error
 	GetProjectRunbook(ctx Context, userID, workspaceID, projectID string) (ProjectRunbook, error)
 	UpdateProjectRunbook(ctx Context, userID, workspaceID, projectID string, input ProjectRunbookInput) (ProjectRunbook, error)
-	ListProjectTestCases(ctx Context, userID, workspaceID, projectID string, options TestCaseListOptions) ([]TestCase, error)
+	ListProjectTestCases(ctx Context, userID, workspaceID, projectID string, options TestCaseListOptions) (TestCaseListResult, error)
 	CreateProjectTestCase(ctx Context, userID, workspaceID, projectID string, input TestCaseInput) (TestCase, error)
 	ImportProjectTestCases(ctx Context, userID, workspaceID, projectID string, input ImportTestCasesInput) (ImportTestCasesResult, error)
 	EnsureActiveCodexWorker(ctx Context, userID, workspaceID, runtimeMode string) (string, error)
 	GetProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string) (TestCase, error)
 	UpdateProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string, input TestCaseInput) (TestCase, error)
+	DeleteProjectTestCase(ctx Context, userID, workspaceID, projectID, caseID string) (TestCase, error)
+	DeleteProjectTestCases(ctx Context, userID, workspaceID, projectID string, input DeleteProjectTestCasesInput) ([]TestCase, error)
 	ListProjectTestCaseRevisions(ctx Context, userID, workspaceID, projectID, caseID string) ([]TestCaseRevision, error)
 	ListProjectTestCaseProposals(ctx Context, userID, workspaceID, projectID string, options TestCaseProposalListOptions) ([]TestCaseProposal, error)
 	ApplyProjectTestCaseProposal(ctx Context, userID, workspaceID, projectID, proposalID string, input ReviewTestCaseProposalInput) (ApplyTestCaseProposalResult, error)
