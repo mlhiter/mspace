@@ -285,8 +285,14 @@ export function ClustersPage() {
   const settingsClusterInUse = Boolean(
     settingsCluster && (settingsCluster.projectCount > 0 || settingsCluster.environmentCount > 0),
   );
-  const canSaveVirtualMachine = canSubmitVirtualMachine(virtualMachineForm);
-  const canCheckVirtualMachine = canSubmitVirtualMachineCheck(checkVirtualMachineForm);
+  const canSaveVirtualMachine = canSubmitVirtualMachine(
+    virtualMachineForm,
+    Boolean(settingsEnvironment?.virtualMachine?.sshAuthConfigured),
+  );
+  const canCheckVirtualMachine = canSubmitVirtualMachineCheck(
+    checkVirtualMachineForm,
+    Boolean(checkVirtualMachineEnvironment?.virtualMachine?.sshAuthConfigured),
+  );
   const settingsEnvironmentInUse = Boolean(
     settingsEnvironment &&
       (settingsEnvironment.issueEnvironmentCount > 0 ||
@@ -315,9 +321,13 @@ export function ClustersPage() {
   }
 
   function openVirtualMachineCheck(environment: Environment) {
+    checkEnvironment.reset();
+    if (environment.virtualMachine?.sshAuthConfigured) {
+      checkEnvironment.mutate({ environmentId: environment.id, input: {} });
+      return;
+    }
     setCheckVirtualMachineEnvironment(environment);
     setCheckVirtualMachineForm(environmentToVMForm(environment));
-    checkEnvironment.reset();
   }
 
   function submitSettings(event: FormEvent<HTMLFormElement>) {
@@ -456,6 +466,7 @@ export function ClustersPage() {
           title={t("clusters.createVirtualMachineTitle")}
           description={t("clusters.virtualMachineDescription")}
           value={virtualMachineForm}
+          hasSavedAuth={false}
           error={createEnvironment.error}
           isPending={createEnvironment.isPending}
           canSubmit={canSaveVirtualMachine}
@@ -474,6 +485,7 @@ export function ClustersPage() {
           title={t("clusters.virtualMachineSettingsTitle")}
           description={t("clusters.virtualMachineDescription")}
           value={virtualMachineForm}
+          hasSavedAuth={Boolean(settingsEnvironment.virtualMachine?.sshAuthConfigured)}
           error={updateEnvironment.error || deleteEnvironment.error}
           isPending={updateEnvironment.isPending}
           canSubmit={canSaveVirtualMachine}
@@ -482,7 +494,9 @@ export function ClustersPage() {
           onSubmit={(event) => {
             event.preventDefault();
             if (!canSaveVirtualMachine) return;
-            updateEnvironment.mutate(normalizeVirtualMachineForm(virtualMachineForm));
+            updateEnvironment.mutate(
+              normalizeVirtualMachineForm(virtualMachineForm, Boolean(settingsEnvironment.virtualMachine?.sshAuthConfigured)),
+            );
           }}
           footerStart={
             <Button
@@ -513,7 +527,10 @@ export function ClustersPage() {
             if (!canCheckVirtualMachine) return;
             checkEnvironment.mutate({
               environmentId: checkVirtualMachineEnvironment.id,
-              input: normalizeVirtualMachineCheckForm(checkVirtualMachineForm),
+              input: normalizeVirtualMachineCheckForm(
+                checkVirtualMachineForm,
+                Boolean(checkVirtualMachineEnvironment.virtualMachine?.sshAuthConfigured),
+              ),
             });
           }}
         />
@@ -1006,6 +1023,7 @@ function VirtualMachineModal(props: {
   title: string;
   description: string;
   value: VirtualMachineFormState;
+  hasSavedAuth: boolean;
   error?: Error | null;
   isPending: boolean;
   canSubmit: boolean;
@@ -1085,7 +1103,14 @@ function VirtualMachineModal(props: {
               placeholder="root"
             />
           </Field>
-          <VirtualMachineAuthFields value={props.value} onChange={props.onChange} notice={t("clusters.vmCheckDescription")} />
+          {props.hasSavedAuth ? (
+            <Notice>{t("clusters.vmSavedAuthDescription")}</Notice>
+          ) : null}
+          <VirtualMachineAuthFields
+            value={props.value}
+            onChange={props.onChange}
+            notice={t(props.hasSavedAuth ? "clusters.vmReplaceAuthDescription" : "clusters.vmCheckDescription")}
+          />
           <Field label={t("clusters.workdir")}>
             <Input
               value={props.value.workdir || ""}
@@ -1129,6 +1154,7 @@ function VirtualMachineCheckModal(props: {
 }) {
   const { t } = useMspaceTranslation();
   const vm = props.environment.virtualMachine;
+  const hasSavedAuth = Boolean(vm?.sshAuthConfigured);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -1186,7 +1212,14 @@ function VirtualMachineCheckModal(props: {
               </span>
             </div>
           </div>
-          <VirtualMachineAuthFields value={props.value} onChange={props.onChange} notice={t("clusters.vmRecheckDescription")} />
+          {hasSavedAuth ? (
+            <Notice>{t("clusters.vmSavedAuthDescription")}</Notice>
+          ) : null}
+          <VirtualMachineAuthFields
+            value={props.value}
+            onChange={props.onChange}
+            notice={t(hasSavedAuth ? "clusters.vmReplaceAuthDescription" : "clusters.vmRecheckDescription")}
+          />
           <div className="mt-1 flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isPending}>
               {t("common.cancel")}
@@ -1302,7 +1335,7 @@ function canSubmitCluster(form: ClusterInput) {
   return true;
 }
 
-function normalizeVirtualMachineForm(form: VirtualMachineFormState): EnvironmentInput {
+function normalizeVirtualMachineForm(form: VirtualMachineFormState, hasSavedAuth = false): EnvironmentInput {
   const authMethod = form.sshAuthMethod || "password";
   const normalized: EnvironmentInput = {
     name: form.name.trim(),
@@ -1320,25 +1353,31 @@ function normalizeVirtualMachineForm(form: VirtualMachineFormState): Environment
     sshPort: normalized.sshPort || 22,
     sshUser: normalized.sshUser || "",
     sshAuthRef: normalized.sshAuthRef || "",
+    sshAuthConfigured: hasSavedAuth,
     workdir: normalized.workdir || "",
     serviceHint: normalized.serviceHint || "",
     labels: {},
   };
-  normalized.sshAuth =
-    authMethod === "private_key"
-      ? {
-          method: "private_key",
-          privateKey: (form.sshPrivateKey || "").trim(),
-          passphrase: form.sshPassphrase || "",
-        }
-      : {
-          method: "password",
-          password: form.sshPassword || "",
-        };
+  if (!hasSavedAuth || canSubmitVirtualMachineCheck(form, false)) {
+    normalized.sshAuth =
+      authMethod === "private_key"
+        ? {
+            method: "private_key",
+            privateKey: (form.sshPrivateKey || "").trim(),
+            passphrase: form.sshPassphrase || "",
+          }
+        : {
+            method: "password",
+            password: form.sshPassword || "",
+          };
+  }
   return normalized;
 }
 
-function normalizeVirtualMachineCheckForm(form: VirtualMachineFormState): EnvironmentCheckInput {
+function normalizeVirtualMachineCheckForm(form: VirtualMachineFormState, hasSavedAuth = false): EnvironmentCheckInput {
+  if (hasSavedAuth && !canSubmitVirtualMachineCheck(form, false)) {
+    return {};
+  }
   const authMethod = form.sshAuthMethod || "password";
   return {
     sshAuth:
@@ -1355,18 +1394,19 @@ function normalizeVirtualMachineCheckForm(form: VirtualMachineFormState): Enviro
   };
 }
 
-function canSubmitVirtualMachine(form: VirtualMachineFormState) {
-  const normalized = normalizeVirtualMachineForm(form);
+function canSubmitVirtualMachine(form: VirtualMachineFormState, hasSavedAuth = false) {
+  const normalized = normalizeVirtualMachineForm(form, hasSavedAuth);
   return Boolean(
     normalized.name &&
       normalized.sshHost &&
       normalized.sshUser &&
       (normalized.sshPort || 0) > 0 &&
-      canSubmitVirtualMachineCheck(form),
+      canSubmitVirtualMachineCheck(form, hasSavedAuth),
   );
 }
 
-function canSubmitVirtualMachineCheck(form: VirtualMachineFormState) {
+function canSubmitVirtualMachineCheck(form: VirtualMachineFormState, hasSavedAuth = false) {
+  if (hasSavedAuth) return true;
   const authMethod = form.sshAuthMethod || "password";
   const hasAuthMaterial =
     authMethod === "private_key" ? Boolean((form.sshPrivateKey || "").trim()) : Boolean(form.sshPassword || "");

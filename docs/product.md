@@ -34,7 +34,7 @@ The repository now has a runnable local desktop MVP:
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage workspace automation policy, keeping source commit capture always on while recording branch / PR handoff state from captured source commits;
 - optionally queue an automatic issue test-environment deployment after a successful source session captures a commit, using the same source commit and deploy/test path as manual deployment;
-- manage reusable Environments from the Environments route: Kubernetes environments can be imported from kubeconfig files, and virtual machine environments store SSH target metadata plus credential references;
+- manage reusable Environments from the Environments route: Kubernetes environments can be imported from kubeconfig files, and virtual machine environments store SSH target metadata plus server-owned SSH credentials;
 - choose a default Environment per project and select a Kubernetes environment when manually deploying an issue test environment;
 - manually trigger an issue-scoped Kubernetes test deployment where the agent creates the namespace, builds and pushes images, deploys resources, and returns a preview URL;
 - record issue test namespace state, cleanup/retain state, deploy session, cleanup session, and preview URL.
@@ -121,11 +121,11 @@ A Kubernetes Environment is projected from the existing `clusters` compatibility
 A virtual machine Environment stores SSH-oriented target metadata:
 
 - SSH host, port, and user;
-- SSH credential reference, not raw secret material;
+- SSH credential configuration state, with raw secret material stored server-side and never returned to clients;
 - optional working directory and service hint;
 - optional labels for future worker routing or runbook matching.
 
-Creating or editing a virtual machine Environment requires a password or private key so mspace can verify SSH login before the target is treated as usable. Only a successful SSH check marks the VM `ready`; failed checks keep the record for later repair as `unreachable`, and missing auth material is rejected instead of creating a fake-ready environment.
+Creating a virtual machine Environment requires a password or private key so mspace can verify SSH login before the target is treated as usable. Editing or rechecking uses the saved credential unless the user supplies a new password/private key to replace it. Only a successful SSH check marks the VM `ready`; failed checks keep the record for later repair as `unreachable`, and missing auth material is rejected instead of creating a fake-ready environment when no saved credential exists.
 
 ### Runtime and Environment Stance
 

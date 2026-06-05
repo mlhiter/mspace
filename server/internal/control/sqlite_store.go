@@ -58,6 +58,7 @@ type memoryStoreSnapshot struct {
 	AgentProfiles        map[string]AgentProfile                      `json:"agentProfiles"`
 	Clusters             map[string]Cluster                           `json:"clusters"`
 	Environments         map[string]Environment                       `json:"environments"`
+	EnvironmentSSHAuth   map[string]virtualMachineStoredSSHAuth       `json:"environmentSshAuth"`
 	TestEnvironments     map[string]IssueTestEnvironment              `json:"testEnvironments"`
 	ReviewEvidence       map[string]SessionReviewEvidence             `json:"reviewEvidence"`
 	SessionFailures      map[string]SessionFailure                    `json:"sessionFailures"`
@@ -205,6 +206,7 @@ func (s *MemoryStore) snapshotJSON() ([]byte, error) {
 		AgentProfiles:        copyMap(s.agentProfiles),
 		Clusters:             copyMap(s.clusters),
 		Environments:         copyMap(s.environments),
+		EnvironmentSSHAuth:   copyMap(s.environmentSSHAuth),
 		TestEnvironments:     copyMap(s.testEnvironments),
 		ReviewEvidence:       copyMap(s.reviewEvidence),
 		SessionFailures:      copyMap(s.sessionFailures),
@@ -262,6 +264,7 @@ func (s *MemoryStore) restoreSnapshot(snapshot memoryStoreSnapshot) {
 	s.agentProfiles = ensureMap(snapshot.AgentProfiles)
 	s.clusters = ensureMap(snapshot.Clusters)
 	s.environments = ensureMap(snapshot.Environments)
+	s.environmentSSHAuth = ensureMap(snapshot.EnvironmentSSHAuth)
 	s.testEnvironments = ensureMap(snapshot.TestEnvironments)
 	s.reviewEvidence = ensureMap(snapshot.ReviewEvidence)
 	s.sessionFailures = ensureMap(snapshot.SessionFailures)

@@ -47,6 +47,7 @@ type MemoryStore struct {
 	agentProfiles        map[string]AgentProfile
 	clusters             map[string]Cluster
 	environments         map[string]Environment
+	environmentSSHAuth   map[string]virtualMachineStoredSSHAuth
 	testEnvironments     map[string]IssueTestEnvironment
 	reviewEvidence       map[string]SessionReviewEvidence
 	sessionFailures      map[string]SessionFailure
@@ -132,6 +133,7 @@ func NewMemoryStore() *MemoryStore {
 		agentProfiles:        map[string]AgentProfile{},
 		clusters:             map[string]Cluster{},
 		environments:         map[string]Environment{},
+		environmentSSHAuth:   map[string]virtualMachineStoredSSHAuth{},
 		testEnvironments:     map[string]IssueTestEnvironment{},
 		reviewEvidence:       map[string]SessionReviewEvidence{},
 		sessionFailures:      map[string]SessionFailure{},
@@ -1474,7 +1476,12 @@ func (s *MemoryStore) CreateEnvironment(_ Context, userID, workspaceID string, i
 		if err != nil {
 			return Environment{}, err
 		}
-		status, err := virtualMachineSSHStatus(context.Background(), normalized, input.SSHAuth)
+		storedAuth, err := normalizeVirtualMachineStoredSSHAuth(input.SSHAuth)
+		if err != nil {
+			return Environment{}, err
+		}
+		applyVirtualMachineStoredSSHAuth(&normalized, storedAuth)
+		status, err := virtualMachineSSHStatus(context.Background(), normalized, storedAuth)
 		if err != nil {
 			return Environment{}, err
 		}
@@ -1491,6 +1498,7 @@ func (s *MemoryStore) CreateEnvironment(_ Context, userID, workspaceID string, i
 		normalized.CreatedAt = now
 		normalized.UpdatedAt = now
 		s.environments[normalized.ID] = normalized
+		s.environmentSSHAuth[normalized.ID] = storedAuth
 		return normalized, nil
 	}
 	s.mu.Lock()
@@ -1552,7 +1560,18 @@ func (s *MemoryStore) UpdateEnvironment(_ Context, userID, workspaceID, environm
 	if updated.Kind != existing.Kind {
 		return Environment{}, errors.New("environment kind cannot be changed")
 	}
-	status, err := virtualMachineSSHStatus(context.Background(), updated, input.SSHAuth)
+	s.mu.Lock()
+	storedAuth := s.environmentSSHAuth[environmentID]
+	s.mu.Unlock()
+	if input.SSHAuth != nil {
+		var err error
+		storedAuth, err = normalizeVirtualMachineStoredSSHAuth(input.SSHAuth)
+		if err != nil {
+			return Environment{}, err
+		}
+	}
+	applyVirtualMachineStoredSSHAuth(&updated, storedAuth)
+	status, err := virtualMachineSSHStatus(context.Background(), updated, storedAuth)
 	if err != nil {
 		return Environment{}, err
 	}
@@ -1575,6 +1594,7 @@ func (s *MemoryStore) UpdateEnvironment(_ Context, userID, workspaceID, environm
 	updated.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	updated.UpdatedAt = updated.LastCheckedAt
 	s.environments[environmentID] = updated
+	s.environmentSSHAuth[environmentID] = storedAuth
 	return updated, nil
 }
 
@@ -1601,7 +1621,18 @@ func (s *MemoryStore) CheckEnvironment(_ Context, userID, workspaceID, environme
 	}
 	s.mu.Unlock()
 
-	status, err := virtualMachineSSHStatus(context.Background(), existing, input.SSHAuth)
+	s.mu.Lock()
+	storedAuth := s.environmentSSHAuth[environmentID]
+	s.mu.Unlock()
+	if input.SSHAuth != nil {
+		var err error
+		storedAuth, err = normalizeVirtualMachineStoredSSHAuth(input.SSHAuth)
+		if err != nil {
+			return Environment{}, err
+		}
+	}
+	applyVirtualMachineStoredSSHAuth(&existing, storedAuth)
+	status, err := virtualMachineSSHStatus(context.Background(), existing, storedAuth)
 	if err != nil {
 		return Environment{}, err
 	}
@@ -1619,6 +1650,7 @@ func (s *MemoryStore) CheckEnvironment(_ Context, userID, workspaceID, environme
 	existing.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	existing.UpdatedAt = existing.LastCheckedAt
 	s.environments[environmentID] = existing
+	s.environmentSSHAuth[environmentID] = storedAuth
 	return existing, nil
 }
 
@@ -1674,6 +1706,7 @@ func (s *MemoryStore) DeleteEnvironment(_ Context, userID, workspaceID, environm
 		}
 	}
 	delete(s.environments, environmentID)
+	delete(s.environmentSSHAuth, environmentID)
 	return nil
 }
 

@@ -1,0 +1,5 @@
+ALTER TABLE environments
+  ADD COLUMN IF NOT EXISTS ssh_auth_method TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS ssh_auth_password TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS ssh_auth_private_key TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS ssh_auth_passphrase TEXT NOT NULL DEFAULT '';

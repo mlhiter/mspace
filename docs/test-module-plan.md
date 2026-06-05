@@ -143,7 +143,7 @@ Test Run Environment Snapshot
 The Environment can include:
 
 - for Kubernetes: cluster id, kubeconfig path, context, registry prefix, exposure defaults, preview domain, ingress class, and NodePort host;
-- for virtual machines: SSH host, port, user, credential reference, workdir, service hints, labels, and readiness from password/private-key SSH login validation.
+- for virtual machines: SSH host, port, user, credential configuration state, workdir, service hints, labels, and readiness from server-owned password/private-key SSH login validation.
 
 The run snapshot should freeze:
 
@@ -157,7 +157,7 @@ The run snapshot should freeze:
 - linked Issue Test Environment when the run creates or reuses one;
 - preview URL only when it is produced by an issue deploy or test run output.
 
-In the first phase, mspace keeps Kubernetes clusters as compatibility records behind the Environment API and adds virtual machine environments as SSH target records that must be validated with password or private-key login before they can be `ready`. It should not introduce heavy environment orchestration yet. Test Plan and Test Run store `environment_id`, `environment_kind`, and `environment_snapshot`, while the existing free-text `environment` field remains human notes for the agent.
+In the first phase, mspace keeps Kubernetes clusters as compatibility records behind the Environment API and adds virtual machine environments as SSH target records with server-owned password/private-key credentials. They must pass SSH login validation before they can be `ready`, and rechecks use the saved credential unless a replacement is supplied. It should not introduce heavy environment orchestration yet. Test Plan and Test Run store `environment_id`, `environment_kind`, and `environment_snapshot`, while the existing free-text `environment` field remains human notes for the agent.
 
 ### Test Plan
 

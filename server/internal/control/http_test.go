@@ -1847,6 +1847,10 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 	if created.Status != "unreachable" || created.LastCheckedAt == "" {
 		t.Fatalf("expected failed ssh check to save vm as unreachable, got %+v", created)
 	}
+	if created.VirtualMachine.SSHAuthRef != "secret://mspace/staging-vm" || !created.VirtualMachine.SSHAuthConfigured {
+		t.Fatalf("expected created vm to report configured ssh auth without raw material, got %+v", created.VirtualMachine)
+	}
+	assertNoSSHAuthMaterialInBody(t, createRecorder.Body.String(), "wrong-password")
 
 	updateRecorder := httptest.NewRecorder()
 	updateReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/environments/"+created.ID, strings.NewReader(`{
@@ -1855,8 +1859,7 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 		"status":"ready",
 		"sshHost":"127.0.0.1",
 		"sshPort":1,
-		"sshUser":"ubuntu",
-		"sshAuth":{"method":"password","password":"still-wrong"}
+		"sshUser":"ubuntu"
 	}`))
 	updateReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(updateRecorder, updateReq)
@@ -1873,11 +1876,13 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 	if updated.Status != "unreachable" || updated.LastCheckedAt == "" {
 		t.Fatalf("expected updated vm to remain unreachable after failed ssh check, got %+v", updated)
 	}
+	if !updated.VirtualMachine.SSHAuthConfigured || updated.VirtualMachine.SSHAuthRef != "secret://mspace/staging-vm" {
+		t.Fatalf("expected update without sshAuth to preserve stored auth, got %+v", updated.VirtualMachine)
+	}
+	assertNoSSHAuthMaterialInBody(t, updateRecorder.Body.String(), "wrong-password")
 
 	checkRecorder := httptest.NewRecorder()
-	checkReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/environments/"+created.ID+"/check", strings.NewReader(`{
-		"sshAuth":{"method":"password","password":"still-wrong"}
-	}`))
+	checkReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/environments/"+created.ID+"/check", strings.NewReader(`{}`))
 	checkReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(checkRecorder, checkReq)
 	if checkRecorder.Code != http.StatusOK {
@@ -1890,6 +1895,21 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 	if checked.ID != created.ID || checked.Kind != environmentKindVirtualMachine || checked.Status != "unreachable" || checked.LastCheckedAt == "" {
 		t.Fatalf("expected checked vm to remain unreachable with checked time, got %+v", checked)
 	}
+	if !checked.VirtualMachine.SSHAuthConfigured {
+		t.Fatalf("expected recheck without sshAuth to use saved auth, got %+v", checked.VirtualMachine)
+	}
+	assertNoSSHAuthMaterialInBody(t, checkRecorder.Body.String(), "wrong-password")
+
+	replaceAuthRecorder := httptest.NewRecorder()
+	replaceAuthReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/environments/"+created.ID+"/check", strings.NewReader(`{
+		"sshAuth":{"method":"password","password":"replacement-password"}
+	}`))
+	replaceAuthReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(replaceAuthRecorder, replaceAuthReq)
+	if replaceAuthRecorder.Code != http.StatusOK {
+		t.Fatalf("replace vm auth status=%d body=%s", replaceAuthRecorder.Code, replaceAuthRecorder.Body.String())
+	}
+	assertNoSSHAuthMaterialInBody(t, replaceAuthRecorder.Body.String(), "replacement-password")
 
 	listRecorder := httptest.NewRecorder()
 	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/environments", nil)
@@ -1912,6 +1932,18 @@ func TestEnvironmentAPISupportsVirtualMachines(t *testing.T) {
 	router.ServeHTTP(deleteRecorder, deleteReq)
 	if deleteRecorder.Code != http.StatusOK {
 		t.Fatalf("delete vm environment status=%d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+}
+
+func assertNoSSHAuthMaterialInBody(t *testing.T, body string, values ...string) {
+	t.Helper()
+	for _, value := range values {
+		if value != "" && strings.Contains(body, value) {
+			t.Fatalf("response leaked ssh auth material %q in body=%s", value, body)
+		}
+	}
+	if strings.Contains(body, "sshAuth\"") || strings.Contains(body, "sshPassword") || strings.Contains(body, "privateKey") || strings.Contains(body, "passphrase") {
+		t.Fatalf("response leaked ssh auth fields in body=%s", body)
 	}
 }
 

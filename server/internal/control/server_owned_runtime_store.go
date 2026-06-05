@@ -103,6 +103,7 @@ func (s *PostgresStore) ListEnvironments(ctx Context, userID, workspaceID string
 			e.ssh_port,
 			e.ssh_user,
 			e.ssh_auth_ref,
+			(e.ssh_auth_method <> ''),
 			e.workdir,
 			e.service_hint,
 			e.labels,
@@ -216,16 +217,27 @@ func (s *PostgresStore) CreateEnvironment(ctx Context, userID, workspaceID strin
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
 		return Environment{}, err
 	}
-	status, err := virtualMachineSSHStatus(dbctx, normalized, input.SSHAuth)
+	storedAuth, err := normalizeVirtualMachineStoredSSHAuth(input.SSHAuth)
+	if err != nil {
+		return Environment{}, err
+	}
+	applyVirtualMachineStoredSSHAuth(&normalized, storedAuth)
+	status, err := virtualMachineSSHStatus(dbctx, normalized, storedAuth)
 	if err != nil {
 		return Environment{}, err
 	}
 	normalized.Status = status
 	row := s.pool.QueryRow(dbctx, `
-		INSERT INTO environments (workspace_id, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, now())
-		RETURNING id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
-	`, workspaceID, normalized.Name, normalized.Kind, normalized.Status, normalized.VirtualMachine.SSHHost, normalized.VirtualMachine.SSHPort, normalized.VirtualMachine.SSHUser, normalized.VirtualMachine.SSHAuthRef, normalized.VirtualMachine.Workdir, normalized.VirtualMachine.ServiceHint, jsonOrObject(normalized.VirtualMachine.Labels))
+		INSERT INTO environments (
+			workspace_id, name, kind, status,
+			ssh_host, ssh_port, ssh_user, ssh_auth_ref,
+			workdir, service_hint, labels,
+			ssh_auth_method, ssh_auth_password, ssh_auth_private_key, ssh_auth_passphrase,
+			last_checked_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, now())
+		RETURNING id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, (ssh_auth_method <> ''), workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
+	`, workspaceID, normalized.Name, normalized.Kind, normalized.Status, normalized.VirtualMachine.SSHHost, normalized.VirtualMachine.SSHPort, normalized.VirtualMachine.SSHUser, normalized.VirtualMachine.SSHAuthRef, normalized.VirtualMachine.Workdir, normalized.VirtualMachine.ServiceHint, jsonOrObject(normalized.VirtualMachine.Labels), storedAuth.Method, storedAuth.Password, storedAuth.PrivateKey, storedAuth.Passphrase)
 	return scanVirtualMachineEnvironment(row)
 }
 
@@ -254,7 +266,18 @@ func (s *PostgresStore) UpdateEnvironment(ctx Context, userID, workspaceID, envi
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
 		return Environment{}, err
 	}
-	status, err := virtualMachineSSHStatus(dbctx, normalized, input.SSHAuth)
+	storedAuth, err := s.loadVirtualMachineStoredSSHAuth(dbctx, workspaceID, environmentID)
+	if err != nil {
+		return Environment{}, err
+	}
+	if input.SSHAuth != nil {
+		storedAuth, err = normalizeVirtualMachineStoredSSHAuth(input.SSHAuth)
+		if err != nil {
+			return Environment{}, err
+		}
+	}
+	applyVirtualMachineStoredSSHAuth(&normalized, storedAuth)
+	status, err := virtualMachineSSHStatus(dbctx, normalized, storedAuth)
 	if err != nil {
 		return Environment{}, err
 	}
@@ -270,11 +293,15 @@ func (s *PostgresStore) UpdateEnvironment(ctx Context, userID, workspaceID, envi
 			workdir = $9,
 			service_hint = $10,
 			labels = $11::jsonb,
+			ssh_auth_method = $12,
+			ssh_auth_password = $13,
+			ssh_auth_private_key = $14,
+			ssh_auth_passphrase = $15,
 			last_checked_at = now(),
 			updated_at = now()
 		WHERE workspace_id = $1 AND id = $2
-		RETURNING id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
-	`, workspaceID, environmentID, normalized.Name, normalized.Status, normalized.VirtualMachine.SSHHost, normalized.VirtualMachine.SSHPort, normalized.VirtualMachine.SSHUser, normalized.VirtualMachine.SSHAuthRef, normalized.VirtualMachine.Workdir, normalized.VirtualMachine.ServiceHint, jsonOrObject(normalized.VirtualMachine.Labels))
+		RETURNING id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, (ssh_auth_method <> ''), workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
+	`, workspaceID, environmentID, normalized.Name, normalized.Status, normalized.VirtualMachine.SSHHost, normalized.VirtualMachine.SSHPort, normalized.VirtualMachine.SSHUser, normalized.VirtualMachine.SSHAuthRef, normalized.VirtualMachine.Workdir, normalized.VirtualMachine.ServiceHint, jsonOrObject(normalized.VirtualMachine.Labels), storedAuth.Method, storedAuth.Password, storedAuth.PrivateKey, storedAuth.Passphrase)
 	environment, err := scanVirtualMachineEnvironment(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Environment{}, ErrNotFound
@@ -300,18 +327,34 @@ func (s *PostgresStore) CheckEnvironment(ctx Context, userID, workspaceID, envir
 	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
 		return Environment{}, err
 	}
-	status, err := virtualMachineSSHStatus(dbctx, existing, input.SSHAuth)
+	storedAuth, err := s.loadVirtualMachineStoredSSHAuth(dbctx, workspaceID, environmentID)
+	if err != nil {
+		return Environment{}, err
+	}
+	if input.SSHAuth != nil {
+		storedAuth, err = normalizeVirtualMachineStoredSSHAuth(input.SSHAuth)
+		if err != nil {
+			return Environment{}, err
+		}
+	}
+	applyVirtualMachineStoredSSHAuth(&existing, storedAuth)
+	status, err := virtualMachineSSHStatus(dbctx, existing, storedAuth)
 	if err != nil {
 		return Environment{}, err
 	}
 	row := s.pool.QueryRow(dbctx, `
 		UPDATE environments
 		SET status = $3,
+			ssh_auth_ref = $4,
+			ssh_auth_method = $5,
+			ssh_auth_password = $6,
+			ssh_auth_private_key = $7,
+			ssh_auth_passphrase = $8,
 			last_checked_at = now(),
 			updated_at = now()
 		WHERE workspace_id = $1 AND id = $2
-		RETURNING id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
-	`, workspaceID, environmentID, status)
+		RETURNING id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, (ssh_auth_method <> ''), workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
+	`, workspaceID, environmentID, status, existing.VirtualMachine.SSHAuthRef, storedAuth.Method, storedAuth.Password, storedAuth.PrivateKey, storedAuth.Passphrase)
 	environment, err := scanVirtualMachineEnvironment(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Environment{}, ErrNotFound
@@ -366,7 +409,7 @@ func (s *PostgresStore) loadEnvironment(ctx context.Context, workspaceID, enviro
 		return Environment{}, err
 	}
 	row := s.pool.QueryRow(ctx, `
-		SELECT id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
+		SELECT id::text, workspace_id::text, name, kind, status, ssh_host, ssh_port, ssh_user, ssh_auth_ref, (ssh_auth_method <> ''), workdir, service_hint, labels, last_checked_at, created_at, updated_at, 0, 0, 0, 0
 		FROM environments
 		WHERE workspace_id = $1 AND id = $2
 	`, strings.TrimSpace(workspaceID), strings.TrimSpace(environmentID))
@@ -375,6 +418,22 @@ func (s *PostgresStore) loadEnvironment(ctx context.Context, workspaceID, enviro
 		return Environment{}, ErrNotFound
 	}
 	return environment, err
+}
+
+func (s *PostgresStore) loadVirtualMachineStoredSSHAuth(ctx context.Context, workspaceID, environmentID string) (virtualMachineStoredSSHAuth, error) {
+	var auth virtualMachineStoredSSHAuth
+	row := s.pool.QueryRow(ctx, `
+		SELECT ssh_auth_method, ssh_auth_password, ssh_auth_private_key, ssh_auth_passphrase
+		FROM environments
+		WHERE workspace_id = $1 AND id = $2
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(environmentID))
+	if err := row.Scan(&auth.Method, &auth.Password, &auth.PrivateKey, &auth.Passphrase); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return virtualMachineStoredSSHAuth{}, ErrNotFound
+		}
+		return virtualMachineStoredSSHAuth{}, err
+	}
+	return auth, nil
 }
 
 func (s *PostgresStore) ListAgentProfiles(ctx Context, userID, workspaceID string) ([]AgentProfile, error) {

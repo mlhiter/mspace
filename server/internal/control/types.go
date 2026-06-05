@@ -447,6 +447,7 @@ type TestPlan struct {
 	ProjectID           string          `json:"projectId"`
 	Title               string          `json:"title"`
 	Description         string          `json:"description"`
+	SetupSteps          string          `json:"setupSteps"`
 	Status              string          `json:"status"`
 	TargetType          string          `json:"targetType"`
 	TargetValue         string          `json:"targetValue"`
@@ -479,6 +480,7 @@ type TestPlanDetail struct {
 type TestPlanInput struct {
 	Title               string          `json:"title"`
 	Description         string          `json:"description"`
+	SetupSteps          string          `json:"setupSteps"`
 	Status              string          `json:"status"`
 	TargetType          string          `json:"targetType"`
 	TargetValue         string          `json:"targetValue"`
@@ -511,6 +513,12 @@ type TestRun struct {
 	Source              string          `json:"source"`
 	ParentIssueID       string          `json:"parentIssueId"`
 	Status              string          `json:"status"`
+	SetupSteps          string          `json:"setupSteps"`
+	SetupStatus         string          `json:"setupStatus"`
+	SetupIssueID        string          `json:"setupIssueId"`
+	SetupSessionID      string          `json:"setupSessionId"`
+	SetupResult         json.RawMessage `json:"setupResult,omitempty"`
+	RunContext          json.RawMessage `json:"runContext,omitempty"`
 	TargetType          string          `json:"targetType"`
 	TargetValue         string          `json:"targetValue"`
 	Environment         string          `json:"environment"`
@@ -933,6 +941,7 @@ type RuntimeTaskArtifactResult struct {
 	TestEnvironment   *RuntimeTaskTestEnvironmentArtifact `json:"testEnvironment,omitempty"`
 	ReviewEvidence    *SessionReviewEvidenceArtifact      `json:"reviewEvidence,omitempty"`
 	TestCaseProposals *TestCaseProposalArtifact           `json:"testCaseProposals,omitempty"`
+	TestSetup         *TestSetupResultArtifact            `json:"testSetup,omitempty"`
 	TestResult        *TestResultArtifact                 `json:"testResult,omitempty"`
 }
 
@@ -964,6 +973,25 @@ type TestCaseProposalArtifactItem struct {
 	Summary      string        `json:"summary"`
 	Rationale    string        `json:"rationale"`
 	ProposedCase TestCaseInput `json:"proposedCase"`
+}
+
+type TestSetupResultArtifact struct {
+	RunID          string                `json:"runId"`
+	Status         string                `json:"status"`
+	Summary        string                `json:"summary"`
+	FailureSummary string                `json:"failureSummary"`
+	Outputs        json.RawMessage       `json:"outputs"`
+	Evidence       json.RawMessage       `json:"evidence"`
+	Steps          []TestSetupResultStep `json:"steps"`
+}
+
+type TestSetupResultStep struct {
+	Title          string          `json:"title"`
+	Status         string          `json:"status"`
+	Command        string          `json:"command"`
+	Summary        string          `json:"summary"`
+	FailureSummary string          `json:"failureSummary"`
+	Evidence       json.RawMessage `json:"evidence"`
 }
 
 type TestResultArtifact struct {
@@ -1303,13 +1331,14 @@ type KubernetesEnvironmentConfig struct {
 }
 
 type VirtualMachineEnvironmentConfig struct {
-	SSHHost     string          `json:"sshHost"`
-	SSHPort     int             `json:"sshPort"`
-	SSHUser     string          `json:"sshUser"`
-	SSHAuthRef  string          `json:"sshAuthRef"`
-	Workdir     string          `json:"workdir"`
-	ServiceHint string          `json:"serviceHint"`
-	Labels      json.RawMessage `json:"labels,omitempty"`
+	SSHHost           string          `json:"sshHost"`
+	SSHPort           int             `json:"sshPort"`
+	SSHUser           string          `json:"sshUser"`
+	SSHAuthRef        string          `json:"sshAuthRef"`
+	SSHAuthConfigured bool            `json:"sshAuthConfigured"`
+	Workdir           string          `json:"workdir"`
+	ServiceHint       string          `json:"serviceHint"`
+	Labels            json.RawMessage `json:"labels,omitempty"`
 }
 
 type VirtualMachineSSHAuthInput struct {
@@ -1337,6 +1366,13 @@ type EnvironmentInput struct {
 
 type EnvironmentCheckInput struct {
 	SSHAuth *VirtualMachineSSHAuthInput `json:"sshAuth,omitempty"`
+}
+
+type virtualMachineStoredSSHAuth struct {
+	Method     string `json:"method"`
+	Password   string `json:"password,omitempty"`
+	PrivateKey string `json:"privateKey,omitempty"`
+	Passphrase string `json:"passphrase,omitempty"`
 }
 
 type KubeconfigImportSkip struct {

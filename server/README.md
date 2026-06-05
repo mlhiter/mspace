@@ -134,9 +134,9 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `POST` | `/api/workspaces/{workspaceID}/agents` | Create a workspace agent profile. |
 | `PUT` | `/api/workspaces/{workspaceID}/agents/{agentID}` | Update a workspace agent profile. |
 | `GET` | `/api/workspaces/{workspaceID}/environments` | List Kubernetes and virtual machine Environments. Kubernetes rows are projected from cluster compatibility records. |
-| `POST` | `/api/workspaces/{workspaceID}/environments` | Create an Environment with `kind:"kubernetes"` or `kind:"virtual_machine"`. Kubernetes create checks kubeconfig reachability; VM create requires one-time `sshAuth` password/private-key material for SSH login validation. |
-| `PUT` | `/api/workspaces/{workspaceID}/environments/{environmentID}` | Update an Environment. Kubernetes update refreshes kubeconfig reachability; VM update requires one-time `sshAuth` password/private-key material and derives status from SSH login validation. |
-| `POST` | `/api/workspaces/{workspaceID}/environments/{environmentID}/check` | Refresh Environment reachability. Kubernetes delegates to the kubeconfig check; VM checks SSH login with one-time `sshAuth` material without persisting raw credentials. |
+| `POST` | `/api/workspaces/{workspaceID}/environments` | Create an Environment with `kind:"kubernetes"` or `kind:"virtual_machine"`. Kubernetes create checks kubeconfig reachability; VM create requires `sshAuth` password/private-key material, saves it server-side, and derives status from SSH login validation. |
+| `PUT` | `/api/workspaces/{workspaceID}/environments/{environmentID}` | Update an Environment. Kubernetes update refreshes kubeconfig reachability; VM update uses the saved SSH credential unless new `sshAuth` is provided to replace it. |
+| `POST` | `/api/workspaces/{workspaceID}/environments/{environmentID}/check` | Refresh Environment reachability. Kubernetes delegates to the kubeconfig check; VM uses the saved SSH credential by default or replaces it when new `sshAuth` is provided. |
 | `DELETE` | `/api/workspaces/{workspaceID}/environments/{environmentID}` | Delete an unused Environment. |
 | `GET` | `/api/workspaces/{workspaceID}/clusters` | Compatibility API for Kubernetes cluster configs. Prefer `/environments` in product integrations. |
 | `POST` | `/api/workspaces/{workspaceID}/clusters` | Compatibility API for creating a Kubernetes cluster config. |

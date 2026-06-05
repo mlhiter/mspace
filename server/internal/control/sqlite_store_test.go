@@ -54,6 +54,63 @@ func TestSQLiteStorePersistsSnapshot(t *testing.T) {
 	}
 }
 
+func TestSQLiteStorePersistsVirtualMachineSSHAuth(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/mspace.db"
+
+	store, err := NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	user, workspaces, err := store.CreatePasswordIdentity(ctx, PasswordAuthInput{
+		Login:    "vm-user",
+		Password: "password-123456",
+		Name:     "VM User",
+	})
+	if err != nil {
+		t.Fatalf("create local identity: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	environment, err := store.CreateEnvironment(ctx, user.ID, workspaceID, EnvironmentInput{
+		Name:       "persisted-vm",
+		Kind:       environmentKindVirtualMachine,
+		SSHHost:    "127.0.0.1",
+		SSHPort:    1,
+		SSHUser:    "ubuntu",
+		SSHAuthRef: "secret://mspace/persisted-vm",
+		SSHAuth:    &VirtualMachineSSHAuthInput{Method: "password", Password: "persisted-password"},
+	})
+	if err != nil {
+		t.Fatalf("create vm environment: %v", err)
+	}
+	if environment.VirtualMachine == nil || !environment.VirtualMachine.SSHAuthConfigured {
+		t.Fatalf("expected vm auth configured before persist, got %+v", environment)
+	}
+	if err := store.Persist(); err != nil {
+		t.Fatalf("persist sqlite store: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close sqlite store: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen sqlite store: %v", err)
+	}
+	defer reopened.Close()
+
+	checked, err := reopened.CheckEnvironment(ctx, user.ID, workspaceID, environment.ID, EnvironmentCheckInput{})
+	if err != nil {
+		t.Fatalf("check persisted vm without sshAuth: %v", err)
+	}
+	if checked.VirtualMachine == nil || !checked.VirtualMachine.SSHAuthConfigured {
+		t.Fatalf("expected persisted vm auth to remain configured, got %+v", checked)
+	}
+	if checked.Status != "unreachable" || checked.LastCheckedAt == "" {
+		t.Fatalf("expected persisted vm check to refresh status, got %+v", checked)
+	}
+}
+
 func TestSQLiteStorePersistsProjectTestCases(t *testing.T) {
 	ctx := context.Background()
 	path := t.TempDir() + "/mspace.db"

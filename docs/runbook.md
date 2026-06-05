@@ -356,13 +356,13 @@ curl -X POST -H "Authorization: Bearer <msp-token>" \
   http://127.0.0.1:8787/api/workspaces/<workspace-id>/environments/<environment-id>/check
 ```
 
-For virtual machine Environments, include one-time SSH auth material in the check body:
+For virtual machine Environments, the check endpoint uses the saved SSH credential by default. Include `sshAuth` only when you want to replace the saved credential and recheck in one request:
 
 ```bash
 curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/environments/<environment-id>/check" \
   -H "Authorization: Bearer <msp-token>" \
   -H 'Content-Type: application/json' \
-  -d '{"sshAuth":{"method":"password","password":"<one-time-password-for-validation>"}}'
+  -d '{"sshAuth":{"method":"password","password":"<password-for-this-ssh-user>"}}'
 ```
 
 The older Kubernetes compatibility endpoint remains available for cluster records:
@@ -469,13 +469,13 @@ The task's `runtimeMode` and `requiredCapabilities` must match the worker heartb
 
 ### VM Environment stays unreachable
 
-Virtual machine Environments run an SSH login check on create/update. `ready` only comes from a successful password or private-key login, and raw passwords/private keys are not stored in the Environment response. If a VM stays `unreachable`, verify the same tuple from the server host:
+Virtual machine Environments run an SSH login check on create/update/recheck. `ready` only comes from a successful password or private-key login, and raw passwords/private keys are stored server-side for worker access but are never returned in the Environment response. If a VM stays `unreachable`, verify the same tuple from the server host:
 
 ```bash
 ssh -p <port> <user>@<host>
 ```
 
-Then retry the VM Environment check, or save the VM Environment with corrected metadata and password/private key. Missing password/private key input is rejected before validation; connection and authentication failures keep the record for repair as `unreachable`.
+Then retry the VM Environment check. Recheck uses the saved credential by default; include new `sshAuth` only when replacing the saved password/private key. Missing password/private key input is rejected before validation only when the VM has no saved credential; connection and authentication failures keep the record for repair as `unreachable`.
 
 ### Personal worker credential expires
 

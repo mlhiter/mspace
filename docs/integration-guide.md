@@ -323,7 +323,7 @@ The free-text `environment` value remains human notes for the agent. The structu
 | `GET` | `/api/workspaces/{workspaceID}/environments` | List Kubernetes and virtual machine Environments. Kubernetes rows are projected from cluster compatibility records. |
 | `POST` | `/api/workspaces/{workspaceID}/environments` | Create an Environment. Use `kind:"kubernetes"` or `kind:"virtual_machine"`. |
 | `PUT` | `/api/workspaces/{workspaceID}/environments/{environmentID}` | Update an Environment. |
-| `POST` | `/api/workspaces/{workspaceID}/environments/{environmentID}/check` | Refresh Environment reachability. Kubernetes uses the kubeconfig check; VM uses one-time SSH auth material. |
+| `POST` | `/api/workspaces/{workspaceID}/environments/{environmentID}/check` | Refresh Environment reachability. Kubernetes uses the kubeconfig check; VM uses the saved SSH credential or replaces it when new `sshAuth` material is provided. |
 | `DELETE` | `/api/workspaces/{workspaceID}/environments/{environmentID}` | Delete an unused Environment. |
 | `GET` | `/api/workspaces/{workspaceID}/clusters` | Compatibility API for Kubernetes cluster records. Prefer `/environments` in product integrations. |
 | `POST` | `/api/workspaces/{workspaceID}/clusters` | Compatibility API for creating a Kubernetes cluster record. |
@@ -380,9 +380,9 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/environments" \
   }'
 ```
 
-For private-key validation, send `"sshAuth":{"method":"private_key","privateKey":"<pem-or-openssh-private-key>","passphrase":"<optional-passphrase>"}`. The server uses `sshAuth` only for the create/update login check and does not return raw secret material in the Environment response.
+For private-key validation, send `"sshAuth":{"method":"private_key","privateKey":"<pem-or-openssh-private-key>","passphrase":"<optional-passphrase>"}`. The server stores usable VM SSH credentials for later worker access and does not return raw secret material in the Environment response.
 
-Recheck a saved virtual machine Environment without editing host metadata:
+Recheck a saved virtual machine Environment without editing host metadata. Omit `sshAuth` to use the saved credential, or include it to replace the saved credential and recheck in one request:
 
 ```bash
 curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/environments/<environment-id>/check" \
@@ -391,7 +391,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/environments/<en
   -d '{
     "sshAuth":{
       "method":"password",
-      "password":"<one-time-password-for-validation>"
+      "password":"<password-for-this-ssh-user>"
     }
   }'
 ```
@@ -414,7 +414,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/environments" \
   }'
 ```
 
-Kubernetes Environments currently use the existing `clusters` storage and remain visible through the `/clusters` compatibility API. Create, update, import, `POST /clusters/{clusterID}/check`, and `POST /environments/{environmentID}/check` all refresh `status` and `lastCheckedAt` from a server-side kubeconfig check: API server discovery plus a lightweight namespace list permission probe. Virtual machine Environments run an SSH login check during create/update and environment-level recheck with either password or private-key auth. Only a successful login marks the VM `ready`; network/auth failures save it as `unreachable`, while missing password/private key input is rejected. `sshAuthRef` points to a credential managed outside the normal product payload and must not contain raw password or private key material.
+Kubernetes Environments currently use the existing `clusters` storage and remain visible through the `/clusters` compatibility API. Create, update, import, `POST /clusters/{clusterID}/check`, and `POST /environments/{environmentID}/check` all refresh `status` and `lastCheckedAt` from a server-side kubeconfig check: API server discovery plus a lightweight namespace list permission probe. Virtual machine Environments run an SSH login check during create/update and environment-level recheck with either saved or newly supplied password/private-key auth. Only a successful login marks the VM `ready`; network/auth failures save it as `unreachable`, while missing password/private key input is rejected when no saved credential exists. `sshAuthRef` and `sshAuthConfigured` are response metadata only; raw passwords and private keys stay in the server store and are not returned to clients.
 
 ## Server Agent Sessions
 

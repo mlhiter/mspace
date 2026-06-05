@@ -85,12 +85,13 @@ func normalizeEnvironmentInput(existing Environment, input EnvironmentInput) (En
 			return Environment{}, errors.New("sshPort must be between 1 and 65535")
 		}
 		vm := &VirtualMachineEnvironmentConfig{
-			SSHHost:     strings.TrimSpace(firstNonEmpty(input.SSHHost, existingVirtualMachineField(existing, "sshHost"))),
-			SSHPort:     sshPort,
-			SSHUser:     strings.TrimSpace(firstNonEmpty(input.SSHUser, existingVirtualMachineField(existing, "sshUser"))),
-			SSHAuthRef:  strings.TrimSpace(firstNonEmpty(input.SSHAuthRef, existingVirtualMachineField(existing, "sshAuthRef"))),
-			Workdir:     strings.TrimSpace(firstNonEmpty(input.Workdir, existingVirtualMachineField(existing, "workdir"))),
-			ServiceHint: strings.TrimSpace(firstNonEmpty(input.ServiceHint, existingVirtualMachineField(existing, "serviceHint"))),
+			SSHHost:           strings.TrimSpace(firstNonEmpty(input.SSHHost, existingVirtualMachineField(existing, "sshHost"))),
+			SSHPort:           sshPort,
+			SSHUser:           strings.TrimSpace(firstNonEmpty(input.SSHUser, existingVirtualMachineField(existing, "sshUser"))),
+			SSHAuthRef:        strings.TrimSpace(firstNonEmpty(input.SSHAuthRef, existingVirtualMachineField(existing, "sshAuthRef"))),
+			SSHAuthConfigured: existing.VirtualMachine != nil && existing.VirtualMachine.SSHAuthConfigured,
+			Workdir:           strings.TrimSpace(firstNonEmpty(input.Workdir, existingVirtualMachineField(existing, "workdir"))),
+			ServiceHint:       strings.TrimSpace(firstNonEmpty(input.ServiceHint, existingVirtualMachineField(existing, "serviceHint"))),
 		}
 		labels, err := normalizeJSONObjectPayload(input.Labels)
 		if len(input.Labels) == 0 && existing.VirtualMachine != nil {
@@ -195,6 +196,7 @@ func scanVirtualMachineEnvironment(row scanner) (Environment, error) {
 		&vm.SSHPort,
 		&vm.SSHUser,
 		&vm.SSHAuthRef,
+		&vm.SSHAuthConfigured,
 		&vm.Workdir,
 		&vm.ServiceHint,
 		&labels,
@@ -237,21 +239,91 @@ func environmentSnapshot(environment Environment) json.RawMessage {
 	return copyRawMessage(payload)
 }
 
-func virtualMachineSSHStatus(ctx context.Context, environment Environment, auth *VirtualMachineSSHAuthInput) (string, error) {
+func virtualMachineSSHStatus(ctx context.Context, environment Environment, auth virtualMachineStoredSSHAuth) (string, error) {
 	if environment.VirtualMachine == nil {
 		return "configured", errors.New("virtual machine environment is required")
 	}
-	authMethods, authRef, err := virtualMachineSSHAuthMethods(auth)
+	authMethods, _, err := virtualMachineSSHAuthMethods(auth.input())
 	if err != nil {
 		return "configured", err
-	}
-	if environment.VirtualMachine.SSHAuthRef == "" {
-		environment.VirtualMachine.SSHAuthRef = authRef
 	}
 	if err := validateVirtualMachineSSH(ctx, *environment.VirtualMachine, authMethods); err != nil {
 		return "unreachable", nil
 	}
 	return "ready", nil
+}
+
+func normalizeVirtualMachineStoredSSHAuth(input *VirtualMachineSSHAuthInput) (virtualMachineStoredSSHAuth, error) {
+	if input == nil {
+		return virtualMachineStoredSSHAuth{}, errors.New("sshAuth is required for virtual machine validation")
+	}
+	method := strings.ToLower(strings.TrimSpace(input.Method))
+	switch method {
+	case "password":
+		if input.Password == "" {
+			return virtualMachineStoredSSHAuth{}, errors.New("ssh password is required")
+		}
+		return virtualMachineStoredSSHAuth{Method: method, Password: input.Password}, nil
+	case "private_key":
+		privateKey := strings.TrimSpace(input.PrivateKey)
+		if privateKey == "" {
+			return virtualMachineStoredSSHAuth{}, errors.New("ssh private key is required")
+		}
+		if _, _, err := virtualMachineSSHAuthMethods(&VirtualMachineSSHAuthInput{
+			Method:     method,
+			PrivateKey: privateKey,
+			Passphrase: input.Passphrase,
+		}); err != nil {
+			return virtualMachineStoredSSHAuth{}, err
+		}
+		return virtualMachineStoredSSHAuth{Method: method, PrivateKey: privateKey, Passphrase: input.Passphrase}, nil
+	default:
+		return virtualMachineStoredSSHAuth{}, errors.New("sshAuth method must be password or private_key")
+	}
+}
+
+func (auth virtualMachineStoredSSHAuth) configured() bool {
+	switch auth.Method {
+	case "password":
+		return auth.Password != ""
+	case "private_key":
+		return auth.PrivateKey != ""
+	default:
+		return false
+	}
+}
+
+func (auth virtualMachineStoredSSHAuth) authRef() string {
+	switch auth.Method {
+	case "password":
+		return "ssh:password"
+	case "private_key":
+		return "ssh:private_key"
+	default:
+		return ""
+	}
+}
+
+func (auth virtualMachineStoredSSHAuth) input() *VirtualMachineSSHAuthInput {
+	if !auth.configured() {
+		return nil
+	}
+	return &VirtualMachineSSHAuthInput{
+		Method:     auth.Method,
+		Password:   auth.Password,
+		PrivateKey: auth.PrivateKey,
+		Passphrase: auth.Passphrase,
+	}
+}
+
+func applyVirtualMachineStoredSSHAuth(environment *Environment, auth virtualMachineStoredSSHAuth) {
+	if environment == nil || environment.VirtualMachine == nil {
+		return
+	}
+	environment.VirtualMachine.SSHAuthConfigured = auth.configured()
+	if environment.VirtualMachine.SSHAuthRef == "" {
+		environment.VirtualMachine.SSHAuthRef = auth.authRef()
+	}
 }
 
 func virtualMachineSSHAuthMethods(auth *VirtualMachineSSHAuthInput) ([]ssh.AuthMethod, string, error) {

@@ -361,6 +361,7 @@ export interface VirtualMachineEnvironmentConfig {
   sshPort: number;
   sshUser: string;
   sshAuthRef: string;
+  sshAuthConfigured: boolean;
   workdir: string;
   serviceHint: string;
   labels?: Record<string, unknown>;

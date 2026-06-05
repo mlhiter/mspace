@@ -12,10 +12,10 @@ export const changelog: ChangelogEntry[] = [
     summary:
       "mspace made SSH virtual machine targets re-verifiable from the Environments list instead of requiring users to reopen settings.",
     items: [
-      "Added an Environment-level check API that refreshes Kubernetes reachability through the existing kubeconfig path and virtual machine reachability through one-time SSH auth material.",
+      "Added an Environment-level check API that refreshes Kubernetes reachability through the existing kubeconfig path and virtual machine reachability through saved server-side SSH credentials.",
       "Added the missing Check action to virtual machine rows in Environments, matching the Kubernetes row affordance.",
-      "Opened a focused SSH verification dialog for VM checks so users can enter a password or private key for that check without changing saved host metadata.",
-      "Kept raw SSH passwords and private keys out of persisted Environment payloads while still updating status and last checked time.",
+      "Let VM checks use an already saved SSH credential directly, with an optional dialog path to replace the credential and recheck.",
+      "Persisted VM SSH passwords or private keys server-side for future worker access while keeping raw credential material out of Environment responses.",
     ],
   },
   {
@@ -49,7 +49,7 @@ export const changelog: ChangelogEntry[] = [
       "mspace evolved the Clusters module into Environments so test and deployment work can target Kubernetes clusters or SSH-managed virtual machines.",
     items: [
       "Added workspace Environment APIs and UI navigation while keeping the old Kubernetes cluster APIs as compatibility records.",
-      "Made Kubernetes environments project from kubeconfig-backed cluster records and added virtual machine environments with SSH host, user, port, workdir, service hint, labels, and credential references.",
+      "Made Kubernetes environments project from kubeconfig-backed cluster records and added virtual machine environments with SSH host, user, port, workdir, service hint, labels, and SSH credential configuration state.",
       "Added a Kubernetes Environment reachability check that refreshes status from the kubeconfig, selected context, API server, and namespace list permission.",
       "Added SSH password and private-key validation for virtual machine environments so VMs are only marked verified after a real login check.",
       "Let test plans and test runs select an Environment and freeze environment id, kind, and snapshot at creation time so historical runs keep their target context.",
