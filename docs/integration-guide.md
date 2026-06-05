@@ -1,6 +1,6 @@
 # mspace API Integration Guide
 
-> Status: server-owned local MVP API guide, updated 2026-06-04
+> Status: server-owned local MVP API guide, updated 2026-06-05
 
 This guide covers the current server control-plane API used by the desktop and workers. The control plane normally runs on `http://127.0.0.1:8787`.
 
@@ -293,7 +293,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
   -d '{"note":"Looks executable after the added environment requirement."}'
 ```
 
-Test plans select ready cases and start issue-backed runs. Workers report results through `test-result.json`; the server reconciles run items, persists supported screenshot evidence as test artifacts, rewrites run item evidence to authenticated artifact refs, and a human must call `accept` or `block` before the run is treated as accepted.
+Test plans select ready cases and start issue-backed runs. A plan can include `setupSteps`, a free-text plan-level setup block that runs once before case execution. Setup uses the normal issue-backed agent-session path and worker artifact channel: workers write `test-setup-result.json`; the server stores the setup result, copies `outputs` into `runContext`, and starts case execution only when the setup task completed with `status:"passed"`. Failed, cancelled, or missing setup marks the run `setup_failed` and leaves items queued. Execution workers then report results through `test-result.json`; the server reconciles run items, persists supported screenshot evidence as test artifacts, rewrites run item evidence to authenticated artifact refs, and a human must call `accept` or `block` before the run is treated as accepted.
 
 Create a test plan pinned to an Environment:
 
@@ -302,7 +302,8 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
   -H "Authorization: Bearer <msp-token>" \
   -H 'Content-Type: application/json' \
   -d '{
-    "name":"Release smoke",
+    "title":"Release smoke",
+    "setupSteps":"1. Confirm the staging Environment.\n2. Update the target deployment image.\n3. Verify the preview URL is reachable and write test-setup-result.json.",
     "caseIds":["<case-id>"],
     "environmentId":"<environment-id>",
     "environment":"Run against the selected staging target"
@@ -310,6 +311,32 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
 ```
 
 The free-text `environment` value remains human notes for the agent. The structured environment binding is `environmentId`; when a plan or run is created, the server resolves that Environment and freezes `environmentKind` plus `environmentSnapshot` so later environment edits do not rewrite historical run context.
+
+Setup artifact shape:
+
+```json
+{
+  "runId": "<run-id>",
+  "status": "passed",
+  "summary": "Preview is ready.",
+  "failureSummary": "",
+  "outputs": {
+    "previewUrl": "https://preview.example.test",
+    "image": "registry.example/app:rc4"
+  },
+  "evidence": {},
+  "steps": [
+    {
+      "title": "Update deployment image",
+      "status": "passed",
+      "command": "kubectl set image deployment/app app=registry.example/app:rc4",
+      "summary": "Deployment rolled out."
+    }
+  ]
+}
+```
+
+Use `status:"failed"` plus `failureSummary` when setup cannot safely complete. The server treats failed or cancelled setup tasks as failed even if a stale artifact claims `passed`.
 
 ## Workspace Runtime Surface APIs
 

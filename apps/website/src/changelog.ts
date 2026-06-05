@@ -8,6 +8,19 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-05",
+    title: "Plan-level setup for test runs",
+    summary:
+      "mspace made formal test plans handle real preconditions before case execution, without turning setup into a heavy template system.",
+    items: [
+      "Added optional setup steps to test plans for work such as confirming the target environment, updating a deployment image, SSHing into a VM, logging into a platform, or preparing a preview URL.",
+      "Made plan-based runs create one setup Issue and agent session first, keeping case items queued until setup passes.",
+      "Added `test-setup-result.json` reconciliation so setup outputs such as preview URL, image, namespace, or SSH target become run context for later case execution.",
+      "Stopped case execution when setup fails, is cancelled, or omits the setup artifact, so failed preconditions do not produce misleading test results.",
+      "Surfaced setup status, setup steps, setup result, and run context in the Tests UI and localized the new copy in English and Simplified Chinese.",
+    ],
+  },
+  {
+    date: "2026-06-05",
     title: "Virtual machine environment rechecks",
     summary:
       "mspace made SSH virtual machine targets re-verifiable from the Environments list instead of requiring users to reopen settings.",

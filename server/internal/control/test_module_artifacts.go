@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -202,6 +203,62 @@ func (s *PostgresStore) reconcileTestResultArtifact(ctx context.Context, q query
 	return updateTestRunCounts(ctx, q, run.WorkspaceID, run.ProjectID, run.ID)
 }
 
+func (s *PostgresStore) reconcileTestSetupArtifact(ctx context.Context, q queryer, task RuntimeTask, artifact *TestSetupResultArtifact) error {
+	runID := ""
+	if artifact != nil {
+		runID = strings.TrimSpace(artifact.RunID)
+	}
+	if runID == "" {
+		runID = testRunIDFromTaskPayload(task)
+	}
+	if runID == "" {
+		return errors.New("test-setup-result.json runId is required")
+	}
+	run, err := loadTestRun(ctx, q, task.WorkspaceID, task.ProjectID, runID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(run.SetupSteps) == "" {
+		return nil
+	}
+	setupResult, status, runContext := buildTestSetupReconciliation(task, artifact)
+	if status != "passed" {
+		_, err := q.Exec(ctx, `
+			UPDATE test_runs
+			SET status = 'setup_failed',
+				setup_status = 'failed',
+				setup_result = $4::jsonb,
+				run_context = $5::jsonb,
+				completed_at = now(),
+				updated_at = now()
+			WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+		`, run.WorkspaceID, run.ProjectID, run.ID, setupResult, runContext)
+		return err
+	}
+	_, err = q.Exec(ctx, `
+		UPDATE test_runs
+		SET status = 'running',
+			setup_status = 'passed',
+			setup_result = $4::jsonb,
+			run_context = $5::jsonb,
+			updated_at = now()
+		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+	`, run.WorkspaceID, run.ProjectID, run.ID, setupResult, runContext)
+	if err != nil {
+		return err
+	}
+	run.SetupStatus = "passed"
+	run.Status = "running"
+	run.SetupResult = setupResult
+	run.RunContext = runContext
+	userID, _ := runtimeTaskCreator(ctx, q, task.WorkspaceID, task.ID)
+	return s.startPostgresTestRunExecutionSessionsWithQueryer(ctx, q, userID, run, CreateTestRunInput{
+		AgentProfile: runtimeTaskAgentProfile(task),
+		RuntimeMode:  task.RuntimeMode,
+		BatchSize:    runtimeTaskTestRunBatchSize(task),
+	})
+}
+
 func (s *PostgresStore) updateTestRunItemFromArtifact(ctx context.Context, q queryer, task RuntimeTask, run TestRun, item TestResultArtifactItem) error {
 	caseID := strings.TrimSpace(item.CaseID)
 	status := normalizeTestRunItemStatus(item.Status)
@@ -240,6 +297,102 @@ func (s *PostgresStore) updateTestRunItemFromArtifact(ctx context.Context, q que
 		return ErrNotFound
 	}
 	return nil
+}
+
+func buildTestSetupReconciliation(task RuntimeTask, artifact *TestSetupResultArtifact) (json.RawMessage, string, json.RawMessage) {
+	if task.Status != "completed" {
+		summary := strings.TrimSpace(task.Error)
+		if summary == "" {
+			summary = fmt.Sprintf("Setup task ended with status %s.", firstNonEmpty(task.Status, "unknown"))
+		}
+		result, _ := json.Marshal(map[string]any{
+			"runId":          testRunIDFromTaskPayload(task),
+			"status":         "failed",
+			"summary":        summary,
+			"failureSummary": summary,
+		})
+		return cloneRawJSONObject(result), "failed", json.RawMessage(`{}`)
+	}
+	if artifact == nil {
+		result, _ := json.Marshal(map[string]any{
+			"runId":   testRunIDFromTaskPayload(task),
+			"status":  "failed",
+			"summary": "Setup task completed without test-setup-result.json.",
+		})
+		return cloneRawJSONObject(result), "failed", json.RawMessage(`{}`)
+	}
+	status := normalizeTestSetupStatus(artifact.Status)
+	if status == "" {
+		status = "passed"
+	}
+	if status != "passed" {
+		status = "failed"
+	}
+	outputs := cloneRawJSONObject(artifact.Outputs)
+	evidence := cloneRawJSONObject(artifact.Evidence)
+	steps := make([]map[string]any, 0, len(artifact.Steps))
+	for _, step := range artifact.Steps {
+		stepStatus := normalizeTestSetupStatus(step.Status)
+		if stepStatus == "" {
+			stepStatus = "passed"
+		}
+		steps = append(steps, map[string]any{
+			"title":          strings.TrimSpace(step.Title),
+			"status":         stepStatus,
+			"command":        strings.TrimSpace(step.Command),
+			"summary":        strings.TrimSpace(step.Summary),
+			"failureSummary": strings.TrimSpace(step.FailureSummary),
+			"evidence":       cloneRawJSONObject(step.Evidence),
+		})
+		if stepStatus == "failed" && status == "passed" {
+			status = "failed"
+		}
+	}
+	result, _ := json.Marshal(map[string]any{
+		"runId":          strings.TrimSpace(artifact.RunID),
+		"status":         status,
+		"summary":        strings.TrimSpace(artifact.Summary),
+		"failureSummary": strings.TrimSpace(artifact.FailureSummary),
+		"outputs":        outputs,
+		"evidence":       evidence,
+		"steps":          steps,
+	})
+	return cloneRawJSONObject(result), status, outputs
+}
+
+func normalizeTestSetupStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "passed", "pass", "success", "succeeded", "ok":
+		return "passed"
+	case "failed", "fail", "error", "blocked":
+		return "failed"
+	case "skipped", "skip":
+		return "skipped"
+	default:
+		return ""
+	}
+}
+
+func runtimeTaskAgentProfile(task RuntimeTask) string {
+	var payload struct {
+		AgentProfile string `json:"agentProfile"`
+	}
+	_ = json.Unmarshal(task.Payload, &payload)
+	return normalizeAgentProfile(payload.AgentProfile)
+}
+
+func runtimeTaskTestRunBatchSize(task RuntimeTask) int {
+	var payload struct {
+		BatchSize int `json:"testRunBatchSize"`
+	}
+	_ = json.Unmarshal(task.Payload, &payload)
+	if payload.BatchSize <= 0 {
+		return defaultTestRunBatchSize
+	}
+	if payload.BatchSize > maxTestRunBatchSize {
+		return maxTestRunBatchSize
+	}
+	return payload.BatchSize
 }
 
 func loadTestRunItemByRunAndCase(ctx context.Context, q queryer, workspaceID, projectID, runID, caseID string) (TestRunItem, error) {
@@ -362,6 +515,47 @@ func (s *MemoryStore) reconcileTestResultArtifactLocked(task RuntimeTask, artifa
 	}
 	run.UpdatedAt = now
 	s.testRuns[run.ID] = run
+}
+
+func (s *MemoryStore) reconcileTestSetupArtifactLocked(task RuntimeTask, artifact *TestSetupResultArtifact) {
+	runID := ""
+	if artifact != nil {
+		runID = strings.TrimSpace(artifact.RunID)
+	}
+	if runID == "" {
+		runID = testRunIDFromTaskPayload(task)
+	}
+	run, ok := s.testRuns[runID]
+	if !ok || run.WorkspaceID != task.WorkspaceID || run.ProjectID != task.ProjectID || strings.TrimSpace(run.SetupSteps) == "" {
+		return
+	}
+	setupResult, status, runContext := buildTestSetupReconciliation(task, artifact)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	run.SetupResult = setupResult
+	run.RunContext = runContext
+	run.UpdatedAt = now
+	if status != "passed" {
+		run.Status = "setup_failed"
+		run.SetupStatus = "failed"
+		run.CompletedAt = now
+		s.testRuns[run.ID] = run
+		return
+	}
+	run.Status = "running"
+	run.SetupStatus = "passed"
+	s.testRuns[run.ID] = run
+	input := CreateTestRunInput{
+		AgentProfile: runtimeTaskAgentProfile(task),
+		RuntimeMode:  task.RuntimeMode,
+		BatchSize:    runtimeTaskTestRunBatchSize(task),
+	}
+	if err := s.startTestRunExecutionSessionsLocked(s.runtimeTaskCreatedByLocked(task.ID), run.ID, input); err != nil {
+		run.Status = "setup_failed"
+		run.SetupStatus = "failed"
+		run.SetupResult = cloneRawJSONObject(json.RawMessage(fmt.Sprintf(`{"status":"failed","summary":"%s"}`, err.Error())))
+		run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		s.testRuns[run.ID] = run
+	}
 }
 
 func (s *MemoryStore) storeMemoryTestResultEvidenceArtifactsLocked(task RuntimeTask, run TestRun, item TestRunItem, evidence json.RawMessage) []TestArtifact {

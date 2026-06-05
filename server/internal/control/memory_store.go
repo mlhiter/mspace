@@ -2392,6 +2392,7 @@ func (s *MemoryStore) CreateProjectTestPlan(_ Context, userID, workspaceID, proj
 		ProjectID:           projectID,
 		Title:               normalized.Title,
 		Description:         normalized.Description,
+		SetupSteps:          normalized.SetupSteps,
 		Status:              normalized.Status,
 		TargetType:          normalized.TargetType,
 		TargetValue:         normalized.TargetValue,
@@ -2441,6 +2442,7 @@ func (s *MemoryStore) UpdateProjectTestPlan(_ Context, userID, workspaceID, proj
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	plan.Title = normalized.Title
 	plan.Description = normalized.Description
+	plan.SetupSteps = normalized.SetupSteps
 	plan.Status = normalized.Status
 	plan.TargetType = normalized.TargetType
 	plan.TargetValue = normalized.TargetValue
@@ -2607,6 +2609,9 @@ func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases
 		PlanID:              planID,
 		Source:              runSource,
 		Status:              "running",
+		SetupStatus:         "not_required",
+		SetupResult:         json.RawMessage(`{}`),
+		RunContext:          json.RawMessage(`{}`),
 		TargetType:          input.TargetType,
 		TargetValue:         input.TargetValue,
 		Environment:         input.Environment,
@@ -2618,6 +2623,13 @@ func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases
 		CreatedByUserID:     user.ID,
 		CreatedAt:           now,
 		UpdatedAt:           now,
+	}
+	if plan != nil {
+		run.SetupSteps = normalizeTestPlanSetupSteps(plan.SetupSteps)
+		if run.SetupSteps != "" {
+			run.Status = "setup_running"
+			run.SetupStatus = "running"
+		}
 	}
 	parentIssueID, err := s.createIssueLocked(user, run.WorkspaceID, CreateIssueInput{
 		ProjectID: run.ProjectID,
@@ -2645,8 +2657,14 @@ func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases
 		}
 		s.testRunItems[item.ID] = item
 	}
-	if err := s.startTestRunExecutionSessionsLocked(user.ID, run.ID, input); err != nil {
-		return TestRunDetail{}, err
+	if run.SetupSteps != "" {
+		if err := s.startTestRunSetupSessionLocked(user.ID, run.ID, input); err != nil {
+			return TestRunDetail{}, err
+		}
+	} else {
+		if err := s.startTestRunExecutionSessionsLocked(user.ID, run.ID, input); err != nil {
+			return TestRunDetail{}, err
+		}
 	}
 	return s.testRunDetailLocked(run.ID)
 }
@@ -3579,6 +3597,9 @@ func (s *MemoryStore) reconcileAgentSessionRuntimeResultLocked(task RuntimeTask)
 	}
 	if task.Status == "completed" && artifacts.TestCaseProposals != nil {
 		s.storeTestCaseProposalArtifactsLocked(task, *artifacts.TestCaseProposals)
+	}
+	if runtimeTaskAutomation(task) == testRunSetupAutomation && isFinalRuntimeTaskStatus(task.Status) {
+		s.reconcileTestSetupArtifactLocked(task, artifacts.TestSetup)
 	}
 	if task.Status == "completed" && artifacts.TestResult != nil {
 		s.reconcileTestResultArtifactLocked(task, *artifacts.TestResult)
@@ -5054,6 +5075,62 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 	}
 	run.Status = "running"
 	run.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	s.testRuns[run.ID] = run
+	return nil
+}
+
+func (s *MemoryStore) startTestRunSetupSessionLocked(userID, runID string, input CreateTestRunInput) error {
+	run, ok := s.testRuns[strings.TrimSpace(runID)]
+	if !ok {
+		return ErrNotFound
+	}
+	parent, ok := s.issues[run.ParentIssueID]
+	if !ok {
+		return ErrNotFound
+	}
+	sortOrder := 1
+	for _, issue := range s.issues {
+		if issue.ParentIssueID == parent.ID && issue.SortOrder >= sortOrder {
+			sortOrder = issue.SortOrder + 1
+		}
+	}
+	body := buildTestRunSetupIssueBody(run)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	child := Issue{
+		ID:            fmt.Sprintf("issue-%04d", s.nextMemoryIDLocked()),
+		WorkspaceID:   run.WorkspaceID,
+		ProjectID:     run.ProjectID,
+		ParentIssueID: parent.ID,
+		SortOrder:     sortOrder,
+		Title:         "Prepare test run",
+		Body:          body,
+		Status:        "open",
+		TriageStatus:  "none",
+		Assignee:      parent.CreatorName,
+		AssigneeType:  "human",
+		CreatorName:   parent.CreatorName,
+		CreatorAvatar: parent.CreatorAvatar,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	s.issues[child.ID] = child
+	session, err := s.createAgentSessionLocked(userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
+		Provider:         "codex",
+		AgentProfile:     input.AgentProfile,
+		RuntimeMode:      input.RuntimeMode,
+		Command:          body,
+		Automation:       testRunSetupAutomation,
+		TestRunID:        run.ID,
+		TestRunBatchSize: input.BatchSize,
+	})
+	if err != nil {
+		return err
+	}
+	run.SetupIssueID = child.ID
+	run.SetupSessionID = session.ID
+	run.SetupStatus = "running"
+	run.Status = "setup_running"
+	run.UpdatedAt = now
 	s.testRuns[run.ID] = run
 	return nil
 }

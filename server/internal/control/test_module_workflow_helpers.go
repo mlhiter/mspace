@@ -16,8 +16,10 @@ const (
 	maxArtifactTestResultItems     = 500
 	maxTestResultArtifactBytes     = 2 << 20
 	maxTestResultArtifactsPerItem  = 10
+	maxTestPlanSetupStepsLength    = 12000
 	testCaseOptimizationAutomation = "test_case_optimization"
 	testCaseGenerationAutomation   = "test_case_generation"
+	testRunSetupAutomation         = "test_run_setup"
 	testRunExecutionAutomation     = "test_run_execution"
 )
 
@@ -62,6 +64,7 @@ func normalizeProposalStatus(value string) string {
 func normalizeTestPlanInput(input TestPlanInput) (TestPlanInput, error) {
 	input.Title = collapseWhitespace(input.Title)
 	input.Description = strings.TrimSpace(input.Description)
+	input.SetupSteps = normalizeTestPlanSetupSteps(input.SetupSteps)
 	input.Status = strings.ToLower(strings.TrimSpace(input.Status))
 	if input.Status == "" {
 		input.Status = "draft"
@@ -93,6 +96,14 @@ func normalizeTestPlanInput(input TestPlanInput) (TestPlanInput, error) {
 		return TestPlanInput{}, fmt.Errorf("caseIds must contain %d or fewer cases", maxTestPlanCases)
 	}
 	return input, nil
+}
+
+func normalizeTestPlanSetupSteps(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > maxTestPlanSetupStepsLength {
+		return value[:maxTestPlanSetupStepsLength]
+	}
+	return value
 }
 
 func normalizeTestTargetType(value string) string {
@@ -326,6 +337,9 @@ func buildTestRunParentIssueBody(plan *TestPlan, run TestRun, cases []TestCase) 
 	if run.EnvironmentID != "" {
 		builder.WriteString("Environment target: `" + run.EnvironmentKind + "` `" + run.EnvironmentID + "`\n\n")
 	}
+	if strings.TrimSpace(run.SetupSteps) != "" {
+		builder.WriteString("Plan setup runs first. Case execution starts only after setup writes a passing `${MSPACE_SESSION_ARTIFACT_DIR}/test-setup-result.json` artifact.\n\n")
+	}
 	if len(cases) > 0 {
 		builder.WriteString("Cases:\n")
 		for _, testCase := range cases {
@@ -339,6 +353,26 @@ func buildTestRunParentIssueBody(plan *TestPlan, run TestRun, cases []TestCase) 
 	return strings.TrimSpace(builder.String())
 }
 
+func buildTestRunSetupIssueBody(run TestRun) string {
+	var builder strings.Builder
+	builder.WriteString("Prepare this test run before executing any cases.\n\n")
+	builder.WriteString("Run ID: `" + run.ID + "`\n")
+	builder.WriteString("Target: `" + run.TargetType + "` `" + firstNonEmpty(run.TargetValue, "not specified") + "`\n")
+	builder.WriteString("Environment: `" + firstNonEmpty(run.Environment, "not specified") + "`\n")
+	if run.EnvironmentID != "" {
+		builder.WriteString("Environment target: `" + run.EnvironmentKind + "` `" + run.EnvironmentID + "`\n")
+	}
+	builder.WriteString("\nSetup steps:\n\n")
+	builder.WriteString(strings.TrimSpace(run.SetupSteps))
+	builder.WriteString("\n\nWrite `${MSPACE_SESSION_ARTIFACT_DIR}/test-setup-result.json` before finishing.\n\n")
+	builder.WriteString("Expected artifact shape:\n\n")
+	builder.WriteString("```json\n")
+	builder.WriteString(`{"runId":"` + run.ID + `","status":"passed|failed","summary":"what is ready","failureSummary":"","outputs":{},"evidence":{},"steps":[{"title":"...","status":"passed|failed","command":"...","summary":"..."}]}`)
+	builder.WriteString("\n```\n\n")
+	builder.WriteString("Put reusable outputs for later case execution in `outputs`, for example `previewUrl`, `image`, `namespace`, or `sshTarget`. If setup cannot safely complete, write `status:\"failed\"` and include a compact `failureSummary`.")
+	return strings.TrimSpace(builder.String())
+}
+
 func buildTestRunExecutionIssueBody(run TestRun, cases []TestCase) string {
 	var builder strings.Builder
 	builder.WriteString("Execute this batch of test cases.\n\n")
@@ -348,6 +382,12 @@ func buildTestRunExecutionIssueBody(run TestRun, cases []TestCase) string {
 	builder.WriteString("Environment: `" + firstNonEmpty(run.Environment, "not specified") + "`\n\n")
 	if run.EnvironmentID != "" {
 		builder.WriteString("Environment target: `" + run.EnvironmentKind + "` `" + run.EnvironmentID + "`\n\n")
+	}
+	if len(run.RunContext) > 0 && strings.TrimSpace(string(run.RunContext)) != "{}" {
+		builder.WriteString("Setup context:\n")
+		builder.WriteString("```json\n")
+		builder.WriteString(strings.TrimSpace(string(run.RunContext)))
+		builder.WriteString("\n```\n\n")
 	}
 	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with one item per case in this batch.\n\n")
 	for _, testCase := range cases {

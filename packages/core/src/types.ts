@@ -194,6 +194,7 @@ export interface TestPlan {
   projectId: string;
   title: string;
   description: string;
+  setupSteps: string;
   status: "draft" | "ready" | "archived" | string;
   targetType: string;
   targetValue: string;
@@ -226,6 +227,7 @@ export interface TestPlanDetail {
 export interface TestPlanInput {
   title: string;
   description?: string;
+  setupSteps?: string;
   status?: string;
   targetType?: string;
   targetValue?: string;
@@ -243,6 +245,12 @@ export interface TestRun {
   source: string;
   parentIssueId: string;
   status: string;
+  setupSteps: string;
+  setupStatus: string;
+  setupIssueId: string;
+  setupSessionId: string;
+  setupResult?: Record<string, unknown>;
+  runContext?: Record<string, unknown>;
   targetType: string;
   targetValue: string;
   environment: string;

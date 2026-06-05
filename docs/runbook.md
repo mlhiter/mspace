@@ -1,6 +1,6 @@
 # mspace Runbook
 
-> Status: server-owned local MVP operations guide, updated 2026-06-03
+> Status: server-owned local MVP operations guide, updated 2026-06-05
 
 ## Local Data
 
@@ -17,6 +17,7 @@ The product and runtime state for signed-in workspaces lives in the server store
 | `<artifact-dir>/test-environment.json` | Optional deploy/test artifact with preview values. |
 | `<artifact-dir>/review-evidence.json` | Optional review artifact for commands, tests, build/deploy result, summary, risks, and follow-ups. |
 | `<artifact-dir>/test-case-proposals.json` | Optional Codex case suggestion artifact reconciled into project Case suggestions. |
+| `<artifact-dir>/test-setup-result.json` | Optional Codex setup artifact for plan-based test runs that have setup steps. A passing setup stores `setupResult`, copies `outputs` into the run context, and only then starts case execution sessions. A failed, cancelled, or missing setup artifact marks the run `setup_failed` and leaves run items queued. |
 | `<artifact-dir>/test-result.json` | Optional Codex test run artifact reconciled into test run items and run acceptance state. Prefer `{"runId":"...","items":[...]}`; the worker also accepts a top-level array of result items when each item carries `runId`. If evidence references screenshot files inside the artifact directory, the worker can embed small image data URLs for transfer; the server persists supported screenshots as `test_artifacts` and rewrites evidence to authenticated artifact refs. |
 | `<artifact-dir>/branch-name.json` | Optional agent-proposed source branch name. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-learned project runbook artifact. |
@@ -96,8 +97,10 @@ Recommended smoke order:
 5. Import CSV or Excel `.xlsx` cases with `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags` headers. Rows without `title` should appear in the skipped list. Use `functional`, `ui`, `api`, or `deployment` for `type`; common aliases such as `UI 测试`, `接口测试`, and `部署测试` normalize to the fixed values.
 6. Edit a case and verify revisions show newest first, with non-initial revisions showing changed fields and before/after values rather than only the case title.
 7. Exercise Optimize or Generate with no connected worker; the UI should surface the worker/session blocker rather than silently claiming success.
-8. Connect a Codex-capable worker, then verify `test-case-proposals.json` becomes Case suggestions and `test-result.json` updates run items. The Cases list should show the latest final run item status. Case Detail should expose `Details`, `Run history`, and `Revisions` tabs, with Run history showing all runs for that case. Case Detail / Run Detail should expose structured evidence such as authenticated screenshot thumbnails, assertions, network summaries, DOM snapshots, and raw evidence.
-9. Accept or block the run manually. A Codex-completed run is not release acceptance until a human records that decision.
+8. Create a formal plan with setup steps, such as confirming the target Environment, updating a Deployment image, SSHing into a VM, or logging into Sealos before opening Object Storage. Starting that plan should create one setup Issue/Session and keep run items queued while the run is `setup_running`.
+9. Complete the setup session with `${MSPACE_SESSION_ARTIFACT_DIR}/test-setup-result.json`. `status:"passed"` should move the run to `running`, expose setup result/run context on Run Detail, and then create execution sessions. `status:"failed"`, a failed worker task, cancellation, or a missing artifact should move the run to `setup_failed` without starting case sessions.
+10. Connect a Codex-capable worker, then verify `test-case-proposals.json` becomes Case suggestions and `test-result.json` updates run items. The Cases list should show the latest final run item status. Case Detail should expose `Details`, `Run history`, and `Revisions` tabs, with Run history showing all runs for that case. Case Detail / Run Detail should expose structured evidence such as authenticated screenshot thumbnails, assertions, network summaries, DOM snapshots, raw evidence, and setup result/run context when a plan setup ran.
+11. Accept or block the run manually. A Codex-completed run is not release acceptance until a human records that decision.
 
 The current case library accepts `functional`, `ui`, `api`, and `deployment` as case types. Specialized UI/CDP automation, API harnessing, deployment orchestration, and multi-worker scheduling are still later execution work; the first loop keeps execution behind Issues, Agent Sessions, Workers, and Evidence.
 

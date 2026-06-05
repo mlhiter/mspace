@@ -1,7 +1,7 @@
 # mspace Test Module Product And Implementation Plan
 
 > Status: product and implementation plan plus implementation snapshot
-> Date: 2026-06-03
+> Date: 2026-06-05
 
 ## Conclusion
 
@@ -27,6 +27,7 @@ The updated workflow adds or clarifies these requirements:
 - Workers are not owned by environments. Multiple workers may have the capabilities needed to operate the same environment, and task routing stays in the runtime worker queue.
 - Test plans support multiple rounds: full run, failed-case retry, blocked-case retry, incremental test, and self-test.
 - Some cases need mock data setup.
+- A formal test plan may need plan-level setup steps that run once before cases, such as signing in to a platform, updating a Deployment image, SSHing into a VM, preparing mock data, or verifying a preview URL.
 - Test types include functional tests, UI tests, API tests, and deployment tests.
 - UI tests need browser/CDP support. Deployment tests may need SSH or commands similar to `sealos run`.
 - Test results need screenshots or other evidence.
@@ -55,6 +56,7 @@ The first version should not include:
 - Sealos UI APIs as the primary execution path.
 - Default agent access to Secrets.
 - UI/CDP automation, SSH multi-machine scheduling, or deployment-test orchestration in the first phase.
+- A reusable setup template library, dependency DAG, or general workflow orchestrator for the first setup slice.
 - Direct writes from Codex-generated cases into the canonical test case library.
 - Treating Codex pass results as release approval without human acceptance.
 
@@ -170,6 +172,7 @@ Recommended fields:
 - target type: branch, commit, source session, image, offline package, version URL, or preview URL
 - target value
 - linked Environment
+- optional setup steps that run once before case execution
 - selected cases
 - case order and dependencies
 - current round
@@ -193,6 +196,7 @@ A Test Run stores:
 - round number;
 - linked Test Plan when the source is plan-based;
 - linked parent Issue;
+- frozen setup steps, setup status, setup Issue, setup Session, setup result, and setup-derived run context when the source plan has setup;
 - linked environment snapshot;
 - status;
 - passed, failed, blocked, and skipped counts;
@@ -301,6 +305,17 @@ The plan needs:
 - whether parallel execution is allowed;
 - whether human acceptance is required.
 
+Plan-level setup is intentionally simple in the current slice. It is free-text operational guidance stored on the plan, not a reusable template or graph engine. The text can describe browser, Kubernetes, VM, SSH, Sealos, mock-data, or deployment preparation in the user's own words. When the plan starts a run, mspace freezes those setup steps onto the run so later edits do not rewrite historical execution context.
+
+Examples:
+
+```text
+1. Confirm the test environment.
+2. SSH to the staging VM and update the target service image.
+3. Log in to Sealos with the test account, open Object Storage, and verify the app page loads.
+4. Write test-setup-result.json with status passed and outputs.previewUrl.
+```
+
 ### 5. Enter Issue-Backed Execution
 
 When a test run starts, mspace creates one parent Issue for the run and execution Issues for batches.
@@ -327,6 +342,8 @@ Test Plan: rc4 functional test
 
 Each execution Issue starts a Codex Agent Session through the existing `POST /issues/{issueID}/sessions` path.
 
+If the plan has setup steps, the run enters `setup_running` first and creates a single setup child Issue with automation marker `test_run_setup`. Case execution Issues are not created yet. The setup session must write `${MSPACE_SESSION_ARTIFACT_DIR}/test-setup-result.json`. Only a completed setup task with a passing setup artifact moves the run to `running` and starts the normal case batches. Failed, cancelled, missing-artifact, or artifact-level failed setup marks the run `setup_failed` and leaves every run item queued.
+
 ### 6. Codex Performs The Actual Test
 
 For the first functional-testing phase, Codex can use:
@@ -335,6 +352,7 @@ For the first functional-testing phase, Codex can use:
 - project runbook;
 - test cases;
 - Environment snapshot;
+- setup-derived run context;
 - preview URL;
 - Kubernetes namespace information;
 - required commands.
@@ -728,6 +746,39 @@ Preferred shape:
 
 The worker also accepts a top-level array for Codex-authored single-run artifacts when each item includes `runId`; it normalizes that array into the object shape before returning `result.testResult`.
 
+Codex plan setup writes:
+
+```text
+test-setup-result.json
+```
+
+Shape:
+
+```json
+{
+  "runId": "test-run-...",
+  "status": "passed",
+  "summary": "Preview is ready.",
+  "failureSummary": "",
+  "outputs": {
+    "previewUrl": "https://preview.example.test",
+    "image": "registry.example/app:rc4",
+    "namespace": "mspace-rc4"
+  },
+  "evidence": {},
+  "steps": [
+    {
+      "title": "Update deployment image",
+      "status": "passed",
+      "command": "kubectl set image deployment/app app=registry.example/app:rc4",
+      "summary": "Deployment rolled out."
+    }
+  ]
+}
+```
+
+The server stores the whole setup result on the run and copies the `outputs` object into `runContext`. Later execution Issues include that context in their prompt, so a setup step can hand off concrete facts such as `previewUrl`, `image`, `namespace`, or `sshTarget` without adding a new product object. `status:"failed"`, a failed setup task, cancellation, or a missing setup artifact stops the run before any case session starts.
+
 When a UI test writes screenshot paths inside `evidence`, the worker may embed small screenshot files from the session artifact directory as `evidence.screenshotImages[]` data URLs. The server extracts supported image data into `test_artifacts`, removes embedded image payloads from run item evidence, and writes artifact refs back into `evidence.artifacts` and `evidence.screenshotImages`. Case Detail and Run Detail render those refs as authenticated thumbnails with an in-app preview.
 
 Future UI testing can write:
@@ -815,6 +866,7 @@ Scope:
 - test plan list and dedicated detail page;
 - target selection: branch, commit, source session, image, offline package, version URL, or preview URL;
 - environment selection;
+- optional plan-level setup steps that run once before case execution;
 - create Test Run;
 - create parent Issue and execution Issues;
 - start Codex sessions for execution Issues;
@@ -832,6 +884,9 @@ Acceptance:
 - user can create a plan such as `rc4 functional test plan`;
 - user can select ready functional, UI, API, or deployment cases;
 - user can start a test run;
+- plan runs with setup start in `setup_running`, create a setup Issue/Session, and keep items queued until setup passes;
+- setup success stores `setupResult` plus `runContext` and then creates execution Issues;
+- setup failure or cancellation marks the run `setup_failed` without starting case sessions;
 - parent Issue and execution Issues are created;
 - default Issues browsing stays focused on human work and does not show those test automation Issues;
 - Codex sessions run through the normal worker path;
@@ -943,6 +998,7 @@ The smallest useful version has three parts:
 1. Case library: import, create, edit, and score cases.
 2. Case refinement: Codex generates proposals, humans accept them.
 3. Functional test plan: select cases, create a run, generate Issues, execute through Codex, collect results, and complete human acceptance.
+4. Lightweight plan setup: for formal plans only, run one setup session before case execution and pass setup outputs into the later case prompts.
 
 This MVP covers the main workflow from the source draft:
 
@@ -953,6 +1009,7 @@ rough case list
   -> reviewed by human
   -> final case list
   -> test plan
+  -> plan-level setup when needed
   -> assigned to Codex
   -> result and screenshot/evidence
   -> human acceptance

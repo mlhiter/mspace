@@ -1183,6 +1183,7 @@ type CreateAgentSessionInput struct {
 	TriggerCommentID string `json:"triggerCommentId"`
 	Automation       string `json:"automation"`
 	TestRunID        string `json:"testRunId"`
+	TestRunBatchSize int    `json:"testRunBatchSize"`
 }
 
 type CreateIssueInput struct {

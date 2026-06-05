@@ -31,6 +31,7 @@ const branchNameArtifactName = "branch-name.json"
 const testEnvironmentArtifactName = "test-environment.json"
 const reviewEvidenceArtifactName = "review-evidence.json"
 const testCaseProposalsArtifactName = "test-case-proposals.json"
+const testSetupResultArtifactName = "test-setup-result.json"
 const testResultArtifactName = "test-result.json"
 const maxTestResultScreenshotBytes = 2 * 1024 * 1024
 
@@ -185,6 +186,7 @@ type agentSessionResult struct {
 	TestEnvironment   *agentSessionTestEnvironment `json:"testEnvironment,omitempty"`
 	ReviewEvidence    *reviewEvidenceArtifact      `json:"reviewEvidence,omitempty"`
 	TestCaseProposals *testCaseProposalsArtifact   `json:"testCaseProposals,omitempty"`
+	TestSetup         *testSetupResultArtifact     `json:"testSetup,omitempty"`
 	TestResult        *testResultArtifact          `json:"testResult,omitempty"`
 }
 
@@ -259,6 +261,25 @@ type testCaseProposalArtifactItem struct {
 	Summary      string          `json:"summary"`
 	Rationale    string          `json:"rationale"`
 	ProposedCase json.RawMessage `json:"proposedCase"`
+}
+
+type testSetupResultArtifact struct {
+	RunID          string                `json:"runId"`
+	Status         string                `json:"status"`
+	Summary        string                `json:"summary"`
+	FailureSummary string                `json:"failureSummary"`
+	Outputs        json.RawMessage       `json:"outputs"`
+	Evidence       json.RawMessage       `json:"evidence"`
+	Steps          []testSetupResultStep `json:"steps"`
+}
+
+type testSetupResultStep struct {
+	Title          string          `json:"title"`
+	Status         string          `json:"status"`
+	Command        string          `json:"command"`
+	Summary        string          `json:"summary"`
+	FailureSummary string          `json:"failureSummary"`
+	Evidence       json.RawMessage `json:"evidence"`
 }
 
 type testResultArtifact struct {
@@ -1120,6 +1141,9 @@ func (result *agentSessionResult) attachArtifacts(payload agentSessionPayload) {
 	if artifact, ok := readTestCaseProposalsArtifact(payload); ok {
 		result.TestCaseProposals = &artifact
 	}
+	if artifact, ok := readTestSetupResultArtifact(payload); ok {
+		result.TestSetup = &artifact
+	}
 	if artifact, ok := readTestResultArtifact(payload); ok {
 		result.TestResult = &artifact
 	}
@@ -1817,6 +1841,37 @@ func readTestResultArtifact(payload agentSessionPayload) (testResultArtifact, bo
 		artifact.RunID = strings.TrimSpace(items[0].RunID)
 	}
 	artifact = enrichTestResultArtifactEvidence(payload, artifact)
+	return artifact, true
+}
+
+func readTestSetupResultArtifact(payload agentSessionPayload) (testSetupResultArtifact, bool) {
+	path := artifactPath(payload, testSetupResultArtifactName)
+	if path == "" {
+		return testSetupResultArtifact{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return testSetupResultArtifact{}, false
+	}
+	var artifact testSetupResultArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return testSetupResultArtifact{}, false
+	}
+	if strings.TrimSpace(artifact.Status) == "" && strings.TrimSpace(artifact.Summary) == "" && len(artifact.Outputs) == 0 && len(artifact.Evidence) == 0 && len(artifact.Steps) == 0 {
+		return testSetupResultArtifact{}, false
+	}
+	if len(artifact.Outputs) == 0 {
+		artifact.Outputs = json.RawMessage(`{}`)
+	}
+	if len(artifact.Evidence) == 0 {
+		artifact.Evidence = json.RawMessage(`{}`)
+	}
+	for index, step := range artifact.Steps {
+		if len(step.Evidence) == 0 {
+			step.Evidence = json.RawMessage(`{}`)
+		}
+		artifact.Steps[index] = step
+	}
 	return artifact, true
 }
 

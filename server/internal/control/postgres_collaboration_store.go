@@ -1678,6 +1678,7 @@ func buildAgentSessionPayload(sessionID string, issue Issue, project Project, ru
 		"triggerCommentId": input.TriggerCommentID,
 		"automation":       input.Automation,
 		"testRunId":        input.TestRunID,
+		"testRunBatchSize": input.TestRunBatchSize,
 		"contextMarkdown":  buildAgentSessionContext(issue, project, runbook, comments, labels, childIssues, input),
 		"artifactDir":      "",
 		"repository": map[string]string{

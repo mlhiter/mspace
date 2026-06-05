@@ -85,6 +85,7 @@ type CaseForm = {
 type PlanForm = {
   title: string;
   description: string;
+  setupSteps: string;
   status: string;
   targetType: string;
   targetValue: string;
@@ -107,6 +108,7 @@ const emptyCaseForm: CaseForm = {
 const emptyPlanForm: PlanForm = {
   title: "",
   description: "",
+  setupSteps: "",
   status: "ready",
   targetType: "branch",
   targetValue: "",
@@ -1358,6 +1360,7 @@ export function TestsPage() {
     mutationFn: () =>
       controlPlaneApi.createProjectTestPlan(auth.token, workspaceId, effectiveProjectId, {
         ...planForm,
+        setupSteps: planForm.setupSteps.trim(),
         environment: "",
         environmentId: planForm.environmentId || "",
         caseIds: selectedCaseIds,
@@ -1991,6 +1994,7 @@ export function TestsPage() {
                             <span>{t(`tests.targetTypeValue.${plan.targetType}`, { defaultValue: plan.targetType })}</span>
                             <span>{plan.targetValue || t("common.unknown")}</span>
                             <span>{t("tests.caseCount", { count: plan.caseCount })}</span>
+                            {hasText(plan.setupSteps) ? <span>{t("tests.setupConfigured")}</span> : null}
                           </div>
                         </div>
                         <div className="flex items-center md:justify-end">
@@ -2068,6 +2072,9 @@ export function TestsPage() {
                             <span className="text-[13px] font-medium text-[color:var(--text)]">{t("tests.runShortId", { id: run.id.slice(0, 8) })}</span>
                             <span className="text-[12px] text-[color:var(--muted)]">{t(`tests.runSourceValue.${run.source || "ad_hoc"}`, { defaultValue: run.source || "ad_hoc" })}</span>
                             <StatusBadge value={run.status} valueLabel={t(`tests.runStatusValue.${run.status}`, { defaultValue: run.status })} />
+                            {run.setupStatus && run.setupStatus !== "not_required" ? (
+                              <StatusBadge value={run.setupStatus} valueLabel={t(`tests.setupStatusValue.${run.setupStatus}`, { defaultValue: run.setupStatus })} />
+                            ) : null}
                           </div>
                           <div className="mt-1 text-[12px] text-[color:var(--muted)]">
                             {t("tests.runCounts", { passed: run.passedCount, failed: run.failedCount, blocked: run.blockedCount, skipped: run.skippedCount })}
@@ -2574,6 +2581,15 @@ function TestPlanDetailContent(props: {
             <RunMetric label={t("tests.runs")} value={String(detail.runs.length)} />
           </div>
           {plan.description ? <p className="mt-4 text-[13px] leading-6 text-[color:var(--muted)]">{plan.description}</p> : null}
+          {hasText(plan.setupSteps) ? (
+            <div className="mt-4 rounded-[8px] bg-[color:var(--paper)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="mb-2 flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--muted-strong)]">
+                <TerminalSquare data-icon className="size-3.5" />
+                {t("tests.setupSteps")}
+              </div>
+              <pre className="max-h-52 overflow-auto whitespace-pre-wrap text-[12px] leading-5 text-[color:var(--muted)]">{plan.setupSteps}</pre>
+            </div>
+          ) : null}
           {plan.environment ? (
             <pre className="mt-4 max-h-52 overflow-auto rounded-[8px] bg-[color:var(--paper)] p-3 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
               {plan.environment}
@@ -2639,6 +2655,9 @@ function TestPlanDetailContent(props: {
                       <Play data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
                       <span className="truncate text-[13px] font-medium text-[color:var(--text)]">{t("tests.runShortId", { id: run.id.slice(0, 8) })}</span>
                       <StatusBadge value={run.status} valueLabel={t(`tests.runStatusValue.${run.status}`, { defaultValue: run.status })} />
+                      {run.setupStatus && run.setupStatus !== "not_required" ? (
+                        <StatusBadge value={run.setupStatus} valueLabel={t(`tests.setupStatusValue.${run.setupStatus}`, { defaultValue: run.setupStatus })} />
+                      ) : null}
                     </div>
                     <p className="mt-1 text-[12px] text-[color:var(--muted)]">
                       {t("tests.runCounts", { passed: run.passedCount, failed: run.failedCount, blocked: run.blockedCount, skipped: run.skippedCount })}
@@ -2787,6 +2806,9 @@ export function TestRunDetailPage() {
             <RunMetric label={t("tests.blocked")} value={String(detail.run.blockedCount)} />
             <RunMetric label={t("tests.passRate")} value={runPassRate(detail.items)} />
           </div>
+          {detail.run.setupStatus && detail.run.setupStatus !== "not_required" ? (
+            <TestRunSetupPanel run={detail.run} />
+          ) : null}
 
           <Field label={t("tests.reviewNote")}>
             <Textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder={t("tests.reviewNotePlaceholder")} className="min-h-20" />
@@ -3293,6 +3315,14 @@ function PlanFormFields(props: {
           </Field>
         </div>
       </div>
+      <Field label={t("tests.setupSteps")} hint={t("tests.setupStepsHint")}>
+        <Textarea
+          value={form.setupSteps}
+          onChange={(event) => onChange((current) => ({ ...current, setupSteps: event.target.value }))}
+          placeholder={t("tests.setupStepsPlaceholder")}
+          className="min-h-32 font-mono text-[12px]"
+        />
+      </Field>
       <div className="rounded-[8px] bg-[color:var(--paper)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
@@ -3374,6 +3404,51 @@ function CaseReadinessPanel(props: { form: CaseForm }) {
         <span className="rounded-[999px] bg-[color:var(--surface)] px-2 py-1 shadow-[inset_0_0_0_1px_var(--line)]">{t("tests.readyPlanHint")}</span>
       </div>
     </section>
+  );
+}
+
+function TestRunSetupPanel(props: { run: TestRun }) {
+  const { t } = useMspaceTranslation();
+  const setupResult = props.run.setupResult && Object.keys(props.run.setupResult).length > 0 ? props.run.setupResult : null;
+  const runContext = props.run.runContext && Object.keys(props.run.runContext).length > 0 ? props.run.runContext : null;
+
+  return (
+    <section className="mt-4 rounded-[8px] bg-[color:var(--paper)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--muted-strong)]">
+          <TerminalSquare data-icon className="size-3.5" />
+          {t("tests.setup")}
+        </div>
+        <StatusBadge value={props.run.setupStatus} valueLabel={t(`tests.setupStatusValue.${props.run.setupStatus}`, { defaultValue: props.run.setupStatus })} />
+      </div>
+      {props.run.setupIssueId || props.run.setupSessionId ? (
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--muted)]">
+          {props.run.setupIssueId ? <span>{t("tests.setupIssue")}: <span className="font-mono">{props.run.setupIssueId.slice(0, 8)}</span></span> : null}
+          {props.run.setupSessionId ? <span>{t("tests.setupSession")}: <span className="font-mono">{props.run.setupSessionId.slice(0, 8)}</span></span> : null}
+        </div>
+      ) : null}
+      {hasText(props.run.setupSteps) ? (
+        <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-[7px] bg-[color:var(--surface)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+          {props.run.setupSteps}
+        </pre>
+      ) : null}
+      {setupResult ? <SetupJSONBlock title={t("tests.setupResult")} value={setupResult} /> : null}
+      {runContext ? <SetupJSONBlock title={t("tests.runContext")} value={runContext} /> : null}
+    </section>
+  );
+}
+
+function SetupJSONBlock(props: { title: string; value: Record<string, unknown> }) {
+  return (
+    <details className="mt-3">
+      <summary className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-[color:var(--muted)] hover:text-[color:var(--text)]">
+        <TerminalSquare data-icon className="size-3.5" />
+        {props.title}
+      </summary>
+      <pre className="mt-2 max-h-48 overflow-auto rounded-[8px] bg-[color:var(--surface)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+        {JSON.stringify(props.value, null, 2)}
+      </pre>
+    </details>
   );
 }
 

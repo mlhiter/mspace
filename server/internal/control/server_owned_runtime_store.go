@@ -2383,6 +2383,11 @@ func (s *PostgresStore) reconcileAgentSessionRuntimeResult(ctx context.Context, 
 			return err
 		}
 	}
+	if runtimeTaskAutomation(task) == testRunSetupAutomation && isFinalRuntimeTaskStatus(task.Status) {
+		if err := s.reconcileTestSetupArtifact(ctx, q, task, artifacts.TestSetup); err != nil {
+			return err
+		}
+	}
 	if task.Status == "completed" && artifacts.TestResult != nil {
 		if err := s.reconcileTestResultArtifact(ctx, q, task, *artifacts.TestResult); err != nil {
 			return err

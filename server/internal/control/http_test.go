@@ -2414,20 +2414,21 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	}
 
 	plan := createProjectTestPlanViaHTTP(t, router, sessionToken, workspaceID, project.ID, fmt.Sprintf(`{
-		"title":"rc4 functional test plan",
-		"description":"Functional regression for auth.",
-		"status":"ready",
-		"targetType":"branch",
-		"targetValue":"release/rc4",
+			"title":"rc4 functional test plan",
+			"description":"Functional regression for auth.",
+			"setupSteps":"1. Confirm the release namespace.\n2. Update the target deployment image.\n3. Verify the preview URL is reachable.",
+			"status":"ready",
+			"targetType":"branch",
+			"targetValue":"release/rc4",
 		"environment":"personal desktop",
 		"caseIds":[%q,%q]
 	}`, existingCase.ID, createdFromProposal.TestCase.ID))
-	if plan.Plan.Status != "ready" || plan.Plan.CaseCount != 2 || len(plan.Cases) != 2 {
+	if plan.Plan.Status != "ready" || plan.Plan.CaseCount != 2 || len(plan.Cases) != 2 || !strings.Contains(plan.Plan.SetupSteps, "Update the target deployment image") {
 		t.Fatalf("unexpected created plan: %+v", plan)
 	}
 
 	run := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":1}`)
-	if run.Run.Status != "running" || run.Run.TotalCount != 2 || run.Run.ParentIssueID == "" || len(run.Items) != 2 {
+	if run.Run.Status != "setup_running" || run.Run.SetupStatus != "running" || run.Run.SetupIssueID == "" || run.Run.SetupSessionID == "" || run.Run.TotalCount != 2 || run.Run.ParentIssueID == "" || len(run.Items) != 2 {
 		t.Fatalf("unexpected started run: %+v", run)
 	}
 	parentIssue, err := store.GetIssue(context.Background(), user.ID, workspaceID, run.Run.ParentIssueID)
@@ -2445,9 +2446,29 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if !issueListContains(allTopLevelIssues, run.Run.ParentIssueID) {
 		t.Fatalf("includeTestAutomation should expose test run parent issue %s, got %+v", run.Run.ParentIssueID, allTopLevelIssues)
 	}
+	setupIssue, err := store.GetIssue(context.Background(), user.ID, workspaceID, run.Run.SetupIssueID)
+	if err != nil {
+		t.Fatalf("get setup issue: %v", err)
+	}
+	if setupIssue.Issue.ParentIssueID != run.Run.ParentIssueID || !strings.Contains(setupIssue.Issue.Body, "test-setup-result.json") {
+		t.Fatalf("unexpected setup issue: %+v", setupIssue.Issue)
+	}
+	for _, item := range run.Items {
+		if item.Status != "queued" || item.ExecutionIssueID != "" || item.AgentSessionID != "" {
+			t.Fatalf("expected queued item before setup passes, got %+v", item)
+		}
+	}
+	setupResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testSetup":{"runId":%q,"status":"passed","summary":"Preview is ready.","outputs":{"previewUrl":"https://rc4.example.test","image":"registry.example/mspace:rc4"},"steps":[{"title":"Update deployment image","status":"passed","command":"kubectl set image deployment/mspace app=registry.example/mspace:rc4","summary":"Deployment updated."}]}}}`, run.Run.ID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, run.Run.SetupSessionID, setupResult); err != nil {
+		t.Fatalf("complete setup task: %v", err)
+	}
+	run = getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, run.Run.ID)
+	if run.Run.Status != "running" || run.Run.SetupStatus != "passed" || !strings.Contains(string(run.Run.RunContext), "rc4.example.test") {
+		t.Fatalf("expected setup to pass and start case execution, got %+v", run.Run)
+	}
 	for _, item := range run.Items {
 		if item.Status != "running" || item.ExecutionIssueID == "" || item.AgentSessionID == "" {
-			t.Fatalf("expected running item with execution issue and session, got %+v", item)
+			t.Fatalf("expected running item with execution issue and session after setup, got %+v", item)
 		}
 		childIssue, err := store.GetIssue(context.Background(), user.ID, workspaceID, item.ExecutionIssueID)
 		if err != nil {
@@ -2533,7 +2554,42 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if acceptedRun.Status != "accepted" || acceptedRun.AcceptanceStatus != "accepted" || acceptedRun.AcceptanceNote != "Accepted with known follow-up." {
 		t.Fatalf("unexpected accepted run: %+v", acceptedRun)
 	}
+	failingSetupRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	if failingSetupRun.Run.Status != "setup_running" || failingSetupRun.Run.SetupSessionID == "" {
+		t.Fatalf("expected second plan run to wait on setup, got %+v", failingSetupRun.Run)
+	}
+	failingSetupResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":1,"testSetup":{"runId":%q,"status":"failed","summary":"Deployment image update failed.","failureSummary":"Image tag rc4 was not found.","outputs":{},"steps":[{"title":"Update deployment image","status":"failed","command":"kubectl set image deployment/mspace app=missing","failureSummary":"Image tag rc4 was not found."}]}}}`, failingSetupRun.Run.ID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, failingSetupRun.Run.SetupSessionID, failingSetupResult); err != nil {
+		t.Fatalf("complete failing setup task: %v", err)
+	}
+	failedSetupRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, failingSetupRun.Run.ID)
+	if failedSetupRun.Run.Status != "setup_failed" || failedSetupRun.Run.SetupStatus != "failed" || !strings.Contains(string(failedSetupRun.Run.SetupResult), "Image tag rc4 was not found") {
+		t.Fatalf("expected setup failure to stop run, got %+v", failedSetupRun.Run)
+	}
+	for _, item := range failedSetupRun.Items {
+		if item.Status != "queued" || item.AgentSessionID != "" {
+			t.Fatalf("setup failure should not start case execution, got %+v", item)
+		}
+	}
+	failedTaskRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	failedTaskResult := fmt.Sprintf(`{"status":"failed","error":"SSH command failed","result":{"exitCode":1,"testSetup":{"runId":%q,"status":"passed","summary":"Stale artifact should not pass."}}}`, failedTaskRun.Run.ID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, failedTaskRun.Run.SetupSessionID, failedTaskResult); err != nil {
+		t.Fatalf("fail setup task: %v", err)
+	}
+	failedTaskRun = getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, failedTaskRun.Run.ID)
+	if failedTaskRun.Run.Status != "setup_failed" || failedTaskRun.Run.SetupStatus != "failed" || !strings.Contains(string(failedTaskRun.Run.SetupResult), "SSH command failed") {
+		t.Fatalf("failed setup task should stop run even if artifact says passed, got %+v", failedTaskRun.Run)
+	}
+	for _, item := range failedTaskRun.Items {
+		if item.Status != "queued" || item.AgentSessionID != "" {
+			t.Fatalf("failed setup task should not start case execution, got %+v", item)
+		}
+	}
 	blockedRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	blockedSetupResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testSetup":{"runId":%q,"status":"passed","summary":"Ready for blocked review.","outputs":{}}}}`, blockedRun.Run.ID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, blockedRun.Run.SetupSessionID, blockedSetupResult); err != nil {
+		t.Fatalf("complete blocked-run setup task: %v", err)
+	}
 	blockedReview := reviewProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, blockedRun.Run.ID, "block", "Blocked by release environment.")
 	if blockedReview.Status != "blocked" || blockedReview.AcceptanceStatus != "blocked" || blockedReview.AcceptanceNote != "Blocked by release environment." {
 		t.Fatalf("unexpected blocked run: %+v", blockedReview)

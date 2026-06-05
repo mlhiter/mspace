@@ -306,6 +306,7 @@ func TestSQLiteStorePersistsTestModuleWorkflowSnapshot(t *testing.T) {
 	}
 	plan, err := store.CreateProjectTestPlan(ctx, user.ID, workspaceID, project.ID, TestPlanInput{
 		Title:       "persisted rc plan",
+		SetupSteps:  "Update deployment image before running cases.",
 		Status:      "ready",
 		TargetType:  "branch",
 		TargetValue: "release/rc",
@@ -323,8 +324,28 @@ func TestSQLiteStorePersistsTestModuleWorkflowSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start test run: %v", err)
 	}
-	if len(run.Items) != 2 || run.Run.ParentIssueID == "" {
+	if len(run.Items) != 2 || run.Run.ParentIssueID == "" || run.Run.SetupStatus != "running" || run.Run.SetupSessionID == "" {
 		t.Fatalf("unexpected started run: %+v", run)
+	}
+	setupTask, err := store.ClaimRuntimeTask(ctx, registration, worker.ID)
+	if err != nil {
+		t.Fatalf("claim setup task: %v", err)
+	}
+	if setupTask == nil || setupTask.SessionID != run.Run.SetupSessionID {
+		t.Fatalf("expected setup task %s, got %+v", run.Run.SetupSessionID, setupTask)
+	}
+	if _, err := store.UpdateRuntimeTaskStatus(ctx, registration, worker.ID, setupTask.ID, UpdateRuntimeTaskStatusInput{
+		Status: "completed",
+		Result: json.RawMessage(`{"exitCode":0,"testSetup":{"runId":"` + run.Run.ID + `","status":"passed","summary":"SQLite setup ready.","outputs":{"previewUrl":"https://sqlite.example.test"}}}`),
+	}); err != nil {
+		t.Fatalf("complete setup task: %v", err)
+	}
+	run, err = store.GetProjectTestRun(ctx, user.ID, workspaceID, project.ID, run.Run.ID)
+	if err != nil {
+		t.Fatalf("load setup-complete run: %v", err)
+	}
+	if run.Run.SetupStatus != "passed" || !strings.Contains(string(run.Run.RunContext), "sqlite.example.test") {
+		t.Fatalf("expected setup result to persist on run, got %+v", run.Run)
 	}
 	adHocRun, err := store.StartAdHocProjectTestRun(ctx, user, workspaceID, project.ID, CreateAdHocTestRunInput{
 		CaseIDs:      []string{sourceCase.ID},

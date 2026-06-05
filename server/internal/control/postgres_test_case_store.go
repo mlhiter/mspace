@@ -671,6 +671,9 @@ func (s *PostgresStore) startPostgresProjectTestRun(ctx Context, user User, work
 		PlanID:              planID,
 		Source:              runSource,
 		Status:              "running",
+		SetupStatus:         "not_required",
+		SetupResult:         json.RawMessage(`{}`),
+		RunContext:          json.RawMessage(`{}`),
 		TargetType:          normalized.TargetType,
 		TargetValue:         normalized.TargetValue,
 		Environment:         normalized.Environment,
@@ -680,6 +683,13 @@ func (s *PostgresStore) startPostgresProjectTestRun(ctx Context, user User, work
 		TotalCount:          len(planCases),
 		AcceptanceStatus:    "pending",
 		CreatedByUserID:     user.ID,
+	}
+	if plan != nil {
+		run.SetupSteps = normalizeTestPlanSetupSteps(plan.SetupSteps)
+		if run.SetupSteps != "" {
+			run.Status = "setup_running"
+			run.SetupStatus = "running"
+		}
 	}
 	parentIssueID, err := s.CreateIssue(ctx, user, workspace.ID, CreateIssueInput{
 		ProjectID: run.ProjectID,
@@ -705,8 +715,14 @@ func (s *PostgresStore) startPostgresProjectTestRun(ctx Context, user User, work
 	if err := tx.Commit(dbctx); err != nil {
 		return TestRunDetail{}, err
 	}
-	if err := s.startPostgresTestRunExecutionSessions(ctx, user.ID, run, normalized); err != nil {
-		return TestRunDetail{}, err
+	if run.SetupSteps != "" {
+		if err := s.startPostgresTestRunSetupSession(ctx, user.ID, run, normalized); err != nil {
+			return TestRunDetail{}, err
+		}
+	} else {
+		if err := s.startPostgresTestRunExecutionSessions(ctx, user.ID, run, normalized); err != nil {
+			return TestRunDetail{}, err
+		}
 	}
 	return s.GetProjectTestRun(ctx, user.ID, run.WorkspaceID, run.ProjectID, run.ID)
 }
@@ -1373,6 +1389,7 @@ func testPlanSelectQuery(whereClause string) string {
 			p.project_id::text,
 			p.title,
 			p.description,
+			p.setup_steps,
 			p.status,
 			p.target_type,
 			p.target_value,
@@ -1402,6 +1419,7 @@ func scanTestPlan(row scanner) (TestPlan, error) {
 		&plan.ProjectID,
 		&plan.Title,
 		&plan.Description,
+		&plan.SetupSteps,
 		&plan.Status,
 		&plan.TargetType,
 		&plan.TargetValue,
@@ -1484,10 +1502,10 @@ func (s *PostgresStore) resolveTestRunEnvironment(ctx context.Context, workspace
 func insertTestPlanRecord(ctx context.Context, q queryer, workspaceID, projectID, userID string, input TestPlanInput) (TestPlan, error) {
 	var planID string
 	if err := q.QueryRow(ctx, `
-		INSERT INTO test_plans (workspace_id, project_id, title, description, status, target_type, target_value, environment, environment_id, environment_kind, environment_snapshot, created_by_user_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, NULLIF($12, '')::uuid)
+		INSERT INTO test_plans (workspace_id, project_id, title, description, setup_steps, status, target_type, target_value, environment, environment_id, environment_kind, environment_snapshot, created_by_user_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, NULLIF($13, '')::uuid)
 		RETURNING id::text
-	`, workspaceID, projectID, input.Title, input.Description, input.Status, input.TargetType, input.TargetValue, input.Environment, input.EnvironmentID, input.EnvironmentKind, jsonOrObject(input.EnvironmentSnapshot), userID).Scan(&planID); err != nil {
+	`, workspaceID, projectID, input.Title, input.Description, input.SetupSteps, input.Status, input.TargetType, input.TargetValue, input.Environment, input.EnvironmentID, input.EnvironmentKind, jsonOrObject(input.EnvironmentSnapshot), userID).Scan(&planID); err != nil {
 		return TestPlan{}, err
 	}
 	return loadTestPlan(ctx, q, workspaceID, projectID, planID)
@@ -1498,16 +1516,17 @@ func updateTestPlanRecord(ctx context.Context, q queryer, workspaceID, projectID
 		UPDATE test_plans
 		SET title = $4,
 			description = $5,
-			status = $6,
-			target_type = $7,
-			target_value = $8,
-			environment = $9,
-			environment_id = $10,
-			environment_kind = $11,
-			environment_snapshot = $12::jsonb,
+			setup_steps = $6,
+			status = $7,
+			target_type = $8,
+			target_value = $9,
+			environment = $10,
+			environment_id = $11,
+			environment_kind = $12,
+			environment_snapshot = $13::jsonb,
 			updated_at = now()
 		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
-	`, workspaceID, projectID, planID, input.Title, input.Description, input.Status, input.TargetType, input.TargetValue, input.Environment, input.EnvironmentID, input.EnvironmentKind, jsonOrObject(input.EnvironmentSnapshot))
+	`, workspaceID, projectID, planID, input.Title, input.Description, input.SetupSteps, input.Status, input.TargetType, input.TargetValue, input.Environment, input.EnvironmentID, input.EnvironmentKind, jsonOrObject(input.EnvironmentSnapshot))
 	if err != nil {
 		return TestPlan{}, err
 	}
@@ -1687,6 +1706,12 @@ func testRunSelectColumnsForAlias(alias string) string {
 			COALESCE(` + alias + `.source, 'plan'),
 			COALESCE(` + alias + `.parent_issue_id::text, ''),
 			` + alias + `.status,
+			` + alias + `.setup_steps,
+			` + alias + `.setup_status,
+			COALESCE(` + alias + `.setup_issue_id::text, ''),
+			` + alias + `.setup_session_id,
+			` + alias + `.setup_result,
+			` + alias + `.run_context,
 			` + alias + `.target_type,
 			` + alias + `.target_value,
 			` + alias + `.environment,
@@ -1710,7 +1735,7 @@ func testRunSelectColumnsForAlias(alias string) string {
 
 func scanTestRun(row scanner) (TestRun, error) {
 	var run TestRun
-	var snapshotBytes []byte
+	var snapshotBytes, setupResultBytes, runContextBytes []byte
 	var completedAt, acceptedAt sql.NullTime
 	var createdAt, updatedAt time.Time
 	if err := row.Scan(
@@ -1721,6 +1746,12 @@ func scanTestRun(row scanner) (TestRun, error) {
 		&run.Source,
 		&run.ParentIssueID,
 		&run.Status,
+		&run.SetupSteps,
+		&run.SetupStatus,
+		&run.SetupIssueID,
+		&run.SetupSessionID,
+		&setupResultBytes,
+		&runContextBytes,
 		&run.TargetType,
 		&run.TargetValue,
 		&run.Environment,
@@ -1742,6 +1773,14 @@ func scanTestRun(row scanner) (TestRun, error) {
 		&updatedAt,
 	); err != nil {
 		return TestRun{}, err
+	}
+	run.SetupResult = copyRawMessage(json.RawMessage(setupResultBytes))
+	if len(run.SetupResult) == 0 {
+		run.SetupResult = json.RawMessage(`{}`)
+	}
+	run.RunContext = copyRawMessage(json.RawMessage(runContextBytes))
+	if len(run.RunContext) == 0 {
+		run.RunContext = json.RawMessage(`{}`)
 	}
 	run.EnvironmentSnapshot = copyRawMessage(json.RawMessage(snapshotBytes))
 	if completedAt.Valid {
@@ -1777,6 +1816,10 @@ func insertTestRunRecord(ctx context.Context, q queryer, run TestRun, parentIssu
 			source,
 			parent_issue_id,
 			status,
+			setup_steps,
+			setup_status,
+			setup_result,
+			run_context,
 			target_type,
 			target_value,
 			environment,
@@ -1787,9 +1830,9 @@ func insertTestRunRecord(ctx context.Context, q queryer, run TestRun, parentIssu
 			acceptance_status,
 			created_by_user_id
 		)
-		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, NULLIF($4, '')::uuid, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, NULLIF($16, '')::uuid)
+		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, NULLIF($4, '')::uuid, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16::jsonb, $17, $18, NULLIF($19, '')::uuid)
 		RETURNING id::text
-	`, run.ID, run.WorkspaceID, run.ProjectID, run.PlanID, firstNonEmpty(run.Source, "ad_hoc"), parentIssueID, run.Status, run.TargetType, run.TargetValue, run.Environment, run.EnvironmentID, run.EnvironmentKind, jsonOrObject(run.EnvironmentSnapshot), run.TotalCount, run.AcceptanceStatus, run.CreatedByUserID).Scan(&runID); err != nil {
+	`, run.ID, run.WorkspaceID, run.ProjectID, run.PlanID, firstNonEmpty(run.Source, "ad_hoc"), parentIssueID, run.Status, run.SetupSteps, firstNonEmpty(run.SetupStatus, "not_required"), jsonOrObject(run.SetupResult), jsonOrObject(run.RunContext), run.TargetType, run.TargetValue, run.Environment, run.EnvironmentID, run.EnvironmentKind, jsonOrObject(run.EnvironmentSnapshot), run.TotalCount, run.AcceptanceStatus, run.CreatedByUserID).Scan(&runID); err != nil {
 		return TestRun{}, err
 	}
 	return loadTestRun(ctx, q, run.WorkspaceID, run.ProjectID, runID)
@@ -1906,7 +1949,7 @@ func scanTestRunItem(row scanner) (TestRunItem, error) {
 func scanTestCaseRunItem(row scanner) (TestCaseRunItem, error) {
 	var item TestRunItem
 	var run TestRun
-	var evidenceBytes []byte
+	var evidenceBytes, runSetupResultBytes, runContextBytes, runEnvironmentSnapshotBytes []byte
 	var itemCreatedAt, itemUpdatedAt time.Time
 	var stepsBytes, dependenciesBytes, tagsBytes, qualityFindingsBytes []byte
 	var caseCreatedAt, caseUpdatedAt time.Time
@@ -1953,9 +1996,18 @@ func scanTestCaseRunItem(row scanner) (TestCaseRunItem, error) {
 		&run.Source,
 		&run.ParentIssueID,
 		&run.Status,
+		&run.SetupSteps,
+		&run.SetupStatus,
+		&run.SetupIssueID,
+		&run.SetupSessionID,
+		&runSetupResultBytes,
+		&runContextBytes,
 		&run.TargetType,
 		&run.TargetValue,
 		&run.Environment,
+		&run.EnvironmentID,
+		&run.EnvironmentKind,
+		&runEnvironmentSnapshotBytes,
 		&run.TotalCount,
 		&run.PassedCount,
 		&run.FailedCount,
@@ -1981,6 +2033,15 @@ func scanTestCaseRunItem(row scanner) (TestCaseRunItem, error) {
 	item.TestCase.QualityFindings = decodeQualityFindings(qualityFindingsBytes)
 	item.TestCase.CreatedAt = caseCreatedAt.UTC().Format(time.RFC3339)
 	item.TestCase.UpdatedAt = caseUpdatedAt.UTC().Format(time.RFC3339)
+	run.SetupResult = copyRawMessage(json.RawMessage(runSetupResultBytes))
+	if len(run.SetupResult) == 0 {
+		run.SetupResult = json.RawMessage(`{}`)
+	}
+	run.RunContext = copyRawMessage(json.RawMessage(runContextBytes))
+	if len(run.RunContext) == 0 {
+		run.RunContext = json.RawMessage(`{}`)
+	}
+	run.EnvironmentSnapshot = copyRawMessage(json.RawMessage(runEnvironmentSnapshotBytes))
 	if completedAt.Valid {
 		run.CompletedAt = completedAt.Time.UTC().Format(time.RFC3339)
 	}
@@ -2082,14 +2143,30 @@ func updateTestRunCounts(ctx context.Context, q queryer, workspaceID, projectID,
 }
 
 func (s *PostgresStore) startPostgresTestRunExecutionSessions(ctx Context, userID string, run TestRun, input CreateTestRunInput) error {
-	dbctx := asContext(ctx)
-	items, err := listTestRunItems(dbctx, s.pool, run.WorkspaceID, run.ProjectID, run.ID)
+	return s.startPostgresTestRunExecutionSessionsWithQueryer(asContext(ctx), s.pool, userID, run, input)
+}
+
+func (s *PostgresStore) startPostgresTestRunExecutionSessionsWithQueryer(ctx context.Context, q queryer, userID string, run TestRun, input CreateTestRunInput) error {
+	if input.BatchSize <= 0 {
+		input.BatchSize = defaultTestRunBatchSize
+	}
+	if input.BatchSize > maxTestRunBatchSize {
+		input.BatchSize = maxTestRunBatchSize
+	}
+	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
+	if strings.TrimSpace(input.RuntimeMode) == "" {
+		input.RuntimeMode = "team"
+	}
+	if err := s.ensureActiveCodexWorkerForQueryer(ctx, q, run.WorkspaceID, userID, input.RuntimeMode); err != nil {
+		return err
+	}
+	items, err := listTestRunItems(ctx, q, run.WorkspaceID, run.ProjectID, run.ID)
 	if err != nil {
 		return err
 	}
 	var plan *TestPlan
 	if run.PlanID != "" {
-		loadedPlan, err := loadTestPlan(dbctx, s.pool, run.WorkspaceID, run.ProjectID, run.PlanID)
+		loadedPlan, err := loadTestPlan(ctx, q, run.WorkspaceID, run.ProjectID, run.PlanID)
 		if err != nil {
 			return err
 		}
@@ -2112,14 +2189,11 @@ func (s *PostgresStore) startPostgresTestRunExecutionSessions(ctx Context, userI
 			cases = append(cases, item.TestCase)
 		}
 		body := buildTestRunExecutionIssueBody(run, cases)
-		child, err := s.CreateIssueTask(ctx, userID, run.WorkspaceID, run.ParentIssueID, IssueTaskInput{
-			Title: fmt.Sprintf("Execute %s batch %d", testRunExecutionScopeLabel(plan, cases), start/input.BatchSize+1),
-			Body:  body,
-		})
+		child, err := createTestRunChildIssue(ctx, q, userID, run, fmt.Sprintf("Execute %s batch %d", testRunExecutionScopeLabel(plan, cases), start/input.BatchSize+1), body)
 		if err != nil {
 			return err
 		}
-		session, err := s.CreateAgentSession(ctx, userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
+		session, err := createTestRunAgentSessionTask(ctx, q, userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
 			Provider:     "codex",
 			AgentProfile: input.AgentProfile,
 			RuntimeMode:  input.RuntimeMode,
@@ -2131,7 +2205,7 @@ func (s *PostgresStore) startPostgresTestRunExecutionSessions(ctx Context, userI
 			return err
 		}
 		for _, item := range batch {
-			if _, err := s.pool.Exec(dbctx, `
+			if _, err := q.Exec(ctx, `
 				UPDATE test_run_items
 				SET execution_issue_id = $4,
 					agent_session_id = $5,
@@ -2144,4 +2218,164 @@ func (s *PostgresStore) startPostgresTestRunExecutionSessions(ctx Context, userI
 		}
 	}
 	return nil
+}
+
+func (s *PostgresStore) ensureActiveCodexWorkerForQueryer(ctx context.Context, q queryer, workspaceID, userID, runtimeMode string) error {
+	workspace, err := loadWorkspaceForUser(ctx, q, workspaceID, userID)
+	if err != nil {
+		return err
+	}
+	runtimeMode = strings.ToLower(strings.TrimSpace(runtimeMode))
+	if runtimeMode == "" {
+		runtimeMode = workspace.Kind
+	}
+	if runtimeMode != "personal" && runtimeMode != "team" {
+		return errors.New("runtimeMode must be personal or team")
+	}
+	if runtimeMode != workspace.Kind {
+		return ErrForbidden
+	}
+	hasActiveWorker, err := s.hasActiveCodexWorker(ctx, workspaceID, runtimeMode)
+	if err != nil {
+		return err
+	}
+	if !hasActiveWorker {
+		return ErrNoActiveCodexWorker
+	}
+	return nil
+}
+
+func (s *PostgresStore) startPostgresTestRunSetupSession(ctx Context, userID string, run TestRun, input CreateTestRunInput) error {
+	dbctx := asContext(ctx)
+	body := buildTestRunSetupIssueBody(run)
+	child, err := s.CreateIssueTask(ctx, userID, run.WorkspaceID, run.ParentIssueID, IssueTaskInput{
+		Title: "Prepare test run",
+		Body:  body,
+	})
+	if err != nil {
+		return err
+	}
+	session, err := s.CreateAgentSession(ctx, userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
+		Provider:         "codex",
+		AgentProfile:     input.AgentProfile,
+		RuntimeMode:      input.RuntimeMode,
+		Command:          body,
+		Automation:       testRunSetupAutomation,
+		TestRunID:        run.ID,
+		TestRunBatchSize: input.BatchSize,
+	})
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(dbctx, `
+		UPDATE test_runs
+		SET setup_issue_id = $4,
+			setup_session_id = $5,
+			setup_status = 'running',
+			status = 'setup_running',
+			updated_at = now()
+		WHERE workspace_id = $1 AND project_id = $2 AND id = $3
+	`, run.WorkspaceID, run.ProjectID, run.ID, child.ID, session.ID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func createTestRunChildIssue(ctx context.Context, q queryer, userID string, run TestRun, title, body string) (IssueListItem, error) {
+	parent, err := loadIssue(ctx, q, run.WorkspaceID, run.ParentIssueID)
+	if err != nil {
+		return IssueListItem{}, err
+	}
+	var issueID string
+	err = q.QueryRow(ctx, `
+		WITH next_order AS (
+			SELECT COALESCE(MAX(sort_order), 0) + 1 AS sort_order
+			FROM issues
+			WHERE workspace_id = $1 AND parent_issue_id = $2
+		),
+		inserted AS (
+			INSERT INTO issues (workspace_id, project_id, parent_issue_id, sort_order, title, body, status, triage_status, assignee, assignee_type, creator_user_id, creator_name, creator_avatar_url)
+			SELECT $1, NULLIF($3, '')::uuid, $2, sort_order, $4, $5, 'open', 'none', $6, 'human', NULLIF($7, '')::uuid, $6, $8
+			FROM next_order
+			RETURNING id
+		)
+		SELECT id::text FROM inserted
+	`, run.WorkspaceID, run.ParentIssueID, parent.ProjectID, strings.TrimSpace(title), strings.TrimSpace(body), parent.CreatorName, strings.TrimSpace(userID), parent.CreatorAvatar).Scan(&issueID)
+	if err != nil {
+		return IssueListItem{}, err
+	}
+	items, err := listChildIssuesForQueryer(ctx, q, run.WorkspaceID, run.ParentIssueID)
+	if err != nil {
+		return IssueListItem{}, err
+	}
+	for _, item := range items {
+		if item.ID == issueID {
+			return item, nil
+		}
+	}
+	return IssueListItem{}, ErrNotFound
+}
+
+func createTestRunAgentSessionTask(ctx context.Context, q queryer, userID, workspaceID, issueID string, input CreateAgentSessionInput) (AgentSession, error) {
+	normalized := normalizeCreateAgentSessionInput(input)
+	if normalized.Command == "" {
+		return AgentSession{}, errors.New("command is required")
+	}
+	issue, err := loadIssue(ctx, q, workspaceID, issueID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if issue.ProjectID == "" {
+		return AgentSession{}, errors.New("attach a project before starting an agent session")
+	}
+	project, err := resolveIssueProject(ctx, q, workspaceID, issue.ProjectID, "")
+	if err != nil {
+		return AgentSession{}, err
+	}
+	sessionID, err := newAgentSessionID()
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if normalized.Branch == "" {
+		normalized.Branch = defaultAgentSessionBranch(issueID, sessionID)
+	}
+	runbook, _ := loadProjectRunbookSnapshot(ctx, q, workspaceID, project.ID)
+	comments, err := listIssueCommentsForQueryer(ctx, q, workspaceID, issueID, userID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	labels, err := listIssueLabels(ctx, q, workspaceID, issueID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	childIssues, err := listChildIssuesForQueryer(ctx, q, workspaceID, issueID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	payload, err := json.Marshal(buildAgentSessionPayload(sessionID, issue, project, runbook, comments, labels, childIssues, normalized))
+	if err != nil {
+		return AgentSession{}, err
+	}
+	capabilities, err := json.Marshal(map[string]bool{"codex": true})
+	if err != nil {
+		return AgentSession{}, err
+	}
+	task, err := insertRuntimeTaskRecord(ctx, q, workspaceID, userID, CreateRuntimeTaskInput{
+		IssueID:              issue.ID,
+		SessionID:            sessionID,
+		ProjectID:            project.ID,
+		Kind:                 "agent_session",
+		Priority:             0,
+		RuntimeMode:          normalized.RuntimeMode,
+		RequiredCapabilities: capabilities,
+		Payload:              payload,
+	})
+	if err != nil {
+		return AgentSession{}, err
+	}
+	return runtimeTaskToAgentSession(task)
 }

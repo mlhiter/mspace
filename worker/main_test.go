@@ -114,6 +114,31 @@ func TestReadTestResultArtifactAcceptsArrayShape(t *testing.T) {
 	}
 }
 
+func TestReadTestSetupResultArtifact(t *testing.T) {
+	artifactDir := t.TempDir()
+	data := `{
+		"runId": "test-run-setup",
+		"status": "passed",
+		"summary": "Preview is ready.",
+		"outputs": {"previewUrl": "https://setup.example.test"},
+		"steps": [{"title": "Update image", "status": "passed", "command": "kubectl set image deployment/app app=image:rc"}]
+	}`
+	if err := os.WriteFile(filepath.Join(artifactDir, testSetupResultArtifactName), []byte(data), 0o644); err != nil {
+		t.Fatalf("write setup artifact: %v", err)
+	}
+
+	artifact, ok := readTestSetupResultArtifact(agentSessionPayload{ArtifactDir: artifactDir})
+	if !ok {
+		t.Fatal("expected test setup artifact to be accepted")
+	}
+	if artifact.RunID != "test-run-setup" || artifact.Status != "passed" || len(artifact.Steps) != 1 {
+		t.Fatalf("unexpected setup artifact: %+v", artifact)
+	}
+	if !strings.Contains(string(artifact.Outputs), "setup.example.test") {
+		t.Fatalf("expected setup outputs to be preserved, got %s", artifact.Outputs)
+	}
+}
+
 func TestReadTestResultArtifactEmbedsScreenshotImages(t *testing.T) {
 	artifactDir := t.TempDir()
 	pngBytes := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}

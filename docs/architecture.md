@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: server-owned runtime and test-module surfaces, updated 2026-06-03
+> Status: server-owned runtime and test-module surfaces, updated 2026-06-05
 
 ## Current Implementation Snapshot
 
@@ -10,7 +10,7 @@ The repository contains a runnable desktop MVP with server-owned product and run
 - Public website in `apps/website`, built with Vite, React 19, Tailwind CSS 4, and lucide-react, deployed as a static Vercel site from the root `vercel.json`.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Shared desktop localization lives in `packages/i18n` for `en` and `zh-CN`.
-- Go server control plane in `server/`, built with chi. Team/shared deployments use PostgreSQL through `pgx`; packaged personal desktop mode can use a server-owned SQLite snapshot store. Project-level test cases, case suggestions, plans, and runs live in this same server store.
+- Go server control plane in `server/`, built with chi. Team/shared deployments use PostgreSQL through `pgx`; packaged personal desktop mode can use a server-owned SQLite snapshot store. Project-level test cases, case suggestions, plans, plan setup steps, and runs live in this same server store.
 - Go runtime worker in `worker/`, registered to workspaces with `msw_...` tokens.
 - Local username/password auth creates a personal workspace by default and works without GitHub access. Default local personal sign-in opens on account creation and hides GitHub. GitHub sign-in remains an optional external identity provider for explicitly configured team servers, from a saved Team server URL or `MSPACE_SERVER_URL`, when `/health` reports `capabilities.githubAuth: true`. Auth responses include `identity.provider` and `identity.login`, so the desktop can show local accounts and GitHub accounts without guessing from `user.email`. Personal and team workspaces both use the server store; team/shared deployments use Postgres, while packaged personal desktop mode can stay local on SQLite.
 - Team collaboration features require an explicit team workspace created from the workspace menu. Team access is through one-time join links rather than email-targeted invitations, with a safe unauthenticated preview for signed-out recipients and desktop deep links that carry the invited team server context.
@@ -105,8 +105,14 @@ Tests / Plans
   -> select ready cases and start a run
 Server
   -> creates a parent issue plus run items linked to cases
+  -> if setupSteps exist, creates one setup issue/session first
 Worker
-  -> executes through the existing agent_session runtime path
+  -> writes test-setup-result.json for setup, when required
+Server
+  -> stores setupResult, copies outputs to runContext
+  -> starts case execution only after completed passing setup
+Worker
+  -> executes cases through the existing agent_session runtime path
   -> writes test-result.json
 Server
   -> reconciles run item status and evidence
@@ -116,6 +122,8 @@ Human
 ```
 
 The Tests UI is intentionally not a separate test-management product. It owns durable case knowledge, case suggestions, plans, and run review state. Collaboration, execution, worker logs, and evidence remain in the existing Issue, Agent Session, Runtime Task, and Evidence model.
+
+Plan setup is the first compatibility layer for real-world preconditions such as Kubernetes image updates, SSH/VM commands, platform login, mock data, or preview checks. It remains free-text setup steps plus a worker artifact contract, not a reusable template library or workflow DAG. A failed, cancelled, or missing setup artifact marks the run `setup_failed` before any case session starts.
 
 Case creation and import use modal flows. Markdown and text imports treat each non-empty line as a case. CSV and Excel `.xlsx` imports share a column contract: `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags`. Excel workbooks are base64-encoded in the API request, the server reads the first non-empty sheet, skips rows without a title, validates case types, and opens the workbook with explicit unzip limits.
 
@@ -137,7 +145,7 @@ Main server-owned state groups:
 - Identity: `users`, `user_password_credentials`, `user_identities`, `auth_sessions`, `oauth_states`, `oauth_results`. `/api/auth/me` and auth result payloads expose a lightweight `identity` object derived from `user_identities` for UI display and admin-login matching.
 - Workspaces: `workspaces`, `workspace_members`, `workspace_invitations`. Invitation tokens are stored as server-side secrets and surfaced to users only as one-time join links. The signed-out preview API returns safe metadata such as workspace name, role, inviter display fields, expiry, and status; it does not expose member lists, raw internal ids, or token debug fields.
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
-- Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`, and `test_artifacts`. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
+- Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`, and `test_artifacts`. Plans can store lightweight setup steps; runs freeze setup text plus setup status, setup issue/session, setup result, and run context. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
 - Runtime surfaces: `workspace_settings`, `agent_profiles`, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`.
 - Runtime queue: `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, `runtime_task_logs`.
@@ -230,7 +238,7 @@ Creating, updating, importing, or manually checking a Kubernetes Environment ref
 
 Virtual machine environments store SSH target metadata: host, port, user, credential reference, workdir, service hints, labels, readiness status, timestamps, and a server-owned SSH credential. Creating a VM Environment requires SSH auth material, either password or private key; updating or manually rechecking can use the saved credential or replace it with new `sshAuth`. The server runs an `ssh user@host`-level login check, stores usable credentials for later worker access, and never returns raw passwords or private keys in Environment payloads. A successful check marks the Environment `ready`; connection or authentication failure saves it as `unreachable`; missing or unusable auth material is rejected when no saved credential exists.
 
-Test plans and test runs can select an Environment. The server stores `environment_id`, `environment_kind`, and a frozen `environment_snapshot` so historical runs keep their meaning even if the reusable environment changes later. The older free-text `environment` field remains human notes/prompt context.
+Test plans and test runs can select an Environment. The server stores `environment_id`, `environment_kind`, and a frozen `environment_snapshot` so historical runs keep their meaning even if the reusable environment changes later. The older free-text `environment` field remains human notes/prompt context. Formal plans may also carry setup steps; each run freezes those steps and records setup output context separately from the Environment snapshot.
 
 Each issue can have one `issue_test_environments` record. It stores selected environment id/kind/snapshot, Kubernetes cluster id, namespace, namespace state, cleanup state, preview URL, deployment session id, cleanup session id, selected source session/commit, registry, kubeconfig, context, exposure mode, domain, ingress class, and NodePort host. Current issue deploy and Resources flows are Kubernetes-only; VM deployment is a later provider-specific execution path.
 
