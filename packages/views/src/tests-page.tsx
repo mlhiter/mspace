@@ -89,7 +89,6 @@ type PlanForm = {
   targetType: string;
   targetValue: string;
   environmentId: string;
-  environment: string;
 };
 
 const emptyCaseForm: CaseForm = {
@@ -112,7 +111,6 @@ const emptyPlanForm: PlanForm = {
   targetType: "branch",
   targetValue: "",
   environmentId: "",
-  environment: "",
 };
 
 const tabs: TabKey[] = ["cases", "proposals", "plans", "runs"];
@@ -1360,6 +1358,7 @@ export function TestsPage() {
     mutationFn: () =>
       controlPlaneApi.createProjectTestPlan(auth.token, workspaceId, effectiveProjectId, {
         ...planForm,
+        environment: "",
         environmentId: planForm.environmentId || "",
         caseIds: selectedCaseIds,
       }),
@@ -3291,9 +3290,6 @@ function PlanFormFields(props: {
                 ))}
               </SelectContent>
             </Select>
-          </Field>
-          <Field label={t("tests.environmentNotes")}>
-            <Textarea value={form.environment} onChange={(event) => onChange((current) => ({ ...current, environment: event.target.value }))} className="min-h-16" />
           </Field>
         </div>
       </div>
