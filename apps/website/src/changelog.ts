@@ -7,6 +7,16 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-06-09",
+    title: "Active issue shortcuts in the sidebar",
+    summary:
+      "mspace made the desktop sidebar Active work block treat open issue work as first-class alongside active test runs.",
+    items: [
+      "Changed Active work to include every non-terminal issue, so ordinary open issues remain reachable from the sidebar before an agent session or child task exists.",
+      "Kept closed and cancelled issues out of Active work while preserving actionable test-run shortcuts in the same recency-sorted list.",
+    ],
+  },
+  {
     date: "2026-06-08",
     title: "Plan-first test execution",
     summary:

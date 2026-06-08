@@ -65,7 +65,6 @@ function joinSearchSubtitle(values: Array<string | number | null | undefined>): 
     .join(" - ");
 }
 
-const activeIssueStatuses = new Set(["needs_review", "changes_requested", "ready_for_test", "blocked"]);
 const inactiveIssueStatuses = new Set(["closed", "cancelled"]);
 const activeTestRunStatuses = new Set(["queued", "setup_running", "setup_failed", "running", "needs_acceptance", "blocked"]);
 
@@ -128,8 +127,7 @@ function isConfiguredTeamServer(source: ServerBaseUrlSource): boolean {
 
 function isActiveIssueWork(issue: IssueListItem): boolean {
   const status = issue.status.trim().toLowerCase();
-  if (inactiveIssueStatuses.has(status)) return false;
-  return issue.sessionCount > 0 || issue.childIssueCount > issue.completedChildIssueCount || activeIssueStatuses.has(status);
+  return !inactiveIssueStatuses.has(status);
 }
 
 function issueActiveWorkItem(issue: IssueListItem, statusLabel: string): ShellActiveWorkItem {
