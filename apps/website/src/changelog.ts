@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-06-08",
+    title: "Plan-first test execution",
+    summary:
+      "mspace tightened the Tests workflow so executable runs start from explicit plans instead of direct case actions.",
+    items: [
+      "Removed the ordinary Run case and Run selected UI paths, keeping cases as test knowledge and plans as the executable scope.",
+      "Changed ready-case actions to create a plan first, so target, environment, and setup context are explicit before a worker runs tests.",
+      "Kept historical and compatibility ad hoc runs readable while making plan-based runs the normal product path.",
+      "Updated English and Simplified Chinese copy so the Runs surface asks users to choose a plan before starting execution.",
+    ],
+  },
+  {
     date: "2026-06-05",
     title: "Workspace-level test plans and runs",
     summary:
@@ -95,7 +107,7 @@ export const changelog: ChangelogEntry[] = [
     date: "2026-06-05",
     title: "Select-all controls for test cases",
     summary:
-      "mspace made the Test Case library easier to use when starting batch optimization, plans, or selected-case runs.",
+      "mspace made the Test Case library easier to use when starting batch optimization or building plans.",
     items: [
       "Added a Select all action for the current filtered case list so users can quickly prepare a batch from search or status results.",
       "Added a header checkbox with checked, unchecked, and mixed states to match the row-selection model users expect in a table.",
@@ -109,7 +121,7 @@ export const changelog: ChangelogEntry[] = [
     summary:
       "mspace made Test Case Detail read more like Issue Detail, with page-level actions and tabs instead of a repeated inner header.",
     items: [
-      "Moved Run case and Save case actions into the page header so they stay aligned with the object title.",
+      "Moved page actions into the header so they stay aligned with the object title.",
       "Removed the duplicated case title summary block below the page title while keeping project, executability, status, and type as compact metadata.",
       "Moved Details, Run history, and Revisions navigation directly under the title area with the same quiet tab treatment as Issue Detail.",
       "Kept save behavior intact by binding the header Save action back to the detail form.",
@@ -133,13 +145,13 @@ export const changelog: ChangelogEntry[] = [
   },
   {
     date: "2026-06-03",
-    title: "Direct selected-case test runs",
+    title: "Compatibility selected-case test runs",
     summary:
-      "mspace made test execution start from selected ready cases without forcing users to create a formal plan first.",
+      "mspace first introduced selected-case execution as a compatibility path before the Tests workflow moved to plan-first runs.",
     items: [
-      "Added project-level test run creation for selected ready cases while keeping plan-based runs for formal release passes.",
-      "Made test runs record their source so selected-case, plan, retry, and later incremental runs can share the same Issue-backed execution model.",
-      "Updated the Tests UI so the Run stage lists project run history directly and offers both selected-case runs and plan runs.",
+      "Added project-level ad hoc test run creation for selected ready cases while keeping plan-based runs for formal release passes.",
+      "Made test runs record their source so compatibility ad hoc, plan, retry, and later incremental runs can share the same Issue-backed execution model.",
+      "This path is now superseded in the ordinary UI by plan-first execution, where selected cases are turned into a plan before a run starts.",
       "Kept worker preflight, parent Issues, child execution Issues, agent sessions, `test-result.json` reconciliation, and human acceptance in the same auditable path.",
     ],
   },

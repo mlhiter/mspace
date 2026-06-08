@@ -193,7 +193,7 @@ Successful acceptance returns the joined workspace. Desktop clients should selec
 | `PUT` | `/api/workspaces/{workspaceID}/test-plans/{planID}` | Update workspace plan metadata and selected cases. |
 | `POST` | `/api/workspaces/{workspaceID}/test-plans/{planID}/runs` | Start an issue-backed test run from a workspace plan. |
 | `GET` | `/api/workspaces/{workspaceID}/test-runs` | List workspace test runs. |
-| `POST` | `/api/workspaces/{workspaceID}/test-runs` | Start an ad hoc issue-backed run from selected ready project cases. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs` | Compatibility/debug-only ad hoc run from selected ready project cases. Normal clients should create a test plan and start `/api/workspaces/{workspaceID}/test-plans/{planID}/runs`. |
 | `GET` | `/api/workspaces/{workspaceID}/test-runs/{runID}` | Read a workspace test run with run items. |
 | `GET` | `/api/workspaces/{workspaceID}/test-runs/{runID}/artifacts` | List artifacts for one workspace test run. |
 | `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/retry` | Retry failed or blocked run items. |

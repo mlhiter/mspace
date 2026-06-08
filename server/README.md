@@ -125,8 +125,8 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `GET` | `/api/workspaces/{workspaceID}/test-plans/{planID}` | Read one workspace test plan. |
 | `PUT` | `/api/workspaces/{workspaceID}/test-plans/{planID}` | Update one workspace test plan. |
 | `POST` | `/api/workspaces/{workspaceID}/test-plans/{planID}/runs` | Start an issue-backed test run. |
-| `GET` | `/api/workspaces/{workspaceID}/test-runs` | List workspace test runs from plans, selected cases, retries, or incremental scopes. |
-| `POST` | `/api/workspaces/{workspaceID}/test-runs` | Start an issue-backed run from selected ready test cases. |
+| `GET` | `/api/workspaces/{workspaceID}/test-runs` | List workspace test runs from plans, compatibility ad hoc runs, retries, or incremental scopes. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs` | Compatibility/debug API for starting an ad hoc issue-backed run from selected ready test cases. Normal product clients should create a test plan and call `/api/workspaces/{workspaceID}/test-plans/{planID}/runs`. |
 | `GET` | `/api/workspaces/{workspaceID}/test-runs/{runID}` | Read one workspace test run. |
 | `GET` | `/api/workspaces/{workspaceID}/test-runs/{runID}/artifacts` | List artifacts for one workspace test run. |
 | `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/retry` | Retry blocked or failed test run items. |
@@ -220,7 +220,7 @@ Case import supports `markdown`, `text`, `csv`, and `xlsx`. Clients should call 
 
 Valid case types are `functional`, `ui`, `api`, and `deployment`. The current product can classify those cases and plan against them; specialized UI/CDP automation, API harnessing, deployment orchestration, and multi-worker scheduling remain future execution capabilities behind the same Issue and Worker runtime path.
 
-Codex-generated or Codex-refined cases never write directly into canonical test cases. Workers return `test-case-proposals.json`; the server stores validated proposals as Case suggestions; humans apply or reject them. Test runs can come from a formal test plan or from selected ready cases. Selected-case runs start execution directly. Formal plan runs may include free-text setup steps; in that case the server freezes the setup text onto the run, creates one setup Issue/Session first, waits for `test-setup-result.json`, stores `setupResult`, copies setup `outputs` into `runContext`, and only starts case execution after the setup task completed with `status:"passed"`. Failed, cancelled, or missing setup stops the run as `setup_failed` without starting case sessions. Execution workers then return `test-result.json`, the server reconciles run items, persists supported screenshot evidence as `test_artifacts`, and a user accepts or blocks the run result.
+Codex-generated or Codex-refined cases never write directly into canonical test cases. Workers return `test-case-proposals.json`; the server stores validated proposals as Case suggestions; humans apply or reject them. Normal test runs start from a workspace test plan so the selected cases, target, environment, and setup are explicit before execution. Plan runs may include free-text setup steps; in that case the server freezes the setup text onto the run, creates one setup Issue/Session first, waits for `test-setup-result.json`, stores `setupResult`, copies setup `outputs` into `runContext`, and only starts case execution after the setup task completed with `status:"passed"`. Failed, cancelled, or missing setup stops the run as `setup_failed` without starting case sessions. The ad hoc selected-case run endpoint remains as a compatibility/debug API, but it is not the normal product path. Execution workers then return `test-result.json`, the server reconciles run items, persists supported screenshot evidence as `test_artifacts`, and a user accepts or blocks the run result.
 
 ## Workspace Invitations
 

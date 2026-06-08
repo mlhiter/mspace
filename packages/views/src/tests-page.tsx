@@ -1477,7 +1477,7 @@ export function TestsPage() {
   const canGoPreviousCasePage = casePage > 0;
   const canGoNextCasePage = casePage < totalCasePages - 1;
   const canCreateCase = Boolean(effectiveProjectId && caseForm.title.trim());
-  const canCreatePlan = Boolean(effectiveProjectId && planForm.title.trim() && selectedCaseIds.length > 0);
+  const canCreatePlan = Boolean(effectiveProjectId && planForm.title.trim() && selectedReadyCaseIds.length > 0);
   const importMappingTask = importMappingTasksQuery.data?.tasks.find((task) => task.id === importMappingTaskId);
   const importMappingActive = Boolean(importMappingTaskId && (!importMappingTask || ["queued", "claimed", "running"].includes(importMappingTask.status)));
 
@@ -1684,7 +1684,7 @@ export function TestsPage() {
         setupSteps: planForm.setupSteps.trim(),
         environment: "",
         environmentId: planForm.environmentId || "",
-        cases: selectedCaseIds.map((caseId) => ({ projectId: effectiveProjectId, caseId })),
+        cases: selectedReadyCaseIds.map((caseId) => ({ projectId: effectiveProjectId, caseId })),
       }),
     onSuccess: async (detail) => {
       setSelectedPlanId(detail.plan.id);
@@ -1692,26 +1692,6 @@ export function TestsPage() {
       setCreatePlanOpen(false);
       setActionMessage(t("tests.planCreated"));
       await navigate({ to: "/tests/plans/$planId", params: { planId: detail.plan.id }, search: testsTabSearch("plans", effectiveProjectId) });
-      await invalidateCaseWorkflow();
-    },
-  });
-
-  const startAdHocRun = useMutation({
-    mutationFn: async () => {
-      if (selectedReadyCaseIds.length === 0) {
-        throw new Error(t("tests.readySelectedRequired"));
-      }
-      await workerReadiness.ensureReady();
-      return controlPlaneApi.startAdHocWorkspaceTestRun(auth.token, workspaceId, {
-        cases: selectedReadyCaseIds.map((caseId) => ({ projectId: effectiveProjectId, caseId })),
-        environmentId: selectedProject?.defaultEnvironmentId || selectedProject?.defaultClusterId || "",
-        runtimeMode: workerReadiness.runtimeMode,
-        resultLocale: language,
-      });
-    },
-    onSuccess: async (detail) => {
-      setActionMessage(t("tests.adHocRunStarted"));
-      await navigate({ to: "/tests/runs/$runId", params: { runId: detail.run.id }, search: testsTabSearch("runs", effectiveProjectId) });
       await invalidateCaseWorkflow();
     },
   });
@@ -1739,7 +1719,7 @@ export function TestsPage() {
     },
   });
 
-  const agentActionError = optimizeCases.error || generateCases.error || startAdHocRun.error || startRun.error;
+  const agentActionError = optimizeCases.error || generateCases.error || startRun.error;
   const agentActionMessage = agentActionError?.message || actionMessage;
   const agentActionMessageClass = agentActionError ? "text-[color:var(--danger)]" : "text-[color:var(--muted)]";
 
@@ -1842,25 +1822,27 @@ export function TestsPage() {
         key: "runs" as const,
         icon: Play,
         count: latestRun ? t("tests.workflow.runLatest", { status: t(`tests.runStatusValue.${latestRun.status}`, { defaultValue: latestRun.status }) }) : t("tests.workflow.runCountEmpty"),
-        status: latestRun?.status === "running" || latestRun?.status === "queued" ? ("active" as const) : readyCases.length > 0 ? ("ready" as const) : ("blocked" as const),
+        status: latestRun?.status === "running" || latestRun?.status === "queued" ? ("active" as const) : readyPlans.length > 0 ? ("ready" as const) : ("blocked" as const),
         statusLabel:
           latestRun?.status === "running" || latestRun?.status === "queued"
             ? t("tests.workflow.runActive")
-            : readyCases.length > 0
+            : readyPlans.length > 0
               ? t("tests.workflow.runReady")
               : t("tests.workflow.blocked"),
         body: t("tests.workflow.runBody"),
-        dependency: readyCases.length > 0 ? t("tests.workflow.runDependencyDone", { count: readyCases.length }) : t("tests.workflow.runDependency"),
+        dependency: readyPlans.length > 0 ? t("tests.workflow.runDependencyDone", { count: readyPlans.length }) : t("tests.workflow.runDependency"),
       },
     ],
-    [allCaseTotal, allPlans.length, latestRun, pendingProposals.length, readyCases.length, t],
+    [allCaseTotal, allPlans.length, latestRun, pendingProposals.length, readyCases.length, readyPlans.length, t],
   );
   const activeStage = workflowStages.find((stage) => stage.key === activeTab) || workflowStages[0];
   const workflowNextAction =
     pendingProposals.length > 0
       ? t("tests.workflow.nextReview", { count: pendingProposals.length })
-      : readyCases.length > 0
-        ? t("tests.workflow.nextRunOrPlan", { count: readyCases.length })
+      : readyPlans.length > 0
+        ? t("tests.workflow.nextRun")
+        : readyCases.length > 0
+          ? t("tests.workflow.nextRunOrPlan", { count: readyCases.length })
           : allCaseTotal > 0
             ? t("tests.workflow.nextOptimize")
             : t("tests.workflow.nextCases");
@@ -2133,9 +2115,9 @@ export function TestsPage() {
                     <Sparkles data-icon />
                     {optimizeCases.isPending ? t("tests.optimizing") : t("tests.optimize")}
                   </Button>
-                  <Button type="button" variant="secondary" onClick={() => startAdHocRun.mutate()} disabled={selectedReadyCaseIds.length === 0 || startAdHocRun.isPending}>
-                    <Play data-icon />
-                    {startAdHocRun.isPending ? t("tests.startingAdHocRun") : t("tests.runSelected")}
+                  <Button type="button" variant="secondary" onClick={openCreatePlanDialog} disabled={selectedReadyCaseIds.length === 0}>
+                    <ListChecks data-icon />
+                    {t("tests.createPlanFromSelection")}
                   </Button>
                   <Button type="button" onClick={openCreateCaseDialog} disabled={!effectiveProjectId}>
                     <Plus data-icon />
@@ -2512,10 +2494,6 @@ export function TestsPage() {
                     <p className="mt-1 text-[12px] text-[color:var(--muted)]">{t("tests.runSelectedDescription")}</p>
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-2">
-                    <Button type="button" variant="secondary" onClick={() => startAdHocRun.mutate()} disabled={selectedReadyCaseIds.length === 0 || startAdHocRun.isPending}>
-                      <Play data-icon />
-                      {startAdHocRun.isPending ? t("tests.startingAdHocRun") : t("tests.runSelected")}
-                    </Button>
                     <Select value={selectedPlanId || "__none"} onValueChange={(value) => setSelectedPlanId(value === "__none" ? "" : value)}>
                       <SelectTrigger className={cn(toolbarSelectClass, "w-[240px]")} aria-label={t("tests.selectedPlan")}>
                         <SelectValue />
@@ -2695,7 +2673,7 @@ export function TestsPage() {
                   onChange={setPlanForm}
                   environments={environments}
                   readyCases={readyCases}
-                  selectedCaseIds={selectedCaseIds}
+                  selectedCaseIds={selectedReadyCaseIds}
                   onCaseToggle={toggleCaseSelection}
                   onSelectReadyCases={selectReadyCases}
                 />
@@ -2720,7 +2698,6 @@ export function TestsPage() {
 
 export function TestCaseDetailPage() {
   const { t } = useMspaceTranslation();
-  const { language } = useMspaceLanguage();
   const navigate = useNavigate();
   const search = useTestsSearch();
   const { caseId = "" } = useParams({ strict: false }) as { caseId?: string };
@@ -2730,8 +2707,8 @@ export function TestCaseDetailPage() {
   const selectedProject = projectFromSearch(projects, search.project);
   const effectiveProjectId = selectedProject?.id || "";
   const [caseForm, setCaseForm] = useState<CaseForm>(emptyCaseForm);
-  const [actionMessage, setActionMessage] = useState("");
-  const workerReadiness = useTestsWorkerReadiness(auth, workspaceId, setActionMessage);
+  const [createPlanOpen, setCreatePlanOpen] = useState(false);
+  const [planForm, setPlanForm] = useState<PlanForm>(emptyPlanForm);
 
   const caseQuery = useQuery({
     queryKey: queryKeys.projectTestCase(workspaceId, effectiveProjectId, caseId || "__none", auth.token),
@@ -2747,6 +2724,11 @@ export function TestCaseDetailPage() {
   const revisions = revisionsQuery.data || emptyTestCaseRevisions;
   const revisionTimeline = useMemo(() => buildTestCaseRevisionTimeline(revisions, t), [revisions, t]);
   const activeCaseTab = !isNew && caseDetailTabs.includes(search.caseTab as TestCaseDetailTab) ? (search.caseTab as TestCaseDetailTab) : "details";
+  const environmentsQuery = useQuery({
+    queryKey: queryKeys.environments(workspaceId, auth.token),
+    queryFn: () => controlPlaneApi.listEnvironments(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
+  });
   const runHistory = useTestCaseRunHistory({
     token: auth.token,
     workspaceId,
@@ -2756,7 +2738,10 @@ export function TestCaseDetailPage() {
     latestResult: testCase?.latestResult,
   });
   const canSave = Boolean(effectiveProjectId && caseForm.title.trim());
-  const canRunCase = Boolean(testCase && testCase.status === "ready");
+  const canCreatePlanFromCase = Boolean(testCase && testCase.status === "ready" && planForm.title.trim());
+  const readyCaseForPlan = testCase && testCase.status === "ready" ? [testCase] : emptyTestCases;
+  const selectedCaseForPlan = testCase && testCase.status === "ready" ? [testCase.id] : [];
+  const environments = environmentsQuery.data || emptyEnvironments;
 
   const createCase = useMutation({
     mutationFn: (input: TestCaseInput) => controlPlaneApi.createProjectTestCase(auth.token, workspaceId, effectiveProjectId, input),
@@ -2777,35 +2762,47 @@ export function TestCaseDetailPage() {
       ]);
     },
   });
-  const startCaseRun = useMutation({
+
+  const createPlanFromCase = useMutation({
     mutationFn: async () => {
       if (!testCase || testCase.status !== "ready") {
         throw new Error(t("tests.readyCaseRequired"));
       }
-      await workerReadiness.ensureReady();
-      return controlPlaneApi.startAdHocWorkspaceTestRun(auth.token, workspaceId, {
+      return controlPlaneApi.createWorkspaceTestPlan(auth.token, workspaceId, {
+        ...planForm,
+        setupSteps: planForm.setupSteps.trim(),
+        environment: "",
+        environmentId: planForm.environmentId || "",
         cases: [{ projectId: effectiveProjectId, caseId: testCase.id }],
-        environmentId: selectedProject?.defaultEnvironmentId || selectedProject?.defaultClusterId || "",
-        runtimeMode: workerReadiness.runtimeMode,
-        resultLocale: language,
       });
     },
     onSuccess: async (detail) => {
-      const runningCaseId = testCase?.id || detail.items[0]?.testCaseId || caseId;
-      setActionMessage(t("tests.adHocRunStarted"));
+      setPlanForm(emptyPlanForm);
+      setCreatePlanOpen(false);
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestRuns(workspaceId, auth.token) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCase(workspaceId, effectiveProjectId, runningCaseId, auth.token) }),
-        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCaseRunItems(workspaceId, effectiveProjectId, runningCaseId, auth.token) }),
-        navigate({
-          to: "/tests/cases/$caseId",
-          params: { caseId: runningCaseId },
-          search: testCaseDetailSearch(effectiveProjectId, "runs", { runId: detail.run.id, itemId: detail.items[0]?.id }),
-        }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestPlans(workspaceId, auth.token) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.projectTestCase(workspaceId, effectiveProjectId, testCase?.id || caseId, auth.token) }),
+        navigate({ to: "/tests/plans/$planId", params: { planId: detail.plan.id }, search: testsTabSearch("plans", effectiveProjectId) }),
       ]);
     },
   });
   const savePending = createCase.isPending || updateCase.isPending;
+
+  function openCreatePlanFromCaseDialog() {
+    if (!testCase || testCase.status !== "ready") return;
+    setPlanForm({
+      ...emptyPlanForm,
+      title: t("tests.casePlanTitle", { title: testCase.title }),
+      environmentId: selectedProject?.defaultEnvironmentId || selectedProject?.defaultClusterId || "",
+    });
+    setCreatePlanOpen(true);
+    createPlanFromCase.reset();
+  }
+
+  function closeCreatePlanFromCaseDialog() {
+    setCreatePlanOpen(false);
+    createPlanFromCase.reset();
+  }
 
   useEffect(() => {
     if (isNew) {
@@ -2879,9 +2876,9 @@ export function TestCaseDetailPage() {
       actions={
         <div className="flex flex-wrap items-center justify-end gap-2 pt-[38px]">
           {!isNew ? (
-            <Button type="button" variant="secondary" onClick={() => startCaseRun.mutate()} disabled={!canRunCase || startCaseRun.isPending}>
-              <Play data-icon />
-              {startCaseRun.isPending ? t("tests.startingAdHocRun") : t("tests.runCase")}
+            <Button type="button" variant="secondary" onClick={openCreatePlanFromCaseDialog} disabled={!testCase || testCase.status !== "ready"}>
+              <ListChecks data-icon />
+              {t("tests.createPlanFromCase")}
             </Button>
           ) : null}
           {isNew || activeCaseTab === "details" ? (
@@ -2897,12 +2894,6 @@ export function TestCaseDetailPage() {
         <CaseDetailTabs activeTab={activeCaseTab} projectId={effectiveProjectId} caseId={testCase.id} />
       ) : null}
       <form id={caseDetailFormId} className="grid gap-5" onSubmit={submitCase}>
-        {startCaseRun.error ? (
-          <p className="text-[12px] text-[color:var(--danger)]">{startCaseRun.error.message}</p>
-        ) : actionMessage ? (
-          <p className="text-[12px] text-[color:var(--muted)]">{actionMessage}</p>
-        ) : null}
-
         {isNew || activeCaseTab === "details" ? (
           <CaseDetailsTab
             form={caseForm}
@@ -2936,6 +2927,39 @@ export function TestCaseDetailPage() {
           <p className="text-[12px] text-[color:var(--danger)]">{(createCase.error || updateCase.error)?.message}</p>
         ) : null}
       </form>
+      {createPlanOpen ? (
+        <TestsModal title={t("tests.createPlanFromCase")} description={t("tests.createPlanFromCaseDescription")} onClose={closeCreatePlanFromCaseDialog} wide>
+          <form
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!canCreatePlanFromCase) return;
+              createPlanFromCase.mutate();
+            }}
+          >
+            <PlanFormFields
+              form={planForm}
+              onChange={setPlanForm}
+              environments={environments}
+              readyCases={readyCaseForPlan}
+              selectedCaseIds={selectedCaseForPlan}
+              onCaseToggle={() => undefined}
+              onSelectReadyCases={() => undefined}
+              selectionLocked
+            />
+            {createPlanFromCase.error ? <p className="text-[12px] text-[color:var(--danger)]">{createPlanFromCase.error.message}</p> : null}
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[color:var(--line)] pt-3">
+              <Button type="button" variant="secondary" onClick={closeCreatePlanFromCaseDialog}>
+                {t("common.cancel")}
+              </Button>
+              <Button type="submit" disabled={createPlanFromCase.isPending || !canCreatePlanFromCase}>
+                <Plus data-icon />
+                {createPlanFromCase.isPending ? t("tests.creatingPlan") : t("tests.createPlan")}
+              </Button>
+            </div>
+          </form>
+        </TestsModal>
+      ) : null}
     </PageFrame>
   );
 }
@@ -3895,9 +3919,10 @@ function PlanFormFields(props: {
   selectedCaseIds: string[];
   onCaseToggle: (caseId: string) => void;
   onSelectReadyCases: () => void;
+  selectionLocked?: boolean;
 }) {
   const { t } = useMspaceTranslation();
-  const { form, onChange, environments, readyCases, selectedCaseIds, onCaseToggle, onSelectReadyCases } = props;
+  const { form, onChange, environments, readyCases, selectedCaseIds, onCaseToggle, onSelectReadyCases, selectionLocked = false } = props;
 
   return (
     <>
@@ -3965,7 +3990,7 @@ function PlanFormFields(props: {
               {t("tests.selectedSummary", { selected: selectedCaseIds.length, total: readyCases.length })}
             </span>
           </div>
-          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={onSelectReadyCases} disabled={readyCases.length === 0}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[12px]" onClick={onSelectReadyCases} disabled={selectionLocked || readyCases.length === 0}>
             {t("tests.selectReady")}
           </Button>
         </div>
@@ -3979,6 +4004,7 @@ function PlanFormFields(props: {
                   type="checkbox"
                   className="mt-1 size-4 shrink-0 accent-[color:var(--accent)]"
                   checked={selectedCaseIds.includes(testCase.id)}
+                  disabled={selectionLocked}
                   onChange={() => onCaseToggle(testCase.id)}
                 />
                 <span className="min-w-0">

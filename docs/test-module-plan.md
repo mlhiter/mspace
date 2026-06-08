@@ -185,7 +185,7 @@ Recommended fields:
 
 ### Test Run
 
-A test run is the durable execution record. It can come from a formal test plan, a selected set of ready cases, a failed/blocked retry, or a later incremental scope.
+A test run is the durable execution record. In the normal product flow it starts from a workspace test plan, including quick plans created from selected ready cases. Compatibility/debug ad hoc runs may still exist at the API layer, and failed/blocked retry or later incremental scopes reuse the same run model.
 
 A test run is also workspace-level. Its run items preserve the project/case identity used for execution, artifacts, and result reconciliation. When a run covers multiple projects, mspace groups queued items by project and creates separate execution Issues/agent sessions per project batch; one agent session should not span multiple repositories or projects.
 
