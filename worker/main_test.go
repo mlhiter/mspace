@@ -114,6 +114,42 @@ func TestReadTestResultArtifactAcceptsArrayShape(t *testing.T) {
 	}
 }
 
+func TestParseImportMappingResultNormalizesSuggestions(t *testing.T) {
+	payload := importMappingPayload{
+		Format:   "csv",
+		FileName: "cases.csv",
+		Headers:  []string{"用例ID", "用例名称", "测试类别", "步骤描述", "执行结果"},
+	}
+	message := `Here is the mapping:
+{
+  "suggestions": [
+    {"source":"用例ID","field":"external_id","index":0,"confidence":0.99,"reason":"source id"},
+    {"source":"用例名称","field":"title","index":1,"confidence":0.98,"reason":"case name"},
+    {"source":"测试类别","field":"tags","index":2,"confidence":0.82,"reason":"business category"},
+    {"source":"步骤描述","field":"steps","index":3,"confidence":0.97,"reason":"actions"},
+    {"source":"执行结果","field":"latest_result","index":4,"confidence":0.9,"reason":"historical execution status"}
+  ],
+  "warnings": ["expected result is not present"]
+}`
+
+	result, err := parseImportMappingResult(message, payload)
+	if err != nil {
+		t.Fatalf("parse import mapping result: %v", err)
+	}
+	if result.Format != "csv" || result.FileName != "cases.csv" {
+		t.Fatalf("expected payload format/file fallback, got %+v", result)
+	}
+	if len(result.Suggestions) != 5 {
+		t.Fatalf("expected five suggestions, got %+v", result.Suggestions)
+	}
+	if result.Suggestions[2].Field != "tags" || result.Suggestions[4].Field != "latest_result" {
+		t.Fatalf("expected business category and execution state fields, got %+v", result.Suggestions)
+	}
+	if len(result.Warnings) != 1 {
+		t.Fatalf("expected warnings to be preserved, got %+v", result.Warnings)
+	}
+}
+
 func TestReadTestSetupResultArtifact(t *testing.T) {
 	artifactDir := t.TempDir()
 	data := `{

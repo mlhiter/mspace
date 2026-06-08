@@ -121,6 +121,7 @@ export interface ImportTestCasesInput {
   format?: "markdown" | "text" | "csv" | "xlsx" | string;
   content: string;
   fileName?: string;
+  columnMappings?: TestCaseImportColumnMapping[];
 }
 
 export interface TestCaseImportSkip {
@@ -156,6 +157,33 @@ export interface TestCaseImportColumnMapping {
   index: number;
   matched: boolean;
   required: boolean;
+  confidence?: number;
+  reason?: string;
+  strategy?: string;
+}
+
+export interface TestCaseImportMappingTaskInput {
+  format?: "csv" | "xlsx" | string;
+  content: string;
+  fileName?: string;
+  runtimeMode?: string;
+}
+
+export interface TestCaseImportMappingSuggestion {
+  source: string;
+  field: string;
+  index: number;
+  confidence: number;
+  reason: string;
+}
+
+export interface TestCaseImportMappingResult {
+  format: string;
+  fileName: string;
+  suggestions: TestCaseImportMappingSuggestion[];
+  warnings: string[];
+  threadId?: string;
+  turnId?: string;
 }
 
 export interface ImportTestCasesPreview {

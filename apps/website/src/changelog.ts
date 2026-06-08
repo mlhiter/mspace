@@ -32,14 +32,14 @@ export const changelog: ChangelogEntry[] = [
   },
   {
     date: "2026-06-05",
-    title: "Safer CSV column mapping for case imports",
+    title: "Worker-assisted column mapping for case imports",
     summary:
-      "mspace made imported case files explain how source columns will map before the user confirms the write.",
+      "mspace moved unfamiliar case-import headers out of hardcoded parser aliases and into reviewable worker suggestions.",
     items: [
-      "Added column mapping data to the read-only import preview response for CSV and Excel `.xlsx` files.",
-      "Recognized common Chinese case-library headers such as `用例ID`, `用例名称`, `所属模块`, `步骤描述`, `预期结果`, `备注`, and `用例等级`.",
-      "Treated business categories from `测试类别` as tags instead of forcing them into the fixed `functional`, `ui`, `api`, or `deployment` type field.",
-      "Split inline numbered steps such as `[1] ... [2] ...` into separate runnable steps during import.",
+      "Added a `test_case_import_mapping` runtime task so Codex-capable workers can suggest source-column mappings from headers and sample rows.",
+      "Kept the server parser focused on canonical fields plus explicit confirmed `columnMappings` instead of growing language-specific aliases.",
+      "Showed worker confidence and reasons in the import preview, then refreshed the preview before the user confirms the final import.",
+      "Mapped business categories to tags and historical execution-state columns to `latest_result` when the worker suggests that structure.",
     ],
   },
   {

@@ -40,6 +40,7 @@ import type {
   KubeconfigDiscoveryResult,
   KubeconfigImportResult,
   ImportTestCasesInput,
+  TestCaseImportMappingTaskInput,
   ImportTestCasesPreview,
   ImportTestCasesResult,
   MspaceUser,
@@ -498,6 +499,12 @@ export const controlPlaneApi = {
     }),
   previewProjectTestCasesImport: (token: string, workspaceId: string, projectId: string, input: ImportTestCasesInput) =>
     requestControlPlane<ImportTestCasesPreview>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/import/preview`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  createProjectTestCasesImportMappingTask: (token: string, workspaceId: string, projectId: string, input: TestCaseImportMappingTaskInput) =>
+    requestControlPlane<RuntimeTask>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-cases/import/mapping-task`, {
       method: "POST",
       headers: authHeaders(token),
       body: JSON.stringify(input),

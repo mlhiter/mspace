@@ -1649,7 +1649,7 @@ func TestProjectTestCasesHTTPFlow(t *testing.T) {
 	if err := json.Unmarshal(previewRecorder.Body.Bytes(), &preview); err != nil {
 		t.Fatalf("parse import preview: %v", err)
 	}
-	if preview.ImportableCount != 2 || preview.SkippedCount != 2 || preview.ParsedCount != 3 {
+	if preview.ImportableCount != 2 || preview.SkippedCount != 2 || preview.ParsedCount != 4 {
 		t.Fatalf("unexpected import preview counts: %+v", preview)
 	}
 	if preview.MissingFieldCounts["preconditions"] != 0 || len(preview.ImportableCaseSamples) == 0 || preview.ImportableCaseSamples[0].Title != "Invite link opens workspace" {
@@ -2355,6 +2355,55 @@ func TestProjectTestCaseAgentActionsRequireWorkerBeforeCreatingIssues(t *testing
 	}
 	if issues := listIssuesViaHTTP(t, router, sessionToken, workspaceID); len(issues) != 0 {
 		t.Fatalf("direct run without a worker should not create orphan issues, got %+v", issues)
+	}
+}
+
+func TestProjectTestCaseImportMappingTaskRequiresWorker(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "test-module-import-mapping-user",
+		Login:          "test-module-import-mapping-user",
+		Name:           "Test Module Import Mapping User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "test-module-import-mapping")
+	body := `{"format":"csv","fileName":"cases.csv","content":"用例ID,用例名称,步骤描述\nOSV2-001,登录页检查,打开登录页","runtimeMode":"personal"}`
+
+	noWorkerRecorder := httptest.NewRecorder()
+	noWorkerReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/import/mapping-task", strings.NewReader(body))
+	noWorkerReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(noWorkerRecorder, noWorkerReq)
+	if noWorkerRecorder.Code != http.StatusConflict || !strings.Contains(noWorkerRecorder.Body.String(), "no active codex worker") {
+		t.Fatalf("expected mapping no-worker conflict, status=%d body=%s", noWorkerRecorder.Code, noWorkerRecorder.Body.String())
+	}
+
+	registerTestRuntimeWorker(t, router, sessionToken, workspaceID)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-cases/import/mapping-task", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create import mapping task status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var task RuntimeTask
+	if err := json.Unmarshal(recorder.Body.Bytes(), &task); err != nil {
+		t.Fatalf("parse runtime task: %v", err)
+	}
+	if task.Kind != "test_case_import_mapping" || task.ProjectID != project.ID || task.RuntimeMode != "personal" {
+		t.Fatalf("unexpected mapping task: %+v", task)
+	}
+	if !strings.Contains(string(task.Payload), `"workspaceId":"`+workspaceID+`"`) || !strings.Contains(string(task.Payload), `"用例名称"`) {
+		t.Fatalf("expected mapping payload to include workspace and headers, got %s", task.Payload)
 	}
 }
 

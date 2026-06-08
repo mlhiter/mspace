@@ -119,6 +119,7 @@ func (s *Server) Routes() http.Handler {
 	r.Put("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleUpdateProjectRunbook)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases", s.handleListProjectTestCases)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import/preview", s.handlePreviewImportProjectTestCases)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import/mapping-task", s.handleCreateImportMappingTask)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/import", s.handleImportProjectTestCases)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/optimize", s.handleOptimizeProjectTestCases)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/generate", s.handleGenerateProjectTestCases)
@@ -886,6 +887,47 @@ func (s *Server) handlePreviewImportProjectTestCases(w http.ResponseWriter, r *h
 		return
 	}
 	writeJSON(w, http.StatusOK, normalizeImportTestCasesPreview(preview))
+}
+
+func (s *Server) handleCreateImportMappingTask(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
+	input := TestCaseImportMappingTaskInput{}
+	body := http.MaxBytesReader(w, r.Body, maxTestCaseImportBodyBytes)
+	if err := json.NewDecoder(body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	runtimeMode, err := s.store.EnsureActiveCodexWorker(r.Context(), user.ID, workspaceID, input.RuntimeMode)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	projects, err := s.store.ListProjects(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	project, ok := projectByID(projects, projectID)
+	if !ok {
+		writeStoreError(w, ErrNotFound)
+		return
+	}
+	taskInput, err := buildImportMappingRuntimeTaskInput(project, runtimeMode, input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	task, err := s.store.CreateRuntimeTask(r.Context(), user.ID, workspaceID, taskInput)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, task)
 }
 
 func (s *Server) handleImportProjectTestCases(w http.ResponseWriter, r *http.Request) {

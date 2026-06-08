@@ -363,9 +363,10 @@ type DeleteProjectTestCasesInput struct {
 }
 
 type ImportTestCasesInput struct {
-	Format   string `json:"format"`
-	Content  string `json:"content"`
-	FileName string `json:"fileName"`
+	Format         string                        `json:"format"`
+	Content        string                        `json:"content"`
+	FileName       string                        `json:"fileName"`
+	ColumnMappings []TestCaseImportColumnMapping `json:"columnMappings"`
 }
 
 type TestCaseImportSkip struct {
@@ -389,11 +390,38 @@ type TestCaseImportPreviewCase struct {
 }
 
 type TestCaseImportColumnMapping struct {
-	Source   string `json:"source"`
-	Field    string `json:"field"`
-	Index    int    `json:"index"`
-	Matched  bool   `json:"matched"`
-	Required bool   `json:"required"`
+	Source     string  `json:"source"`
+	Field      string  `json:"field"`
+	Index      int     `json:"index"`
+	Matched    bool    `json:"matched"`
+	Required   bool    `json:"required"`
+	Confidence float64 `json:"confidence,omitempty"`
+	Reason     string  `json:"reason,omitempty"`
+	Strategy   string  `json:"strategy,omitempty"`
+}
+
+type TestCaseImportMappingTaskInput struct {
+	Format      string `json:"format"`
+	Content     string `json:"content"`
+	FileName    string `json:"fileName"`
+	RuntimeMode string `json:"runtimeMode"`
+}
+
+type TestCaseImportMappingSuggestion struct {
+	Source     string  `json:"source"`
+	Field      string  `json:"field"`
+	Index      int     `json:"index"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
+}
+
+type TestCaseImportMappingResult struct {
+	Format      string                            `json:"format"`
+	FileName    string                            `json:"fileName"`
+	Suggestions []TestCaseImportMappingSuggestion `json:"suggestions"`
+	Warnings    []string                          `json:"warnings"`
+	ThreadID    string                            `json:"threadId,omitempty"`
+	TurnID      string                            `json:"turnId,omitempty"`
 }
 
 type ImportTestCasesPreview struct {

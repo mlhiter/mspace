@@ -165,6 +165,42 @@ type issueTypeTriageResult struct {
 	TurnID     string  `json:"turnId,omitempty"`
 }
 
+type importMappingPayload struct {
+	WorkspaceID           string                   `json:"workspaceId"`
+	ProjectID             string                   `json:"projectId"`
+	Format                string                   `json:"format"`
+	FileName              string                   `json:"fileName"`
+	Headers               []string                 `json:"headers"`
+	SampleRows            [][]string               `json:"sampleRows"`
+	SystemFields          []map[string]string      `json:"systemFields"`
+	Prompt                string                   `json:"prompt"`
+	DeveloperInstructions string                   `json:"developerInstructions"`
+	Env                   map[string]string        `json:"env"`
+	Project               importMappingProjectSpec `json:"project"`
+}
+
+type importMappingProjectSpec struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type importMappingResult struct {
+	Format      string                    `json:"format"`
+	FileName    string                    `json:"fileName"`
+	Suggestions []importMappingSuggestion `json:"suggestions"`
+	Warnings    []string                  `json:"warnings"`
+	ThreadID    string                    `json:"threadId,omitempty"`
+	TurnID      string                    `json:"turnId,omitempty"`
+}
+
+type importMappingSuggestion struct {
+	Source     string  `json:"source"`
+	Field      string  `json:"field"`
+	Index      int     `json:"index"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
+}
+
 type repositorySpec struct {
 	URL           string `json:"url"`
 	DefaultBranch string `json:"defaultBranch"`
@@ -660,6 +696,8 @@ func handleTask(ctx context.Context, client *runtimeClient, cfg config, logger *
 		result, taskErr = executeAgentSessionTask(ctx, client, cfg, workerID, task)
 	case "issue_type_triage":
 		result, taskErr = executeIssueTypeTriageTask(ctx, client, cfg, workerID, task)
+	case "test_case_import_mapping":
+		result, taskErr = executeImportMappingTask(ctx, client, cfg, workerID, task)
 	default:
 		result, taskErr = executeProtocolTask(cfg, task)
 	}
@@ -863,6 +901,159 @@ func runCodexIssueTypeTriage(ctx context.Context, runtimeClient *runtimeClient, 
 	result.ThreadID = threadResp.Thread.ID
 	result.TurnID = turnResp.Turn.ID
 	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: fmt.Sprintf("Issue type triage classified as %s.", result.Type)})
+	return result, nil
+}
+
+func executeImportMappingTask(ctx context.Context, client *runtimeClient, cfg config, workerID string, task runtimeTask) (json.RawMessage, error) {
+	payload, err := parseImportMappingPayload(task.Payload)
+	if err != nil {
+		return nil, err
+	}
+	runCtx, stopCancelWatcher := client.watchTaskCancellation(ctx, workerID, task.ID, cfg.PollInterval)
+	defer stopCancelWatcher()
+	if err := client.appendTaskLog(ctx, workerID, task.ID, appendTaskLogInput{Stream: "system", Message: "Starting Codex import column mapping."}); err != nil {
+		return nil, err
+	}
+	result, err := runCodexImportMapping(runCtx, client, cfg, workerID, task.ID, payload)
+	if err != nil {
+		_ = client.appendTaskLog(context.WithoutCancel(ctx), workerID, task.ID, appendTaskLogInput{Stream: "codex-error", Message: err.Error()})
+		return nil, err
+	}
+	body, err := json.Marshal(result)
+	return body, err
+}
+
+func parseImportMappingPayload(raw json.RawMessage) (importMappingPayload, error) {
+	var payload importMappingPayload
+	if len(raw) == 0 {
+		return payload, errors.New("import mapping payload is required")
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, fmt.Errorf("parse import mapping payload: %w", err)
+	}
+	payload.WorkspaceID = strings.TrimSpace(payload.WorkspaceID)
+	payload.ProjectID = strings.TrimSpace(payload.ProjectID)
+	payload.Format = strings.ToLower(strings.TrimSpace(payload.Format))
+	payload.FileName = strings.TrimSpace(payload.FileName)
+	payload.Prompt = strings.TrimSpace(payload.Prompt)
+	payload.DeveloperInstructions = strings.TrimSpace(payload.DeveloperInstructions)
+	payload.Project.ID = strings.TrimSpace(payload.Project.ID)
+	payload.Project.Name = strings.TrimSpace(payload.Project.Name)
+	for index, header := range payload.Headers {
+		payload.Headers[index] = strings.TrimSpace(header)
+	}
+	if payload.Format != "csv" && payload.Format != "xlsx" {
+		return payload, errors.New("import mapping payload format must be csv or xlsx")
+	}
+	if len(payload.Headers) == 0 {
+		return payload, errors.New("import mapping payload requires headers")
+	}
+	if payload.Prompt == "" {
+		return payload, errors.New("import mapping payload prompt is required")
+	}
+	if payload.DeveloperInstructions == "" {
+		payload.DeveloperInstructions = defaultImportMappingDeveloperInstructions()
+	}
+	return payload, nil
+}
+
+func runCodexImportMapping(ctx context.Context, runtimeClient *runtimeClient, cfg config, workerID, taskID string, payload importMappingPayload) (importMappingResult, error) {
+	codexPath, err := exec.LookPath("codex")
+	if err != nil {
+		return importMappingResult{}, errors.New("codex CLI is not available on PATH")
+	}
+	workdir := os.TempDir()
+	codexPayload := agentSessionPayload{
+		Workdir:               workdir,
+		Prompt:                payload.Prompt,
+		DeveloperInstructions: payload.DeveloperInstructions,
+		ApprovalPolicy:        "never",
+		Sandbox:               "danger-full-access",
+		Env:                   payload.Env,
+	}
+	appClient, err := startCodexAppServer(codexPath, codexPayload)
+	if err != nil {
+		return importMappingResult{}, err
+	}
+	defer appClient.close()
+
+	go captureCodexDiagnosticStream(ctx, runtimeClient, workerID, taskID, appClient.stderr)
+
+	var initResp codexInitializeResponse
+	if err := appClient.request(ctx, "initialize", map[string]any{
+		"clientInfo": map[string]any{
+			"name":    "mspace-worker-import-mapping",
+			"title":   "mspace worker import mapping",
+			"version": cfg.Version,
+		},
+		"capabilities": map[string]any{
+			"experimentalApi": true,
+		},
+	}, &initResp); err != nil {
+		return importMappingResult{}, fmt.Errorf("initialize codex app-server: %w", err)
+	}
+	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Codex app-server ready: " + initResp.UserAgent})
+
+	var threadResp codexThreadStartResponse
+	if err := appClient.request(ctx, "thread/start", map[string]any{
+		"cwd":                    workdir,
+		"approvalPolicy":         "never",
+		"approvalsReviewer":      "user",
+		"sandbox":                "danger-full-access",
+		"developerInstructions":  payload.DeveloperInstructions,
+		"personality":            "pragmatic",
+		"ephemeral":              true,
+		"sessionStartSource":     "startup",
+		"serviceName":            "mspace-worker-import-mapping",
+		"experimentalRawEvents":  false,
+		"persistExtendedHistory": false,
+	}, &threadResp); err != nil {
+		return importMappingResult{}, fmt.Errorf("start codex import mapping thread: %w", err)
+	}
+	if strings.TrimSpace(threadResp.Thread.ID) == "" {
+		return importMappingResult{}, errors.New("codex app-server returned an empty import mapping thread id")
+	}
+	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Codex import mapping thread: " + threadResp.Thread.ID})
+
+	var turnResp codexTurnStartResponse
+	if err := appClient.request(ctx, "turn/start", map[string]any{
+		"threadId": threadResp.Thread.ID,
+		"input": []map[string]any{
+			{
+				"type":          "text",
+				"text":          payload.Prompt,
+				"text_elements": []map[string]any{},
+			},
+		},
+		"cwd":            workdir,
+		"approvalPolicy": "never",
+		"sandboxPolicy": map[string]any{
+			"type": "dangerFullAccess",
+		},
+		"responsesapiClientMetadata": map[string]string{
+			"mspace.runtime_task_id": taskID,
+			"mspace.task":            "test_case_import_mapping",
+			"mspace.worker_name":     cfg.Name,
+		},
+	}, &turnResp); err != nil {
+		return importMappingResult{}, fmt.Errorf("start codex import mapping turn: %w", err)
+	}
+	if strings.TrimSpace(turnResp.Turn.ID) == "" {
+		return importMappingResult{}, errors.New("codex app-server returned an empty import mapping turn id")
+	}
+	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Codex import mapping turn: " + turnResp.Turn.ID})
+
+	message, err := waitCodexTurnMessage(ctx, runtimeClient, appClient, workerID, taskID, threadResp.Thread.ID, turnResp.Turn.ID)
+	if err != nil {
+		return importMappingResult{}, err
+	}
+	result, err := parseImportMappingResult(message, payload)
+	if err != nil {
+		return importMappingResult{}, err
+	}
+	result.ThreadID = threadResp.Thread.ID
+	result.TurnID = turnResp.Turn.ID
+	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: fmt.Sprintf("Import mapping produced %d suggestions.", len(result.Suggestions))})
 	return result, nil
 }
 
@@ -2414,6 +2605,118 @@ func parseIssueTypeTriageResult(value string) (issueTypeTriageResult, error) {
 		result.Confidence = 1
 	}
 	return result, nil
+}
+
+func parseImportMappingResult(value string, payload importMappingPayload) (importMappingResult, error) {
+	raw := strings.TrimSpace(value)
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start < 0 || end < start {
+		return importMappingResult{}, errors.New("import mapping response did not contain a JSON object")
+	}
+	raw = raw[start : end+1]
+	var result importMappingResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return importMappingResult{}, fmt.Errorf("parse import mapping JSON: %w", err)
+	}
+	result.Format = strings.ToLower(strings.TrimSpace(firstNonEmpty(result.Format, payload.Format)))
+	result.FileName = strings.TrimSpace(firstNonEmpty(result.FileName, payload.FileName))
+	seenIndexes := map[int]bool{}
+	seenFields := map[string]bool{}
+	suggestions := make([]importMappingSuggestion, 0, len(result.Suggestions))
+	for _, suggestion := range result.Suggestions {
+		suggestion.Source = strings.TrimSpace(suggestion.Source)
+		suggestion.Field = normalizeImportMappingField(suggestion.Field)
+		suggestion.Reason = truncate(strings.Join(strings.Fields(suggestion.Reason), " "), 240)
+		if suggestion.Field == "" {
+			continue
+		}
+		if suggestion.Index < 0 {
+			suggestion.Index = importMappingHeaderIndex(payload.Headers, suggestion.Source)
+		}
+		if suggestion.Index < 0 || suggestion.Index >= len(payload.Headers) || seenIndexes[suggestion.Index] || seenFields[suggestion.Field] {
+			continue
+		}
+		if suggestion.Source == "" {
+			suggestion.Source = strings.TrimSpace(payload.Headers[suggestion.Index])
+		}
+		if suggestion.Confidence < 0 {
+			suggestion.Confidence = 0
+		}
+		if suggestion.Confidence > 1 {
+			suggestion.Confidence = 1
+		}
+		if suggestion.Confidence == 0 {
+			suggestion.Confidence = 0.5
+		}
+		seenIndexes[suggestion.Index] = true
+		seenFields[suggestion.Field] = true
+		suggestions = append(suggestions, suggestion)
+	}
+	result.Suggestions = suggestions
+	result.Warnings = normalizeStringList(result.Warnings)
+	return result, nil
+}
+
+func importMappingHeaderIndex(headers []string, source string) int {
+	sourceKey := normalizeImportMappingKey(source)
+	if sourceKey == "" {
+		return -1
+	}
+	for index, header := range headers {
+		if normalizeImportMappingKey(header) == sourceKey {
+			return index
+		}
+	}
+	return -1
+}
+
+func normalizeImportMappingField(value string) string {
+	field := strings.TrimSpace(value)
+	switch field {
+	case "expectedResult":
+		field = "expected_result"
+	case "environmentRequirements":
+		field = "environment_requirements"
+	case "externalId":
+		field = "external_id"
+	case "latestResult":
+		field = "latest_result"
+	default:
+		field = strings.ToLower(field)
+	}
+	if !isAllowedImportMappingField(field) {
+		return ""
+	}
+	return field
+}
+
+func isAllowedImportMappingField(field string) bool {
+	switch strings.TrimSpace(field) {
+	case "title", "type", "area", "priority", "preconditions", "steps", "expected_result", "environment_requirements", "tags", "external_id", "latest_result":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeImportMappingKey(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "\ufeff")
+	value = strings.ReplaceAll(value, " ", "_")
+	value = strings.ReplaceAll(value, "-", "_")
+	value = strings.ReplaceAll(value, "（", "(")
+	value = strings.ReplaceAll(value, "）", ")")
+	return value
+}
+
+func defaultImportMappingDeveloperInstructions() string {
+	return strings.TrimSpace(`
+You are helping mspace preview a test-case import. You only produce column mapping suggestions.
+Return exactly one JSON object and no markdown fences or prose.
+Allowed fields are: title, type, area, priority, preconditions, steps, expected_result, environment_requirements, tags, external_id, latest_result.
+Never claim data was imported or modified. The user must confirm mappings before the server writes anything.
+`)
 }
 
 func isAllowedIssueTypeLabel(value string) bool {

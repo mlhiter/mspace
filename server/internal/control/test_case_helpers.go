@@ -21,6 +21,7 @@ const (
 	maxImportedWorkbookUnzipBytes = 16 * 1024 * 1024
 	maxImportedWorkbookXMLBytes   = 4 * 1024 * 1024
 	maxImportPreviewSamples       = 5
+	maxImportMappingSampleRows    = 5
 	defaultTestCaseType           = "functional"
 	defaultTestCaseSource         = "manual"
 	defaultImportedCaseSource     = "import"
@@ -56,16 +57,17 @@ type importColumnDefinition struct {
 }
 
 var importColumnDefinitions = []importColumnDefinition{
-	{field: "title", required: true, aliases: []string{"case", "test_case", "name", "title/name", "标题", "用例标题", "用例名称", "测试用例", "测试用例名称", "case_name"}},
-	{field: "type", aliases: []string{"test_type", "case_type", "test_kind", "kind", "用例类型", "测试类型", "类型"}},
-	{field: "area", aliases: []string{"area", "module", "feature", "belonging_module", "所属模块", "模块", "功能模块", "业务模块", "所属功能"}},
-	{field: "priority", aliases: []string{"priority", "level", "severity", "用例等级", "优先级", "等级", "重要级别", "重要性"}},
-	{field: "preconditions", required: true, aliases: []string{"precondition", "preconditions", "setup", "前置条件", "前置", "前提条件", "准备条件"}},
-	{field: "steps", required: true, aliases: []string{"step", "steps", "actions", "test_steps", "步骤", "操作步骤", "步骤描述", "测试步骤", "执行步骤"}},
-	{field: "expected_result", required: true, aliases: []string{"expected", "expected_result", "expectedresults", "expectation", "预期结果", "期望结果", "预期", "期望"}},
-	{field: "environment_requirements", required: true, aliases: []string{"env", "environment", "environment_requirements", "environment_requirement", "test_environment", "环境", "环境要求", "测试环境", "备注", "说明"}},
-	{field: "tags", aliases: []string{"tag", "tags", "labels", "标签", "标记", "测试类别", "测试分类", "类别"}},
-	{field: "external_id", aliases: []string{"id", "case_id", "test_case_id", "用例id", "用例_id", "用例编号", "编号"}},
+	{field: "title", required: true, aliases: []string{"case", "test_case", "name", "title/name", "case_name"}},
+	{field: "type", aliases: []string{"test_type", "case_type", "test_kind", "kind"}},
+	{field: "area", aliases: []string{"area", "module", "feature", "belonging_module"}},
+	{field: "priority", aliases: []string{"priority", "level", "severity"}},
+	{field: "preconditions", required: true, aliases: []string{"precondition", "preconditions", "setup"}},
+	{field: "steps", required: true, aliases: []string{"step", "steps", "actions", "test_steps"}},
+	{field: "expected_result", required: true, aliases: []string{"expected", "expected_result", "expectedresults", "expectation"}},
+	{field: "environment_requirements", required: true, aliases: []string{"env", "environment", "environment_requirements", "environment_requirement", "test_environment"}},
+	{field: "tags", aliases: []string{"tag", "tags", "labels"}},
+	{field: "external_id", aliases: []string{"id", "case_id", "test_case_id"}},
+	{field: "latest_result", aliases: []string{"latest_result", "execution_result", "last_result"}},
 }
 
 var importColumnAliasToField = buildImportColumnAliasToField()
@@ -141,6 +143,7 @@ func normalizeImportTestCasesInput(input ImportTestCasesInput) (ImportTestCasesI
 	input.Format = strings.ToLower(strings.TrimSpace(input.Format))
 	input.Content = strings.TrimSpace(input.Content)
 	input.FileName = strings.TrimSpace(input.FileName)
+	input.ColumnMappings = normalizeImportColumnMappingOverrides(input.ColumnMappings)
 	if input.Format == "" {
 		input.Format = "markdown"
 	}
@@ -171,9 +174,9 @@ func parseImportedTestCases(input ImportTestCasesInput) ([]TestCaseInput, []Test
 	}
 	switch normalized.Format {
 	case "csv":
-		return parseCSVTestCases(normalized.Content)
+		return parseCSVTestCases(normalized)
 	case "xlsx":
-		return parseExcelTestCases(normalized.Content)
+		return parseExcelTestCases(normalized)
 	default:
 		return parseLineBasedTestCases(normalized.Content), []TestCaseImportSkip{}, nil
 	}
@@ -188,6 +191,15 @@ func previewImportedTestCases(input ImportTestCasesInput) (ImportTestCasesPrevie
 	if err != nil {
 		return ImportTestCasesPreview{}, err
 	}
+	parsedCount := len(inputs)
+	if normalized.Format == "csv" || normalized.Format == "xlsx" {
+		if records, recordErr := importPreviewRecords(normalized); recordErr == nil {
+			_, start := importHeader(records, normalized.ColumnMappings)
+			if start > 0 && len(records) >= start {
+				parsedCount = len(records[start:])
+			}
+		}
+	}
 	contentBytes := len([]byte(normalized.Content))
 	if normalized.Format == "xlsx" {
 		if workbookBytes, decodeErr := base64.StdEncoding.DecodeString(normalized.Content); decodeErr == nil {
@@ -201,7 +213,7 @@ func previewImportedTestCases(input ImportTestCasesInput) (ImportTestCasesPrevie
 		MaxContentBytes:        maxImportedTestCaseBytes,
 		MaxWorkbookBytes:       maxImportedWorkbookBytes,
 		MaxImportableCases:     maxImportedTestCases,
-		ParsedCount:            len(inputs),
+		ParsedCount:            parsedCount,
 		SkippedCount:           len(skipped),
 		ReachedImportCaseLimit: len(inputs) >= maxImportedTestCases,
 		MissingFieldCounts:     map[string]int{},
@@ -247,7 +259,7 @@ func previewImportedTestCases(input ImportTestCasesInput) (ImportTestCasesPrevie
 			})
 		}
 	}
-	if preview.ImportableCount == 0 {
+	if preview.ImportableCount == 0 && preview.SkippedCount == 0 {
 		return ImportTestCasesPreview{}, errors.New("content cannot be empty")
 	}
 	return normalizeImportTestCasesPreview(preview), nil
@@ -306,8 +318,8 @@ func missingImportFields(input TestCaseInput) []string {
 	return missing
 }
 
-func parseCSVTestCases(content string) ([]TestCaseInput, []TestCaseImportSkip, error) {
-	reader := csv.NewReader(strings.NewReader(content))
+func parseCSVTestCases(input ImportTestCasesInput) ([]TestCaseInput, []TestCaseImportSkip, error) {
+	reader := csv.NewReader(strings.NewReader(input.Content))
 	reader.TrimLeadingSpace = true
 	reader.FieldsPerRecord = -1
 	records, err := reader.ReadAll()
@@ -317,12 +329,12 @@ func parseCSVTestCases(content string) ([]TestCaseInput, []TestCaseImportSkip, e
 	if len(records) == 0 {
 		return nil, nil, errors.New("content is required")
 	}
-	cases, skipped := recordsToTestCaseInputs(records)
+	cases, skipped := recordsToTestCaseInputs(records, input.ColumnMappings)
 	return cases, skipped, nil
 }
 
-func parseExcelTestCases(content string) ([]TestCaseInput, []TestCaseImportSkip, error) {
-	workbookBytes, err := base64.StdEncoding.DecodeString(content)
+func parseExcelTestCases(input ImportTestCasesInput) ([]TestCaseInput, []TestCaseImportSkip, error) {
+	workbookBytes, err := base64.StdEncoding.DecodeString(input.Content)
 	if err != nil {
 		return nil, nil, errors.New("content must be a base64 encoded .xlsx file")
 	}
@@ -354,7 +366,7 @@ func parseExcelTestCases(content string) ([]TestCaseInput, []TestCaseImportSkip,
 		if len(records) == 0 {
 			continue
 		}
-		cases, skipped := importRecordsToTestCaseInputs(records)
+		cases, skipped := importRecordsToTestCaseInputs(records, input.ColumnMappings)
 		if len(cases) == 0 && len(skipped) == 0 {
 			continue
 		}
@@ -363,8 +375,8 @@ func parseExcelTestCases(content string) ([]TestCaseInput, []TestCaseImportSkip,
 	return nil, nil, errors.New("workbook must contain at least one non-empty worksheet")
 }
 
-func recordsToTestCaseInputs(records [][]string) ([]TestCaseInput, []TestCaseImportSkip) {
-	return importRecordsToTestCaseInputs(recordsToImportRecords(records))
+func recordsToTestCaseInputs(records [][]string, mappings []TestCaseImportColumnMapping) ([]TestCaseInput, []TestCaseImportSkip) {
+	return importRecordsToTestCaseInputs(recordsToImportRecords(records), mappings)
 }
 
 type importRecord struct {
@@ -372,8 +384,8 @@ type importRecord struct {
 	values []string
 }
 
-func importRecordsToTestCaseInputs(records []importRecord) ([]TestCaseInput, []TestCaseImportSkip) {
-	header, start := importHeader(records)
+func importRecordsToTestCaseInputs(records []importRecord, mappings []TestCaseImportColumnMapping) ([]TestCaseInput, []TestCaseImportSkip) {
+	header, start := importHeader(records, mappings)
 	cases := make([]TestCaseInput, 0, minInt(len(records), maxImportedTestCases))
 	skipped := []TestCaseImportSkip{}
 	for lineIndex, record := range records[start:] {
@@ -381,7 +393,7 @@ func importRecordsToTestCaseInputs(records []importRecord) ([]TestCaseInput, []T
 		if record.line > 0 {
 			lineNumber = record.line
 		}
-		input := csvRecordToTestCaseInput(record.values, header)
+		input := csvRecordToTestCaseInput(record.values, header, start == 0)
 		if input.Title == "" {
 			skipped = append(skipped, TestCaseImportSkip{Line: lineNumber, Reason: "missing title", Content: strings.Join(record.values, ",")})
 			continue
@@ -394,10 +406,18 @@ func importRecordsToTestCaseInputs(records []importRecord) ([]TestCaseInput, []T
 	return cases, skipped
 }
 
-func importHeader(records []importRecord) (map[string]int, int) {
+func importHeader(records []importRecord, mappings []TestCaseImportColumnMapping) (map[string]int, int) {
 	header := map[string]int{}
 	start := 0
 	if len(records) == 0 {
+		return header, start
+	}
+	mappingHeader := importHeaderFromMappings(records[0].values, mappings)
+	if len(mappingHeader) > 0 {
+		for field, index := range mappingHeader {
+			header[field] = index
+		}
+		start = 1
 		return header, start
 	}
 	matchedColumns := 0
@@ -417,8 +437,76 @@ func importHeader(records []importRecord) (map[string]int, int) {
 	}
 	if _, ok := header["title"]; ok || (matchedColumns >= 2 && matchedRequiredColumn) {
 		start = 1
+	} else if looksLikeImportHeader(records) {
+		start = 1
 	}
 	return header, start
+}
+
+func looksLikeImportHeader(records []importRecord) bool {
+	if len(records) < 2 || len(records[0].values) < 2 {
+		return false
+	}
+	first := records[0].values
+	second := records[1].values
+	firstNonEmpty := 0
+	for _, value := range first {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		firstNonEmpty++
+		if len([]rune(value)) > 32 {
+			return false
+		}
+	}
+	if firstNonEmpty < 2 {
+		return false
+	}
+	secondLongValues := 0
+	for _, value := range second {
+		if len([]rune(strings.TrimSpace(value))) > 32 {
+			secondLongValues++
+		}
+	}
+	return secondLongValues > 0
+}
+
+func importHeaderFromMappings(headers []string, mappings []TestCaseImportColumnMapping) map[string]int {
+	result := map[string]int{}
+	usedIndexes := map[int]bool{}
+	for _, mapping := range mappings {
+		field := normalizeImportMappingField(mapping.Field)
+		if field == "" {
+			continue
+		}
+		index := mapping.Index
+		if index < 0 && strings.TrimSpace(mapping.Source) != "" {
+			index = importColumnIndexBySource(headers, mapping.Source)
+		}
+		if index < 0 || index >= len(headers) || usedIndexes[index] {
+			continue
+		}
+		if _, exists := result[field]; exists {
+			continue
+		}
+		result[field] = index
+		usedIndexes[index] = true
+	}
+	return result
+}
+
+func importColumnIndexBySource(headers []string, source string) int {
+	sourceKey := normalizeImportColumnKey(source)
+	if sourceKey == "" {
+		return -1
+	}
+	for index, header := range headers {
+		if normalizeImportColumnKey(header) == sourceKey {
+			return index
+		}
+	}
+	return -1
 }
 
 func isRequiredImportColumn(field string) bool {
@@ -443,7 +531,7 @@ func importColumnMappings(input ImportTestCasesInput) []TestCaseImportColumnMapp
 	if err != nil || len(records) == 0 {
 		return []TestCaseImportColumnMapping{}
 	}
-	header, start := importHeader(records)
+	header, start := importHeader(records, input.ColumnMappings)
 	if start == 0 {
 		return []TestCaseImportColumnMapping{}
 	}
@@ -454,13 +542,16 @@ func importColumnMappings(input ImportTestCasesInput) []TestCaseImportColumnMapp
 	result := make([]TestCaseImportColumnMapping, 0, len(records[0].values))
 	for index, name := range records[0].values {
 		source := strings.TrimPrefix(strings.TrimSpace(name), "\ufeff")
-		field := normalizeCSVHeader(source)
+		field := fieldForImportColumn(records[0].values, input.ColumnMappings, index, source)
 		result = append(result, TestCaseImportColumnMapping{
-			Source:   source,
-			Field:    field,
-			Index:    index,
-			Matched:  field != "",
-			Required: field != "" && required[field],
+			Source:     source,
+			Field:      field,
+			Index:      index,
+			Matched:    field != "",
+			Required:   field != "" && required[field],
+			Confidence: importMappingConfidence(input.ColumnMappings, index, source),
+			Reason:     importMappingReason(input.ColumnMappings, index, source),
+			Strategy:   importMappingStrategy(input.ColumnMappings, index, source),
 		})
 	}
 	for _, definition := range importColumnDefinitions {
@@ -478,6 +569,58 @@ func importColumnMappings(input ImportTestCasesInput) []TestCaseImportColumnMapp
 		})
 	}
 	return result
+}
+
+func fieldForImportColumn(headers []string, mappings []TestCaseImportColumnMapping, index int, source string) string {
+	for _, mapping := range mappings {
+		field := normalizeImportMappingField(mapping.Field)
+		if field == "" {
+			continue
+		}
+		if mapping.Index == index {
+			return field
+		}
+		if mapping.Index < 0 && strings.TrimSpace(mapping.Source) != "" && importColumnIndexBySource(headers, mapping.Source) == index {
+			return field
+		}
+	}
+	return normalizeCSVHeader(source)
+}
+
+func importMappingConfidence(mappings []TestCaseImportColumnMapping, index int, source string) float64 {
+	mapping, ok := importColumnMappingForIndex(mappings, index, source)
+	if !ok {
+		return 0
+	}
+	return mapping.Confidence
+}
+
+func importMappingReason(mappings []TestCaseImportColumnMapping, index int, source string) string {
+	mapping, ok := importColumnMappingForIndex(mappings, index, source)
+	if !ok {
+		return ""
+	}
+	return mapping.Reason
+}
+
+func importMappingStrategy(mappings []TestCaseImportColumnMapping, index int, source string) string {
+	mapping, ok := importColumnMappingForIndex(mappings, index, source)
+	if !ok {
+		return ""
+	}
+	return mapping.Strategy
+}
+
+func importColumnMappingForIndex(mappings []TestCaseImportColumnMapping, index int, source string) (TestCaseImportColumnMapping, bool) {
+	for _, mapping := range mappings {
+		if mapping.Index == index {
+			return mapping, true
+		}
+		if mapping.Index < 0 && strings.TrimSpace(mapping.Source) != "" && normalizeImportColumnKey(mapping.Source) == normalizeImportColumnKey(source) {
+			return mapping, true
+		}
+	}
+	return TestCaseImportColumnMapping{}, false
 }
 
 func importPreviewRecords(input ImportTestCasesInput) ([]importRecord, error) {
@@ -523,6 +666,135 @@ func importPreviewRecords(input ImportTestCasesInput) ([]importRecord, error) {
 	return []importRecord{}, nil
 }
 
+func buildImportMappingRuntimeTaskInput(project Project, runtimeMode string, input TestCaseImportMappingTaskInput) (CreateRuntimeTaskInput, error) {
+	normalized, err := normalizeImportTestCasesInput(ImportTestCasesInput{
+		Format:   input.Format,
+		Content:  input.Content,
+		FileName: input.FileName,
+	})
+	if err != nil {
+		return CreateRuntimeTaskInput{}, err
+	}
+	if normalized.Format != "csv" && normalized.Format != "xlsx" {
+		return CreateRuntimeTaskInput{}, errors.New("worker column mapping is only available for csv or xlsx imports")
+	}
+	records, err := importPreviewRecords(normalized)
+	if err != nil {
+		return CreateRuntimeTaskInput{}, err
+	}
+	if len(records) == 0 {
+		return CreateRuntimeTaskInput{}, errors.New("content is required")
+	}
+	header := make([]string, 0, len(records[0].values))
+	for _, value := range records[0].values {
+		header = append(header, strings.TrimPrefix(strings.TrimSpace(value), "\ufeff"))
+	}
+	sampleRows := make([][]string, 0, maxImportMappingSampleRows)
+	for _, record := range records[1:] {
+		if len(sampleRows) >= maxImportMappingSampleRows {
+			break
+		}
+		row := make([]string, 0, len(record.values))
+		for _, value := range record.values {
+			row = append(row, truncateImportSampleValue(collapseWhitespace(value), 240))
+		}
+		sampleRows = append(sampleRows, row)
+	}
+	payload := map[string]any{
+		"workspaceId": project.WorkspaceID,
+		"projectId":   project.ID,
+		"project": map[string]string{
+			"id":   project.ID,
+			"name": project.Name,
+		},
+		"format":                normalized.Format,
+		"fileName":              normalized.FileName,
+		"headers":               header,
+		"sampleRows":            sampleRows,
+		"systemFields":          importMappingSystemFields(),
+		"prompt":                buildImportMappingPrompt(project, normalized, header, sampleRows),
+		"developerInstructions": defaultImportMappingDeveloperInstructions(),
+	}
+	payloadBody, err := json.Marshal(payload)
+	if err != nil {
+		return CreateRuntimeTaskInput{}, err
+	}
+	capabilities, err := json.Marshal(map[string]bool{"codex": true})
+	if err != nil {
+		return CreateRuntimeTaskInput{}, err
+	}
+	return CreateRuntimeTaskInput{
+		ProjectID:            project.ID,
+		Kind:                 "test_case_import_mapping",
+		Priority:             0,
+		RuntimeMode:          strings.TrimSpace(runtimeMode),
+		RequiredCapabilities: capabilities,
+		Payload:              payloadBody,
+	}, nil
+}
+
+func importMappingSystemFields() []map[string]string {
+	return []map[string]string{
+		{"field": "title", "required": "true", "description": "Test case title or name."},
+		{"field": "type", "required": "false", "description": "Fixed mspace case type: functional, ui, api, or deployment."},
+		{"field": "area", "required": "false", "description": "Feature/module/business area."},
+		{"field": "priority", "required": "false", "description": "Priority or severity label such as P0/P1."},
+		{"field": "preconditions", "required": "true", "description": "Setup or preconditions required before execution."},
+		{"field": "steps", "required": "true", "description": "Execution steps, actions, or step description."},
+		{"field": "expected_result", "required": "true", "description": "Expected outcome/result."},
+		{"field": "environment_requirements", "required": "true", "description": "Environment, notes, browser/device/network, or setup requirements."},
+		{"field": "tags", "required": "false", "description": "Business category, labels, component tags, or free-form grouping."},
+		{"field": "external_id", "required": "false", "description": "Source case id or external identifier."},
+		{"field": "latest_result", "required": "false", "description": "Historical execution state; useful for preview context but not canonical case definition."},
+	}
+}
+
+func buildImportMappingPrompt(project Project, input ImportTestCasesInput, headers []string, sampleRows [][]string) string {
+	body := map[string]any{
+		"task":         "Suggest column mappings for a test case import preview.",
+		"projectName":  project.Name,
+		"format":       input.Format,
+		"fileName":     input.FileName,
+		"headers":      headers,
+		"sampleRows":   sampleRows,
+		"systemFields": importMappingSystemFields(),
+		"rules": []string{
+			"Return suggestions only; do not import, persist, or modify test cases.",
+			"Map each source column to at most one system field.",
+			"Map a system field at most once.",
+			"Use latest_result for historical execution status/result columns instead of type or expected_result.",
+			"Use tags for business categories that are not one of the fixed system types.",
+			"Leave unrelated columns unmapped by omitting them from suggestions.",
+			"Use confidence from 0 to 1 and include a short reason.",
+		},
+	}
+	data, err := json.MarshalIndent(body, "", "  ")
+	if err != nil {
+		return "Suggest column mappings for this test case import. Return JSON only."
+	}
+	return "Analyze this import sample and return JSON only.\n\n" + string(data) + "\n\nExpected output shape:\n{\"suggestions\":[{\"source\":\"用例名称\",\"field\":\"title\",\"index\":1,\"confidence\":0.98,\"reason\":\"column contains case names\"}],\"warnings\":[]}"
+}
+
+func defaultImportMappingDeveloperInstructions() string {
+	return strings.TrimSpace(`
+You are helping mspace preview a test-case import. You only produce column mapping suggestions.
+Return exactly one JSON object and no markdown fences or prose.
+Allowed fields are: title, type, area, priority, preconditions, steps, expected_result, environment_requirements, tags, external_id, latest_result.
+Never claim data was imported or modified. The user must confirm mappings before the server writes anything.
+`)
+}
+
+func truncateImportSampleValue(value string, limit int) string {
+	if limit <= 0 || len([]rune(value)) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
+}
+
 func nonEmptyImportRecords(records [][]string) []importRecord {
 	result := make([]importRecord, 0, len(records))
 	for index, record := range records {
@@ -542,12 +814,12 @@ func recordHasValue(record []string) bool {
 	return false
 }
 
-func csvRecordToTestCaseInput(record []string, header map[string]int) TestCaseInput {
+func csvRecordToTestCaseInput(record []string, header map[string]int, allowFallback bool) TestCaseInput {
 	value := func(key string, fallbackIndex int) string {
 		if index, ok := header[key]; ok && index >= 0 && index < len(record) {
 			return strings.TrimSpace(record[index])
 		}
-		if fallbackIndex >= 0 && fallbackIndex < len(record) {
+		if allowFallback && fallbackIndex >= 0 && fallbackIndex < len(record) {
 			return strings.TrimSpace(record[fallbackIndex])
 		}
 		return ""
@@ -611,6 +883,80 @@ func cleanImportedCaseTitle(line string) string {
 
 func normalizeCSVHeader(value string) string {
 	return importColumnAliasToField[normalizeImportColumnKey(value)]
+}
+
+func normalizeImportColumnMappingOverrides(values []TestCaseImportColumnMapping) []TestCaseImportColumnMapping {
+	result := make([]TestCaseImportColumnMapping, 0, len(values))
+	usedIndexes := map[int]bool{}
+	usedFields := map[string]bool{}
+	for _, value := range values {
+		field := normalizeImportMappingField(value.Field)
+		if field == "" {
+			continue
+		}
+		value.Source = strings.TrimPrefix(strings.TrimSpace(value.Source), "\ufeff")
+		value.Reason = collapseWhitespace(value.Reason)
+		value.Strategy = strings.ToLower(strings.TrimSpace(value.Strategy))
+		value.Field = field
+		if value.Index < 0 && value.Source == "" {
+			continue
+		}
+		if value.Index >= 0 {
+			if usedIndexes[value.Index] {
+				continue
+			}
+			usedIndexes[value.Index] = true
+		}
+		if usedFields[field] {
+			continue
+		}
+		usedFields[field] = true
+		if value.Confidence < 0 {
+			value.Confidence = 0
+		}
+		if value.Confidence > 1 {
+			value.Confidence = 1
+		}
+		value.Matched = true
+		value.Required = isRequiredImportColumn(field)
+		if value.Strategy == "" {
+			value.Strategy = "confirmed"
+		}
+		result = append(result, value)
+	}
+	return result
+}
+
+func normalizeImportMappingField(value string) string {
+	field := strings.TrimSpace(value)
+	switch field {
+	case "expectedResult":
+		field = "expected_result"
+	case "environmentRequirements":
+		field = "environment_requirements"
+	case "externalId":
+		field = "external_id"
+	case "latestResult":
+		field = "latest_result"
+	default:
+		field = normalizeCSVHeader(field)
+		if field == "" {
+			field = strings.ToLower(strings.TrimSpace(value))
+		}
+	}
+	if !isAllowedImportMappingField(field) {
+		return ""
+	}
+	return field
+}
+
+func isAllowedImportMappingField(field string) bool {
+	for _, definition := range importColumnDefinitions {
+		if definition.field == field {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeImportColumnKey(value string) string {

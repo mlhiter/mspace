@@ -12,6 +12,32 @@ func TestParseChineseCSVImportColumns(t *testing.T) {
 	}, "\n")
 	input := ImportTestCasesInput{Format: "csv", FileName: "object-storage.csv", Content: content}
 
+	previewWithoutMapping, err := previewImportedTestCases(input)
+	if err != nil {
+		t.Fatalf("preview chinese csv import without mapping: %v", err)
+	}
+	if previewWithoutMapping.ImportableCount != 0 || previewWithoutMapping.SkippedCount != 1 {
+		t.Fatalf("expected no importable cases without confirmed mapping, got %+v", previewWithoutMapping)
+	}
+	if !hasUnmatchedImportColumnMapping(previewWithoutMapping.ColumnMappings, "用例名称") ||
+		!hasUnmatchedImportColumnMapping(previewWithoutMapping.ColumnMappings, "步骤描述") ||
+		!hasUnmatchedImportColumnMapping(previewWithoutMapping.ColumnMappings, "用例等级") {
+		t.Fatalf("expected chinese source columns to stay unmatched without worker/user mapping, got %+v", previewWithoutMapping.ColumnMappings)
+	}
+
+	input.ColumnMappings = []TestCaseImportColumnMapping{
+		{Source: "用例ID", Field: "external_id", Index: 0, Confidence: 0.98, Strategy: "worker", Reason: "case identifier"},
+		{Source: "用例名称", Field: "title", Index: 1, Confidence: 0.99, Strategy: "worker", Reason: "case name"},
+		{Source: "所属模块", Field: "area", Index: 2, Confidence: 0.94, Strategy: "worker", Reason: "feature area"},
+		{Source: "测试类别", Field: "tags", Index: 3, Confidence: 0.86, Strategy: "worker", Reason: "business category, not system type"},
+		{Source: "前置条件", Field: "preconditions", Index: 4, Confidence: 0.98, Strategy: "worker", Reason: "setup text"},
+		{Source: "步骤描述", Field: "steps", Index: 5, Confidence: 0.99, Strategy: "worker", Reason: "numbered steps"},
+		{Source: "预期结果", Field: "expected_result", Index: 6, Confidence: 0.99, Strategy: "worker", Reason: "expected result"},
+		{Source: "备注", Field: "environment_requirements", Index: 7, Confidence: 0.72, Strategy: "worker", Reason: "environment note"},
+		{Source: "用例等级", Field: "priority", Index: 8, Confidence: 0.96, Strategy: "worker", Reason: "priority level"},
+		{Source: "执行结果", Field: "latest_result", Index: 9, Confidence: 0.9, Strategy: "worker", Reason: "historical execution state"},
+	}
+
 	cases, skipped, err := parseImportedTestCases(input)
 	if err != nil {
 		t.Fatalf("parse chinese csv import: %v", err)
@@ -55,8 +81,8 @@ func TestParseChineseCSVImportColumns(t *testing.T) {
 		!hasImportColumnMapping(preview.ColumnMappings, "测试类别", "tags") {
 		t.Fatalf("expected chinese csv column mappings, got %+v", preview.ColumnMappings)
 	}
-	if !hasUnmatchedImportColumnMapping(preview.ColumnMappings, "执行结果") {
-		t.Fatalf("expected execution result column to stay unmatched, got %+v", preview.ColumnMappings)
+	if !hasImportColumnMapping(preview.ColumnMappings, "执行结果", "latest_result") {
+		t.Fatalf("expected execution result column to map as historical state, got %+v", preview.ColumnMappings)
 	}
 }
 

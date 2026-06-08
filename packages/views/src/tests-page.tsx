@@ -35,10 +35,14 @@ import {
   queryKeys,
   type Project,
   type Environment,
+  type RuntimeTask,
   type RuntimeWorker,
   type TestCase,
   type ImportTestCasesInput,
   type TestCaseInput,
+  type TestCaseImportColumnMapping,
+  type TestCaseImportMappingResult,
+  type TestCaseImportMappingSuggestion,
   type ImportTestCasesPreview,
   type TestCaseLatestResult,
   type TestCaseProposal,
@@ -939,6 +943,54 @@ function importPreviewColumnMappings(preview: ImportTestCasesPreview) {
   return (preview.columnMappings || []).filter((mapping) => mapping.source || mapping.required);
 }
 
+function isWorkerMappableImportFormat(format: TestCaseImportFormat) {
+  return format === "csv" || format === "xlsx";
+}
+
+function normalizeImportMappingSuggestions(result: Record<string, unknown> | undefined): TestCaseImportMappingSuggestion[] {
+  const suggestions = Array.isArray(result?.suggestions) ? result.suggestions : [];
+  return suggestions
+    .map((value) => {
+      if (!value || typeof value !== "object") return null;
+      const suggestion = value as Partial<TestCaseImportMappingSuggestion>;
+      const source = typeof suggestion.source === "string" ? suggestion.source.trim() : "";
+      const field = typeof suggestion.field === "string" ? suggestion.field.trim() : "";
+      const index = typeof suggestion.index === "number" ? suggestion.index : -1;
+      if (!source || !field || index < 0) return null;
+      const confidence = typeof suggestion.confidence === "number" ? Math.max(0, Math.min(1, suggestion.confidence)) : 0;
+      const reason = typeof suggestion.reason === "string" ? suggestion.reason.trim() : "";
+      return { source, field, index, confidence, reason };
+    })
+    .filter((value): value is TestCaseImportMappingSuggestion => Boolean(value));
+}
+
+function importMappingResultFromTask(task: RuntimeTask | undefined): TestCaseImportMappingResult | undefined {
+  if (!task || !task.result || typeof task.result !== "object") return undefined;
+  const suggestions = normalizeImportMappingSuggestions(task.result);
+  const warnings = Array.isArray(task.result.warnings) ? task.result.warnings.filter((value): value is string => typeof value === "string") : [];
+  return {
+    format: typeof task.result.format === "string" ? task.result.format : "",
+    fileName: typeof task.result.fileName === "string" ? task.result.fileName : "",
+    suggestions,
+    warnings,
+    threadId: typeof task.result.threadId === "string" ? task.result.threadId : undefined,
+    turnId: typeof task.result.turnId === "string" ? task.result.turnId : undefined,
+  };
+}
+
+function importMappingsFromSuggestions(suggestions: TestCaseImportMappingSuggestion[]): TestCaseImportColumnMapping[] {
+  return suggestions.map((suggestion) => ({
+    source: suggestion.source,
+    field: suggestion.field,
+    index: suggestion.index,
+    matched: true,
+    required: false,
+    confidence: suggestion.confidence,
+    reason: suggestion.reason,
+    strategy: "worker",
+  }));
+}
+
 function qualityFindingLabel(code: string, message: string, t: ReturnType<typeof useMspaceTranslation>["t"]) {
   return t(`tests.qualityFinding.${code}`, { defaultValue: message || code });
 }
@@ -1258,10 +1310,15 @@ export function TestsPage() {
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPayload, setImportPayload] = useState<ImportTestCasesInput | null>(null);
   const [importPreview, setImportPreview] = useState<ImportTestCasesPreview | null>(null);
+  const [importMappingTaskId, setImportMappingTaskId] = useState("");
+  const [importMappingResult, setImportMappingResult] = useState<TestCaseImportMappingResult | null>(null);
+  const [importMappingError, setImportMappingError] = useState("");
+  const [importMappingPreviewing, setImportMappingPreviewing] = useState(false);
   const [importFileError, setImportFileError] = useState("");
   const [importSummary, setImportSummary] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const importPreviewRequestRef = useRef(0);
+  const importMappingAppliedTaskRef = useRef("");
   const workerReadiness = useTestsWorkerReadiness(auth, workspaceId, setActionMessage);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) || projects[0];
@@ -1361,6 +1418,13 @@ export function TestsPage() {
     enabled: serverWorkspaceReady,
   });
 
+  const importMappingTasksQuery = useQuery({
+    queryKey: queryKeys.runtimeTasks(workspaceId, auth.token, 20, 0),
+    queryFn: () => controlPlaneApi.listRuntimeTasks(auth.token, workspaceId, { limit: 20, offset: 0 }),
+    enabled: serverWorkspaceReady && Boolean(importMappingTaskId),
+    refetchInterval: importMappingTaskId ? 2_500 : false,
+  });
+
   const caseList = casesQuery.data || emptyTestCaseListResult;
   const cases = caseList.cases || emptyTestCases;
   const caseTotal = caseList.total || 0;
@@ -1396,7 +1460,8 @@ export function TestsPage() {
   const canGoNextCasePage = casePage < totalCasePages - 1;
   const canCreateCase = Boolean(effectiveProjectId && caseForm.title.trim());
   const canCreatePlan = Boolean(effectiveProjectId && planForm.title.trim() && selectedCaseIds.length > 0);
-  const canImportCases = Boolean(importFile && importPayload && importPreview && !importFileError);
+  const importMappingTask = importMappingTasksQuery.data?.tasks.find((task) => task.id === importMappingTaskId);
+  const importMappingActive = Boolean(importMappingTaskId && (!importMappingTask || ["queued", "claimed", "running"].includes(importMappingTask.status)));
 
   async function invalidateCaseWorkflow() {
     await Promise.all([
@@ -1451,6 +1516,60 @@ export function TestsPage() {
     },
   });
 
+  const createImportMappingTask = useMutation({
+    mutationFn: async () => {
+      if (!importPayload || !isWorkerMappableImportFormat(importFormat)) {
+        throw new Error(t("tests.importMappingRequiresTabularFile"));
+      }
+      await workerReadiness.ensureReady();
+      return controlPlaneApi.createProjectTestCasesImportMappingTask(auth.token, workspaceId, effectiveProjectId, {
+        format: importFormat,
+        content: importPayload.content,
+        fileName: importPayload.fileName,
+        runtimeMode: workerReadiness.runtimeMode,
+      });
+    },
+    onSuccess: async (task) => {
+      importMappingAppliedTaskRef.current = "";
+      setImportMappingTaskId(task.id);
+      setImportMappingResult(null);
+      setImportMappingError("");
+      setActionMessage(t("tests.importMappingQueued"));
+      await queryClient.invalidateQueries({ queryKey: queryKeys.runtimeTasks(workspaceId, auth.token, 20, 0) });
+    },
+    onError: (error) => {
+      setImportMappingError(error instanceof Error ? error.message : t("tests.importMappingFailed"));
+    },
+  });
+  const canImportCases = Boolean(
+    importFile &&
+      importPayload &&
+      importPreview &&
+      importPreview.importableCount > 0 &&
+      !importFileError &&
+      !createImportMappingTask.isPending &&
+      !importMappingActive &&
+      !importMappingPreviewing,
+  );
+  const canMapImportColumns = Boolean(
+    importFile &&
+      importPayload &&
+      importPreview &&
+      isWorkerMappableImportFormat(importFormat) &&
+      !previewImport.isPending &&
+      !importMappingPreviewing &&
+      !createImportMappingTask.isPending &&
+      !importMappingActive,
+  );
+
+  function resetImportMappingState() {
+    setImportMappingTaskId("");
+    setImportMappingResult(null);
+    setImportMappingError("");
+    setImportMappingPreviewing(false);
+    importMappingAppliedTaskRef.current = "";
+  }
+
   const importCases = useMutation({
     mutationFn: async () => {
       if (!importPayload || !importPreview) {
@@ -1468,6 +1587,7 @@ export function TestsPage() {
       setImportPayload(null);
       setImportPreview(null);
       setImportFileError("");
+      resetImportMappingState();
       setImportOpen(false);
       if (created[0]) {
         setSelectedCaseIds([created[0].id]);
@@ -1602,6 +1722,68 @@ export function TestsPage() {
   const agentActionError = optimizeCases.error || generateCases.error || startAdHocRun.error || startRun.error;
   const agentActionMessage = agentActionError?.message || actionMessage;
   const agentActionMessageClass = agentActionError ? "text-[color:var(--danger)]" : "text-[color:var(--muted)]";
+
+  useEffect(() => {
+    if (!importMappingTaskId || !importMappingTask || !importPayload) return;
+    if (importMappingTask.status === "completed") {
+      if (importMappingAppliedTaskRef.current === importMappingTask.id) return;
+      importMappingAppliedTaskRef.current = importMappingTask.id;
+      const result = importMappingResultFromTask(importMappingTask);
+      const mappings = importMappingsFromSuggestions(result?.suggestions || []);
+      if (result) {
+        setImportMappingResult(result);
+      }
+      if (mappings.length === 0) {
+        setImportMappingTaskId("");
+        setImportMappingError(t("tests.importMappingNoSuggestions"));
+        setActionMessage(t("tests.importMappingNoSuggestions"));
+        return;
+      }
+      const nextPayload: ImportTestCasesInput = {
+        ...importPayload,
+        columnMappings: mappings,
+      };
+      const requestId = importPreviewRequestRef.current + 1;
+      importPreviewRequestRef.current = requestId;
+      setImportPayload(nextPayload);
+      setImportMappingTaskId("");
+      setImportMappingError("");
+      setImportMappingPreviewing(true);
+      setActionMessage(t("tests.importMappingApplied", { count: mappings.length }));
+      void controlPlaneApi.previewProjectTestCasesImport(auth.token, workspaceId, effectiveProjectId, nextPayload)
+        .then((preview) => {
+          if (requestId !== importPreviewRequestRef.current) return;
+          setImportPayload(nextPayload);
+          setImportPreview(preview);
+          setImportFileError("");
+          importCases.reset();
+        })
+        .catch((error) => {
+          if (requestId !== importPreviewRequestRef.current) return;
+          setImportFileError(error instanceof Error ? error.message : t("tests.importPreviewFailed"));
+        })
+        .finally(() => {
+          if (requestId !== importPreviewRequestRef.current) return;
+          setImportMappingPreviewing(false);
+        });
+      return;
+    }
+    if (importMappingTask.status === "failed" || importMappingTask.status === "cancelled") {
+      setImportMappingTaskId("");
+      setImportMappingError(importMappingTask.error || t("tests.importMappingFailed"));
+      setActionMessage(t("tests.importMappingFailed"));
+    }
+  }, [
+    auth.token,
+    effectiveProjectId,
+    importMappingTask,
+    importMappingTaskId,
+    importPayload,
+    importCases,
+    t,
+    workspaceId,
+  ]);
+
   const workflowStages = useMemo(
     () => [
       {
@@ -1760,7 +1942,9 @@ export function TestsPage() {
     setImportPreview(null);
     setImportFileError("");
     setImportSummary("");
+    resetImportMappingState();
     previewImport.reset();
+    createImportMappingTask.reset();
     importCases.reset();
   }
 
@@ -1772,7 +1956,9 @@ export function TestsPage() {
     setImportPreview(null);
     setImportFileError("");
     setImportSummary("");
+    resetImportMappingState();
     previewImport.reset();
+    createImportMappingTask.reset();
     importCases.reset();
   }
 
@@ -1784,7 +1970,9 @@ export function TestsPage() {
     setImportPreview(null);
     setImportFileError("");
     setImportSummary("");
+    resetImportMappingState();
     previewImport.reset();
+    createImportMappingTask.reset();
     importCases.reset();
   }
 
@@ -1793,7 +1981,9 @@ export function TestsPage() {
     setImportPayload(null);
     setImportPreview(null);
     setImportSummary("");
+    resetImportMappingState();
     previewImport.reset();
+    createImportMappingTask.reset();
     importCases.reset();
     if (!file) {
       importPreviewRequestRef.current += 1;
@@ -2410,6 +2600,28 @@ export function TestsPage() {
                 <div className="min-w-0 rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
                   {importFormat === "xlsx" ? t("tests.importExcelHint") : t("tests.importFormatHint")}
                 </div>
+                {isWorkerMappableImportFormat(importFormat) && importPreview ? (
+                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-[8px] bg-[color:var(--paper)] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+                    <div className="min-w-[180px] flex-1 text-[12px] leading-5 text-[color:var(--muted)]">
+                      <div className="font-medium text-[color:var(--muted-strong)]">{t("tests.importMappingTitle")}</div>
+                      <div>
+                        {importMappingActive
+                          ? t("tests.importMappingRunning", {
+                              status: t(`workspaceSettings.taskStatus.${importMappingTask?.status || "queued"}`, { defaultValue: importMappingTask?.status || "queued" }),
+                            })
+                          : importMappingResult
+                            ? t("tests.importMappingApplied", { count: importMappingResult.suggestions.length })
+                            : t("tests.importMappingBody")}
+                      </div>
+                    </div>
+                    <Button type="button" variant="secondary" onClick={() => createImportMappingTask.mutate()} disabled={!canMapImportColumns}>
+                      <Sparkles data-icon />
+                      {createImportMappingTask.isPending || importMappingActive ? t("tests.importMappingRunningShort") : t("tests.importMapWithWorker")}
+                    </Button>
+                  </div>
+                ) : null}
+                {importMappingPreviewing ? <p className="text-[12px] text-[color:var(--muted)]">{t("tests.importMappingPreviewing")}</p> : null}
+                {importMappingError ? <p className="text-[12px] text-[color:var(--danger)]">{importMappingError}</p> : null}
                 {importPreview ? <ImportPreviewPanel preview={importPreview} t={t} /> : null}
                 {importSummary ? <p className="text-[12px] text-[color:var(--muted)]">{importSummary}</p> : null}
                 {importCases.error ? <p className="text-[12px] text-[color:var(--danger)]">{importCases.error.message}</p> : null}
@@ -3209,14 +3421,23 @@ function ImportPreviewPanel(props: { preview: ImportTestCasesPreview; t: ReturnT
               <div
                 key={`${mapping.source || mapping.field}-${mapping.index}`}
                 className={cn(
-                  "flex min-w-0 items-center justify-between gap-2 rounded-[7px] px-2 py-1.5 shadow-[inset_0_0_0_1px_var(--line)]",
+                  "grid min-w-0 gap-1 rounded-[7px] px-2 py-1.5 shadow-[inset_0_0_0_1px_var(--line)]",
                   mapping.matched ? "bg-[color:var(--block)] text-[color:var(--muted)]" : "bg-[color:var(--warning-soft)] text-[color:var(--warning)]",
                 )}
               >
-                <span className="min-w-0 truncate">{mapping.source || t("tests.importPreviewMissingColumn")}</span>
-                <span className="shrink-0 text-[color:var(--muted-strong)]">
-                  {mapping.matched ? importPreviewFieldLabel(mapping.field, t) : t("tests.importPreviewUnmatchedColumn")}
-                </span>
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="min-w-0 truncate">{mapping.source || t("tests.importPreviewMissingColumn")}</span>
+                  <span className="shrink-0 text-[color:var(--muted-strong)]">
+                    {mapping.matched ? importPreviewFieldLabel(mapping.field, t) : t("tests.importPreviewUnmatchedColumn")}
+                  </span>
+                </div>
+                {mapping.strategy || mapping.confidence ? (
+                  <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-[color:var(--muted)]">
+                    {mapping.strategy ? <span>{t(`tests.importPreviewMappingStrategy.${mapping.strategy}`, { defaultValue: mapping.strategy })}</span> : null}
+                    {mapping.confidence ? <span>{t("tests.importPreviewMappingConfidence", { confidence: Math.round(mapping.confidence * 100) })}</span> : null}
+                  </div>
+                ) : null}
+                {mapping.reason ? <div className="line-clamp-2 text-[11px] leading-4 text-[color:var(--muted)]">{mapping.reason}</div> : null}
               </div>
             ))}
           </div>
