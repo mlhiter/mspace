@@ -876,6 +876,23 @@ function hasText(value?: string) {
   return (value || "").trim().length > 0;
 }
 
+function canReviewTestRun(status: string) {
+  return status === "needs_acceptance";
+}
+
+function isReviewedTestRun(status: string) {
+  return status === "accepted" || status === "blocked";
+}
+
+function canRetryTestRun(status: string, items: TestRunItem[]) {
+  if (status !== "needs_acceptance" && status !== "blocked") return false;
+  return items.some((item) => item.status === "failed" || item.status === "blocked");
+}
+
+function testRunReviewPendingMessageKey(status: string) {
+  return status === "setup_failed" ? "tests.runReviewSetupFailed" : "tests.runReviewPending";
+}
+
 function hasRunnableStep(steps: TestCaseStep[]) {
   return steps.some((step) => hasText(step.action));
 }
@@ -3246,6 +3263,9 @@ export function TestRunDetailPage() {
 
   const detail = runQuery.data;
   const runTitle = detail.plan?.title || t("tests.adHocRun");
+  const showReviewControls = canReviewTestRun(detail.run.status);
+  const showReviewDecision = isReviewedTestRun(detail.run.status);
+  const showRetryRun = canRetryTestRun(detail.run.status, detail.items);
 
   return (
     <PageFrame
@@ -3286,24 +3306,46 @@ export function TestRunDetailPage() {
             <TestRunSetupPanel run={detail.run} />
           ) : null}
 
-          <Field label={t("tests.reviewNote")}>
-            <Textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder={t("tests.reviewNotePlaceholder")} className="min-h-20" />
-          </Field>
+          {showReviewDecision ? (
+            <div className="mt-4 rounded-[8px] bg-[color:var(--paper)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[12px] font-medium text-[color:var(--muted-strong)]">{t("tests.reviewDecision")}</span>
+                <StatusBadge value={detail.run.acceptanceStatus} valueLabel={t(`tests.acceptanceStatusValue.${detail.run.acceptanceStatus}`, { defaultValue: detail.run.acceptanceStatus })} />
+              </div>
+              {hasText(detail.run.acceptanceNote) ? (
+                <p className="mt-2 whitespace-pre-wrap text-[12px] leading-5 text-[color:var(--muted)]">{detail.run.acceptanceNote}</p>
+              ) : (
+                <p className="mt-2 text-[12px] leading-5 text-[color:var(--muted)]">{t("tests.noReviewNote")}</p>
+              )}
+            </div>
+          ) : showReviewControls ? (
+            <>
+              <Field label={t("tests.reviewNote")}>
+                <Textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder={t("tests.runReviewNotePlaceholder")} className="min-h-20" />
+              </Field>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <Button type="button" variant="secondary" onClick={() => retryRun.mutate()} disabled={retryRun.isPending}>
-              <RotateCcw data-icon />
-              {retryRun.isPending ? t("tests.retryingRun") : t("tests.retryRun")}
-            </Button>
-            <Button type="button" variant="secondary" onClick={() => blockRun.mutate()} disabled={blockRun.isPending}>
-              <Ban data-icon />
-              {blockRun.isPending ? t("tests.blockingRun") : t("tests.blockRun")}
-            </Button>
-            <Button type="button" onClick={() => acceptRun.mutate()} disabled={acceptRun.isPending}>
-              <Check data-icon />
-              {acceptRun.isPending ? t("tests.acceptingRun") : t("tests.acceptRun")}
-            </Button>
-          </div>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <Button type="button" variant="secondary" onClick={() => blockRun.mutate()} disabled={blockRun.isPending}>
+                  <Ban data-icon />
+                  {blockRun.isPending ? t("tests.blockingRun") : t("tests.blockRun")}
+                </Button>
+                <Button type="button" onClick={() => acceptRun.mutate()} disabled={acceptRun.isPending}>
+                  <Check data-icon />
+                  {acceptRun.isPending ? t("tests.acceptingRun") : t("tests.acceptRun")}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <p className="mt-4 text-[12px] leading-5 text-[color:var(--muted)]">{t(testRunReviewPendingMessageKey(detail.run.status))}</p>
+          )}
+          {showRetryRun ? (
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <Button type="button" variant="secondary" onClick={() => retryRun.mutate()} disabled={retryRun.isPending}>
+                <RotateCcw data-icon />
+                {retryRun.isPending ? t("tests.retryingRun") : t("tests.retryRun")}
+              </Button>
+            </div>
+          ) : null}
           {(retryRun.error || acceptRun.error || blockRun.error) ? (
             <p className="mt-3 text-[12px] text-[color:var(--danger)]">{(retryRun.error || acceptRun.error || blockRun.error)?.message}</p>
           ) : actionMessage ? (
