@@ -12,6 +12,7 @@ import {
   ListChecks,
   Maximize2,
   Network,
+  Pencil,
   Play,
   Plus,
   RotateCcw,
@@ -421,6 +422,18 @@ function formToInput(form: CaseForm): TestCaseInput {
       .split(",")
       .map((tag) => tag.trim())
       .filter(Boolean),
+  };
+}
+
+function planToForm(plan: TestPlan): PlanForm {
+  return {
+    title: plan.title || "",
+    description: plan.description || "",
+    setupSteps: plan.setupSteps || "",
+    status: plan.status || "ready",
+    targetType: plan.targetType || "branch",
+    targetValue: plan.targetValue || "",
+    environmentId: plan.environmentId || "",
   };
 }
 
@@ -3073,8 +3086,114 @@ function TestPlanDetailContent(props: {
 }) {
   const { t } = useMspaceTranslation();
   const { detail, projectId, projects, actionMessage, startRun } = props;
+  const auth = useMspaceAuth();
+  const workspaceId = auth.workspace?.id || "";
+  const queryClient = useQueryClient();
   const { plan } = detail;
   const projectNames = useMemo(() => new Map(projects.map((project) => [project.id, project.name])), [projects]);
+  const [editPlanOpen, setEditPlanOpen] = useState(false);
+  const [editPlanForm, setEditPlanForm] = useState<PlanForm>(() => planToForm(plan));
+  const [editSelectedCaseIds, setEditSelectedCaseIds] = useState<string[]>(() => detail.cases.map((planCase) => planCase.testCase.id));
+  const [editActionMessage, setEditActionMessage] = useState("");
+  const workspaceReadyCasesQueryKey = useMemo(
+    () => ["workspace-ready-test-cases", workspaceId, auth.token, projects.map((project) => project.id).join(",")] as const,
+    [auth.token, projects, workspaceId],
+  );
+  const environmentsQuery = useQuery({
+    queryKey: queryKeys.environments(workspaceId, auth.token),
+    queryFn: () => controlPlaneApi.listEnvironments(auth.token, workspaceId),
+    enabled: editPlanOpen && Boolean(auth.token && workspaceId),
+  });
+  const workspaceReadyCasesQuery = useQuery({
+    queryKey: workspaceReadyCasesQueryKey,
+    queryFn: async () => {
+      const results = await Promise.all(
+        projects.map((project) =>
+          controlPlaneApi.listProjectTestCases(auth.token, workspaceId, project.id, {
+            status: "ready",
+            limit: testCaseAuxiliaryLimit,
+          }),
+        ),
+      );
+      return results.flatMap((result) => result.cases || []);
+    },
+    enabled: editPlanOpen && Boolean(auth.token && workspaceId && projects.length > 0),
+  });
+  const editReadyCases = useMemo(() => {
+    const byId = new Map<string, TestCase>();
+    (workspaceReadyCasesQuery.data || emptyTestCases).forEach((testCase) => {
+      byId.set(testCase.id, normalizeTestCaseForView(testCase));
+    });
+    detail.cases.forEach((planCase) => {
+      byId.set(
+        planCase.testCase.id,
+        normalizeTestCaseForView({
+          ...planCase.testCase,
+          projectId: planCase.projectId || planCase.testCase.projectId,
+        }),
+      );
+    });
+    return Array.from(byId.values()).sort((left, right) => {
+      const leftProject = projectNames.get(left.projectId) || "";
+      const rightProject = projectNames.get(right.projectId) || "";
+      if (leftProject !== rightProject) return leftProject.localeCompare(rightProject);
+      return left.title.localeCompare(right.title);
+    });
+  }, [detail.cases, projectNames, workspaceReadyCasesQuery.data]);
+  const editReadyCaseById = useMemo(() => new Map(editReadyCases.map((testCase) => [testCase.id, testCase])), [editReadyCases]);
+  const editSelectedCaseInputs = useMemo(
+    () =>
+      editSelectedCaseIds
+        .map((caseId) => {
+          const testCase = editReadyCaseById.get(caseId);
+          return testCase?.projectId ? { projectId: testCase.projectId, caseId } : undefined;
+        })
+        .filter((item): item is { projectId: string; caseId: string } => Boolean(item)),
+    [editReadyCaseById, editSelectedCaseIds],
+  );
+  const canUpdatePlan = Boolean(editPlanForm.title.trim() && editSelectedCaseInputs.length > 0);
+  const updatePlan = useMutation({
+    mutationFn: () =>
+      controlPlaneApi.updateWorkspaceTestPlan(auth.token, workspaceId, plan.id, {
+        ...editPlanForm,
+        setupSteps: editPlanForm.setupSteps.trim(),
+        environment: "",
+        environmentId: editPlanForm.environmentId || "",
+        cases: editSelectedCaseInputs,
+      }),
+    onSuccess: async (updated) => {
+      setEditPlanOpen(false);
+      setEditActionMessage(t("tests.planUpdated"));
+      queryClient.setQueryData(queryKeys.workspaceTestPlan(workspaceId, plan.id, auth.token), updated);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestPlans(workspaceId, auth.token) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestPlan(workspaceId, plan.id, auth.token) }),
+      ]);
+    },
+  });
+  const environments = environmentsQuery.data || emptyEnvironments;
+  const planActionMessage = editActionMessage || actionMessage;
+
+  function openEditPlanDialog() {
+    setEditPlanForm(planToForm(plan));
+    setEditSelectedCaseIds(detail.cases.map((planCase) => planCase.testCase.id));
+    setEditActionMessage("");
+    setEditPlanOpen(true);
+    updatePlan.reset();
+  }
+
+  function closeEditPlanDialog() {
+    setEditPlanOpen(false);
+    updatePlan.reset();
+  }
+
+  function toggleEditPlanCase(caseId: string) {
+    setEditSelectedCaseIds((current) => (current.includes(caseId) ? current.filter((id) => id !== caseId) : [...current, caseId]));
+  }
+
+  function selectEditReadyCases() {
+    setEditSelectedCaseIds(editReadyCases.filter((testCase) => testCase.status === "ready").map((testCase) => testCase.id));
+  }
 
   return (
     <PageFrame
@@ -3087,6 +3206,10 @@ function TestPlanDetailContent(props: {
       ]}
       actions={
         <>
+          <Button type="button" variant="secondary" onClick={openEditPlanDialog}>
+            <Pencil data-icon />
+            {t("tests.editPlan")}
+          </Button>
           <Button type="button" onClick={() => startRun.mutate(plan)} disabled={startRun.isPending}>
             <Play data-icon />
             {startRun.isPending ? t("tests.startingRun") : t("tests.startRun")}
@@ -3124,8 +3247,8 @@ function TestPlanDetailContent(props: {
           ) : null}
           {startRun.error ? (
             <p className="mt-3 text-[12px] text-[color:var(--danger)]">{startRun.error.message}</p>
-          ) : actionMessage ? (
-            <p className="mt-3 text-[12px] text-[color:var(--muted)]">{actionMessage}</p>
+          ) : planActionMessage ? (
+            <p className="mt-3 text-[12px] text-[color:var(--muted)]">{planActionMessage}</p>
           ) : null}
         </section>
 
@@ -3199,6 +3322,41 @@ function TestPlanDetailContent(props: {
           </div>
         </section>
       </div>
+      {editPlanOpen ? (
+        <TestsModal title={t("tests.editPlan")} description={t("tests.editPlanDescription")} onClose={closeEditPlanDialog} wide>
+          <form
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!canUpdatePlan) return;
+              updatePlan.mutate();
+            }}
+          >
+            <PlanFormFields
+              form={editPlanForm}
+              onChange={setEditPlanForm}
+              environments={environments}
+              readyCases={editReadyCases}
+              selectedCaseIds={editSelectedCaseIds}
+              onCaseToggle={toggleEditPlanCase}
+              onSelectReadyCases={selectEditReadyCases}
+              projectNames={projectNames}
+            />
+            {workspaceReadyCasesQuery.isLoading ? <p className="text-[12px] text-[color:var(--muted)]">{t("tests.loading")}</p> : null}
+            {workspaceReadyCasesQuery.error ? <p className="text-[12px] text-[color:var(--danger)]">{workspaceReadyCasesQuery.error.message}</p> : null}
+            {updatePlan.error ? <p className="text-[12px] text-[color:var(--danger)]">{updatePlan.error.message}</p> : null}
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[color:var(--line)] pt-3">
+              <Button type="button" variant="secondary" onClick={closeEditPlanDialog}>
+                {t("common.cancel")}
+              </Button>
+              <Button type="submit" disabled={updatePlan.isPending || !canUpdatePlan}>
+                <Save data-icon />
+                {updatePlan.isPending ? t("tests.savingPlan") : t("tests.savePlan")}
+              </Button>
+            </div>
+          </form>
+        </TestsModal>
+      ) : null}
     </PageFrame>
   );
 }
@@ -3913,9 +4071,10 @@ function PlanFormFields(props: {
   onCaseToggle: (caseId: string) => void;
   onSelectReadyCases: () => void;
   selectionLocked?: boolean;
+  projectNames?: Map<string, string>;
 }) {
   const { t } = useMspaceTranslation();
-  const { form, onChange, environments, readyCases, selectedCaseIds, onCaseToggle, onSelectReadyCases, selectionLocked = false } = props;
+  const { form, onChange, environments, readyCases, selectedCaseIds, onCaseToggle, onSelectReadyCases, selectionLocked = false, projectNames } = props;
 
   return (
     <>
@@ -4002,7 +4161,10 @@ function PlanFormFields(props: {
                 />
                 <span className="min-w-0">
                   <span className="block truncate font-medium text-[color:var(--text)]">{testCase.title}</span>
-                  <span>{testCase.area || t("common.unknown")}</span>
+                  <span>
+                    {projectNames?.get(testCase.projectId) ? `${projectNames.get(testCase.projectId)} · ` : ""}
+                    {testCase.area || t("common.unknown")}
+                  </span>
                 </span>
               </label>
             ))

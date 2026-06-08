@@ -14,6 +14,7 @@ export const changelog: ChangelogEntry[] = [
     items: [
       "Removed the ordinary Run case and Run selected UI paths, keeping cases as test knowledge and plans as the executable scope.",
       "Changed ready-case actions to create a plan first, so target, environment, and setup context are explicit before a worker runs tests.",
+      "Added plan-detail editing so users can adjust the selected ready cases, target, environment, and setup before the next run.",
       "Kept historical and compatibility ad hoc runs readable while making plan-based runs the normal product path.",
       "Updated English and Simplified Chinese copy so the Runs surface asks users to choose a plan before starting execution.",
     ],
