@@ -4251,7 +4251,7 @@ function TestRunSetupPanel(props: { run: TestRun }) {
   const runContext = props.run.runContext && Object.keys(props.run.runContext).length > 0 ? props.run.runContext : null;
 
   return (
-    <section className="mt-4 rounded-[8px] bg-[color:var(--paper)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
+    <section className="mt-4 min-w-0 overflow-hidden rounded-[8px] bg-[color:var(--paper)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--muted-strong)]">
           <TerminalSquare data-icon className="size-3.5" />
@@ -4266,7 +4266,7 @@ function TestRunSetupPanel(props: { run: TestRun }) {
         </div>
       ) : null}
       {hasText(props.run.setupSteps) ? (
-        <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-[7px] bg-[color:var(--surface)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+        <pre className="mt-3 max-h-40 max-w-full overflow-auto whitespace-pre-wrap rounded-[7px] bg-[color:var(--surface)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)] [overflow-wrap:anywhere]">
           {props.run.setupSteps}
         </pre>
       ) : null}
@@ -4278,12 +4278,12 @@ function TestRunSetupPanel(props: { run: TestRun }) {
 
 function SetupJSONBlock(props: { title: string; value: Record<string, unknown> }) {
   return (
-    <details className="mt-3">
-      <summary className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-[color:var(--muted)] hover:text-[color:var(--text)]">
+    <details className="mt-3 min-w-0 max-w-full overflow-hidden">
+      <summary className="inline-flex max-w-full cursor-pointer items-center gap-1.5 text-[11px] font-medium text-[color:var(--muted)] hover:text-[color:var(--text)]">
         <TerminalSquare data-icon className="size-3.5" />
         {props.title}
       </summary>
-      <pre className="mt-2 max-h-48 overflow-auto rounded-[8px] bg-[color:var(--surface)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+      <pre className="mt-2 max-h-48 max-w-full overflow-auto whitespace-pre-wrap rounded-[8px] bg-[color:var(--surface)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)] [overflow-wrap:anywhere]">
         {JSON.stringify(props.value, null, 2)}
       </pre>
     </details>
