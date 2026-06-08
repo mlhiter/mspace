@@ -3259,14 +3259,6 @@ export function TestRunDetailPage() {
           : [{ label: t("tests.adHocRun"), to: "/tests" as const, search: testsTabSearch("runs", effectiveProjectId) }]),
         { label: t("tests.runShortId", { id: detail.run.id.slice(0, 8) }) },
       ]}
-      actions={
-        <Button type="button" variant="secondary" asChild>
-          <Link to="/tests" search={testsTabSearch("runs", effectiveProjectId)}>
-            <ArrowLeft data-icon />
-            {t("common.goBack")}
-          </Link>
-        </Button>
-      }
     >
       <div className="grid gap-5">
         <section className="rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
