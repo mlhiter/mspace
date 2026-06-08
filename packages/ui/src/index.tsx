@@ -291,13 +291,20 @@ export type BreadcrumbItem = {
 };
 
 export type ShellActiveWorkItem = {
-  issueId: string;
+  id: string;
+  kind?: "issue" | "test-run";
   projectName?: string;
   title: string;
   status: string;
+  statusLabel?: string;
+  subtitle?: string;
   namespace?: string;
   namespaceStatus?: string;
   sessionStatus?: string;
+  updatedAt?: string;
+  to: string;
+  params?: Record<string, string>;
+  search?: Record<string, unknown>;
 };
 
 export type ShellAccount = {
@@ -409,7 +416,7 @@ export function AppShell(
         </div>
         <div className="mt-2 flex flex-col gap-1">
           {activeWorkItems.length > 0 ? (
-            activeWorkItems.slice(0, 5).map((item) => <ActiveWorkLink key={item.issueId} item={item} />)
+            activeWorkItems.slice(0, 5).map((item) => <ActiveWorkLink key={item.id} item={item} />)
           ) : (
             <div className="rounded-[8px] px-2 py-2 text-[12px] leading-5 text-[color:var(--muted)]">
               {t("navigation.noActiveWork")}
@@ -1053,28 +1060,32 @@ function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
   const status = normalizeStatusValue(props.item.sessionStatus || props.item.namespaceStatus || props.item.status);
   const { t } = useMspaceTranslation();
   const projectName = props.item.projectName || t("common.noProject");
-  const secondary = props.item.namespace || projectName;
+  const secondary = props.item.subtitle || props.item.namespace || projectName;
   return (
     <Link
-      to="/issues/$issueId"
-      params={{ issueId: props.item.issueId }}
+      to={props.item.to}
+      params={props.item.params}
+      search={props.item.search}
       className="group flex w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] transition-[background-color,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-[0.98]"
     >
       <span
         className={cn(
           "size-2 rounded-full",
-          status === "running" || status === "in_progress" || status === "deploying" || status === "test_in_progress" ? "bg-[color:var(--accent-blue)]" : null,
-          status === "queued" || status === "cleanup_requested" ? "bg-[color:var(--warning)]" : null,
+          status === "running" || status === "setup_running" || status === "in_progress" || status === "deploying" || status === "test_in_progress" ? "bg-[color:var(--accent-blue)]" : null,
+          status === "queued" || status === "cleanup_requested" || status === "needs_acceptance" ? "bg-[color:var(--warning)]" : null,
           status === "open" || status === "completed" || status === "test_passed" ? "bg-[color:var(--success)]" : null,
           status === "closed" ? "bg-[color:var(--done)]" : null,
           status === "retained" ? "bg-[color:var(--muted)]" : null,
-          status === "needs_review" || status === "ready_for_test" || status === "changes_requested" ? "bg-[color:var(--warning)]" : null,
-          status === "test_failed" || status === "failed" ? "bg-[color:var(--danger)]" : null,
-          !["running", "in_progress", "deploying", "queued", "cleanup_requested", "open", "closed", "completed", "retained", "needs_review", "ready_for_test", "changes_requested", "test_in_progress", "test_passed", "test_failed", "failed"].includes(status) ? "bg-[color:var(--faint)]" : null,
+          status === "needs_review" || status === "ready_for_test" || status === "changes_requested" || status === "blocked" ? "bg-[color:var(--warning)]" : null,
+          status === "test_failed" || status === "failed" || status === "setup_failed" ? "bg-[color:var(--danger)]" : null,
+          !["running", "setup_running", "in_progress", "deploying", "queued", "cleanup_requested", "needs_acceptance", "open", "closed", "completed", "retained", "needs_review", "ready_for_test", "changes_requested", "blocked", "test_in_progress", "test_passed", "test_failed", "failed", "setup_failed"].includes(status) ? "bg-[color:var(--faint)]" : null,
         )}
       />
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-medium">{props.item.title}</span>
+        <span className="block truncate font-medium">
+          {props.item.title}
+          {props.item.statusLabel ? <span className="font-normal text-[color:var(--muted)]"> · {props.item.statusLabel}</span> : null}
+        </span>
         <span className="block truncate text-[11px] text-[color:var(--muted)]">
           {projectName}{secondary && secondary !== projectName ? ` · ${secondary}` : ""}
         </span>

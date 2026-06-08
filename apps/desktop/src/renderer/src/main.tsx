@@ -41,9 +41,11 @@ import {
   setStoredAuthIdentity,
   type AuthMeResult,
   type CreateWorkspaceInput,
+  type IssueListItem,
+  type TestRun,
   type WorkspaceInvitationPreview,
 } from "@mspace/core";
-import { AppShell, Button, Field, Input, MspaceToastProvider, Notice, type ShellSearchItem } from "@mspace/ui";
+import { AppShell, Button, Field, Input, MspaceToastProvider, Notice, type ShellActiveWorkItem, type ShellSearchItem } from "@mspace/ui";
 import { initializeMspaceI18n, t, useMspaceTranslation } from "@mspace/i18n";
 import mspaceLogoUrl from "../../../assets/brand/mspace-logo.svg";
 import "./globals.css";
@@ -62,6 +64,10 @@ function joinSearchSubtitle(values: Array<string | number | null | undefined>): 
     .filter(Boolean)
     .join(" - ");
 }
+
+const activeIssueStatuses = new Set(["needs_review", "changes_requested", "ready_for_test", "blocked"]);
+const inactiveIssueStatuses = new Set(["closed", "cancelled"]);
+const activeTestRunStatuses = new Set(["queued", "setup_running", "setup_failed", "running", "needs_acceptance", "blocked"]);
 
 function normalizeServerInput(value: string): string {
   const trimmed = value.trim();
@@ -118,6 +124,47 @@ function serverSupportsGitHubAuth(payload: ServerHealthPayload | undefined): boo
 
 function isConfiguredTeamServer(source: ServerBaseUrlSource): boolean {
   return source !== "default";
+}
+
+function isActiveIssueWork(issue: IssueListItem): boolean {
+  const status = issue.status.trim().toLowerCase();
+  if (inactiveIssueStatuses.has(status)) return false;
+  return issue.sessionCount > 0 || issue.childIssueCount > issue.completedChildIssueCount || activeIssueStatuses.has(status);
+}
+
+function issueActiveWorkItem(issue: IssueListItem, statusLabel: string): ShellActiveWorkItem {
+  return {
+    id: `issue:${issue.id}`,
+    kind: "issue",
+    projectName: issue.projectName,
+    title: issue.title,
+    status: issue.status,
+    statusLabel,
+    subtitle: issue.childIssueCount > 0 ? `${issue.completedChildIssueCount}/${issue.childIssueCount}` : undefined,
+    updatedAt: issue.updatedAt,
+    to: "/issues/$issueId",
+    params: { issueId: issue.id },
+  };
+}
+
+function isActiveTestRunWork(run: TestRun): boolean {
+  return activeTestRunStatuses.has(run.status.trim().toLowerCase());
+}
+
+function testRunActiveWorkItem(run: TestRun, title: string, statusLabel: string, subtitle: string, projectName?: string): ShellActiveWorkItem {
+  return {
+    id: `test-run:${run.id}`,
+    kind: "test-run",
+    projectName,
+    title,
+    status: run.status,
+    statusLabel,
+    subtitle,
+    updatedAt: run.updatedAt,
+    to: "/tests/runs/$runId",
+    params: { runId: run.id },
+    search: { tab: "runs" },
+  };
 }
 
 function defaultPasswordAuthMode(source: ServerBaseUrlSource): PasswordAuthMode {
@@ -498,6 +545,7 @@ function RootShell() {
   const serverWorkspaceReady = authToken !== "" && Boolean(currentWorkspace?.id);
   const workspaceIssuesQueryKey = queryKeys.workspaceIssues(currentWorkspace?.id || "", authToken);
   const workspaceProjectsQueryKey = queryKeys.workspaceProjects(currentWorkspace?.id || "", authToken);
+  const workspaceTestRunsQueryKey = queryKeys.workspaceTestRuns(currentWorkspace?.id || "", authToken);
   const issuesQuery = useQuery({
     queryKey: workspaceIssuesQueryKey,
     queryFn: () => controlPlaneApi.listIssues(authToken, currentWorkspace?.id || ""),
@@ -511,6 +559,12 @@ function RootShell() {
   const inboxQuery = useQuery({
     queryKey: queryKeys.workspaceInbox(currentWorkspace?.id || "", authToken),
     queryFn: () => controlPlaneApi.listInbox(authToken, currentWorkspace?.id || ""),
+    enabled: serverWorkspaceReady,
+    refetchInterval: serverWorkspaceReady ? 5_000 : false,
+  });
+  const testRunsQuery = useQuery({
+    queryKey: workspaceTestRunsQueryKey,
+    queryFn: () => controlPlaneApi.listWorkspaceTestRuns(authToken, currentWorkspace?.id || ""),
     enabled: serverWorkspaceReady,
     refetchInterval: serverWorkspaceReady ? 5_000 : false,
   });
@@ -623,6 +677,27 @@ function RootShell() {
 
     return [...issueItems, ...projectItems];
   }, [issuesQuery.data, projectsQuery.data, t]);
+  const activeWorkItems = useMemo<ShellActiveWorkItem[]>(() => {
+    const projectNameById = new Map((projectsQuery.data || []).map((project) => [project.id, project.name]));
+    const issueItems = (issuesQuery.data || [])
+      .filter(isActiveIssueWork)
+      .map((issue) =>
+        issueActiveWorkItem(issue, t(`issueStatus.${issue.status}`, { defaultValue: issue.status })),
+      );
+    const testRunItems = (testRunsQuery.data || [])
+      .filter(isActiveTestRunWork)
+      .map((run) =>
+        testRunActiveWorkItem(
+          run,
+          t("tests.runShortId", { id: run.id.slice(0, 8) }),
+          t(`tests.runStatusValue.${run.status}`, { defaultValue: run.status }),
+          t("tests.runCounts", { passed: run.passedCount, failed: run.failedCount, blocked: run.blockedCount, skipped: run.skippedCount }),
+          projectNameById.get(run.projectId),
+        ),
+      );
+
+    return [...issueItems, ...testRunItems].sort((left, right) => Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || ""));
+  }, [issuesQuery.data, projectsQuery.data, testRunsQuery.data, t]);
 
   const shell = (
     <MspaceAuthProvider
@@ -639,7 +714,7 @@ function RootShell() {
     >
       <AppShell
         brandLogoSrc={mspaceLogoUrl}
-        activeWorkItems={[]}
+        activeWorkItems={activeWorkItems}
         inboxUnreadCount={inboxUnreadCount}
         searchItems={searchItems}
         searchLoading={issuesQuery.isLoading || projectsQuery.isLoading}
