@@ -2,7 +2,6 @@ import { useEffect, useId, useMemo, useRef, useState, type Dispatch, type FormEv
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import {
-  ArrowLeft,
   ArrowRight,
   Ban,
   Check,
@@ -3088,12 +3087,6 @@ function TestPlanDetailContent(props: {
       ]}
       actions={
         <>
-          <Button type="button" variant="secondary" asChild>
-            <Link to="/tests" search={testsTabSearch("plans", projectId)}>
-              <ArrowLeft data-icon />
-              {t("common.goBack")}
-            </Link>
-          </Button>
           <Button type="button" onClick={() => startRun.mutate(plan)} disabled={startRun.isPending}>
             <Play data-icon />
             {startRun.isPending ? t("tests.startingRun") : t("tests.startRun")}
