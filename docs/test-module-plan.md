@@ -32,7 +32,7 @@ The updated workflow adds or clarifies these requirements:
 - Test types include functional tests, UI tests, API tests, and deployment tests.
 - UI tests need browser/CDP support. Deployment tests may need SSH or commands similar to `sealos run`.
 - Test results need screenshots or other evidence.
-- Human acceptance is required. A Codex-completed run should not automatically mean a release is accepted.
+- Human review remains a checkpoint. A Codex-completed run should not automatically mean a release is accepted, but the current product treats accept/block as audit records until a later release or plan gate consumes them.
 
 ## Product Positioning
 
@@ -43,7 +43,7 @@ It solves four concrete problems:
 1. Where test cases come from: QA input, rough list import, repository analysis, and project runbook analysis.
 2. Whether a case is executable: clear steps, explicit expectations, complete dependencies, and correct ordering.
 3. How a version is tested: create a plan for an RC, commit, branch, image, offline package, or preview environment.
-4. Why the result can be trusted: Codex returns status, screenshots, logs, commands, resources, failure summaries, and human acceptance back to the Issue.
+4. Why the result can be trusted: Codex returns status, screenshots, logs, commands, resources, failure summaries, retry state, and human review records back to the Issue.
 
 ## Non-Goals
 
@@ -59,7 +59,7 @@ The first version should not include:
 - UI/CDP automation, SSH multi-machine scheduling, or deployment-test orchestration in the first phase.
 - A reusable setup template library, dependency DAG, or general workflow orchestrator for the first setup slice.
 - Direct writes from Codex-generated cases into the canonical test case library.
-- Treating Codex pass results as release approval without human acceptance.
+- Treating Codex pass results as release approval without a human review checkpoint.
 
 ## Core Object Model
 
@@ -210,7 +210,7 @@ A Test Run stores:
 - passed, failed, blocked, and skipped counts;
 - pass rate;
 - start and completion time;
-- human acceptance status.
+- human review status.
 
 ### Test Run Item
 
@@ -314,7 +314,7 @@ The plan needs:
 - selected ready cases;
 - execution scope: full, failed retry, blocked retry, incremental, or custom;
 - whether parallel execution is allowed;
-- whether human acceptance is required.
+- whether human review is required.
 
 The create/edit plan UI should stay focused on fields that change execution behavior: title, target type, Environment, setup steps, and selected ready cases. Do not expose a standalone description box or target-value input in the primary modal unless a later workflow makes those values actionable for the user. Existing stored description or target value data may still be displayed when present for historical plans and runs.
 
@@ -383,9 +383,11 @@ After execution, Codex returns structured results:
 
 These results update Test Run Items while remaining inspectable from Issue Evidence and Session Detail.
 
-### 7. Human Acceptance
+### 7. Human Review
 
 When a run finishes, it should move to `needs_acceptance`. It should not automatically become release-approved.
+
+In the current product, retry is the primary recovery action because it requeues failed or blocked run items. Accept/block decisions are review records for audit and later reporting; they do not yet drive Issue status, release gating, or canonical case knowledge.
 
 The reviewer needs to see:
 
@@ -395,13 +397,13 @@ The reviewer needs to see:
 - screenshots or logs;
 - whether retry is needed;
 - whether a defect Issue should be created;
-- whether the run is accepted.
+- whether the run was reviewed and whether follow-up is needed.
 
 Human actions:
 
-- accept the run;
 - rerun failed items;
-- mark as blocked;
+- record the run as reviewed;
+- record follow-up needed;
 - create a defect Issue;
 - archive the run;
 - start the next round.
@@ -428,7 +430,7 @@ case library
   -> test plan
   -> issue-backed execution
   -> structured result
-  -> human acceptance
+  -> human review
 ```
 
 ### UI Tests: Later Phase
@@ -627,7 +629,7 @@ Show:
 - current round;
 - status;
 - latest pass rate;
-- human acceptance status.
+- human review status.
 
 ### Tests / Runs
 
@@ -645,7 +647,7 @@ Show:
 - Evidence;
 - environment;
 - screenshots/logs;
-- human acceptance actions.
+- failed-item retry and human review actions.
 
 ### Issue Detail Integration
 
@@ -914,7 +916,7 @@ Scope:
 - show pass rate, failed, blocked, and skipped items;
 - show per-case run history from Case Detail;
 - retry failed or blocked items;
-- support human acceptance.
+- support lightweight human review records.
 
 Acceptance:
 
@@ -929,7 +931,7 @@ Acceptance:
 - Codex sessions run through the normal worker path;
 - results are written back to Test Run Items;
 - failed items can be retried or turned into defect Issues;
-- human acceptance status is saved.
+- human review status is saved.
 
 ### Phase 4: Environment Scheduling And Parallel Execution
 
@@ -994,7 +996,7 @@ Mitigation:
 
 - require structured `test-result.json`;
 - keep logs, commands, screenshots, and resource evidence;
-- require human acceptance for important runs;
+- require human review for important runs;
 - failed items can be retried or turned into defect Issues.
 
 ### Risk 3: Environment Drift
@@ -1024,7 +1026,7 @@ UI, API, deployment, and multi-machine testing together would make the first ver
 
 Mitigation:
 
-- keep one shared case -> plan -> Issue -> Codex -> evidence -> human acceptance loop;
+- keep one shared case -> plan -> Issue -> Codex -> evidence -> human review loop;
 - support functional, UI, API, and deployment as case types without forking the workflow;
 - defer specialized UI/CDP, API harness, and deployment orchestration until the shared loop is stable.
 
@@ -1034,7 +1036,7 @@ The smallest useful version has three parts:
 
 1. Case library: import, create, edit, and score cases.
 2. Case refinement: Codex generates proposals, humans accept them.
-3. Functional test plan: select cases, create a run, generate Issues, execute through Codex, collect results, and complete human acceptance.
+3. Functional test plan: select cases, create a run, generate Issues, execute through Codex, collect results, retry failures if needed, and record human review.
 4. Lightweight plan setup: for formal plans only, run one setup session before case execution and pass setup outputs into the later case prompts.
 
 This MVP covers the main workflow from the source draft:
@@ -1049,7 +1051,7 @@ rough case list
   -> plan-level setup when needed
   -> assigned to Codex
   -> result and screenshot/evidence
-  -> human acceptance
+  -> human review
 ```
 
 Formal Environment scheduling, multiple Codex/Chrome CDP workers, deployment tests, and multi-machine coordination should come after the first functional loop works.
@@ -1121,13 +1123,13 @@ Phase 3 manual acceptance:
 6. Confirm Codex sessions use the normal worker path.
 7. Confirm results write back to Test Run Items.
 8. Confirm failed items can be retried or turned into defect Issues.
-9. Confirm human acceptance status can be saved.
+9. Confirm human review status can be saved.
 
 ## Design Summary
 
 **Not building**: the first version does not include a generic test platform, UI/CDP/SSH/deployment orchestration, server-side Codex, execution outside Issues, or direct Codex writes into canonical cases.
 
-**Building**: a Tests module where projects own imported, created, and refined test cases; the workspace owns test plans and runs that may span multiple projects; and execution assigns project-grouped case batches to Codex through Issues while storing results, evidence, failures, screenshots, and human acceptance state.
+**Building**: a Tests module where projects own imported, created, and refined test cases; the workspace owns test plans and runs that may span multiple projects; and execution assigns project-grouped case batches to Codex through Issues while storing results, evidence, failures, screenshots, and lightweight human review state.
 
 **Approach**: add server-owned objects for project-level test cases plus workspace-level plans and runs. Reuse the existing Issue + Agent Session + Worker + Evidence path for execution. Codex only produces proposal/result artifacts; the server validates them, and humans approve canonical state changes.
 

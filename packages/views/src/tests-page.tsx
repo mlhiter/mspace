@@ -3374,6 +3374,7 @@ export function TestRunDetailPage() {
   const { auth, workspaceId, serverWorkspaceReady, projectsQuery, projects } = useWorkspaceProjects();
   const selectedProject = projectFromSearch(projects, search.project);
   const effectiveProjectId = selectedProject?.id || "";
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewNote, setReviewNote] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const workerReadiness = useTestsWorkerReadiness(auth, workspaceId, setActionMessage);
@@ -3382,6 +3383,12 @@ export function TestRunDetailPage() {
     queryFn: () => controlPlaneApi.getWorkspaceTestRun(auth.token, workspaceId, runId),
     enabled: serverWorkspaceReady && Boolean(runId),
   });
+
+  useEffect(() => {
+    setReviewOpen(false);
+    setReviewNote("");
+    setActionMessage("");
+  }, [runId]);
 
   async function invalidateRun() {
     await Promise.all([
@@ -3410,6 +3417,8 @@ export function TestRunDetailPage() {
     mutationFn: () => controlPlaneApi.acceptWorkspaceTestRun(auth.token, workspaceId, runId, { note: reviewNote }),
     onSuccess: async () => {
       setReviewNote("");
+      setReviewOpen(false);
+      setActionMessage(t("tests.runAccepted"));
       await invalidateRun();
     },
   });
@@ -3417,6 +3426,8 @@ export function TestRunDetailPage() {
     mutationFn: () => controlPlaneApi.blockWorkspaceTestRun(auth.token, workspaceId, runId, { note: reviewNote }),
     onSuccess: async () => {
       setReviewNote("");
+      setReviewOpen(false);
+      setActionMessage(t("tests.runBlocked"));
       await invalidateRun();
     },
   });
@@ -3454,6 +3465,7 @@ export function TestRunDetailPage() {
   const showReviewControls = canReviewTestRun(detail.run.status);
   const showReviewDecision = isReviewedTestRun(detail.run.status);
   const showRetryRun = canRetryTestRun(detail.run.status, detail.items);
+  const reviewPanelId = `${runId}-review-panel`;
 
   return (
     <PageFrame
@@ -3491,6 +3503,31 @@ export function TestRunDetailPage() {
             <TestRunSetupPanel run={detail.run} />
           ) : null}
 
+          {showRetryRun || showReviewControls ? (
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              {showRetryRun ? (
+                <Button type="button" onClick={() => retryRun.mutate()} disabled={retryRun.isPending}>
+                  <RotateCcw data-icon />
+                  {retryRun.isPending ? t("tests.retryingRun") : t("tests.retryRun")}
+                </Button>
+              ) : null}
+              {showReviewControls ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  aria-expanded={reviewOpen}
+                  aria-controls={reviewPanelId}
+                  onClick={() => setReviewOpen((open) => !open)}
+                >
+                  <ClipboardCheck data-icon />
+                  {t("tests.recordRunReview")}
+                  <ChevronRight data-icon className={cn("transition-transform duration-150", reviewOpen ? "rotate-90" : "")} />
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
           {showReviewDecision ? (
             <div className="mt-4 rounded-[8px] bg-[color:var(--paper)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
               <div className="flex flex-wrap items-center gap-2">
@@ -3503,34 +3540,32 @@ export function TestRunDetailPage() {
                 <p className="mt-2 text-[12px] leading-5 text-[color:var(--muted)]">{t("tests.noReviewNote")}</p>
               )}
             </div>
-          ) : showReviewControls ? (
-            <>
+          ) : showReviewControls && reviewOpen ? (
+            <div id={reviewPanelId} className="mt-3 rounded-[8px] bg-[color:var(--block)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="mb-3">
+                <p className="text-[12px] font-medium leading-5 text-[color:var(--muted-strong)]">{t("tests.recordRunReview")}</p>
+                <p className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">{t("tests.recordRunReviewHint")}</p>
+              </div>
               <Field label={t("tests.reviewNote")}>
                 <Textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder={t("tests.runReviewNotePlaceholder")} className="min-h-20" />
               </Field>
 
-              <div className="mt-4 flex flex-wrap items-center gap-2">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button type="button" variant="secondary" onClick={() => blockRun.mutate()} disabled={blockRun.isPending}>
                   <Ban data-icon />
                   {blockRun.isPending ? t("tests.blockingRun") : t("tests.blockRun")}
                 </Button>
-                <Button type="button" onClick={() => acceptRun.mutate()} disabled={acceptRun.isPending}>
+                <Button type="button" variant="secondary" onClick={() => acceptRun.mutate()} disabled={acceptRun.isPending}>
                   <Check data-icon />
                   {acceptRun.isPending ? t("tests.acceptingRun") : t("tests.acceptRun")}
                 </Button>
               </div>
-            </>
+            </div>
+          ) : showReviewControls ? (
+            <p className="mt-2 text-[12px] leading-5 text-[color:var(--muted)]">{t("tests.runReviewAvailable")}</p>
           ) : (
             <p className="mt-4 text-[12px] leading-5 text-[color:var(--muted)]">{t(testRunReviewPendingMessageKey(detail.run.status))}</p>
           )}
-          {showRetryRun ? (
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <Button type="button" variant="secondary" onClick={() => retryRun.mutate()} disabled={retryRun.isPending}>
-                <RotateCcw data-icon />
-                {retryRun.isPending ? t("tests.retryingRun") : t("tests.retryRun")}
-              </Button>
-            </div>
-          ) : null}
           {(retryRun.error || acceptRun.error || blockRun.error) ? (
             <p className="mt-3 text-[12px] text-[color:var(--danger)]">{(retryRun.error || acceptRun.error || blockRun.error)?.message}</p>
           ) : actionMessage ? (

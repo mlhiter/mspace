@@ -118,7 +118,7 @@ Server
   -> reconciles run item status and evidence
   -> persists screenshot evidence as server-owned test_artifacts
 Human
-  -> accepts or blocks the run result
+  -> retries failed items or records a review decision
 ```
 
 The Tests UI is intentionally not a separate test-management product. It owns durable project case knowledge, project case suggestions, workspace plans, and run review state. Collaboration, execution, worker logs, and evidence remain in the existing Issue, Agent Session, Runtime Task, and Evidence model.
@@ -272,7 +272,7 @@ Team invitation setup follows the same user-centered rule. Workspace Settings cr
 
 Open account registration creates a personal workspace and a personal runtime boundary. Only server-admin logins configured by `MSPACE_SERVER_ADMIN_LOGINS` or `MSPACE_BOOTSTRAP_ADMIN_LOGIN` can create team workspaces. Team server runners are reachable only through membership in a team workspace, and runtime worker/task mode must match the workspace kind.
 
-Tests stays focused on project-level cases/suggestions plus workspace-level plans, runs, and run acceptance. Agents stays focused on mentionable Codex-backed role behavior. Environments stays focused on reusable Kubernetes and VM validation targets. Projects stays focused on repository metadata and project runbooks.
+Tests stays focused on project-level cases/suggestions plus workspace-level plans, runs, retry, and run review records. Agents stays focused on mentionable Codex-backed role behavior. Environments stays focused on reusable Kubernetes and VM validation targets. Projects stays focused on repository metadata and project runbooks.
 
 The desktop visual language is a quiet Notion-like workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, restrained icon actions, and no decorative dashboard language.
 

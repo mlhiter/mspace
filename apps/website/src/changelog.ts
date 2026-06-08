@@ -154,7 +154,7 @@ export const changelog: ChangelogEntry[] = [
       "Added project-level ad hoc test run creation for selected ready cases while keeping plan-based runs for formal release passes.",
       "Made test runs record their source so compatibility ad hoc, plan, retry, and later incremental runs can share the same Issue-backed execution model.",
       "This path is now superseded in the ordinary UI by plan-first execution, where selected cases are turned into a plan before a run starts.",
-      "Kept worker preflight, parent Issues, child execution Issues, agent sessions, `test-result.json` reconciliation, and human acceptance in the same auditable path.",
+      "Kept worker preflight, parent Issues, child execution Issues, agent sessions, `test-result.json` reconciliation, retry, and human review records in the same auditable path.",
     ],
   },
   {

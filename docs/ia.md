@@ -69,7 +69,7 @@ The ownership model should be clear:
 - Runtime is the worker execution surface.
 - Environment is the target being operated, currently Kubernetes or virtual machine.
 - Evidence is the result attached back to the issue.
-- Test Case is project-level quality knowledge; Test Plan and Test Run are workspace-level orchestration and acceptance records that preserve per-case project identity.
+- Test Case is project-level quality knowledge; Test Plan and Test Run are workspace-level orchestration and review records that preserve per-case project identity.
 
 ## Screen Map
 
