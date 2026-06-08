@@ -23,6 +23,99 @@ const (
 	testRunExecutionAutomation     = "test_run_execution"
 )
 
+func agentSessionRequiredCapabilities(input CreateAgentSessionInput) (json.RawMessage, error) {
+	required := map[string]bool{"codex": true}
+	if len(input.RequiredCapabilities) > 0 {
+		var extras map[string]bool
+		if err := json.Unmarshal(input.RequiredCapabilities, &extras); err != nil {
+			return nil, fmt.Errorf("requiredCapabilities must be a JSON object")
+		}
+		for key, value := range extras {
+			key = strings.TrimSpace(key)
+			if key != "" && value {
+				required[key] = true
+			}
+		}
+	}
+	return json.Marshal(required)
+}
+
+func testRunExecutionRequiredCapabilities(cases []TestCase) (json.RawMessage, error) {
+	required := map[string]bool{"codex": true}
+	if testRunBatchRequiresBrowser(cases) {
+		required["browser"] = true
+		required["chrome_cdp"] = true
+	}
+	return json.Marshal(required)
+}
+
+func testRunBatchRequiresBrowser(cases []TestCase) bool {
+	for _, testCase := range cases {
+		if strings.EqualFold(strings.TrimSpace(testCase.Type), "ui") {
+			return true
+		}
+	}
+	return false
+}
+
+func testRunExecutionCapabilitySets(cases []TestCase, batchSize int) ([]json.RawMessage, error) {
+	if batchSize <= 0 {
+		batchSize = defaultTestRunBatchSize
+	}
+	if batchSize > maxTestRunBatchSize {
+		batchSize = maxTestRunBatchSize
+	}
+	sets := []json.RawMessage{}
+	for _, projectCases := range testCasesGroupedByProject(cases) {
+		for start := 0; start < len(projectCases); start += batchSize {
+			end := start + batchSize
+			if end > len(projectCases) {
+				end = len(projectCases)
+			}
+			requiredCapabilities, err := testRunExecutionRequiredCapabilities(projectCases[start:end])
+			if err != nil {
+				return nil, err
+			}
+			sets = append(sets, requiredCapabilities)
+		}
+	}
+	return dedupeCapabilitySets(sets), nil
+}
+
+func testCasesGroupedByProject(cases []TestCase) [][]TestCase {
+	groups := [][]TestCase{}
+	indexByProjectID := map[string]int{}
+	for _, testCase := range cases {
+		projectID := strings.TrimSpace(testCase.ProjectID)
+		index, ok := indexByProjectID[projectID]
+		if !ok {
+			index = len(groups)
+			indexByProjectID[projectID] = index
+			groups = append(groups, []TestCase{})
+		}
+		groups[index] = append(groups[index], testCase)
+	}
+	return groups
+}
+
+func dedupeCapabilitySets(sets []json.RawMessage) []json.RawMessage {
+	seen := map[string]bool{}
+	deduped := []json.RawMessage{}
+	for _, set := range sets {
+		normalized, err := normalizeJSONObjectPayload(set)
+		if err != nil {
+			continue
+		}
+		key := string(normalized)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		deduped = append(deduped, normalized)
+	}
+	return deduped
+}
+
 func normalizeReviewNote(value string) string {
 	value = strings.TrimSpace(value)
 	if len(value) > 4000 {
@@ -487,6 +580,9 @@ func buildTestRunExecutionIssueBody(run TestRun, cases []TestCase) string {
 		builder.WriteString("\n```\n\n")
 	}
 	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with one item per case in this batch.\n\n")
+	if testRunBatchRequiresBrowser(cases) {
+		builder.WriteString("This batch includes UI cases. Use the browser-capable runtime (`MSPACE_CHROME_CDP_URL` when provided) to exercise the preview or target page, capture at least one screenshot per UI case, save screenshots under `${MSPACE_SESSION_ARTIFACT_DIR}/screenshots/`, and reference them from each result item with `evidence.screenshotPaths`. Also include useful `evidence.assertions` and `evidence.networkStatuses` when observable. If browser execution is impossible, mark the affected item `blocked` and put the concrete blocker in `failureSummary` instead of returning text-only evidence.\n\n")
+	}
 	builder.WriteString(testResultLanguageInstruction(run.ResultLocale) + "\n\n")
 	for _, testCase := range cases {
 		builder.WriteString("## " + testCase.ID + ": " + testCase.Title + "\n")

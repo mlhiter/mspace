@@ -846,6 +846,9 @@ func (s *PostgresStore) startPostgresProjectTestRun(ctx Context, user User, work
 	if len(planCases) == 0 {
 		return TestRunDetail{}, errors.New("test run has no test cases")
 	}
+	if err := s.ensureActiveWorkersForTestRunExecution(dbctx, workspace.ID, normalized.RuntimeMode, normalized.BatchSize, planCases); err != nil {
+		return TestRunDetail{}, err
+	}
 	runSource := "ad_hoc"
 	planID := ""
 	if plan != nil {
@@ -918,6 +921,23 @@ func (s *PostgresStore) startPostgresProjectTestRun(ctx Context, user User, work
 		}
 	}
 	return s.GetWorkspaceTestRun(ctx, user.ID, run.WorkspaceID, run.ID)
+}
+
+func (s *PostgresStore) ensureActiveWorkersForTestRunExecution(ctx context.Context, workspaceID, runtimeMode string, batchSize int, cases []TestCase) error {
+	requiredSets, err := testRunExecutionCapabilitySets(cases, batchSize)
+	if err != nil {
+		return err
+	}
+	for _, requiredCapabilities := range requiredSets {
+		hasActiveWorker, err := s.hasActiveWorkerWithCapabilities(ctx, workspaceID, runtimeMode, requiredCapabilities)
+		if err != nil {
+			return err
+		}
+		if !hasActiveWorker {
+			return ErrNoActiveCodexWorker
+		}
+	}
+	return nil
 }
 
 func (s *PostgresStore) GetWorkspaceTestRun(ctx Context, userID, workspaceID, runID string) (TestRunDetail, error) {
@@ -1113,6 +1133,13 @@ func (s *PostgresStore) RetryWorkspaceTestRun(ctx Context, user User, workspaceI
 	}
 	if !hasActiveWorker {
 		return TestRunDetail{}, ErrNoActiveCodexWorker
+	}
+	retryCases, err := testRunCasesForRetry(dbctx, s.pool, workspaceID, runID, normalized.ItemIDs)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if err := s.ensureActiveWorkersForTestRunExecution(dbctx, workspaceID, normalized.RuntimeMode, defaultTestRunBatchSize, retryCases); err != nil {
+		return TestRunDetail{}, err
 	}
 	if err := resetTestRunItemsForRetry(dbctx, s.pool, workspaceID, runID, normalized.ItemIDs); err != nil {
 		return TestRunDetail{}, err
@@ -2438,6 +2465,53 @@ func resetTestRunItemsForRetry(ctx context.Context, q queryer, workspaceID, runI
 	return nil
 }
 
+func testRunCasesForRetry(ctx context.Context, q queryer, workspaceID, runID string, itemIDs []string) ([]TestCase, error) {
+	args := []any{strings.TrimSpace(workspaceID), strings.TrimSpace(runID)}
+	where := "i.workspace_id = $1 AND i.run_id = $2"
+	if len(itemIDs) == 0 {
+		where += " AND i.status IN ('failed', 'blocked')"
+	} else {
+		ids := make([]string, 0, len(itemIDs))
+		for _, itemID := range itemIDs {
+			itemID = strings.TrimSpace(itemID)
+			if itemID != "" {
+				ids = append(ids, itemID)
+			}
+		}
+		if len(ids) == 0 {
+			return nil, ErrNotFound
+		}
+		args = append(args, ids)
+		where += " AND (i.id::text = ANY($3::text[]) OR i.case_id::text = ANY($3::text[]))"
+	}
+	rows, err := q.Query(ctx, `
+		SELECT `+testCaseSelectColumnsForAlias("tc")+`
+		FROM test_run_items i
+		JOIN test_cases tc ON tc.workspace_id = i.workspace_id AND tc.project_id = i.project_id AND tc.id = i.case_id
+		WHERE `+where+`
+		ORDER BY i.created_at ASC, i.id ASC
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cases := []TestCase{}
+	for rows.Next() {
+		testCase, err := scanTestCase(rows)
+		if err != nil {
+			return nil, err
+		}
+		cases = append(cases, testCase)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(cases) == 0 {
+		return nil, ErrNotFound
+	}
+	return cases, nil
+}
+
 func reviewTestRunRecord(ctx context.Context, q queryer, userID, workspaceID, runID, status, note string) (TestRun, error) {
 	tag, err := q.Exec(ctx, `
 		UPDATE test_runs
@@ -2538,18 +2612,30 @@ func (s *PostgresStore) startPostgresTestRunExecutionSessionsWithQueryer(ctx con
 			for _, item := range batch {
 				cases = append(cases, item.TestCase)
 			}
+			requiredCapabilities, err := testRunExecutionRequiredCapabilities(cases)
+			if err != nil {
+				return err
+			}
+			hasActiveWorker, err := s.hasActiveWorkerWithCapabilities(ctx, run.WorkspaceID, input.RuntimeMode, requiredCapabilities)
+			if err != nil {
+				return err
+			}
+			if !hasActiveWorker {
+				return ErrNoActiveCodexWorker
+			}
 			body := buildTestRunExecutionIssueBody(run, cases)
 			child, err := createTestRunChildIssue(ctx, q, userID, run, projectID, fmt.Sprintf("Execute %s batch %d", testRunExecutionScopeLabel(plan, cases), start/input.BatchSize+1), body)
 			if err != nil {
 				return err
 			}
 			session, err := createTestRunAgentSessionTask(ctx, q, userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
-				Provider:     "codex",
-				AgentProfile: input.AgentProfile,
-				RuntimeMode:  input.RuntimeMode,
-				Command:      body,
-				Automation:   testRunExecutionAutomation,
-				TestRunID:    run.ID,
+				Provider:             "codex",
+				AgentProfile:         input.AgentProfile,
+				RuntimeMode:          input.RuntimeMode,
+				Command:              body,
+				Automation:           testRunExecutionAutomation,
+				TestRunID:            run.ID,
+				RequiredCapabilities: requiredCapabilities,
 			})
 			if err != nil {
 				return err
@@ -2729,7 +2815,7 @@ func createTestRunAgentSessionTask(ctx context.Context, q queryer, userID, works
 	if err != nil {
 		return AgentSession{}, err
 	}
-	capabilities, err := json.Marshal(map[string]bool{"codex": true})
+	capabilities, err := agentSessionRequiredCapabilities(normalized)
 	if err != nil {
 		return AgentSession{}, err
 	}

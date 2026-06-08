@@ -2358,6 +2358,71 @@ func TestProjectTestCaseAgentActionsRequireWorkerBeforeCreatingIssues(t *testing
 	}
 }
 
+func TestUITestRunRequiresBrowserCapableWorker(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "test-module-ui-worker-user",
+		Login:          "test-module-ui-worker-user",
+		Name:           "Test Module UI Worker User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "test-module-ui-worker")
+	uiCase := createProjectTestCaseViaHTTP(t, router, sessionToken, workspaceID, project.ID, `{
+		"title":"Login form renders in browser",
+		"type":"ui",
+		"status":"ready",
+		"steps":[{"action":"Open the login page","expected":"The login form is visible."},{"action":"Capture the page","expected":"A screenshot is saved."}],
+		"expectedResult":"The browser evidence includes a screenshot.",
+		"environmentRequirements":"Preview URL and browser/CDP worker are available."
+	}`)
+
+	registerTestRuntimeWorker(t, router, sessionToken, workspaceID)
+	blockedRecorder := httptest.NewRecorder()
+	blockedReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+project.ID+"/test-runs", strings.NewReader(`{"caseIds":["`+uiCase.ID+`"],"runtimeMode":"personal","batchSize":1}`))
+	blockedReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(blockedRecorder, blockedReq)
+	if blockedRecorder.Code != http.StatusConflict || !strings.Contains(blockedRecorder.Body.String(), "no active codex worker") {
+		t.Fatalf("expected UI run without browser worker to conflict, status=%d body=%s", blockedRecorder.Code, blockedRecorder.Body.String())
+	}
+	if issues := listIssuesViaHTTPWithQuery(t, router, sessionToken, workspaceID, "includeTestAutomation=1"); len(issues) != 0 {
+		t.Fatalf("UI run without a browser worker should not create orphan issues, got %+v", issues)
+	}
+
+	tokenResult, worker := registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true,"browser":true,"chrome_cdp":true}`)
+	run := startAdHocProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, `{"caseIds":["`+uiCase.ID+`"],"runtimeMode":"personal","batchSize":1}`)
+	if run.Run.Status != "running" || len(run.Items) != 1 || run.Items[0].AgentSessionID == "" {
+		t.Fatalf("expected UI run to start with browser worker, got %+v", run)
+	}
+	task, err := store.ClaimRuntimeTask(context.Background(), RuntimeRegistration{WorkspaceID: workspaceID, TokenID: tokenResult.RegistrationToken.ID}, worker.ID)
+	if err != nil {
+		t.Fatalf("claim UI task: %v", err)
+	}
+	if task == nil || task.SessionID != run.Items[0].AgentSessionID {
+		t.Fatalf("expected UI execution task, got %+v", task)
+	}
+	capabilitiesText := string(task.RequiredCapabilities)
+	if !strings.Contains(capabilitiesText, `"browser":true`) || !strings.Contains(capabilitiesText, `"chrome_cdp":true`) {
+		t.Fatalf("expected UI task to require browser and chrome_cdp, got %s", capabilitiesText)
+	}
+	sessionDetail, err := store.GetSession(context.Background(), user.ID, workspaceID, run.Items[0].AgentSessionID)
+	if err != nil {
+		t.Fatalf("get UI session: %v", err)
+	}
+	if !strings.Contains(sessionDetail.Session.Command, "screenshotPaths") || !strings.Contains(sessionDetail.Session.Command, "MSPACE_CHROME_CDP_URL") {
+		t.Fatalf("expected UI session command to require screenshot evidence, got %q", sessionDetail.Session.Command)
+	}
+}
+
 func TestProjectTestCaseImportMappingTaskRequiresWorker(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
@@ -3985,6 +4050,10 @@ func TestManualTestDeploySessionDoesNotTriggerAutomaticDeploy(t *testing.T) {
 }
 
 func registerTestRuntimeWorker(t *testing.T, router http.Handler, sessionToken, workspaceID string) (RuntimeRegistrationTokenResult, RuntimeWorker) {
+	return registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true,"docker":true,"kubectl":true}`)
+}
+
+func registerTestRuntimeWorkerWithCapabilities(t *testing.T, router http.Handler, sessionToken, workspaceID, capabilities string) (RuntimeRegistrationTokenResult, RuntimeWorker) {
 	t.Helper()
 	createTokenRecorder := httptest.NewRecorder()
 	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"test worker","expiresInHours":12}`))
@@ -3999,7 +4068,7 @@ func registerTestRuntimeWorker(t *testing.T, router http.Handler, sessionToken, 
 	}
 
 	registerRecorder := httptest.NewRecorder()
-	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"test-worker","mode":"personal","version":"0.1.0","capabilities":{"codex":true,"docker":true,"kubectl":true},"labels":{"host":"local"}}`))
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"test-worker","mode":"personal","version":"0.1.0","capabilities":`+capabilities+`,"labels":{"host":"local"}}`))
 	registerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
 	router.ServeHTTP(registerRecorder, registerReq)
 	if registerRecorder.Code != http.StatusCreated {

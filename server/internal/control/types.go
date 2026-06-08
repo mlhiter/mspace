@@ -1281,17 +1281,18 @@ type SessionDetail struct {
 }
 
 type CreateAgentSessionInput struct {
-	Provider         string `json:"provider"`
-	AgentProfile     string `json:"agentProfile"`
-	RuntimeMode      string `json:"runtimeMode"`
-	Command          string `json:"command"`
-	Branch           string `json:"branch"`
-	SourceSessionID  string `json:"sourceSessionId"`
-	SourceCommitSHA  string `json:"sourceCommitSha"`
-	TriggerCommentID string `json:"triggerCommentId"`
-	Automation       string `json:"automation"`
-	TestRunID        string `json:"testRunId"`
-	TestRunBatchSize int    `json:"testRunBatchSize"`
+	Provider             string          `json:"provider"`
+	AgentProfile         string          `json:"agentProfile"`
+	RuntimeMode          string          `json:"runtimeMode"`
+	Command              string          `json:"command"`
+	Branch               string          `json:"branch"`
+	SourceSessionID      string          `json:"sourceSessionId"`
+	SourceCommitSHA      string          `json:"sourceCommitSha"`
+	TriggerCommentID     string          `json:"triggerCommentId"`
+	Automation           string          `json:"automation"`
+	TestRunID            string          `json:"testRunId"`
+	TestRunBatchSize     int             `json:"testRunBatchSize"`
+	RequiredCapabilities json.RawMessage `json:"requiredCapabilities,omitempty"`
 }
 
 type CreateIssueInput struct {

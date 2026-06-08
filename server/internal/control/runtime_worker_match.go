@@ -1,6 +1,7 @@
 package control
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -8,13 +9,20 @@ import (
 const activeWorkerMaxAge = 45 * time.Second
 
 func isActiveCodexWorker(worker RuntimeWorker, workspaceID, runtimeMode string, now time.Time) bool {
+	return isActiveWorkerWithCapabilities(worker, workspaceID, runtimeMode, json.RawMessage(`{"codex":true}`), now)
+}
+
+func isActiveWorkerWithCapabilities(worker RuntimeWorker, workspaceID, runtimeMode string, requiredCapabilities json.RawMessage, now time.Time) bool {
 	if worker.WorkspaceID != strings.TrimSpace(workspaceID) {
 		return false
 	}
 	if worker.Mode != strings.TrimSpace(runtimeMode) || worker.Status != "online" {
 		return false
 	}
-	if !jsonObjectContains(worker.Capabilities, []byte(`{"codex":true}`)) {
+	if len(requiredCapabilities) == 0 {
+		requiredCapabilities = json.RawMessage(`{}`)
+	}
+	if !jsonObjectContains(worker.Capabilities, requiredCapabilities) {
 		return false
 	}
 	lastSeenAt, err := time.Parse(time.RFC3339Nano, worker.LastSeenAt)

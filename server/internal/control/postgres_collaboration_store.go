@@ -564,7 +564,11 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 	if normalized.RuntimeMode != workspace.Kind {
 		return AgentSession{}, ErrForbidden
 	}
-	hasActiveWorker, err := s.hasActiveCodexWorker(dbctx, workspaceID, normalized.RuntimeMode)
+	requiredCapabilities, err := agentSessionRequiredCapabilities(normalized)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	hasActiveWorker, err := s.hasActiveWorkerWithCapabilities(dbctx, workspaceID, normalized.RuntimeMode, requiredCapabilities)
 	if err != nil {
 		return AgentSession{}, err
 	}
@@ -606,10 +610,6 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 	if err != nil {
 		return AgentSession{}, err
 	}
-	capabilities, err := json.Marshal(map[string]bool{"codex": true})
-	if err != nil {
-		return AgentSession{}, err
-	}
 	task, err := s.CreateRuntimeTask(ctx, userID, workspaceID, CreateRuntimeTaskInput{
 		IssueID:              issue.ID,
 		SessionID:            sessionID,
@@ -617,7 +617,7 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 		Kind:                 "agent_session",
 		Priority:             0,
 		RuntimeMode:          normalized.RuntimeMode,
-		RequiredCapabilities: capabilities,
+		RequiredCapabilities: requiredCapabilities,
 		Payload:              payload,
 	})
 	if err != nil {

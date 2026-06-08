@@ -2761,6 +2761,13 @@ func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases
 	if !s.hasActiveCodexWorkerLocked(workspaceID, input.RuntimeMode, time.Now().UTC()) {
 		return TestRunDetail{}, ErrNoActiveCodexWorker
 	}
+	setupSteps := ""
+	if plan != nil {
+		setupSteps = normalizeTestPlanSetupSteps(plan.SetupSteps)
+	}
+	if err := s.ensureActiveWorkersForTestRunExecutionLocked(workspaceID, input.RuntimeMode, input.BatchSize, cases); err != nil {
+		return TestRunDetail{}, err
+	}
 	runSource := "ad_hoc"
 	planID := ""
 	if plan != nil {
@@ -2792,7 +2799,7 @@ func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases
 		UpdatedAt:           now,
 	}
 	if plan != nil {
-		run.SetupSteps = normalizeTestPlanSetupSteps(plan.SetupSteps)
+		run.SetupSteps = setupSteps
 		if run.SetupSteps != "" {
 			run.Status = "setup_running"
 			run.SetupStatus = "running"
@@ -2834,6 +2841,19 @@ func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases
 		}
 	}
 	return s.testRunDetailLocked(run.ID)
+}
+
+func (s *MemoryStore) ensureActiveWorkersForTestRunExecutionLocked(workspaceID, runtimeMode string, batchSize int, cases []TestCase) error {
+	requiredSets, err := testRunExecutionCapabilitySets(cases, batchSize)
+	if err != nil {
+		return err
+	}
+	for _, requiredCapabilities := range requiredSets {
+		if !s.hasActiveWorkerWithCapabilitiesLocked(workspaceID, runtimeMode, requiredCapabilities, time.Now().UTC()) {
+			return ErrNoActiveCodexWorker
+		}
+	}
+	return nil
 }
 
 func (s *MemoryStore) ListWorkspaceTestRuns(_ Context, userID, workspaceID string, options TestRunListOptions) ([]TestRun, error) {
@@ -2965,6 +2985,13 @@ func (s *MemoryStore) RetryWorkspaceTestRun(_ Context, user User, workspaceID, r
 	if !s.hasActiveCodexWorkerLocked(run.WorkspaceID, normalized.RuntimeMode, time.Now().UTC()) {
 		return TestRunDetail{}, ErrNoActiveCodexWorker
 	}
+	retryCases, err := s.testRunCasesForRetryLocked(run.ID, normalized.ItemIDs)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if err := s.ensureActiveWorkersForTestRunExecutionLocked(run.WorkspaceID, normalized.RuntimeMode, defaultTestRunBatchSize, retryCases); err != nil {
+		return TestRunDetail{}, err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for id, item := range s.testRunItems {
 		if item.RunID != run.ID {
@@ -2995,6 +3022,30 @@ func (s *MemoryStore) RetryWorkspaceTestRun(_ Context, user User, workspaceID, r
 		return TestRunDetail{}, err
 	}
 	return s.testRunDetailLocked(run.ID)
+}
+
+func (s *MemoryStore) testRunCasesForRetryLocked(runID string, itemIDs []string) ([]TestCase, error) {
+	cases := []TestCase{}
+	for _, item := range s.testRunItems {
+		if item.RunID != strings.TrimSpace(runID) {
+			continue
+		}
+		if len(itemIDs) > 0 && !containsString(itemIDs, item.ID) && !containsString(itemIDs, item.TestCaseID) {
+			continue
+		}
+		if len(itemIDs) == 0 && item.Status != "failed" && item.Status != "blocked" {
+			continue
+		}
+		testCase, ok := s.testCases[item.TestCaseID]
+		if !ok {
+			continue
+		}
+		cases = append(cases, testCaseSnapshot(testCase))
+	}
+	if len(cases) == 0 {
+		return nil, ErrNotFound
+	}
+	return cases, nil
 }
 
 func (s *MemoryStore) RetryProjectTestRun(ctx Context, user User, workspaceID, projectID, runID string, input RetryTestRunInput) (TestRunDetail, error) {
@@ -3280,7 +3331,11 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 	if normalized.RuntimeMode != workspace.Kind {
 		return AgentSession{}, ErrForbidden
 	}
-	if !s.hasActiveCodexWorkerLocked(workspaceID, normalized.RuntimeMode, time.Now().UTC()) {
+	requiredCapabilities, err := agentSessionRequiredCapabilities(normalized)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if !s.hasActiveWorkerWithCapabilitiesLocked(workspaceID, normalized.RuntimeMode, requiredCapabilities, time.Now().UTC()) {
 		return AgentSession{}, ErrNoActiveCodexWorker
 	}
 	sessionID, err := newAgentSessionID()
@@ -3310,10 +3365,6 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 	if err != nil {
 		return AgentSession{}, err
 	}
-	capabilities, err := json.Marshal(map[string]bool{"codex": true})
-	if err != nil {
-		return AgentSession{}, err
-	}
 	s.nextID++
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	task := RuntimeTask{
@@ -3326,7 +3377,7 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 		Status:               "queued",
 		Priority:             0,
 		RuntimeMode:          normalized.RuntimeMode,
-		RequiredCapabilities: json.RawMessage(capabilities),
+		RequiredCapabilities: requiredCapabilities,
 		Payload:              json.RawMessage(payload),
 		Result:               json.RawMessage(`{}`),
 		CreatedAt:            now,
@@ -5342,6 +5393,13 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 					cases = append(cases, testCaseSnapshot(testCase))
 				}
 			}
+			requiredCapabilities, err := testRunExecutionRequiredCapabilities(cases)
+			if err != nil {
+				return err
+			}
+			if !s.hasActiveWorkerWithCapabilitiesLocked(run.WorkspaceID, input.RuntimeMode, requiredCapabilities, time.Now().UTC()) {
+				return ErrNoActiveCodexWorker
+			}
 			parent, ok := s.issues[run.ParentIssueID]
 			if !ok {
 				return ErrNotFound
@@ -5373,12 +5431,13 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 			}
 			s.issues[child.ID] = child
 			session, err := s.createAgentSessionLocked(userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
-				Provider:     "codex",
-				AgentProfile: input.AgentProfile,
-				RuntimeMode:  input.RuntimeMode,
-				Command:      body,
-				Automation:   testRunExecutionAutomation,
-				TestRunID:    run.ID,
+				Provider:             "codex",
+				AgentProfile:         input.AgentProfile,
+				RuntimeMode:          input.RuntimeMode,
+				Command:              body,
+				Automation:           testRunExecutionAutomation,
+				TestRunID:            run.ID,
+				RequiredCapabilities: requiredCapabilities,
 			})
 			if err != nil {
 				return err
@@ -5590,8 +5649,12 @@ func (s *MemoryStore) runtimeWorkerByID(workspaceID, workerID string) (RuntimeWo
 }
 
 func (s *MemoryStore) hasActiveCodexWorkerLocked(workspaceID, runtimeMode string, now time.Time) bool {
+	return s.hasActiveWorkerWithCapabilitiesLocked(workspaceID, runtimeMode, json.RawMessage(`{"codex":true}`), now)
+}
+
+func (s *MemoryStore) hasActiveWorkerWithCapabilitiesLocked(workspaceID, runtimeMode string, requiredCapabilities json.RawMessage, now time.Time) bool {
 	for _, worker := range s.runtimeWorkers {
-		if isActiveCodexWorker(worker, workspaceID, runtimeMode, now) {
+		if isActiveWorkerWithCapabilities(worker, workspaceID, runtimeMode, requiredCapabilities, now) {
 			return true
 		}
 	}

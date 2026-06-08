@@ -1344,19 +1344,31 @@ func (s *PostgresStore) hasActiveCodexWorker(ctx context.Context, workspaceID, r
 }
 
 func hasActiveCodexWorkerRecord(ctx context.Context, q queryer, workspaceID, runtimeMode string) (bool, error) {
+	return hasActiveWorkerWithCapabilitiesRecord(ctx, q, workspaceID, runtimeMode, json.RawMessage(`{"codex": true}`))
+}
+
+func (s *PostgresStore) hasActiveWorkerWithCapabilities(ctx context.Context, workspaceID, runtimeMode string, requiredCapabilities json.RawMessage) (bool, error) {
+	return hasActiveWorkerWithCapabilitiesRecord(ctx, s.pool, workspaceID, runtimeMode, requiredCapabilities)
+}
+
+func hasActiveWorkerWithCapabilitiesRecord(ctx context.Context, q queryer, workspaceID, runtimeMode string, requiredCapabilities json.RawMessage) (bool, error) {
+	requiredCapabilities, err := normalizeJSONObjectPayload(requiredCapabilities)
+	if err != nil {
+		return false, err
+	}
 	var exists bool
-	err := q.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1
 			FROM runtime_workers
 			WHERE workspace_id = $1
 				AND mode = $2
 				AND status = 'online'
-				AND capabilities @> '{"codex": true}'::jsonb
+				AND capabilities @> $3::jsonb
 				AND last_seen_at >= now() - interval '45 seconds'
 			LIMIT 1
 		)
-	`, strings.TrimSpace(workspaceID), strings.TrimSpace(runtimeMode)).Scan(&exists)
+	`, strings.TrimSpace(workspaceID), strings.TrimSpace(runtimeMode), requiredCapabilities).Scan(&exists)
 	return exists, err
 }
 
