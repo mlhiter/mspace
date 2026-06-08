@@ -140,6 +140,24 @@ func normalizeTestRunSource(value string) string {
 	}
 }
 
+func normalizeTestResultLocale(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "zh", "zh-cn", "zh_hans", "zh-hans", "chinese", "simplified_chinese", "simplified-chinese":
+		return "zh-CN"
+	default:
+		return "en"
+	}
+}
+
+func testResultLanguageInstruction(locale string) string {
+	switch normalizeTestResultLocale(locale) {
+	case "zh-CN":
+		return "Use Simplified Chinese for all user-facing result text in `summary`, `failureSummary`, `actualResult`, assertion summaries, and evidence notes. Keep field names, IDs, commands, URLs, and code/log excerpts unchanged."
+	default:
+		return "Use English for all user-facing result text in `summary`, `failureSummary`, `actualResult`, assertion summaries, and evidence notes. Keep field names, IDs, commands, URLs, and code/log excerpts unchanged."
+	}
+}
+
 func normalizeCreateTestRunInput(input CreateTestRunInput, plan TestPlan) (CreateTestRunInput, error) {
 	input.TargetType = normalizeTestTargetType(firstNonEmpty(input.TargetType, plan.TargetType))
 	if input.TargetType == "" {
@@ -154,6 +172,7 @@ func normalizeCreateTestRunInput(input CreateTestRunInput, plan TestPlan) (Creat
 	}
 	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
 	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
+	input.ResultLocale = normalizeTestResultLocale(input.ResultLocale)
 	if input.BatchSize <= 0 {
 		input.BatchSize = defaultTestRunBatchSize
 	}
@@ -179,6 +198,7 @@ func normalizeCreateAdHocTestRunInput(input CreateAdHocTestRunInput) (CreateAdHo
 	}
 	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
 	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
+	input.ResultLocale = normalizeTestResultLocale(input.ResultLocale)
 	if input.BatchSize <= 0 {
 		input.BatchSize = defaultTestRunBatchSize
 	}
@@ -265,6 +285,7 @@ func normalizeRetryTestRunInput(input RetryTestRunInput) RetryTestRunInput {
 	input.ItemIDs = uniqueStrings(input.ItemIDs)
 	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
 	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
+	input.ResultLocale = normalizeTestResultLocale(input.ResultLocale)
 	return input
 }
 
@@ -422,6 +443,7 @@ func buildTestRunParentIssueBody(plan *TestPlan, run TestRun, cases []TestCase) 
 		builder.WriteString("\n")
 	}
 	builder.WriteString("This issue tracks the overall run. Execution details live in the child issues and test run items.\n\n")
+	builder.WriteString(testResultLanguageInstruction(run.ResultLocale) + "\n\n")
 	builder.WriteString("Codex execution sessions must write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with:\n\n")
 	builder.WriteString(`{"runId":"` + run.ID + `","items":[{"caseId":"...","status":"passed|failed|blocked|skipped","actualResult":"...","failureSummary":"...","evidence":{}}]}`)
 	return strings.TrimSpace(builder.String())
@@ -439,6 +461,7 @@ func buildTestRunSetupIssueBody(run TestRun) string {
 	builder.WriteString("\nSetup steps:\n\n")
 	builder.WriteString(strings.TrimSpace(run.SetupSteps))
 	builder.WriteString("\n\nWrite `${MSPACE_SESSION_ARTIFACT_DIR}/test-setup-result.json` before finishing.\n\n")
+	builder.WriteString(testResultLanguageInstruction(run.ResultLocale) + "\n\n")
 	builder.WriteString("Expected artifact shape:\n\n")
 	builder.WriteString("```json\n")
 	builder.WriteString(`{"runId":"` + run.ID + `","status":"passed|failed","summary":"what is ready","failureSummary":"","outputs":{},"evidence":{},"steps":[{"title":"...","status":"passed|failed","command":"...","summary":"..."}]}`)
@@ -464,6 +487,7 @@ func buildTestRunExecutionIssueBody(run TestRun, cases []TestCase) string {
 		builder.WriteString("\n```\n\n")
 	}
 	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with one item per case in this batch.\n\n")
+	builder.WriteString(testResultLanguageInstruction(run.ResultLocale) + "\n\n")
 	for _, testCase := range cases {
 		builder.WriteString("## " + testCase.ID + ": " + testCase.Title + "\n")
 		builder.WriteString("Type: " + firstNonEmpty(testCase.Type, defaultTestCaseType) + "\n")

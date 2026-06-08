@@ -622,6 +622,7 @@ type TestRun struct {
 	SetupSessionID      string          `json:"setupSessionId"`
 	SetupResult         json.RawMessage `json:"setupResult,omitempty"`
 	RunContext          json.RawMessage `json:"runContext,omitempty"`
+	ResultLocale        string          `json:"resultLocale"`
 	TargetType          string          `json:"targetType"`
 	TargetValue         string          `json:"targetValue"`
 	Environment         string          `json:"environment"`
@@ -730,6 +731,7 @@ type CreateTestRunInput struct {
 	AgentProfile        string          `json:"agentProfile"`
 	RuntimeMode         string          `json:"runtimeMode"`
 	BatchSize           int             `json:"batchSize"`
+	ResultLocale        string          `json:"resultLocale"`
 }
 
 type CreateAdHocTestRunInput struct {
@@ -743,6 +745,7 @@ type CreateAdHocTestRunInput struct {
 	AgentProfile    string              `json:"agentProfile"`
 	RuntimeMode     string              `json:"runtimeMode"`
 	BatchSize       int                 `json:"batchSize"`
+	ResultLocale    string              `json:"resultLocale"`
 }
 
 type ReviewTestRunInput struct {
@@ -753,6 +756,7 @@ type RetryTestRunInput struct {
 	ItemIDs      []string `json:"itemIds"`
 	AgentProfile string   `json:"agentProfile"`
 	RuntimeMode  string   `json:"runtimeMode"`
+	ResultLocale string   `json:"resultLocale"`
 }
 
 type Issue struct {

@@ -256,6 +256,7 @@ func (s *PostgresStore) reconcileTestSetupArtifact(ctx context.Context, q querye
 		AgentProfile: runtimeTaskAgentProfile(task),
 		RuntimeMode:  task.RuntimeMode,
 		BatchSize:    runtimeTaskTestRunBatchSize(task),
+		ResultLocale: run.ResultLocale,
 	})
 }
 
@@ -547,6 +548,7 @@ func (s *MemoryStore) reconcileTestSetupArtifactLocked(task RuntimeTask, artifac
 		AgentProfile: runtimeTaskAgentProfile(task),
 		RuntimeMode:  task.RuntimeMode,
 		BatchSize:    runtimeTaskTestRunBatchSize(task),
+		ResultLocale: run.ResultLocale,
 	}
 	if err := s.startTestRunExecutionSessionsLocked(s.runtimeTaskCreatedByLocked(task.ID), run.ID, input); err != nil {
 		run.Status = "setup_failed"

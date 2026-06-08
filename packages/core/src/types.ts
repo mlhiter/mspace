@@ -329,6 +329,7 @@ export interface TestRun {
   setupSessionId: string;
   setupResult?: Record<string, unknown>;
   runContext?: Record<string, unknown>;
+  resultLocale: string;
   targetType: string;
   targetValue: string;
   environment: string;
@@ -387,6 +388,7 @@ export interface CreateTestRunInput {
   agentProfile?: string;
   runtimeMode?: string;
   batchSize?: number;
+  resultLocale?: string;
 }
 
 export interface CreateAdHocTestRunInput {
@@ -400,12 +402,14 @@ export interface CreateAdHocTestRunInput {
   agentProfile?: string;
   runtimeMode?: string;
   batchSize?: number;
+  resultLocale?: string;
 }
 
 export interface RetryTestRunInput {
   itemIds?: string[];
   agentProfile?: string;
   runtimeMode?: string;
+  resultLocale?: string;
 }
 
 export interface ReviewTestRunInput {

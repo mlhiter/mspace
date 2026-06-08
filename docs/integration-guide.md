@@ -347,7 +347,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
   -d '{"note":"Looks executable after the added environment requirement."}'
 ```
 
-Workspace test plans select ready project cases and start issue-backed runs. A plan can include `setupSteps`, a free-text plan-level setup block that runs once before case execution. Setup uses the normal issue-backed agent-session path and worker artifact channel: workers write `test-setup-result.json`; the server stores the setup result, copies `outputs` into `runContext`, and starts case execution only when the setup task completed with `status:"passed"`. Failed, cancelled, or missing setup marks the run `setup_failed` and leaves items queued. Execution workers then report results through `test-result.json`; the server reconciles run items, persists supported screenshot evidence as test artifacts, rewrites run item evidence to authenticated artifact refs, and a human must call `accept` or `block` before the run is treated as accepted. When a run spans projects, mspace groups queued items by project and creates separate execution Issues/agent sessions per project batch; one agent session should not span multiple repositories.
+Workspace test plans select ready project cases and start issue-backed runs. A plan can include `setupSteps`, a free-text plan-level setup block that runs once before case execution. Setup uses the normal issue-backed agent-session path and worker artifact channel: workers write `test-setup-result.json`; the server stores the setup result, copies `outputs` into `runContext`, and starts case execution only when the setup task completed with `status:"passed"`. Failed, cancelled, or missing setup marks the run `setup_failed` and leaves items queued. Execution workers then report results through `test-result.json`; the server reconciles run items, persists supported screenshot evidence as test artifacts, rewrites run item evidence to authenticated artifact refs, and a human must call `accept` or `block` before the run is treated as accepted. Run start and retry inputs may include `resultLocale:"en"|"zh-CN"`; the server stores it on the run and instructs setup/execution sessions to write user-facing `summary`, `actualResult`, and `failureSummary` text in that language. When a run spans projects, mspace groups queued items by project and creates separate execution Issues/agent sessions per project batch; one agent session should not span multiple repositories.
 
 Create a test plan pinned to an Environment:
 
@@ -364,6 +364,18 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/test-plans" \
     ],
     "environmentId":"<environment-id>",
     "environment":"Run against the selected staging target"
+  }'
+```
+
+Start the plan in the current UI language:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/test-plans/<plan-id>/runs" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "runtimeMode":"personal",
+    "resultLocale":"zh-CN"
   }'
 ```
 

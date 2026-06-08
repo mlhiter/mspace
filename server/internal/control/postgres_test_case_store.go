@@ -796,6 +796,7 @@ func (s *PostgresStore) StartAdHocWorkspaceTestRun(ctx Context, user User, works
 		AgentProfile:    normalized.AgentProfile,
 		RuntimeMode:     normalized.RuntimeMode,
 		BatchSize:       normalized.BatchSize,
+		ResultLocale:    normalized.ResultLocale,
 	}
 	if err := s.resolveTestRunEnvironment(dbctx, workspaceID, &runInput); err != nil {
 		return TestRunDetail{}, err
@@ -871,6 +872,7 @@ func (s *PostgresStore) startPostgresProjectTestRun(ctx Context, user User, work
 		EnvironmentID:       normalized.EnvironmentID,
 		EnvironmentKind:     normalized.EnvironmentKind,
 		EnvironmentSnapshot: cloneRawJSONObject(normalized.EnvironmentSnapshot),
+		ResultLocale:        normalized.ResultLocale,
 		TotalCount:          len(planCases),
 		AcceptanceStatus:    "pending",
 		CreatedByUserID:     user.ID,
@@ -1117,12 +1119,13 @@ func (s *PostgresStore) RetryWorkspaceTestRun(ctx Context, user User, workspaceI
 	}
 	if _, err := s.pool.Exec(dbctx, `
 		UPDATE test_runs
-		SET status = 'running', acceptance_status = 'pending', acceptance_note = '', updated_at = now()
+		SET status = 'running', acceptance_status = 'pending', acceptance_note = '', result_locale = $3, updated_at = now()
 		WHERE workspace_id = $1 AND id = $2
-	`, workspaceID, runID); err != nil {
+	`, workspaceID, runID, normalized.ResultLocale); err != nil {
 		return TestRunDetail{}, err
 	}
-	if err := s.startPostgresTestRunExecutionSessions(ctx, user.ID, run, CreateTestRunInput{AgentProfile: normalized.AgentProfile, RuntimeMode: normalized.RuntimeMode, BatchSize: defaultTestRunBatchSize}); err != nil {
+	run.ResultLocale = normalized.ResultLocale
+	if err := s.startPostgresTestRunExecutionSessions(ctx, user.ID, run, CreateTestRunInput{AgentProfile: normalized.AgentProfile, RuntimeMode: normalized.RuntimeMode, BatchSize: defaultTestRunBatchSize, ResultLocale: normalized.ResultLocale}); err != nil {
 		return TestRunDetail{}, err
 	}
 	return s.GetWorkspaceTestRun(ctx, user.ID, workspaceID, runID)
@@ -2051,6 +2054,7 @@ func testRunSelectColumnsForAlias(alias string) string {
 			` + alias + `.setup_session_id,
 			` + alias + `.setup_result,
 			` + alias + `.run_context,
+			COALESCE(` + alias + `.result_locale, 'en'),
 			` + alias + `.target_type,
 			` + alias + `.target_value,
 			` + alias + `.environment,
@@ -2091,6 +2095,7 @@ func scanTestRun(row scanner) (TestRun, error) {
 		&run.SetupSessionID,
 		&setupResultBytes,
 		&runContextBytes,
+		&run.ResultLocale,
 		&run.TargetType,
 		&run.TargetValue,
 		&run.Environment,
@@ -2121,6 +2126,7 @@ func scanTestRun(row scanner) (TestRun, error) {
 	if len(run.RunContext) == 0 {
 		run.RunContext = json.RawMessage(`{}`)
 	}
+	run.ResultLocale = normalizeTestResultLocale(run.ResultLocale)
 	run.EnvironmentSnapshot = copyRawMessage(json.RawMessage(snapshotBytes))
 	if completedAt.Valid {
 		run.CompletedAt = completedAt.Time.UTC().Format(time.RFC3339)
@@ -2159,6 +2165,7 @@ func insertTestRunRecord(ctx context.Context, q queryer, run TestRun, parentIssu
 			setup_status,
 			setup_result,
 			run_context,
+			result_locale,
 			target_type,
 			target_value,
 			environment,
@@ -2169,9 +2176,9 @@ func insertTestRunRecord(ctx context.Context, q queryer, run TestRun, parentIssu
 			acceptance_status,
 			created_by_user_id
 		)
-		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, NULLIF($4, '')::uuid, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17::jsonb, $18, $19, NULLIF($20, '')::uuid)
+		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, NULLIF($4, '')::uuid, $5, NULLIF($6, '')::uuid, $7, $8, $9, $10::jsonb, $11::jsonb, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, $20, NULLIF($21, '')::uuid)
 		RETURNING id::text
-	`, run.ID, run.WorkspaceID, run.ProjectID, run.PlanID, firstNonEmpty(run.Source, "ad_hoc"), parentIssueID, run.Status, run.SetupSteps, firstNonEmpty(run.SetupStatus, "not_required"), jsonOrObject(run.SetupResult), jsonOrObject(run.RunContext), run.TargetType, run.TargetValue, run.Environment, run.EnvironmentID, run.EnvironmentKind, jsonOrObject(run.EnvironmentSnapshot), run.TotalCount, run.AcceptanceStatus, run.CreatedByUserID).Scan(&runID); err != nil {
+	`, run.ID, run.WorkspaceID, run.ProjectID, run.PlanID, firstNonEmpty(run.Source, "ad_hoc"), parentIssueID, run.Status, run.SetupSteps, firstNonEmpty(run.SetupStatus, "not_required"), jsonOrObject(run.SetupResult), jsonOrObject(run.RunContext), normalizeTestResultLocale(run.ResultLocale), run.TargetType, run.TargetValue, run.Environment, run.EnvironmentID, run.EnvironmentKind, jsonOrObject(run.EnvironmentSnapshot), run.TotalCount, run.AcceptanceStatus, run.CreatedByUserID).Scan(&runID); err != nil {
 		return TestRun{}, err
 	}
 	return loadTestRun(ctx, q, run.WorkspaceID, runID)
@@ -2484,6 +2491,7 @@ func (s *PostgresStore) startPostgresTestRunExecutionSessions(ctx Context, userI
 }
 
 func (s *PostgresStore) startPostgresTestRunExecutionSessionsWithQueryer(ctx context.Context, q queryer, userID string, run TestRun, input CreateTestRunInput) error {
+	run.ResultLocale = normalizeTestResultLocale(firstNonEmpty(input.ResultLocale, run.ResultLocale))
 	if input.BatchSize <= 0 {
 		input.BatchSize = defaultTestRunBatchSize
 	}
@@ -2606,6 +2614,7 @@ func (s *PostgresStore) ensureActiveCodexWorkerForQueryer(ctx context.Context, q
 
 func (s *PostgresStore) startPostgresTestRunSetupSession(ctx Context, userID string, run TestRun, input CreateTestRunInput) error {
 	dbctx := asContext(ctx)
+	run.ResultLocale = normalizeTestResultLocale(firstNonEmpty(input.ResultLocale, run.ResultLocale))
 	body := buildTestRunSetupIssueBody(run)
 	child, err := s.CreateIssueTask(ctx, userID, run.WorkspaceID, run.ParentIssueID, IssueTaskInput{
 		Title: "Prepare test run",

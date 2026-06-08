@@ -55,7 +55,7 @@ import {
   type TestRunDetail,
   type TestRunItem,
 } from "@mspace/core";
-import { useMspaceTranslation } from "@mspace/i18n";
+import { useMspaceLanguage, useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
   CollectionEmptyState,
@@ -1305,6 +1305,7 @@ function projectFromSearch(projects: Project[], searchProjectId?: string): Proje
 
 export function TestsPage() {
   const { t } = useMspaceTranslation();
+  const { language } = useMspaceLanguage();
   const navigate = useNavigate();
   const search = useTestsSearch();
   const queryClient = useQueryClient();
@@ -1705,6 +1706,7 @@ export function TestsPage() {
         cases: selectedReadyCaseIds.map((caseId) => ({ projectId: effectiveProjectId, caseId })),
         environmentId: selectedProject?.defaultEnvironmentId || selectedProject?.defaultClusterId || "",
         runtimeMode: workerReadiness.runtimeMode,
+        resultLocale: language,
       });
     },
     onSuccess: async (detail) => {
@@ -1724,6 +1726,7 @@ export function TestsPage() {
         environmentId: plan.environmentId,
         environmentKind: plan.environmentKind,
         runtimeMode: workerReadiness.runtimeMode,
+        resultLocale: language,
       });
     },
     onSuccess: async (detail) => {
@@ -2717,6 +2720,7 @@ export function TestsPage() {
 
 export function TestCaseDetailPage() {
   const { t } = useMspaceTranslation();
+  const { language } = useMspaceLanguage();
   const navigate = useNavigate();
   const search = useTestsSearch();
   const { caseId = "" } = useParams({ strict: false }) as { caseId?: string };
@@ -2783,6 +2787,7 @@ export function TestCaseDetailPage() {
         cases: [{ projectId: effectiveProjectId, caseId: testCase.id }],
         environmentId: selectedProject?.defaultEnvironmentId || selectedProject?.defaultClusterId || "",
         runtimeMode: workerReadiness.runtimeMode,
+        resultLocale: language,
       });
     },
     onSuccess: async (detail) => {
@@ -2958,6 +2963,7 @@ function CaseHeaderMeta(props: { projectName: string; testCase?: TestCase }) {
 
 export function TestPlanDetailPage() {
   const { t } = useMspaceTranslation();
+  const { language } = useMspaceLanguage();
   const navigate = useNavigate();
   const search = useTestsSearch();
   const { planId = "" } = useParams({ strict: false }) as { planId?: string };
@@ -2983,6 +2989,7 @@ export function TestPlanDetailPage() {
         environmentId: plan.environmentId,
         environmentKind: plan.environmentKind,
         runtimeMode: workerReadiness.runtimeMode,
+        resultLocale: language,
       });
     },
     onSuccess: async (runDetail) => {
@@ -3181,6 +3188,7 @@ function TestPlanDetailContent(props: {
 
 export function TestRunDetailPage() {
   const { t } = useMspaceTranslation();
+  const { language } = useMspaceLanguage();
   const search = useTestsSearch();
   const { runId = "" } = useParams({ strict: false }) as { runId?: string };
   const queryClient = useQueryClient();
@@ -3211,6 +3219,7 @@ export function TestRunDetailPage() {
       await workerReadiness.ensureReady();
       return controlPlaneApi.retryWorkspaceTestRun(auth.token, workspaceId, runId, {
         runtimeMode: workerReadiness.runtimeMode,
+        resultLocale: language,
       });
     },
     onSuccess: async () => {

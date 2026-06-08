@@ -2720,6 +2720,7 @@ func (s *MemoryStore) StartAdHocWorkspaceTestRun(_ Context, user User, workspace
 		AgentProfile:    normalized.AgentProfile,
 		RuntimeMode:     normalized.RuntimeMode,
 		BatchSize:       normalized.BatchSize,
+		ResultLocale:    normalized.ResultLocale,
 	}
 	if err := s.resolveTestRunEnvironmentLocked(workspaceID, &runInput); err != nil {
 		return TestRunDetail{}, err
@@ -2783,6 +2784,7 @@ func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases
 		EnvironmentID:       input.EnvironmentID,
 		EnvironmentKind:     input.EnvironmentKind,
 		EnvironmentSnapshot: cloneRawJSONObject(input.EnvironmentSnapshot),
+		ResultLocale:        input.ResultLocale,
 		TotalCount:          len(cases),
 		AcceptanceStatus:    "pending",
 		CreatedByUserID:     user.ID,
@@ -2985,9 +2987,10 @@ func (s *MemoryStore) RetryWorkspaceTestRun(_ Context, user User, workspaceID, r
 	run.Status = "running"
 	run.AcceptanceStatus = "pending"
 	run.AcceptanceNote = ""
+	run.ResultLocale = normalized.ResultLocale
 	run.UpdatedAt = now
 	s.testRuns[run.ID] = run
-	createRunInput := CreateTestRunInput{AgentProfile: normalized.AgentProfile, RuntimeMode: normalized.RuntimeMode, BatchSize: defaultTestRunBatchSize}
+	createRunInput := CreateTestRunInput{AgentProfile: normalized.AgentProfile, RuntimeMode: normalized.RuntimeMode, BatchSize: defaultTestRunBatchSize, ResultLocale: normalized.ResultLocale}
 	if err := s.startTestRunExecutionSessionsLocked(user.ID, run.ID, createRunInput); err != nil {
 		return TestRunDetail{}, err
 	}
@@ -5305,6 +5308,7 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 	if !ok {
 		return ErrNotFound
 	}
+	run.ResultLocale = normalizeTestResultLocale(firstNonEmpty(input.ResultLocale, run.ResultLocale))
 	var plan *TestPlan
 	if run.PlanID != "" {
 		if existingPlan, ok := s.testPlans[run.PlanID]; ok {
@@ -5349,6 +5353,7 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 				}
 			}
 			now := time.Now().UTC().Format(time.RFC3339Nano)
+			body := buildTestRunExecutionIssueBody(run, cases)
 			child := Issue{
 				ID:            fmt.Sprintf("issue-%04d", s.nextMemoryIDLocked()),
 				WorkspaceID:   run.WorkspaceID,
@@ -5356,7 +5361,7 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 				ParentIssueID: parent.ID,
 				SortOrder:     sortOrder,
 				Title:         fmt.Sprintf("Execute %s batch %d", testRunExecutionScopeLabel(plan, cases), start/input.BatchSize+1),
-				Body:          buildTestRunExecutionIssueBody(run, cases),
+				Body:          body,
 				Status:        "open",
 				TriageStatus:  "none",
 				Assignee:      parent.CreatorName,
@@ -5367,12 +5372,11 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 				UpdatedAt:     now,
 			}
 			s.issues[child.ID] = child
-			command := buildTestRunExecutionIssueBody(run, cases)
 			session, err := s.createAgentSessionLocked(userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
 				Provider:     "codex",
 				AgentProfile: input.AgentProfile,
 				RuntimeMode:  input.RuntimeMode,
-				Command:      command,
+				Command:      body,
 				Automation:   testRunExecutionAutomation,
 				TestRunID:    run.ID,
 			})
@@ -5399,6 +5403,7 @@ func (s *MemoryStore) startTestRunSetupSessionLocked(userID, runID string, input
 	if !ok {
 		return ErrNotFound
 	}
+	run.ResultLocale = normalizeTestResultLocale(firstNonEmpty(input.ResultLocale, run.ResultLocale))
 	parent, ok := s.issues[run.ParentIssueID]
 	if !ok {
 		return ErrNotFound

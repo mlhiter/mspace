@@ -2592,8 +2592,8 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 		t.Fatalf("unexpected created plan: %+v", plan)
 	}
 
-	run := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":1}`)
-	if run.Run.Status != "setup_running" || run.Run.SetupStatus != "running" || run.Run.SetupIssueID == "" || run.Run.SetupSessionID == "" || run.Run.TotalCount != 2 || run.Run.ParentIssueID == "" || len(run.Items) != 2 {
+	run := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":1,"resultLocale":"zh-CN"}`)
+	if run.Run.Status != "setup_running" || run.Run.SetupStatus != "running" || run.Run.ResultLocale != "zh-CN" || run.Run.SetupIssueID == "" || run.Run.SetupSessionID == "" || run.Run.TotalCount != 2 || run.Run.ParentIssueID == "" || len(run.Items) != 2 {
 		t.Fatalf("unexpected started run: %+v", run)
 	}
 	parentIssue, err := store.GetIssue(context.Background(), user.ID, workspaceID, run.Run.ParentIssueID)
@@ -2615,7 +2615,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get setup issue: %v", err)
 	}
-	if setupIssue.Issue.ParentIssueID != run.Run.ParentIssueID || !strings.Contains(setupIssue.Issue.Body, "test-setup-result.json") {
+	if setupIssue.Issue.ParentIssueID != run.Run.ParentIssueID || !strings.Contains(setupIssue.Issue.Body, "test-setup-result.json") || !strings.Contains(setupIssue.Issue.Body, "Use Simplified Chinese") {
 		t.Fatalf("unexpected setup issue: %+v", setupIssue.Issue)
 	}
 	for _, item := range run.Items {
@@ -2642,11 +2642,18 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 		if childIssue.Issue.ParentIssueID != run.Run.ParentIssueID {
 			t.Fatalf("expected child issue under parent %s, got %+v", run.Run.ParentIssueID, childIssue.Issue)
 		}
+		if !strings.Contains(childIssue.Issue.Body, "Use Simplified Chinese") {
+			t.Fatalf("execution issue should preserve result locale instruction, got body %q", childIssue.Issue.Body)
+		}
 		if issueListContains(allTopLevelIssues, item.ExecutionIssueID) {
 			t.Fatalf("top-level issue list should still hide execution child issue %s, got %+v", item.ExecutionIssueID, allTopLevelIssues)
 		}
-		if _, err := store.GetSession(context.Background(), user.ID, workspaceID, item.AgentSessionID); err != nil {
+		sessionDetail, err := store.GetSession(context.Background(), user.ID, workspaceID, item.AgentSessionID)
+		if err != nil {
 			t.Fatalf("get item agent session: %v", err)
+		}
+		if !strings.Contains(sessionDetail.Session.Command, "Use Simplified Chinese") {
+			t.Fatalf("execution session command should preserve result locale instruction, got %q", sessionDetail.Session.Command)
 		}
 	}
 
