@@ -308,11 +308,15 @@ The user selects `ready` cases and creates a test plan.
 The plan needs:
 
 - title;
-- target: branch, commit, source session, image, offline package, version URL, or preview URL;
+- target type: branch, commit, source session, image, offline package, version URL, or preview URL;
 - environment: selected Environment or an existing Issue Test Environment snapshot;
+- optional setup steps that run once before case execution;
+- selected ready cases;
 - execution scope: full, failed retry, blocked retry, incremental, or custom;
 - whether parallel execution is allowed;
 - whether human acceptance is required.
+
+The create/edit plan UI should stay focused on fields that change execution behavior: title, target type, Environment, setup steps, and selected ready cases. Do not expose a standalone description box or target-value input in the primary modal unless a later workflow makes those values actionable for the user. Existing stored description or target value data may still be displayed when present for historical plans and runs.
 
 Plan-level setup is intentionally simple in the current slice. It is free-text operational guidance stored on the plan, not a reusable template or graph engine. The text can describe browser, Kubernetes, VM, SSH, Sealos, mock-data, or deployment preparation in the user's own words. When the plan starts a run, mspace freezes those setup steps onto the run so later edits do not rewrite historical execution context.
 
@@ -617,7 +621,7 @@ Plan rows open into dedicated plan detail pages. The list page should not keep a
 Show:
 
 - plan title;
-- target under test;
+- target under test, showing the target value only when one exists;
 - linked environment;
 - case count;
 - current round;
@@ -897,7 +901,7 @@ Goal: turn cases into executable plans and assign Codex through Issues.
 Scope:
 
 - test plan list and dedicated detail page;
-- target selection: branch, commit, source session, image, offline package, version URL, or preview URL;
+- target-type selection: branch, commit, source session, image, offline package, version URL, or preview URL;
 - environment selection;
 - optional plan-level setup steps that run once before case execution;
 - create Test Run;

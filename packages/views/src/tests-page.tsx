@@ -888,6 +888,11 @@ function hasText(value?: string) {
   return (value || "").trim().length > 0;
 }
 
+function formatTargetLabel(t: ReturnType<typeof useMspaceTranslation>["t"], targetType: string, targetValue?: string) {
+  const typeLabel = t(`tests.targetTypeValue.${targetType}`, { defaultValue: targetType });
+  return hasText(targetValue) ? t("tests.runTarget", { type: typeLabel, value: targetValue }) : typeLabel;
+}
+
 function canReviewTestRun(status: string) {
   return status === "needs_acceptance";
 }
@@ -2468,8 +2473,7 @@ export function TestsPage() {
                             <span className="truncate text-[13px] font-medium text-[color:var(--text)]">{plan.title}</span>
                           </div>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-[color:var(--muted)]">
-                            <span>{t(`tests.targetTypeValue.${plan.targetType}`, { defaultValue: plan.targetType })}</span>
-                            <span>{plan.targetValue || t("common.unknown")}</span>
+                            <span>{formatTargetLabel(t, plan.targetType, plan.targetValue)}</span>
                             <span>{t("tests.caseCount", { count: plan.caseCount })}</span>
                             {hasText(plan.setupSteps) ? <span>{t("tests.setupConfigured")}</span> : null}
                           </div>
@@ -3198,7 +3202,7 @@ function TestPlanDetailContent(props: {
   return (
     <PageFrame
       title={plan.title}
-      subtitle={t("tests.runTarget", { type: t(`tests.targetTypeValue.${plan.targetType}`, { defaultValue: plan.targetType }), value: plan.targetValue || t("common.unknown") })}
+      subtitle={formatTargetLabel(t, plan.targetType, plan.targetValue)}
       breadcrumbs={[
         { label: t("common.mspace"), to: "/inbox" },
         { label: t("tests.title"), to: "/tests", search: testsTabSearch("plans", projectId) },
@@ -3470,10 +3474,7 @@ export function TestRunDetailPage() {
             <div className="min-w-0">
               <h2 className="text-[15px] font-semibold text-[color:var(--text)]">{runTitle}</h2>
               <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">
-                {t("tests.runTarget", {
-                  type: t(`tests.targetTypeValue.${detail.run.targetType}`, { defaultValue: detail.run.targetType }),
-                  value: detail.run.targetValue || t("common.unknown"),
-                })}
+                {formatTargetLabel(t, detail.run.targetType, detail.run.targetValue)}
               </p>
             </div>
             <StatusBadge value={detail.run.status} valueLabel={t(`tests.runStatusValue.${detail.run.status}`, { defaultValue: detail.run.status })} />
@@ -3838,10 +3839,7 @@ function CaseRunHistoryItem(props: {
             {props.entry.runSource ? <span>{t(`tests.runSourceValue.${props.entry.runSource}`, { defaultValue: props.entry.runSource })}</span> : null}
             {props.entry.targetType ? (
               <span>
-                {t("tests.runTarget", {
-                  type: t(`tests.targetTypeValue.${props.entry.targetType}`, { defaultValue: props.entry.targetType }),
-                  value: props.entry.targetValue || t("common.unknown"),
-                })}
+                {formatTargetLabel(t, props.entry.targetType, props.entry.targetValue)}
               </span>
             ) : null}
           </div>
@@ -4078,7 +4076,7 @@ function PlanFormFields(props: {
 
   return (
     <>
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,1fr)]">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,0.85fr)_minmax(0,1fr)]">
         <Field label={t("tests.planTitle")}>
           <Input
             value={form.title}
@@ -4100,31 +4098,21 @@ function PlanFormFields(props: {
             </SelectContent>
           </Select>
         </Field>
-        <Field label={t("tests.targetValue")}>
-          <Input value={form.targetValue} onChange={(event) => onChange((current) => ({ ...current, targetValue: event.target.value }))} />
+        <Field label={t("tests.environment")}>
+          <Select value={form.environmentId || "__none"} onValueChange={(value) => onChange((current) => ({ ...current, environmentId: value === "__none" ? "" : value }))}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none">{t("tests.noEnvironment")}</SelectItem>
+              {environments.map((environment) => (
+                <SelectItem key={environment.id} value={environment.id}>
+                  {environment.name} · {environment.kind === "virtual_machine" ? t("clusters.kindVirtualMachine") : t("clusters.kindKubernetes")}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
-      </div>
-      <div className="grid gap-3 lg:grid-cols-2">
-        <Field label={t("tests.planDescription")}>
-          <Textarea value={form.description} onChange={(event) => onChange((current) => ({ ...current, description: event.target.value }))} className="min-h-24" />
-        </Field>
-        <div className="grid gap-3">
-          <Field label={t("tests.environment")}>
-            <Select value={form.environmentId || "__none"} onValueChange={(value) => onChange((current) => ({ ...current, environmentId: value === "__none" ? "" : value }))}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none">{t("tests.noEnvironment")}</SelectItem>
-                {environments.map((environment) => (
-                  <SelectItem key={environment.id} value={environment.id}>
-                    {environment.name} · {environment.kind === "virtual_machine" ? t("clusters.kindVirtualMachine") : t("clusters.kindKubernetes")}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-        </div>
       </div>
       <Field label={t("tests.setupSteps")} hint={t("tests.setupStepsHint")}>
         <Textarea
