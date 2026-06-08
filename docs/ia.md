@@ -108,7 +108,7 @@ The current sidebar exposes Inbox, Issues, Tests, Agents, Environments, and Proj
 
 Current implementation principles:
 
-- left sidebar contains the workspace identity/account menu, global search / Command+K palette for issues and projects, quick issue creation, primary navigation, active issue work, and runtime worker state;
+- left sidebar contains the workspace identity/account menu, global search / Command+K palette for issues and projects, quick issue creation, primary navigation, Active work shortcuts for issue titles and test plan titles, and runtime worker state;
 - Inbox and Project lists use row-level cards and compact metadata rather than dashboard tiles;
 - Issue Detail should read as a live document with session and evidence context attached around it;
 - Session Detail can be more operational, but should still preserve the same paper workspace tone;

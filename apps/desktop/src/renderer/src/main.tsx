@@ -42,6 +42,7 @@ import {
   type AuthMeResult,
   type CreateWorkspaceInput,
   type IssueListItem,
+  type TestPlan,
   type TestRun,
   type WorkspaceInvitationPreview,
 } from "@mspace/core";
@@ -67,6 +68,15 @@ function joinSearchSubtitle(values: Array<string | number | null | undefined>): 
 
 const inactiveIssueStatuses = new Set(["closed", "cancelled"]);
 const activeTestRunStatuses = new Set(["queued", "setup_running", "setup_failed", "running", "needs_acceptance", "blocked"]);
+const reviewIssueStatuses = new Set(["needs_review", "changes_requested", "ready_for_test", "blocked"]);
+const testRunStatusPriority = new Map([
+  ["needs_acceptance", 100],
+  ["blocked", 95],
+  ["setup_failed", 90],
+  ["running", 70],
+  ["setup_running", 70],
+  ["queued", 50],
+]);
 
 function normalizeServerInput(value: string): string {
   const trimmed = value.trim();
@@ -130,15 +140,28 @@ function isActiveIssueWork(issue: IssueListItem): boolean {
   return !inactiveIssueStatuses.has(status);
 }
 
-function issueActiveWorkItem(issue: IssueListItem, statusLabel: string): ShellActiveWorkItem {
+function activeIssuePriority(issue: IssueListItem): number {
+  const status = issue.status.trim().toLowerCase();
+  if (reviewIssueStatuses.has(status)) return 90;
+  if (issue.unread) return 85;
+  if (issue.sessionCount > 0) return 75;
+  if (issue.childIssueCount > issue.completedChildIssueCount) return 70;
+  return 40;
+}
+
+function issueActiveWorkItem(issue: IssueListItem, statusLabel: string, noProjectLabel: string, taskProgressLabel: string): ShellActiveWorkItem {
+  const projectName = issue.projectName || noProjectLabel;
+  const detailLabel = issue.childIssueCount > 0 ? taskProgressLabel : "";
   return {
     id: `issue:${issue.id}`,
     kind: "issue",
-    projectName: issue.projectName,
+    projectName,
     title: issue.title,
     status: issue.status,
     statusLabel,
-    subtitle: issue.childIssueCount > 0 ? `${issue.completedChildIssueCount}/${issue.childIssueCount}` : undefined,
+    contextLabel: projectName,
+    detailLabel,
+    priority: activeIssuePriority(issue),
     updatedAt: issue.updatedAt,
     to: "/issues/$issueId",
     params: { issueId: issue.id },
@@ -149,20 +172,100 @@ function isActiveTestRunWork(run: TestRun): boolean {
   return activeTestRunStatuses.has(run.status.trim().toLowerCase());
 }
 
-function testRunActiveWorkItem(run: TestRun, title: string, statusLabel: string, subtitle: string, projectName?: string): ShellActiveWorkItem {
+type ActiveTestRunGroup = {
+  key: string;
+  plan?: TestPlan;
+  runs: TestRun[];
+};
+
+function statusPriority(status: string): number {
+  return testRunStatusPriority.get(status.trim().toLowerCase()) || 0;
+}
+
+function latestTimestamp(items: Array<{ updatedAt?: string }>): number {
+  return Math.max(...items.map((item) => Date.parse(item.updatedAt || "") || 0), 0);
+}
+
+function compareActiveWorkPriority(left: ShellActiveWorkItem, right: ShellActiveWorkItem): number {
+  const leftPriority = typeof left.priority === "number" ? left.priority : statusPriority(left.status);
+  const rightPriority = typeof right.priority === "number" ? right.priority : statusPriority(right.status);
+  if (leftPriority !== rightPriority) return rightPriority - leftPriority;
+  return (Date.parse(right.updatedAt || "") || 0) - (Date.parse(left.updatedAt || "") || 0);
+}
+
+function groupActiveTestRuns(runs: TestRun[], plans: TestPlan[]): ActiveTestRunGroup[] {
+  const planById = new Map(plans.map((plan) => [plan.id, plan]));
+  const groups = new Map<string, ActiveTestRunGroup>();
+  for (const run of runs.filter(isActiveTestRunWork)) {
+    const plan = planById.get(run.planId);
+    const key = plan ? `plan:${plan.id}` : `run:${run.id}`;
+    const group = groups.get(key) || { key, plan, runs: [] };
+    group.runs.push(run);
+    groups.set(key, group);
+  }
+  return Array.from(groups.values());
+}
+
+function bestRunForGroup(runs: TestRun[]): TestRun {
+  return [...runs].sort((left, right) => {
+    const priorityDelta = statusPriority(right.status) - statusPriority(left.status);
+    if (priorityDelta !== 0) return priorityDelta;
+    return (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0);
+  })[0];
+}
+
+function testRunActiveWorkItem(
+  group: ActiveTestRunGroup,
+  labels: {
+    fallbackTitle: string;
+    statusLabel: (status: string) => string;
+    counts: (run: TestRun) => string;
+    runContext: (count: number) => string;
+    projectCount: (count: number) => string;
+    noProject: string;
+  },
+  projectNameById: Map<string, string>,
+): ShellActiveWorkItem {
+  const run = bestRunForGroup(group.runs);
+  const projectNames = Array.from(new Set(group.runs.map((item) => projectNameById.get(item.projectId)).filter(Boolean))) as string[];
+  const projectLabel =
+    projectNames.length === 1
+      ? projectNames[0]
+      : projectNames.length > 1
+        ? labels.projectCount(projectNames.length)
+        : labels.noProject;
+  const statusLabel = group.runs.length > 1 ? labels.runContext(group.runs.length) : labels.statusLabel(run.status);
   return {
-    id: `test-run:${run.id}`,
+    id: group.key,
     kind: "test-run",
-    projectName,
-    title,
+    projectName: projectLabel,
+    title: group.plan?.title || labels.fallbackTitle,
     status: run.status,
     statusLabel,
-    subtitle,
-    updatedAt: run.updatedAt,
+    contextLabel: projectLabel,
+    detailLabel: labels.counts(run),
+    priority: statusPriority(run.status),
+    updatedAt: new Date(latestTimestamp(group.runs)).toISOString(),
     to: "/tests/runs/$runId",
     params: { runId: run.id },
     search: { tab: "runs" },
   };
+}
+
+function selectActiveWorkItems(issueItems: ShellActiveWorkItem[], testItems: ShellActiveWorkItem[]): ShellActiveWorkItem[] {
+  const sortedIssues = [...issueItems].sort(compareActiveWorkPriority);
+  const sortedTests = [...testItems].sort(compareActiveWorkPriority);
+  const selected = [...sortedIssues.slice(0, 3), ...sortedTests.slice(0, 2)];
+  if (selected.length < 5) {
+    const selectedIds = new Set(selected.map((item) => item.id));
+    for (const item of [...sortedIssues, ...sortedTests].sort(compareActiveWorkPriority)) {
+      if (selected.length >= 5) break;
+      if (selectedIds.has(item.id)) continue;
+      selected.push(item);
+      selectedIds.add(item.id);
+    }
+  }
+  return selected.sort(compareActiveWorkPriority);
 }
 
 function defaultPasswordAuthMode(source: ServerBaseUrlSource): PasswordAuthMode {
@@ -543,6 +646,7 @@ function RootShell() {
   const serverWorkspaceReady = authToken !== "" && Boolean(currentWorkspace?.id);
   const workspaceIssuesQueryKey = queryKeys.workspaceIssues(currentWorkspace?.id || "", authToken);
   const workspaceProjectsQueryKey = queryKeys.workspaceProjects(currentWorkspace?.id || "", authToken);
+  const workspaceTestPlansQueryKey = queryKeys.workspaceTestPlans(currentWorkspace?.id || "", authToken);
   const workspaceTestRunsQueryKey = queryKeys.workspaceTestRuns(currentWorkspace?.id || "", authToken);
   const issuesQuery = useQuery({
     queryKey: workspaceIssuesQueryKey,
@@ -557,6 +661,12 @@ function RootShell() {
   const inboxQuery = useQuery({
     queryKey: queryKeys.workspaceInbox(currentWorkspace?.id || "", authToken),
     queryFn: () => controlPlaneApi.listInbox(authToken, currentWorkspace?.id || ""),
+    enabled: serverWorkspaceReady,
+    refetchInterval: serverWorkspaceReady ? 5_000 : false,
+  });
+  const testPlansQuery = useQuery({
+    queryKey: workspaceTestPlansQueryKey,
+    queryFn: () => controlPlaneApi.listWorkspaceTestPlans(authToken, currentWorkspace?.id || ""),
     enabled: serverWorkspaceReady,
     refetchInterval: serverWorkspaceReady ? 5_000 : false,
   });
@@ -680,22 +790,36 @@ function RootShell() {
     const issueItems = (issuesQuery.data || [])
       .filter(isActiveIssueWork)
       .map((issue) =>
-        issueActiveWorkItem(issue, t(`issueStatus.${issue.status}`, { defaultValue: issue.status })),
+        issueActiveWorkItem(
+          issue,
+          t(`issueStatus.${issue.status}`, { defaultValue: issue.status }),
+          t("common.noProject"),
+          t("navigation.activeIssueTasks", { completed: issue.completedChildIssueCount, total: issue.childIssueCount }),
+        ),
       );
-    const testRunItems = (testRunsQuery.data || [])
-      .filter(isActiveTestRunWork)
-      .map((run) =>
+    const testRunItems = groupActiveTestRuns(testRunsQuery.data || [], testPlansQuery.data || []).map((group) =>
         testRunActiveWorkItem(
-          run,
-          t("tests.runShortId", { id: run.id.slice(0, 8) }),
-          t(`tests.runStatusValue.${run.status}`, { defaultValue: run.status }),
-          t("tests.runCounts", { passed: run.passedCount, failed: run.failedCount, blocked: run.blockedCount, skipped: run.skippedCount }),
-          projectNameById.get(run.projectId),
+          group,
+          {
+            fallbackTitle: t("navigation.activeAdHocTestRun"),
+            statusLabel: (status) => t(`tests.runStatusValue.${status}`, { defaultValue: status }),
+            counts: (run) =>
+              t("tests.runCounts", {
+                passed: run.passedCount,
+                failed: run.failedCount,
+                blocked: run.blockedCount,
+                skipped: run.skippedCount,
+              }),
+            runContext: (count) => t("navigation.activeTestRunCount", { count }),
+            projectCount: (count) => t("navigation.activeProjectCount", { count }),
+            noProject: t("common.noProject"),
+          },
+          projectNameById,
         ),
       );
 
-    return [...issueItems, ...testRunItems].sort((left, right) => Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || ""));
-  }, [issuesQuery.data, projectsQuery.data, testRunsQuery.data, t]);
+    return selectActiveWorkItems(issueItems, testRunItems);
+  }, [issuesQuery.data, projectsQuery.data, testPlansQuery.data, testRunsQuery.data, t]);
 
   const shell = (
     <MspaceAuthProvider

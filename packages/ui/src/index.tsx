@@ -298,9 +298,12 @@ export type ShellActiveWorkItem = {
   status: string;
   statusLabel?: string;
   subtitle?: string;
+  contextLabel?: string;
+  detailLabel?: string;
   namespace?: string;
   namespaceStatus?: string;
   sessionStatus?: string;
+  priority?: number;
   updatedAt?: string;
   to: string;
   params?: Record<string, string>;
@@ -1060,7 +1063,8 @@ function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
   const status = normalizeStatusValue(props.item.sessionStatus || props.item.namespaceStatus || props.item.status);
   const { t } = useMspaceTranslation();
   const projectName = props.item.projectName || t("common.noProject");
-  const secondary = props.item.subtitle || props.item.namespace || projectName;
+  const contextLabel = props.item.contextLabel || projectName;
+  const detailLabel = props.item.detailLabel || props.item.subtitle || props.item.namespace || "";
   return (
     <Link
       to={props.item.to}
@@ -1087,7 +1091,7 @@ function ActiveWorkLink(props: { item: ShellActiveWorkItem }) {
           {props.item.statusLabel ? <span className="font-normal text-[color:var(--muted)]"> · {props.item.statusLabel}</span> : null}
         </span>
         <span className="block truncate text-[11px] text-[color:var(--muted)]">
-          {projectName}{secondary && secondary !== projectName ? ` · ${secondary}` : ""}
+          {contextLabel}{detailLabel && detailLabel !== contextLabel ? ` · ${detailLabel}` : ""}
         </span>
       </span>
       <ChevronRight

@@ -8,12 +8,13 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-09",
-    title: "Active issue shortcuts in the sidebar",
+    title: "Clearer Active work shortcuts in the sidebar",
     summary:
-      "mspace made the desktop sidebar Active work block treat open issue work as first-class alongside active test runs.",
+      "mspace made the desktop sidebar Active work block show recognizable issue and test plan work instead of raw execution records.",
     items: [
-      "Changed Active work to include every non-terminal issue, so ordinary open issues remain reachable from the sidebar before an agent session or child task exists.",
-      "Kept closed and cancelled issues out of Active work while preserving actionable test-run shortcuts in the same recency-sorted list.",
+      "Changed Active work to include every non-terminal issue by title, so ordinary open issues remain reachable before an agent session or child task exists.",
+      "Grouped actionable test runs by test plan where possible, showing the plan title, project context, run count, and latest result counts instead of repeated `Run` labels.",
+      "Kept closed and cancelled issues out of Active work while preserving a compact mix of issue and test-plan shortcuts.",
     ],
   },
   {
