@@ -8,13 +8,13 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-10",
-    title: "Readable test run rows",
+    title: "Readable test run attempts",
     summary:
-      "mspace made the Tests run list describe the user-facing plan first instead of leading with raw run identifiers.",
+      "mspace made repeated Tests runs distinguishable by showing the plan context and human-readable attempt number first.",
     items: [
-      "Changed run rows to use the associated test plan title as the primary label when a plan is available.",
-      "Moved the short run id into secondary metadata so internal `test-run` identifiers do not become the row headline.",
-      "Applied the same title treatment to plan-detail run history, with localized fallback labels for compatibility runs.",
+      "Changed workspace run rows to show the associated test plan title plus `Run N` / `第 N 次运行` when a plan has been run multiple times.",
+      "Changed plan-detail run history to lead with the attempt number so repeated runs in the same plan are easy to compare.",
+      "Kept the short run id as secondary metadata so internal `test-run` identifiers remain available for debugging without becoming the row headline.",
     ],
   },
   {

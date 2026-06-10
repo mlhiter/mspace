@@ -344,8 +344,53 @@ function testsTabSearch(tab: TabKey, projectId?: string) {
   return { tab, project: projectId || undefined };
 }
 
-function testRunListTitle(run: TestRun, planTitleById: Map<string, string>, fallbackTitle: string) {
-  return planTitleById.get(run.planId) || fallbackTitle;
+function testRunCreatedTime(run: TestRun) {
+  return Date.parse(run.createdAt || run.updatedAt || "") || 0;
+}
+
+function compareTestRunAttemptOrder(left: TestRun, right: TestRun) {
+  const timeDelta = testRunCreatedTime(left) - testRunCreatedTime(right);
+  if (timeDelta !== 0) return timeDelta;
+  return left.id.localeCompare(right.id);
+}
+
+function testRunAttemptNumberById(runs: TestRun[]) {
+  const byPlanId = new Map<string, TestRun[]>();
+  for (const run of runs) {
+    if (!hasText(run.planId)) continue;
+    const planRuns = byPlanId.get(run.planId) || [];
+    planRuns.push(run);
+    byPlanId.set(run.planId, planRuns);
+  }
+  const attemptNumberById = new Map<string, number>();
+  byPlanId.forEach((planRuns) => {
+    [...planRuns].sort(compareTestRunAttemptOrder).forEach((run, index) => {
+      attemptNumberById.set(run.id, index + 1);
+    });
+  });
+  return attemptNumberById;
+}
+
+function testRunListTitle(
+  run: TestRun,
+  planTitleById: Map<string, string>,
+  attemptNumberById: Map<string, number>,
+  fallbackTitle: string,
+  formatAttemptTitle: (title: string, attemptNumber: number) => string,
+) {
+  const title = planTitleById.get(run.planId) || fallbackTitle;
+  const attemptNumber = attemptNumberById.get(run.id);
+  return attemptNumber ? formatAttemptTitle(title, attemptNumber) : title;
+}
+
+function testRunAttemptTitle(
+  run: TestRun,
+  attemptNumberById: Map<string, number>,
+  fallbackTitle: string,
+  formatAttemptTitle: (attemptNumber: number) => string,
+) {
+  const attemptNumber = attemptNumberById.get(run.id);
+  return attemptNumber ? formatAttemptTitle(attemptNumber) : fallbackTitle;
 }
 
 function testCaseDetailSearch(
@@ -1487,6 +1532,7 @@ export function TestsPage() {
   const proposals = proposalsQuery.data || emptyTestCaseProposals;
   const plans = plansQuery.data || emptyTestPlans;
   const planTitleById = useMemo(() => new Map(allPlans.map((plan) => [plan.id, plan.title])), [allPlans]);
+  const runAttemptNumberById = useMemo(() => testRunAttemptNumberById(allRuns), [allRuns]);
   const selectedPlan = selectedPlanQuery.data?.plan || plans.find((plan) => plan.id === selectedPlanId);
   const selectedPlanDetail = selectedPlanQuery.data;
   const latestRun = useMemo(() => [...allRuns].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0], [allRuns]);
@@ -2541,7 +2587,9 @@ export function TestsPage() {
                     <TestsPanelState icon={Play} title={t("tests.noRunsTitle")} body={t("tests.noRunsBody")} />
                   ) : (
                     allRuns.map((run) => {
-                      const runTitle = testRunListTitle(run, planTitleById, t("tests.runFallbackTitle"));
+                      const runTitle = testRunListTitle(run, planTitleById, runAttemptNumberById, t("tests.runFallbackTitle"), (title, attemptNumber) =>
+                        t("tests.runAttemptTitle", { title, number: attemptNumber }),
+                      );
                       return (
                         <Link
                           key={run.id}
@@ -3108,7 +3156,7 @@ function TestPlanDetailContent(props: {
   const [editPlanForm, setEditPlanForm] = useState<PlanForm>(() => planToForm(plan));
   const [editSelectedCaseIds, setEditSelectedCaseIds] = useState<string[]>(() => detail.cases.map((planCase) => planCase.testCase.id));
   const [editActionMessage, setEditActionMessage] = useState("");
-  const runTitleByPlanId = useMemo(() => new Map([[plan.id, plan.title]]), [plan.id, plan.title]);
+  const runAttemptNumberById = useMemo(() => testRunAttemptNumberById(detail.runs), [detail.runs]);
   const workspaceReadyCasesQueryKey = useMemo(
     () => ["workspace-ready-test-cases", workspaceId, auth.token, projects.map((project) => project.id).join(",")] as const,
     [auth.token, projects, workspaceId],
@@ -3304,7 +3352,9 @@ function TestPlanDetailContent(props: {
               <TestsPanelState icon={Play} title={t("tests.noRunsTitle")} body={t("tests.noRunsBody")} />
             ) : (
               detail.runs.map((run) => {
-                const runTitle = testRunListTitle(run, runTitleByPlanId, t("tests.runAttemptFallbackTitle"));
+                const runTitle = testRunAttemptTitle(run, runAttemptNumberById, t("tests.runAttemptFallbackTitle"), (attemptNumber) =>
+                  t("tests.runAttemptOnlyTitle", { number: attemptNumber }),
+                );
                 return (
                   <Link
                     key={run.id}
