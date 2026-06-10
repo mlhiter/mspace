@@ -61,7 +61,7 @@ pnpm run server
 
 For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker before it submits an agent mention. The worker uses the active desktop server URL, a short-lived workspace registration credential, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Electron writes the credential to `<Electron userData>/worker/tokens/<workspace-id>.token`, renews the 12-hour credential before expiry, and revokes the previous credential after a short grace period. The worker rereads the token file for runtime API calls, so credential renewal should be invisible during normal personal use. Workspace Settings labels these rows as automatic desktop credentials and keeps expired/replaced rows under credential history. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
 
-When Chrome or Chromium is available, the desktop personal worker also prepares a dedicated Chrome CDP endpoint for UI test batches and advertises `browser:true` plus `chrome_cdp:true`. Electron first honors `MSPACE_CHROME_CDP_URL` if it is already reachable, otherwise it starts a desktop-managed Chrome profile under `<Electron userData>/worker/browser-profile` and passes the resulting CDP URL to the worker as `MSPACE_CHROME_CDP_URL`. If Chrome is missing or CDP cannot be reached, the worker still starts with Codex-only capability instead of claiming UI execution support.
+For UI test batches, the desktop personal worker also prepares a dedicated CDP endpoint and advertises `browser:true` plus `chrome_cdp:true`. Electron first honors `MSPACE_CHROME_CDP_URL` if it is already reachable, otherwise it tries a desktop-managed Chrome profile under `<Electron userData>/worker/browser-profile`, then falls back to an Electron-managed Chromium host under `<Electron userData>/worker/electron-browser-profile` when local Chrome cannot expose CDP. The reachable CDP URL is passed to the worker as `MSPACE_CHROME_CDP_URL`. If no CDP endpoint can be reached, the worker still starts with Codex-only capability instead of claiming UI execution support.
 
 For team or self-hosted worker runtime hosts, connect a worker from Workspace Settings:
 
@@ -244,8 +244,9 @@ If preview succeeds but returns `accepted`, `revoked`, or `expired`, the route i
 | `MSPACE_WORKER_CODEX_HOME_DIR` | Docker Codex worker script | `~/.mspace/codex-worker-home` | Host directory mounted into the Codex-capable dev worker as `CODEX_HOME`. |
 | `MSPACE_WORKER_CODEX_CLI_VERSION` | Docker Codex worker script | `0.130.0` | `@openai/codex` npm version installed into `worker/Dockerfile.codex-dev`. |
 | `MSPACE_AUTO_PERSONAL_WORKER` | Electron main process | enabled | Set to `0` to prevent the desktop from auto-starting a host-local personal worker before agent mentions. |
-| `MSPACE_CHROME_CDP_URL` | Electron main process / Worker session | auto-detected in personal desktop mode | Optional reachable Chrome DevTools Protocol base URL. When set before desktop startup, Electron uses it for the personal worker and advertises UI test capability only if `/json/version` is reachable. |
+| `MSPACE_CHROME_CDP_URL` | Electron main process / Worker session | auto-detected in personal desktop mode | Optional reachable Chrome DevTools Protocol base URL. When set before desktop startup, Electron uses it for the personal worker and advertises UI test capability only if `/json/version` is reachable; if it is not reachable, managed CDP fallback is attempted. |
 | `MSPACE_CHROME_EXECUTABLE` | Electron main process | platform default Chrome/Chromium paths | Optional browser executable path used when Electron needs to start a dedicated personal-worker CDP browser. |
+| `MSPACE_ELECTRON_EXECUTABLE` | Electron main process | dev Electron binary when available | Optional Electron executable path used as the managed Chromium CDP fallback when local Chrome cannot expose CDP. |
 
 Environment, project, and issue test environment fields are passed into sessions as:
 
@@ -486,7 +487,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 
 The task's `runtimeMode` and `requiredCapabilities` must match the worker heartbeat.
 
-If a Tests plan includes any `ui` cases, the server requires a fresh worker with `{"codex":true,"browser":true,"chrome_cdp":true}`. In personal desktop mode, restart the desktop app or stop/start the personal worker so Electron can launch its dedicated Chrome CDP profile and refresh the worker heartbeat. If the worker still shows Codex-only capabilities, verify Chrome exists, or provide `MSPACE_CHROME_EXECUTABLE` / a reachable `MSPACE_CHROME_CDP_URL` before starting the desktop app.
+If a Tests plan includes any `ui` cases, the server requires a fresh worker with `{"codex":true,"browser":true,"chrome_cdp":true}`. In personal desktop mode, restart the desktop app or stop/start the personal worker so Electron can launch a managed CDP endpoint and refresh the worker heartbeat. If Chrome exists but CDP never becomes reachable, Electron should fall back to its bundled Chromium host in local dev. If the worker still shows Codex-only capabilities, provide a reachable `MSPACE_CHROME_CDP_URL`, or set `MSPACE_CHROME_EXECUTABLE` / `MSPACE_ELECTRON_EXECUTABLE` before starting the desktop app.
 
 ### VM Environment stays unreachable
 

@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   ensureServerStarted,
@@ -37,6 +37,7 @@ let personalWorkerProcess: ChildProcessWithoutNullStreams | null = null;
 let personalWorkerRuntime: PersonalWorkerRuntime | null = null;
 let personalWorkerBrowserProcess: ChildProcess | null = null;
 let personalWorkerBrowserCdpUrl = "";
+let personalWorkerBrowserSource = "";
 let personalWorkerWorkspaceId = "";
 let personalWorkerRestartTimer: NodeJS.Timeout | null = null;
 let personalWorkerCredentialTimer: NodeJS.Timeout | null = null;
@@ -163,6 +164,27 @@ function resolveChromeExecutable(): string | null {
             "/usr/bin/chromium",
             "/usr/bin/chromium-browser",
           ];
+  return candidates.find((candidate) => candidate && existsSync(candidate)) || null;
+}
+
+function resolveElectronDistExecutable(moduleRoot: string): string {
+  const executable =
+    process.platform === "darwin"
+      ? join("dist", "Electron.app", "Contents", "MacOS", "Electron")
+      : process.platform === "win32"
+        ? join("dist", "electron.exe")
+        : join("dist", "electron");
+  return join(moduleRoot, executable);
+}
+
+function resolveElectronExecutable(): string | null {
+  const configured = String(process.env.MSPACE_ELECTRON_EXECUTABLE || "").trim();
+  if (configured && existsSync(configured)) return configured;
+  const candidates = [
+    basename(process.execPath).toLowerCase() === (process.platform === "win32" ? "electron.exe" : "electron") ? process.execPath : "",
+    resolveElectronDistExecutable(join(app.getAppPath(), "node_modules", "electron")),
+    resolveElectronDistExecutable(join(resolveProjectRoot(), "apps", "desktop", "node_modules", "electron")),
+  ];
   return candidates.find((candidate) => candidate && existsSync(candidate)) || null;
 }
 
@@ -337,6 +359,14 @@ function resolvePersonalWorkerBrowserDataDir(): string {
   return join(app.getPath("userData"), "worker", "browser-profile");
 }
 
+function resolvePersonalWorkerElectronBrowserDataDir(): string {
+  return join(app.getPath("userData"), "worker", "electron-browser-profile");
+}
+
+function resolvePersonalWorkerElectronBrowserAppDir(): string {
+  return join(app.getPath("userData"), "worker", "electron-browser-host");
+}
+
 function findAvailablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -385,6 +415,7 @@ function clearPersonalWorkerBrowserRuntime(browserProcess?: ChildProcess): boole
   if (browserProcess && personalWorkerBrowserProcess !== browserProcess) return false;
   personalWorkerBrowserProcess = null;
   personalWorkerBrowserCdpUrl = "";
+  personalWorkerBrowserSource = "";
   return true;
 }
 
@@ -402,6 +433,96 @@ function refreshPersonalWorkerAfterBrowserLoss(reason: string): void {
   personalWorkerProcess.kill("SIGTERM");
 }
 
+function setPersonalWorkerBrowserCapability(
+  capabilities: Record<string, boolean>,
+  labels: Record<string, string>,
+  env: Record<string, string>,
+  cdpUrl: string,
+  source: string,
+): void {
+  capabilities.browser = true;
+  capabilities.chrome_cdp = true;
+  labels.browser = "chrome-cdp";
+  labels.browserSource = source;
+  env.MSPACE_CHROME_CDP_URL = cdpUrl;
+}
+
+function attachPersonalWorkerBrowserProcessHandlers(browserProcess: ChildProcess, source: string): void {
+  browserProcess.once("exit", () => {
+    if (clearPersonalWorkerBrowserRuntime(browserProcess)) {
+      refreshPersonalWorkerAfterBrowserLoss(`${source} exited`);
+    }
+  });
+  browserProcess.once("error", (error) => {
+    console.warn(`[personal-worker] Chrome CDP ${source} process failed: ${error instanceof Error ? error.message : String(error)}`);
+    if (clearPersonalWorkerBrowserRuntime(browserProcess)) {
+      refreshPersonalWorkerAfterBrowserLoss(`${source} failed`);
+    }
+  });
+}
+
+async function writePersonalWorkerElectronBrowserHostApp(): Promise<string> {
+  const appDir = resolvePersonalWorkerElectronBrowserAppDir();
+  await mkdir(appDir, { recursive: true });
+  await writeFile(join(appDir, "package.json"), `${JSON.stringify({ main: "main.cjs" })}\n`);
+  await writeFile(join(appDir, "main.cjs"), `const { app, BrowserWindow } = require("electron");
+
+let windowRef;
+
+app.whenReady().then(() => {
+  windowRef = new BrowserWindow({
+    show: false,
+    width: 1280,
+    height: 900,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  windowRef.loadURL("about:blank").catch(() => {});
+});
+`);
+  return appDir;
+}
+
+async function startElectronPersonalWorkerBrowserRuntime(
+  capabilities: Record<string, boolean>,
+  labels: Record<string, string>,
+  env: Record<string, string>,
+): Promise<boolean> {
+  const electronPath = resolveElectronExecutable();
+  if (!electronPath) {
+    console.warn("[personal-worker] Electron executable was not found; local worker will start without browser/CDP capability.");
+    return false;
+  }
+  const port = await findAvailablePort();
+  const cdpUrl = `http://${PERSONAL_WORKER_BROWSER_CDP_HOST}:${port}`;
+  const appDir = await writePersonalWorkerElectronBrowserHostApp();
+  await mkdir(resolvePersonalWorkerElectronBrowserDataDir(), { recursive: true });
+  const browserProcess = spawn(electronPath, [
+    `--remote-debugging-address=${PERSONAL_WORKER_BROWSER_CDP_HOST}`,
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${resolvePersonalWorkerElectronBrowserDataDir()}`,
+    appDir,
+  ], {
+    detached: false,
+    stdio: "ignore",
+  });
+  personalWorkerBrowserProcess = browserProcess;
+  personalWorkerBrowserCdpUrl = cdpUrl;
+  personalWorkerBrowserSource = "electron-managed";
+  attachPersonalWorkerBrowserProcessHandlers(browserProcess, "electron-managed");
+
+  if (await waitForChromeCdp(cdpUrl)) {
+    setPersonalWorkerBrowserCapability(capabilities, labels, env, cdpUrl, "electron-managed");
+    return true;
+  }
+  console.warn(`[personal-worker] Electron CDP did not become ready at ${cdpUrl}; local worker will start without browser/CDP capability.`);
+  stopPersonalWorkerBrowserRuntime(browserProcess);
+  return false;
+}
+
 async function ensurePersonalWorkerBrowserRuntime(): Promise<PersonalWorkerRuntime> {
   const capabilities: Record<string, boolean> = {
     protocolSmoke: true,
@@ -417,29 +538,15 @@ async function ensurePersonalWorkerBrowserRuntime(): Promise<PersonalWorkerRunti
   const configuredCdpUrl = String(process.env.MSPACE_CHROME_CDP_URL || "").trim().replace(/\/+$/, "");
   if (configuredCdpUrl) {
     if (await isChromeCdpReachable(configuredCdpUrl)) {
-      capabilities.browser = true;
-      capabilities.chrome_cdp = true;
-      labels.browser = "chrome-cdp";
-      labels.browserSource = "configured";
-      env.MSPACE_CHROME_CDP_URL = configuredCdpUrl;
+      setPersonalWorkerBrowserCapability(capabilities, labels, env, configuredCdpUrl, "configured");
+      return { capabilities, labels, env };
     } else {
-      console.warn(`[personal-worker] configured Chrome CDP URL is not reachable: ${configuredCdpUrl}`);
+      console.warn(`[personal-worker] configured Chrome CDP URL is not reachable: ${configuredCdpUrl}; trying managed CDP fallback.`);
     }
-    return { capabilities, labels, env };
-  }
-
-  const chromePath = resolveChromeExecutable();
-  if (!chromePath) {
-    console.warn("[personal-worker] Chrome executable was not found; local worker will start without browser/CDP capability.");
-    return { capabilities, labels, env };
   }
 
   if (personalWorkerBrowserProcess && personalWorkerBrowserCdpUrl && await isChromeCdpReachable(personalWorkerBrowserCdpUrl)) {
-    capabilities.browser = true;
-    capabilities.chrome_cdp = true;
-    labels.browser = "chrome-cdp";
-    labels.browserSource = "desktop-managed";
-    env.MSPACE_CHROME_CDP_URL = personalWorkerBrowserCdpUrl;
+    setPersonalWorkerBrowserCapability(capabilities, labels, env, personalWorkerBrowserCdpUrl, personalWorkerBrowserSource || "desktop-managed");
     return { capabilities, labels, env };
   }
 
@@ -447,45 +554,38 @@ async function ensurePersonalWorkerBrowserRuntime(): Promise<PersonalWorkerRunti
     stopPersonalWorkerBrowserRuntime();
   }
 
-  const port = await findAvailablePort();
-  const cdpUrl = `http://${PERSONAL_WORKER_BROWSER_CDP_HOST}:${port}`;
-  await mkdir(resolvePersonalWorkerBrowserDataDir(), { recursive: true });
-  const browserProcess = spawn(chromePath, [
-    `--remote-debugging-address=${PERSONAL_WORKER_BROWSER_CDP_HOST}`,
-    `--remote-debugging-port=${port}`,
-    `--user-data-dir=${resolvePersonalWorkerBrowserDataDir()}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-background-networking",
-    "about:blank",
-  ], {
-    detached: false,
-    stdio: "ignore",
-  });
-  personalWorkerBrowserProcess = browserProcess;
-  personalWorkerBrowserCdpUrl = cdpUrl;
-  browserProcess.once("exit", () => {
-    if (clearPersonalWorkerBrowserRuntime(browserProcess)) {
-      refreshPersonalWorkerAfterBrowserLoss("exited");
-    }
-  });
-  browserProcess.once("error", (error) => {
-    console.warn(`[personal-worker] Chrome CDP process failed: ${error instanceof Error ? error.message : String(error)}`);
-    if (clearPersonalWorkerBrowserRuntime(browserProcess)) {
-      refreshPersonalWorkerAfterBrowserLoss("failed");
-    }
-  });
+  const chromePath = resolveChromeExecutable();
+  if (chromePath) {
+    const port = await findAvailablePort();
+    const cdpUrl = `http://${PERSONAL_WORKER_BROWSER_CDP_HOST}:${port}`;
+    await mkdir(resolvePersonalWorkerBrowserDataDir(), { recursive: true });
+    const browserProcess = spawn(chromePath, [
+      `--remote-debugging-address=${PERSONAL_WORKER_BROWSER_CDP_HOST}`,
+      `--remote-debugging-port=${port}`,
+      `--user-data-dir=${resolvePersonalWorkerBrowserDataDir()}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-background-networking",
+      "about:blank",
+    ], {
+      detached: false,
+      stdio: "ignore",
+    });
+    personalWorkerBrowserProcess = browserProcess;
+    personalWorkerBrowserCdpUrl = cdpUrl;
+    personalWorkerBrowserSource = "desktop-managed";
+    attachPersonalWorkerBrowserProcessHandlers(browserProcess, "desktop-managed");
 
-  if (await waitForChromeCdp(cdpUrl)) {
-    capabilities.browser = true;
-    capabilities.chrome_cdp = true;
-    labels.browser = "chrome-cdp";
-    labels.browserSource = "desktop-managed";
-    env.MSPACE_CHROME_CDP_URL = cdpUrl;
-  } else {
-    console.warn(`[personal-worker] Chrome CDP did not become ready at ${cdpUrl}; local worker will start without browser/CDP capability.`);
+    if (await waitForChromeCdp(cdpUrl)) {
+      setPersonalWorkerBrowserCapability(capabilities, labels, env, cdpUrl, "desktop-managed");
+      return { capabilities, labels, env };
+    }
+    console.warn(`[personal-worker] Chrome CDP did not become ready at ${cdpUrl}; trying Electron CDP fallback.`);
     stopPersonalWorkerBrowserRuntime(browserProcess);
+  } else {
+    console.warn("[personal-worker] Chrome executable was not found; trying Electron CDP fallback.");
   }
+  await startElectronPersonalWorkerBrowserRuntime(capabilities, labels, env);
   return { capabilities, labels, env };
 }
 

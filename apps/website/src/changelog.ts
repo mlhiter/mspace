@@ -12,10 +12,10 @@ export const changelog: ChangelogEntry[] = [
     summary:
       "mspace made desktop personal workers match the browser/CDP capability required by UI test plan runs.",
     items: [
-      "Started or reused a reachable Chrome DevTools endpoint before launching the desktop-managed personal worker.",
+      "Started or reused a reachable Chrome DevTools endpoint before launching the desktop-managed personal worker, with an Electron-managed Chromium fallback when local Chrome cannot expose CDP.",
       "Advertised `browser` and `chrome_cdp` only after CDP readiness is confirmed, while keeping Codex-only worker startup available when Chrome is missing.",
       "Changed Tests worker readiness checks so plans or retries that include UI cases wait for a browser-capable worker instead of being short-circuited by a Codex-only worker.",
-      "Documented the personal-worker CDP path and the `MSPACE_CHROME_CDP_URL` / `MSPACE_CHROME_EXECUTABLE` debug overrides.",
+      "Documented the personal-worker CDP path and the `MSPACE_CHROME_CDP_URL`, `MSPACE_CHROME_EXECUTABLE`, and `MSPACE_ELECTRON_EXECUTABLE` debug overrides.",
     ],
   },
   {
