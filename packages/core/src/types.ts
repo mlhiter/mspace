@@ -1467,6 +1467,7 @@ export interface MspaceDesktopAPI {
     authToken: string;
     workspaceId: string;
     serverUrl?: string;
+    requiredCapabilities?: Record<string, boolean>;
   }) => Promise<{
     ok: boolean;
     status: string;

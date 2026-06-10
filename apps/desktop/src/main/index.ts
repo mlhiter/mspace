@@ -7,11 +7,13 @@ import {
   type BrowserWindowConstructorOptions,
   type OpenDialogOptions,
 } from "electron";
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   ensureServerStarted,
   getServerBaseUrl,
@@ -32,6 +34,9 @@ let personalWorkerHandlersRegistered = false;
 let dockerWorkerProcess: ChildProcessWithoutNullStreams | null = null;
 let dockerWorkerContainer = "";
 let personalWorkerProcess: ChildProcessWithoutNullStreams | null = null;
+let personalWorkerRuntime: PersonalWorkerRuntime | null = null;
+let personalWorkerBrowserProcess: ChildProcess | null = null;
+let personalWorkerBrowserCdpUrl = "";
 let personalWorkerWorkspaceId = "";
 let personalWorkerRestartTimer: NodeJS.Timeout | null = null;
 let personalWorkerCredentialTimer: NodeJS.Timeout | null = null;
@@ -45,6 +50,8 @@ const PERSONAL_WORKER_TOKEN_HOURS = 12;
 const PERSONAL_WORKER_TOKEN_RENEWAL_BUFFER_MS = 15 * 60 * 1000;
 const PERSONAL_WORKER_TOKEN_RETRY_MS = 60 * 1000;
 const PERSONAL_WORKER_OLD_TOKEN_REVOKE_DELAY_MS = 30 * 1000;
+const PERSONAL_WORKER_BROWSER_START_TIMEOUT_MS = 10_000;
+const PERSONAL_WORKER_BROWSER_CDP_HOST = "127.0.0.1";
 const DEEP_LINK_PROTOCOL = "mspace";
 let pendingInviteToken = "";
 
@@ -70,12 +77,19 @@ type EnsurePersonalWorkerInput = {
   workspaceId?: string;
   serverUrl?: string;
   credentialServerUrl?: string;
+  requiredCapabilities?: Record<string, unknown>;
 };
 
 type EnsurePersonalWorkerResult = {
   ok: boolean;
   status: string;
   workerName: string;
+};
+
+type PersonalWorkerRuntime = {
+  capabilities: Record<string, boolean>;
+  labels: Record<string, string>;
+  env: Record<string, string>;
 };
 
 type RuntimeRegistrationTokenResult = {
@@ -85,6 +99,12 @@ type RuntimeRegistrationTokenResult = {
     expiresAt?: string;
   };
 };
+
+function runtimeHasRequiredCapabilities(runtime: PersonalWorkerRuntime | null, requiredCapabilities: Record<string, unknown> | undefined): boolean {
+  if (!requiredCapabilities) return true;
+  if (!runtime) return false;
+  return Object.entries(requiredCapabilities).every(([capability, required]) => required !== true || runtime.capabilities[capability] === true);
+}
 
 function resolveBrandIconPath(): string | undefined {
   const candidates = [
@@ -118,6 +138,32 @@ function resolveWorkerDir(): string {
   const cwdCandidate = join(process.cwd(), "worker");
   if (existsSync(cwdCandidate)) return cwdCandidate;
   return join(resolveProjectRoot(), "worker");
+}
+
+function resolveChromeExecutable(): string | null {
+  const configured = String(process.env.MSPACE_CHROME_EXECUTABLE || "").trim();
+  if (configured && existsSync(configured)) return configured;
+  const candidates =
+    process.platform === "darwin"
+      ? [
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+          join(homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+          "/Applications/Chromium.app/Contents/MacOS/Chromium",
+          "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ]
+      : process.platform === "win32"
+        ? [
+            join(process.env.ProgramFiles || "C:\\Program Files", "Google", "Chrome", "Application", "chrome.exe"),
+            join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Google", "Chrome", "Application", "chrome.exe"),
+            join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "Application", "chrome.exe"),
+          ]
+        : [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser",
+          ];
+  return candidates.find((candidate) => candidate && existsSync(candidate)) || null;
 }
 
 function resolvePersonalWorkerTokenPath(workspaceId: string): string {
@@ -287,6 +333,162 @@ function assertCodexAuthAvailable(): void {
   }
 }
 
+function resolvePersonalWorkerBrowserDataDir(): string {
+  return join(app.getPath("userData"), "worker", "browser-profile");
+}
+
+function findAvailablePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, PERSONAL_WORKER_BROWSER_CDP_HOST, () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (!port) {
+          reject(new Error("Could not allocate a Chrome CDP port."));
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+async function isChromeCdpReachable(cdpUrl: string): Promise<boolean> {
+  const baseUrl = String(cdpUrl || "").trim().replace(/\/+$/, "");
+  if (!baseUrl) return false;
+  try {
+    const response = await fetch(`${baseUrl}/json/version`, { signal: AbortSignal.timeout(1_500) });
+    if (!response.ok) return false;
+    const payload = (await response.json()) as { webSocketDebuggerUrl?: string };
+    return Boolean(String(payload.webSocketDebuggerUrl || "").trim());
+  } catch {
+    return false;
+  }
+}
+
+async function waitForChromeCdp(cdpUrl: string): Promise<boolean> {
+  const deadline = Date.now() + PERSONAL_WORKER_BROWSER_START_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (await isChromeCdpReachable(cdpUrl)) return true;
+    await sleep(250);
+  }
+  return false;
+}
+
+function clearPersonalWorkerBrowserRuntime(browserProcess?: ChildProcess): boolean {
+  if (browserProcess && personalWorkerBrowserProcess !== browserProcess) return false;
+  personalWorkerBrowserProcess = null;
+  personalWorkerBrowserCdpUrl = "";
+  return true;
+}
+
+function stopPersonalWorkerBrowserRuntime(browserProcess?: ChildProcess): void {
+  const target = browserProcess || personalWorkerBrowserProcess;
+  if (!clearPersonalWorkerBrowserRuntime(browserProcess)) return;
+  if (target && !target.killed) {
+    target.kill("SIGTERM");
+  }
+}
+
+function refreshPersonalWorkerAfterBrowserLoss(reason: string): void {
+  if (personalWorkerStopping || !personalWorkerProcess) return;
+  console.warn(`[personal-worker] Chrome CDP ${reason}; restarting worker so browser capability is refreshed.`);
+  personalWorkerProcess.kill("SIGTERM");
+}
+
+async function ensurePersonalWorkerBrowserRuntime(): Promise<PersonalWorkerRuntime> {
+  const capabilities: Record<string, boolean> = {
+    protocolSmoke: true,
+    codex: true,
+    dryRun: false,
+  };
+  const labels: Record<string, string> = {
+    provider: "desktop-local",
+    environment: "host",
+  };
+  const env: Record<string, string> = {};
+
+  const configuredCdpUrl = String(process.env.MSPACE_CHROME_CDP_URL || "").trim().replace(/\/+$/, "");
+  if (configuredCdpUrl) {
+    if (await isChromeCdpReachable(configuredCdpUrl)) {
+      capabilities.browser = true;
+      capabilities.chrome_cdp = true;
+      labels.browser = "chrome-cdp";
+      labels.browserSource = "configured";
+      env.MSPACE_CHROME_CDP_URL = configuredCdpUrl;
+    } else {
+      console.warn(`[personal-worker] configured Chrome CDP URL is not reachable: ${configuredCdpUrl}`);
+    }
+    return { capabilities, labels, env };
+  }
+
+  const chromePath = resolveChromeExecutable();
+  if (!chromePath) {
+    console.warn("[personal-worker] Chrome executable was not found; local worker will start without browser/CDP capability.");
+    return { capabilities, labels, env };
+  }
+
+  if (personalWorkerBrowserProcess && personalWorkerBrowserCdpUrl && await isChromeCdpReachable(personalWorkerBrowserCdpUrl)) {
+    capabilities.browser = true;
+    capabilities.chrome_cdp = true;
+    labels.browser = "chrome-cdp";
+    labels.browserSource = "desktop-managed";
+    env.MSPACE_CHROME_CDP_URL = personalWorkerBrowserCdpUrl;
+    return { capabilities, labels, env };
+  }
+
+  if (personalWorkerBrowserProcess || personalWorkerBrowserCdpUrl) {
+    stopPersonalWorkerBrowserRuntime();
+  }
+
+  const port = await findAvailablePort();
+  const cdpUrl = `http://${PERSONAL_WORKER_BROWSER_CDP_HOST}:${port}`;
+  await mkdir(resolvePersonalWorkerBrowserDataDir(), { recursive: true });
+  const browserProcess = spawn(chromePath, [
+    `--remote-debugging-address=${PERSONAL_WORKER_BROWSER_CDP_HOST}`,
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${resolvePersonalWorkerBrowserDataDir()}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-networking",
+    "about:blank",
+  ], {
+    detached: false,
+    stdio: "ignore",
+  });
+  personalWorkerBrowserProcess = browserProcess;
+  personalWorkerBrowserCdpUrl = cdpUrl;
+  browserProcess.once("exit", () => {
+    if (clearPersonalWorkerBrowserRuntime(browserProcess)) {
+      refreshPersonalWorkerAfterBrowserLoss("exited");
+    }
+  });
+  browserProcess.once("error", (error) => {
+    console.warn(`[personal-worker] Chrome CDP process failed: ${error instanceof Error ? error.message : String(error)}`);
+    if (clearPersonalWorkerBrowserRuntime(browserProcess)) {
+      refreshPersonalWorkerAfterBrowserLoss("failed");
+    }
+  });
+
+  if (await waitForChromeCdp(cdpUrl)) {
+    capabilities.browser = true;
+    capabilities.chrome_cdp = true;
+    labels.browser = "chrome-cdp";
+    labels.browserSource = "desktop-managed";
+    env.MSPACE_CHROME_CDP_URL = cdpUrl;
+  } else {
+    console.warn(`[personal-worker] Chrome CDP did not become ready at ${cdpUrl}; local worker will start without browser/CDP capability.`);
+    stopPersonalWorkerBrowserRuntime(browserProcess);
+  }
+  return { capabilities, labels, env };
+}
+
 async function createWorkerBootstrapCredential(input: StartDockerWorkerInput & { name?: string; expiresInHours?: number; credentialServerUrl?: string }): Promise<RuntimeRegistrationTokenResult> {
   const authToken = String(input?.authToken || "").trim();
   const workspaceId = String(input?.workspaceId || "").trim();
@@ -430,6 +632,8 @@ async function stopPersonalWorker(): Promise<void> {
     personalWorkerProcess.kill("SIGTERM");
     personalWorkerProcess = null;
   }
+  personalWorkerRuntime = null;
+  stopPersonalWorkerBrowserRuntime();
   const workspaceId = personalWorkerWorkspaceId;
   const credential = personalWorkerCredential;
   const credentialInput = personalWorkerCredentialInput;
@@ -448,7 +652,7 @@ async function stopPersonalWorker(): Promise<void> {
   personalWorkerCredentialInput = null;
 }
 
-function startPersonalWorkerProcess(input: EnsurePersonalWorkerInput, tokenFile: string, workerName: string): void {
+function startPersonalWorkerProcess(input: EnsurePersonalWorkerInput, tokenFile: string, workerName: string, runtime: PersonalWorkerRuntime): void {
   const serverUrl = String(input.serverUrl || getServerBaseUrl()).trim();
   const bundled = resolveBundledWorkerBinary();
   const command = bundled || "go";
@@ -456,29 +660,35 @@ function startPersonalWorkerProcess(input: EnsurePersonalWorkerInput, tokenFile:
   const cwd = bundled ? undefined : resolveWorkerDir();
 
   personalWorkerStopping = false;
-  personalWorkerProcess = spawn(command, args, {
+  const workerProcess = spawn(command, args, {
     cwd,
     env: {
       ...process.env,
+      ...runtime.env,
       MSPACE_RUNTIME_TOKEN_FILE: tokenFile,
       MSPACE_SERVER_URL: serverUrl,
       MSPACE_WORKER_MODE: "personal",
       MSPACE_WORKER_NAME: workerName,
-      MSPACE_WORKER_CAPABILITIES: '{"protocolSmoke":true,"codex":true,"dryRun":false}',
-      MSPACE_WORKER_LABELS: '{"provider":"desktop-local","environment":"host"}',
+      MSPACE_WORKER_CAPABILITIES: JSON.stringify(runtime.capabilities),
+      MSPACE_WORKER_LABELS: JSON.stringify(runtime.labels),
       MSPACE_WORKER_WORK_ROOT: join(app.getPath("userData"), "worker"),
     },
     stdio: "pipe",
   });
+  personalWorkerProcess = workerProcess;
+  personalWorkerRuntime = runtime;
 
-  personalWorkerProcess.stdout.on("data", (chunk) => {
+  workerProcess.stdout.on("data", (chunk) => {
     process.stdout.write(`[personal-worker] ${chunk}`);
   });
-  personalWorkerProcess.stderr.on("data", (chunk) => {
+  workerProcess.stderr.on("data", (chunk) => {
     process.stderr.write(`[personal-worker] ${chunk}`);
   });
-  personalWorkerProcess.on("exit", () => {
-    personalWorkerProcess = null;
+  workerProcess.on("exit", () => {
+    if (personalWorkerProcess === workerProcess) {
+      personalWorkerProcess = null;
+      personalWorkerRuntime = null;
+    }
     if (personalWorkerStopping || personalWorkerWorkspaceId !== String(input.workspaceId || "").trim()) return;
     const delay = Math.min(30_000, 1_000 * 2 ** personalWorkerRestartAttempts);
     personalWorkerRestartAttempts += 1;
@@ -506,14 +716,24 @@ async function ensurePersonalWorker(input: EnsurePersonalWorkerInput): Promise<E
     serverUrl,
     credentialServerUrl: String(input.credentialServerUrl || serverUrl).trim().replace(/\/+$/, ""),
   };
-  if (personalWorkerProcess && personalWorkerWorkspaceId === workspaceId) {
+  if (
+    personalWorkerProcess &&
+    personalWorkerWorkspaceId === workspaceId &&
+    runtimeHasRequiredCapabilities(personalWorkerRuntime, credentialInput.requiredCapabilities)
+  ) {
     personalWorkerCredentialInput = credentialInput;
     if (personalWorkerCredential) {
       schedulePersonalWorkerCredentialRenewal(credentialInput, personalWorkerCredential);
     }
     return { ok: true, status: "running", workerName: `desktop-personal-${workspaceId.slice(0, 8)}` };
   }
-  await stopPersonalWorker();
+  if (personalWorkerProcess || personalWorkerWorkspaceId) {
+    await stopPersonalWorker();
+  }
+  const runtime = await ensurePersonalWorkerBrowserRuntime();
+  if (!runtimeHasRequiredCapabilities(runtime, credentialInput.requiredCapabilities)) {
+    throw new Error("The local personal worker could not prepare the required browser/CDP capability.");
+  }
   personalWorkerStopping = false;
   personalWorkerWorkspaceId = workspaceId;
   personalWorkerCredentialInput = credentialInput;
@@ -527,7 +747,7 @@ async function ensurePersonalWorker(input: EnsurePersonalWorkerInput): Promise<E
   const tokenPath = await writePersonalWorkerTokenFile(workspaceId, String(token.token || ""));
   personalWorkerCredential = token;
   const workerName = `desktop-personal-${workspaceId.slice(0, 8)}`;
-  startPersonalWorkerProcess(credentialInput, tokenPath, workerName);
+  startPersonalWorkerProcess(credentialInput, tokenPath, workerName, runtime);
   schedulePersonalWorkerCredentialRenewal(credentialInput, token);
   return { ok: true, status: "starting", workerName };
 }

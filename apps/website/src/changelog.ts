@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-10",
+    title: "Browser-capable personal test worker",
+    summary:
+      "mspace made desktop personal workers match the browser/CDP capability required by UI test plan runs.",
+    items: [
+      "Started or reused a reachable Chrome DevTools endpoint before launching the desktop-managed personal worker.",
+      "Advertised `browser` and `chrome_cdp` only after CDP readiness is confirmed, while keeping Codex-only worker startup available when Chrome is missing.",
+      "Changed Tests worker readiness checks so plans or retries that include UI cases wait for a browser-capable worker instead of being short-circuited by a Codex-only worker.",
+      "Documented the personal-worker CDP path and the `MSPACE_CHROME_CDP_URL` / `MSPACE_CHROME_EXECUTABLE` debug overrides.",
+    ],
+  },
+  {
+    date: "2026-06-10",
     title: "Ordered, more closed test plans",
     summary:
       "mspace made Tests plans carry a visible execution sequence and added deterministic guidance for cases that depend on existing data.",

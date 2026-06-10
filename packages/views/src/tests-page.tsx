@@ -1261,18 +1261,43 @@ function hasCodexCapability(worker: RuntimeWorker) {
   return worker.capabilities?.codex === true;
 }
 
+function testCasesRequireBrowser(testCases: TestCase[]) {
+  return testCases.some((testCase) => testCase.type === "ui");
+}
+
+function testPlanDetailRequiresBrowser(detail?: TestPlanDetail | null) {
+  return testCasesRequireBrowser((detail?.cases || []).map((planCase) => planCase.testCase));
+}
+
+function requiredTestWorkerCapabilities(options?: { browser?: boolean }): Record<string, boolean> {
+  return {
+    codex: true,
+    ...(options?.browser ? { browser: true, chrome_cdp: true } : {}),
+  };
+}
+
+function hasRuntimeCapabilities(worker: RuntimeWorker, requiredCapabilities: Record<string, boolean>) {
+  return Object.entries(requiredCapabilities).every(([capability, required]) => !required || worker.capabilities?.[capability] === true);
+}
+
 function isFreshWorkerHeartbeat(value: string) {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) && Date.now() - timestamp <= 45_000;
 }
 
-function activeCodexWorker(workers: RuntimeWorker[], workspaceId: string, runtimeMode: string) {
+function activeCodexWorker(
+  workers: RuntimeWorker[],
+  workspaceId: string,
+  runtimeMode: string,
+  requiredCapabilities = requiredTestWorkerCapabilities(),
+) {
   return workers.find(
     (worker) =>
       worker.workspaceId === workspaceId &&
       worker.mode === runtimeMode &&
       worker.status === "online" &&
       hasCodexCapability(worker) &&
+      hasRuntimeCapabilities(worker, requiredCapabilities) &&
       isFreshWorkerHeartbeat(worker.lastSeenAt),
   );
 }
@@ -1345,13 +1370,14 @@ function useTestsWorkerReadiness(
   return useMemo(
     () => ({
       runtimeMode,
-      ensureReady: async () => {
+      ensureReady: async (options?: { browser?: boolean }) => {
+        const requiredCapabilities = requiredTestWorkerCapabilities(options);
         const workers = await queryClient.fetchQuery({
           queryKey: runtimeWorkersQueryKey,
           queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
           staleTime: 0,
         });
-        if (activeCodexWorker(workers, workspaceId, runtimeMode)) return;
+        if (activeCodexWorker(workers, workspaceId, runtimeMode, requiredCapabilities)) return;
         if (runtimeMode !== "personal" || !window.mspaceDesktop?.ensurePersonalWorker) {
           throw new Error(workerUnavailableText);
         }
@@ -1360,6 +1386,7 @@ function useTestsWorkerReadiness(
           authToken: auth.token,
           workspaceId,
           serverUrl: getControlPlaneBaseUrl(),
+          requiredCapabilities,
         });
         for (let attempt = 0; attempt < 12; attempt += 1) {
           await sleep(1_000);
@@ -1368,7 +1395,7 @@ function useTestsWorkerReadiness(
             queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
             staleTime: 0,
           });
-          if (activeCodexWorker(refreshed, workspaceId, runtimeMode)) return;
+          if (activeCodexWorker(refreshed, workspaceId, runtimeMode, requiredCapabilities)) return;
         }
         throw new Error(workerStartingText);
       },
@@ -1778,7 +1805,15 @@ export function TestsPage() {
 
   const startRun = useMutation({
     mutationFn: async (plan: TestPlan) => {
-      await workerReadiness.ensureReady();
+      const detailForRun =
+        selectedPlanDetail?.plan.id === plan.id
+          ? selectedPlanDetail
+          : await queryClient.fetchQuery({
+              queryKey: queryKeys.workspaceTestPlan(workspaceId, plan.id, auth.token),
+              queryFn: () => controlPlaneApi.getWorkspaceTestPlan(auth.token, workspaceId, plan.id),
+              staleTime: 0,
+            });
+      await workerReadiness.ensureReady({ browser: testPlanDetailRequiresBrowser(detailForRun) });
       return controlPlaneApi.startWorkspaceTestRun(auth.token, workspaceId, plan.id, {
         targetType: plan.targetType,
         targetValue: plan.targetValue,
@@ -3098,7 +3133,7 @@ export function TestPlanDetailPage() {
   const detail = planQuery.data;
   const startRun = useMutation({
     mutationFn: async (plan: TestPlan) => {
-      await workerReadiness.ensureReady();
+      await workerReadiness.ensureReady({ browser: testPlanDetailRequiresBrowser(detail) });
       return controlPlaneApi.startWorkspaceTestRun(auth.token, workspaceId, plan.id, {
         targetType: plan.targetType,
         targetValue: plan.targetValue,
@@ -3497,7 +3532,7 @@ export function TestRunDetailPage() {
 
   const retryRun = useMutation({
     mutationFn: async () => {
-      await workerReadiness.ensureReady();
+      await workerReadiness.ensureReady({ browser: testCasesRequireBrowser(runQuery.data?.items.map((item) => item.testCase) || []) });
       return controlPlaneApi.retryWorkspaceTestRun(auth.token, workspaceId, runId, {
         runtimeMode: workerReadiness.runtimeMode,
         resultLocale: language,

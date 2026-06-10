@@ -60,6 +60,7 @@ const desktopAPI = {
     authToken: string;
     workspaceId: string;
     serverUrl?: string;
+    requiredCapabilities?: Record<string, boolean>;
   }) => ipcRenderer.invoke("mspace:ensure-personal-worker", input) as Promise<{
     ok: boolean;
     status: string;
