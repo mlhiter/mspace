@@ -344,6 +344,10 @@ function testsTabSearch(tab: TabKey, projectId?: string) {
   return { tab, project: projectId || undefined };
 }
 
+function testRunListTitle(run: TestRun, planTitleById: Map<string, string>, fallbackTitle: string) {
+  return planTitleById.get(run.planId) || fallbackTitle;
+}
+
 function testCaseDetailSearch(
   projectId?: string,
   caseTab: TestCaseDetailTab = "details",
@@ -1482,6 +1486,7 @@ export function TestsPage() {
   const readyPlans = useMemo(() => allPlans.filter((plan) => plan.status === "ready"), [allPlans]);
   const proposals = proposalsQuery.data || emptyTestCaseProposals;
   const plans = plansQuery.data || emptyTestPlans;
+  const planTitleById = useMemo(() => new Map(allPlans.map((plan) => [plan.id, plan.title])), [allPlans]);
   const selectedPlan = selectedPlanQuery.data?.plan || plans.find((plan) => plan.id === selectedPlanId);
   const selectedPlanDetail = selectedPlanQuery.data;
   const latestRun = useMemo(() => [...allRuns].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0], [allRuns]);
@@ -2535,36 +2540,40 @@ export function TestsPage() {
                   ) : allRuns.length === 0 ? (
                     <TestsPanelState icon={Play} title={t("tests.noRunsTitle")} body={t("tests.noRunsBody")} />
                   ) : (
-                    allRuns.map((run) => (
-                      <Link
-                        key={run.id}
-                        to="/tests/runs/$runId"
-                        params={{ runId: run.id }}
-                        search={testsTabSearch("runs", effectiveProjectId)}
-                        className="grid w-full gap-3 px-4 py-3 text-left transition-colors hover:bg-[color:var(--hover)] md:grid-cols-[minmax(0,1fr)_220px_24px]"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <Play data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
-                            <span className="text-[13px] font-medium text-[color:var(--text)]">{t("tests.runShortId", { id: run.id.slice(0, 8) })}</span>
-                            <span className="text-[12px] text-[color:var(--muted)]">{t(`tests.runSourceValue.${run.source || "ad_hoc"}`, { defaultValue: run.source || "ad_hoc" })}</span>
-                            <StatusBadge value={run.status} valueLabel={t(`tests.runStatusValue.${run.status}`, { defaultValue: run.status })} />
-                            {run.setupStatus && run.setupStatus !== "not_required" ? (
-                              <StatusBadge value={run.setupStatus} valueLabel={t(`tests.setupStatusValue.${run.setupStatus}`, { defaultValue: run.setupStatus })} />
-                            ) : null}
+                    allRuns.map((run) => {
+                      const runTitle = testRunListTitle(run, planTitleById, t("tests.runFallbackTitle"));
+                      return (
+                        <Link
+                          key={run.id}
+                          to="/tests/runs/$runId"
+                          params={{ runId: run.id }}
+                          search={testsTabSearch("runs", effectiveProjectId)}
+                          className="grid w-full gap-3 px-4 py-3 text-left transition-colors hover:bg-[color:var(--hover)] md:grid-cols-[minmax(0,1fr)_220px_24px]"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                              <Play data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
+                              <span className="min-w-0 truncate text-[13px] font-medium text-[color:var(--text)]">{runTitle}</span>
+                              <span className="shrink-0 text-[12px] text-[color:var(--muted)]">{t("tests.runShortId", { id: run.id.slice(0, 8) })}</span>
+                              <span className="shrink-0 text-[12px] text-[color:var(--muted)]">{t(`tests.runSourceValue.${run.source || "ad_hoc"}`, { defaultValue: run.source || "ad_hoc" })}</span>
+                              <StatusBadge value={run.status} valueLabel={t(`tests.runStatusValue.${run.status}`, { defaultValue: run.status })} />
+                              {run.setupStatus && run.setupStatus !== "not_required" ? (
+                                <StatusBadge value={run.setupStatus} valueLabel={t(`tests.setupStatusValue.${run.setupStatus}`, { defaultValue: run.setupStatus })} />
+                              ) : null}
+                            </div>
+                            <div className="mt-1 text-[12px] text-[color:var(--muted)]">
+                              {t("tests.runCounts", { passed: run.passedCount, failed: run.failedCount, blocked: run.blockedCount, skipped: run.skippedCount })}
+                            </div>
                           </div>
-                          <div className="mt-1 text-[12px] text-[color:var(--muted)]">
-                            {t("tests.runCounts", { passed: run.passedCount, failed: run.failedCount, blocked: run.blockedCount, skipped: run.skippedCount })}
+                          <div className="flex items-center text-[12px] text-[color:var(--muted)] md:justify-end">
+                            <RelativeTime value={run.updatedAt} />
                           </div>
-                        </div>
-                        <div className="flex items-center text-[12px] text-[color:var(--muted)] md:justify-end">
-                          <RelativeTime value={run.updatedAt} />
-                        </div>
-                        <div className="hidden items-center justify-end md:flex">
-                          <ArrowRight data-icon className="text-[color:var(--faint)]" />
-                        </div>
-                      </Link>
-                    ))
+                          <div className="hidden items-center justify-end md:flex">
+                            <ArrowRight data-icon className="text-[color:var(--faint)]" />
+                          </div>
+                        </Link>
+                      );
+                    })
                   )}
                 </div>
               </section>
@@ -3099,6 +3108,7 @@ function TestPlanDetailContent(props: {
   const [editPlanForm, setEditPlanForm] = useState<PlanForm>(() => planToForm(plan));
   const [editSelectedCaseIds, setEditSelectedCaseIds] = useState<string[]>(() => detail.cases.map((planCase) => planCase.testCase.id));
   const [editActionMessage, setEditActionMessage] = useState("");
+  const runTitleByPlanId = useMemo(() => new Map([[plan.id, plan.title]]), [plan.id, plan.title]);
   const workspaceReadyCasesQueryKey = useMemo(
     () => ["workspace-ready-test-cases", workspaceId, auth.token, projects.map((project) => project.id).join(",")] as const,
     [auth.token, projects, workspaceId],
@@ -3293,35 +3303,39 @@ function TestPlanDetailContent(props: {
             {detail.runs.length === 0 ? (
               <TestsPanelState icon={Play} title={t("tests.noRunsTitle")} body={t("tests.noRunsBody")} />
             ) : (
-              detail.runs.map((run) => (
-                <Link
-                  key={run.id}
-                  to="/tests/runs/$runId"
-                  params={{ runId: run.id }}
-                  search={testsTabSearch("runs", projectId)}
-                  className="grid gap-3 px-4 py-3 transition-colors hover:bg-[color:var(--hover)] md:grid-cols-[minmax(0,1fr)_220px_24px]"
-                >
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Play data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
-                      <span className="truncate text-[13px] font-medium text-[color:var(--text)]">{t("tests.runShortId", { id: run.id.slice(0, 8) })}</span>
-                      <StatusBadge value={run.status} valueLabel={t(`tests.runStatusValue.${run.status}`, { defaultValue: run.status })} />
-                      {run.setupStatus && run.setupStatus !== "not_required" ? (
-                        <StatusBadge value={run.setupStatus} valueLabel={t(`tests.setupStatusValue.${run.setupStatus}`, { defaultValue: run.setupStatus })} />
-                      ) : null}
+              detail.runs.map((run) => {
+                const runTitle = testRunListTitle(run, runTitleByPlanId, t("tests.runAttemptFallbackTitle"));
+                return (
+                  <Link
+                    key={run.id}
+                    to="/tests/runs/$runId"
+                    params={{ runId: run.id }}
+                    search={testsTabSearch("runs", projectId)}
+                    className="grid gap-3 px-4 py-3 transition-colors hover:bg-[color:var(--hover)] md:grid-cols-[minmax(0,1fr)_220px_24px]"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <Play data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
+                        <span className="min-w-0 truncate text-[13px] font-medium text-[color:var(--text)]">{runTitle}</span>
+                        <span className="shrink-0 text-[12px] text-[color:var(--muted)]">{t("tests.runShortId", { id: run.id.slice(0, 8) })}</span>
+                        <StatusBadge value={run.status} valueLabel={t(`tests.runStatusValue.${run.status}`, { defaultValue: run.status })} />
+                        {run.setupStatus && run.setupStatus !== "not_required" ? (
+                          <StatusBadge value={run.setupStatus} valueLabel={t(`tests.setupStatusValue.${run.setupStatus}`, { defaultValue: run.setupStatus })} />
+                        ) : null}
+                      </div>
+                      <p className="mt-1 text-[12px] text-[color:var(--muted)]">
+                        {t("tests.runCounts", { passed: run.passedCount, failed: run.failedCount, blocked: run.blockedCount, skipped: run.skippedCount })}
+                      </p>
                     </div>
-                    <p className="mt-1 text-[12px] text-[color:var(--muted)]">
-                      {t("tests.runCounts", { passed: run.passedCount, failed: run.failedCount, blocked: run.blockedCount, skipped: run.skippedCount })}
-                    </p>
-                  </div>
-                  <div className="flex items-center text-[12px] text-[color:var(--muted)] md:justify-end">
-                    <RelativeTime value={run.updatedAt} />
-                  </div>
-                  <div className="hidden items-center justify-end md:flex">
-                    <ArrowRight data-icon className="text-[color:var(--faint)]" />
-                  </div>
-                </Link>
-              ))
+                    <div className="flex items-center text-[12px] text-[color:var(--muted)] md:justify-end">
+                      <RelativeTime value={run.updatedAt} />
+                    </div>
+                    <div className="hidden items-center justify-end md:flex">
+                      <ArrowRight data-icon className="text-[color:var(--faint)]" />
+                    </div>
+                  </Link>
+                );
+              })
             )}
           </div>
         </section>

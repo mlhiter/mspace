@@ -7,6 +7,17 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-06-10",
+    title: "Readable test run rows",
+    summary:
+      "mspace made the Tests run list describe the user-facing plan first instead of leading with raw run identifiers.",
+    items: [
+      "Changed run rows to use the associated test plan title as the primary label when a plan is available.",
+      "Moved the short run id into secondary metadata so internal `test-run` identifiers do not become the row headline.",
+      "Applied the same title treatment to plan-detail run history, with localized fallback labels for compatibility runs.",
+    ],
+  },
+  {
     date: "2026-06-09",
     title: "Clearer Active work shortcuts in the sidebar",
     summary:
