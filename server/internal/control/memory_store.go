@@ -2816,13 +2816,14 @@ func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases
 	}
 	run.ParentIssueID = parentIssueID
 	s.testRuns[run.ID] = run
-	for _, testCase := range cases {
+	for index, testCase := range cases {
 		item := TestRunItem{
 			ID:          fmt.Sprintf("test-run-item-%04d", s.nextMemoryIDLocked()),
 			WorkspaceID: run.WorkspaceID,
 			ProjectID:   testCase.ProjectID,
 			RunID:       run.ID,
 			TestCaseID:  testCase.ID,
+			SortOrder:   index + 1,
 			Status:      "queued",
 			Evidence:    json.RawMessage(`{}`),
 			TestCase:    testCaseSnapshot(testCase),
@@ -5347,6 +5348,9 @@ func (s *MemoryStore) testRunDetailLocked(runID string) (TestRunDetail, error) {
 		items = append(items, copyItem)
 	}
 	sort.Slice(items, func(i, j int) bool {
+		if items[i].SortOrder != items[j].SortOrder {
+			return items[i].SortOrder < items[j].SortOrder
+		}
 		return items[i].CreatedAt < items[j].CreatedAt
 	})
 	run.TotalCount = len(items)
@@ -5374,6 +5378,9 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 		}
 	}
 	sort.Slice(queued, func(i, j int) bool {
+		if queued[i].SortOrder != queued[j].SortOrder {
+			return queued[i].SortOrder < queued[j].SortOrder
+		}
 		return queued[i].CreatedAt < queued[j].CreatedAt
 	})
 	for _, projectItems := range testRunItemsGroupedByProject(queued) {

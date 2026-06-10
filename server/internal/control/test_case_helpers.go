@@ -42,6 +42,53 @@ var (
 		"是否正常",
 		"没问题",
 	}
+	existingDataActionPatterns = []string{
+		"delete",
+		"remove",
+		"archive",
+		"update",
+		"edit",
+		"modify",
+		"rename",
+		"disable",
+		"enable",
+		"删除",
+		"移除",
+		"归档",
+		"更新",
+		"编辑",
+		"修改",
+		"重命名",
+		"禁用",
+		"启用",
+	}
+	dataSourcePatterns = []string{
+		"create",
+		"created",
+		"creates",
+		"new ",
+		"add ",
+		"seed",
+		"fixture",
+		"mock data",
+		"test data",
+		"setup",
+		"runcontext",
+		"prepared",
+		"provision",
+		"dependency",
+		"depends on",
+		"创建",
+		"新建",
+		"新增",
+		"准备",
+		"预置",
+		"种子",
+		"测试数据",
+		"模拟数据",
+		"前置",
+		"依赖",
+	}
 	allowedTestCaseTypes = map[string]struct{}{
 		"functional": {},
 		"ui":         {},
@@ -1022,10 +1069,40 @@ func scoreTestCaseQuality(input TestCaseInput) (int, []TestCaseQualityFinding) {
 			break
 		}
 	}
+	if needsExistingDataSource(input, combined) && !declaresExistingDataSource(input, combined) {
+		add("missing_data_source", "State whether the target data is created by the case, setup, or a dependency.", 18)
+	}
 	if score < 0 {
 		score = 0
 	}
 	return score, findings
+}
+
+func needsExistingDataSource(input TestCaseInput, combined string) bool {
+	if strings.TrimSpace(combined) == "" {
+		combined = strings.ToLower(strings.Join([]string{input.Title, input.Preconditions, stepsToText(input.Steps), input.ExpectedResult}, " "))
+	}
+	return containsAnyPattern(combined, existingDataActionPatterns)
+}
+
+func declaresExistingDataSource(input TestCaseInput, combined string) bool {
+	if len(input.Dependencies) > 0 {
+		return true
+	}
+	if strings.TrimSpace(combined) == "" {
+		combined = strings.ToLower(strings.Join([]string{input.Title, input.Preconditions, stepsToText(input.Steps), input.ExpectedResult}, " "))
+	}
+	return containsAnyPattern(combined, dataSourcePatterns)
+}
+
+func containsAnyPattern(value string, patterns []string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, pattern := range patterns {
+		if strings.Contains(value, strings.ToLower(pattern)) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeTestCaseSteps(values []TestCaseStep) []TestCaseStep {

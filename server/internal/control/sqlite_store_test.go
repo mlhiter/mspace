@@ -327,6 +327,9 @@ func TestSQLiteStorePersistsTestModuleWorkflowSnapshot(t *testing.T) {
 	if len(run.Items) != 2 || run.Run.ParentIssueID == "" || run.Run.SetupStatus != "running" || run.Run.SetupSessionID == "" {
 		t.Fatalf("unexpected started run: %+v", run)
 	}
+	if run.Items[0].SortOrder != 1 || run.Items[1].SortOrder != 2 || run.Items[0].TestCaseID != sourceCase.ID || run.Items[1].TestCaseID != appliedCaseID {
+		t.Fatalf("expected persisted run items to preserve plan order, got %+v", run.Items)
+	}
 	setupTask, err := store.ClaimRuntimeTask(ctx, registration, worker.ID)
 	if err != nil {
 		t.Fatalf("claim setup task: %v", err)

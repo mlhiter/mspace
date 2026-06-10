@@ -2,7 +2,9 @@ import { useEffect, useId, useMemo, useRef, useState, type Dispatch, type FormEv
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import {
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
   Ban,
   Check,
   ChevronLeft,
@@ -953,6 +955,16 @@ function isReviewedTestRun(status: string) {
 function canRetryTestRun(status: string, items: TestRunItem[]) {
   if (status !== "needs_acceptance" && status !== "blocked") return false;
   return items.some((item) => item.status === "failed" || item.status === "blocked");
+}
+
+function moveCaseId(values: string[], caseId: string, direction: "up" | "down") {
+  const index = values.indexOf(caseId);
+  if (index < 0) return values;
+  const targetIndex = direction === "up" ? index - 1 : index + 1;
+  if (targetIndex < 0 || targetIndex >= values.length) return values;
+  const next = [...values];
+  [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+  return next;
 }
 
 function testRunReviewPendingMessageKey(status: string) {
@@ -1949,6 +1961,12 @@ export function TestsPage() {
     setSelectedCaseIds(readyCases.map((testCase) => testCase.id));
   }
 
+  function moveSelectedReadyCase(caseId: string, direction: "up" | "down") {
+    const nextReadyCaseIds = moveCaseId(selectedReadyCaseIds, caseId, direction);
+    const readyCaseIds = new Set(selectedReadyCaseIds);
+    setSelectedCaseIds((current) => [...current.filter((id) => !readyCaseIds.has(id)), ...nextReadyCaseIds]);
+  }
+
   function toggleVisibleCasesSelection() {
     setSelectedCaseIds((current) => {
       if (allVisibleCasesSelected) {
@@ -2749,6 +2767,7 @@ export function TestsPage() {
                   selectedCaseIds={selectedReadyCaseIds}
                   onCaseToggle={toggleCaseSelection}
                   onSelectReadyCases={selectReadyCases}
+                  onCaseMove={moveSelectedReadyCase}
                 />
                 {createPlan.error ? <p className="text-[12px] text-[color:var(--danger)]">{createPlan.error.message}</p> : null}
                 <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[color:var(--line)] pt-3">
@@ -3018,6 +3037,7 @@ export function TestCaseDetailPage() {
               selectedCaseIds={selectedCaseForPlan}
               onCaseToggle={() => undefined}
               onSelectReadyCases={() => undefined}
+              onCaseMove={() => undefined}
               selectionLocked
             />
             {createPlanFromCase.error ? <p className="text-[12px] text-[color:var(--danger)]">{createPlanFromCase.error.message}</p> : null}
@@ -3257,6 +3277,10 @@ function TestPlanDetailContent(props: {
     setEditSelectedCaseIds(editReadyCases.filter((testCase) => testCase.status === "ready").map((testCase) => testCase.id));
   }
 
+  function moveEditPlanCase(caseId: string, direction: "up" | "down") {
+    setEditSelectedCaseIds((current) => moveCaseId(current, caseId, direction));
+  }
+
   return (
     <PageFrame
       title={plan.title}
@@ -3327,7 +3351,13 @@ function TestPlanDetailContent(props: {
               >
                 <div className="min-w-0">
                   <div className="flex min-w-0 items-center gap-2">
-                    <ClipboardCheck data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
+                    <span
+                      className="grid size-6 shrink-0 place-items-center rounded-full bg-[color:var(--block)] text-[11px] font-semibold tabular-nums text-[color:var(--muted-strong)]"
+                      title={t("tests.executionOrder", { order: planCase.sortOrder })}
+                      aria-label={t("tests.executionOrder", { order: planCase.sortOrder })}
+                    >
+                      {planCase.sortOrder}
+                    </span>
                     <span className="truncate text-[13px] font-medium text-[color:var(--text)]">{planCase.testCase.title}</span>
                   </div>
                   <p className="mt-1 text-[12px] text-[color:var(--muted)]">
@@ -3408,6 +3438,7 @@ function TestPlanDetailContent(props: {
               selectedCaseIds={editSelectedCaseIds}
               onCaseToggle={toggleEditPlanCase}
               onSelectReadyCases={selectEditReadyCases}
+              onCaseMove={moveEditPlanCase}
               projectNames={projectNames}
             />
             {workspaceReadyCasesQuery.isLoading ? <p className="text-[12px] text-[color:var(--muted)]">{t("tests.loading")}</p> : null}
@@ -3528,7 +3559,13 @@ export function TestRunDetailPage() {
   const runTitle = detail.plan?.title || t("tests.adHocRun");
   const showReviewControls = canReviewTestRun(detail.run.status);
   const showReviewDecision = isReviewedTestRun(detail.run.status);
-  const showRetryRun = canRetryTestRun(detail.run.status, detail.items);
+  const orderedRunItems = [...detail.items].sort((left, right) => {
+    const leftOrder = left.sortOrder || 0;
+    const rightOrder = right.sortOrder || 0;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    return Date.parse(left.createdAt) - Date.parse(right.createdAt);
+  });
+  const showRetryRun = canRetryTestRun(detail.run.status, orderedRunItems);
   const reviewPanelId = `${runId}-review-panel`;
 
   return (
@@ -3557,11 +3594,11 @@ export function TestRunDetailPage() {
           </div>
 
           <div className="mt-4 grid gap-3 md:grid-cols-5">
-            <RunMetric label={t("tests.total")} value={String(detail.items.length)} />
+            <RunMetric label={t("tests.total")} value={String(orderedRunItems.length)} />
             <RunMetric label={t("tests.passed")} value={String(detail.run.passedCount)} />
             <RunMetric label={t("tests.failed")} value={String(detail.run.failedCount)} />
             <RunMetric label={t("tests.blocked")} value={String(detail.run.blockedCount)} />
-            <RunMetric label={t("tests.passRate")} value={runPassRate(detail.items)} />
+            <RunMetric label={t("tests.passRate")} value={runPassRate(orderedRunItems)} />
           </div>
           {detail.run.setupStatus && detail.run.setupStatus !== "not_required" ? (
             <TestRunSetupPanel run={detail.run} />
@@ -3638,21 +3675,30 @@ export function TestRunDetailPage() {
         </section>
 
         <section className="divide-y divide-[color:var(--line)] rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
-          {detail.items.map((item) => (
-            <div key={item.id} className="grid gap-3 p-3 md:grid-cols-[minmax(0,1fr)_140px]">
-              <div className="min-w-0">
-                <div className="flex min-w-0 items-center gap-2">
-                  <ClipboardCheck data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
-                  <span className="truncate text-[13px] font-medium text-[color:var(--text)]">{item.testCase.title}</span>
+          {orderedRunItems.map((item, index) => {
+            const order = item.sortOrder || index + 1;
+            return (
+              <div key={item.id} className="grid gap-3 p-3 md:grid-cols-[minmax(0,1fr)_140px]">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className="grid size-6 shrink-0 place-items-center rounded-full bg-[color:var(--block)] text-[11px] font-semibold tabular-nums text-[color:var(--muted-strong)]"
+                      title={t("tests.executionOrder", { order })}
+                      aria-label={t("tests.executionOrder", { order })}
+                    >
+                      {order}
+                    </span>
+                    <span className="truncate text-[13px] font-medium text-[color:var(--text)]">{item.testCase.title}</span>
+                  </div>
+                  <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">{item.actualResult || item.failureSummary || t("tests.noResultYet")}</p>
+                  <TestRunEvidencePanel evidence={item.evidence} />
                 </div>
-                <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">{item.actualResult || item.failureSummary || t("tests.noResultYet")}</p>
-                <TestRunEvidencePanel evidence={item.evidence} />
+                <div className="flex items-start md:justify-end">
+                  <StatusBadge value={item.status} valueLabel={t(`tests.runItemStatusValue.${item.status}`, { defaultValue: item.status })} />
+                </div>
               </div>
-              <div className="flex items-start md:justify-end">
-                <StatusBadge value={item.status} valueLabel={t(`tests.runItemStatusValue.${item.status}`, { defaultValue: item.status })} />
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </section>
       </div>
     </PageFrame>
@@ -4167,11 +4213,17 @@ function PlanFormFields(props: {
   selectedCaseIds: string[];
   onCaseToggle: (caseId: string) => void;
   onSelectReadyCases: () => void;
+  onCaseMove: (caseId: string, direction: "up" | "down") => void;
   selectionLocked?: boolean;
   projectNames?: Map<string, string>;
 }) {
   const { t } = useMspaceTranslation();
-  const { form, onChange, environments, readyCases, selectedCaseIds, onCaseToggle, onSelectReadyCases, selectionLocked = false, projectNames } = props;
+  const { form, onChange, environments, readyCases, selectedCaseIds, onCaseToggle, onSelectReadyCases, onCaseMove, selectionLocked = false, projectNames } = props;
+  const readyCaseById = useMemo(() => new Map(readyCases.map((testCase) => [testCase.id, testCase])), [readyCases]);
+  const selectedCases = useMemo(
+    () => selectedCaseIds.map((caseId) => readyCaseById.get(caseId)).filter((testCase): testCase is TestCase => Boolean(testCase)),
+    [readyCaseById, selectedCaseIds],
+  );
 
   return (
     <>
@@ -4233,6 +4285,31 @@ function PlanFormFields(props: {
             {t("tests.selectReady")}
           </Button>
         </div>
+        {selectedCases.length > 0 ? (
+          <div className="mb-3 grid gap-1.5">
+            <div className="text-[12px] font-medium text-[color:var(--muted-strong)]">{t("tests.selectedCaseOrder")}</div>
+            {selectedCases.map((testCase, index) => (
+              <div key={testCase.id} className="grid grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2 rounded-[7px] bg-[color:var(--surface)] px-2 py-1.5 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]">
+                <span className="grid size-6 place-items-center rounded-full bg-[color:var(--block)] text-[11px] font-semibold tabular-nums text-[color:var(--muted-strong)]">{index + 1}</span>
+                <span className="min-w-0">
+                  <span className="block truncate font-medium text-[color:var(--text)]">{testCase.title}</span>
+                  <span className="block truncate text-[color:var(--muted)]">
+                    {projectNames?.get(testCase.projectId) ? `${projectNames.get(testCase.projectId)} · ` : ""}
+                    {testCase.area || t("common.unknown")}
+                  </span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <Button type="button" variant="ghost" size="icon" aria-label={t("tests.moveCaseUp")} disabled={selectionLocked || index === 0} onClick={() => onCaseMove(testCase.id, "up")}>
+                    <ArrowUp data-icon />
+                  </Button>
+                  <Button type="button" variant="ghost" size="icon" aria-label={t("tests.moveCaseDown")} disabled={selectionLocked || index === selectedCases.length - 1} onClick={() => onCaseMove(testCase.id, "down")}>
+                    <ArrowDown data-icon />
+                  </Button>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div className="grid max-h-64 gap-2 overflow-auto pr-1 md:grid-cols-2">
           {readyCases.length === 0 ? (
             <p className="text-[12px] text-[color:var(--muted)]">{t("tests.noReadyCases")}</p>

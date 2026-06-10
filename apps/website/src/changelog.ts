@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-10",
+    title: "Ordered, more closed test plans",
+    summary:
+      "mspace made Tests plans carry a visible execution sequence and added deterministic guidance for cases that depend on existing data.",
+    items: [
+      "Added an ordered selected-case list to the create/edit plan flow so users can move ready cases up or down before a run starts.",
+      "Stored plan order on run items and showed the frozen sequence in Plan Detail and Run Detail, keeping results aligned with the intended execution order.",
+      "Added a `missing_data_source` quality finding for cases that delete, update, rename, archive, enable, or disable existing data without saying whether setup, this case, or a dependency provides that data.",
+      "Kept account and credential handling out of this slice while continuing to use plan-level setup as the shared prerequisite path.",
+    ],
+  },
+  {
+    date: "2026-06-10",
     title: "Readable test run attempts",
     summary:
       "mspace made repeated Tests runs distinguishable by showing the plan context and human-readable attempt number first.",

@@ -1075,6 +1075,7 @@ func (s *PostgresStore) ListProjectTestCaseRunItems(ctx Context, userID, workspa
 			i.project_id::text,
 			i.run_id::text,
 			i.case_id::text,
+			i.sort_order,
 			COALESCE(i.execution_issue_id::text, ''),
 			i.agent_session_id,
 			i.status,
@@ -2212,12 +2213,12 @@ func insertTestRunRecord(ctx context.Context, q queryer, run TestRun, parentIssu
 }
 
 func insertTestRunItems(ctx context.Context, q queryer, run TestRun, cases []TestCase) error {
-	for _, testCase := range cases {
+	for index, testCase := range cases {
 		if _, err := q.Exec(ctx, `
-			INSERT INTO test_run_items (workspace_id, project_id, run_id, case_id, status, evidence)
-			VALUES ($1, $2, $3, $4, 'queued', '{}'::jsonb)
+			INSERT INTO test_run_items (workspace_id, project_id, run_id, case_id, sort_order, status, evidence)
+			VALUES ($1, $2, $3, $4, $5, 'queued', '{}'::jsonb)
 			ON CONFLICT(run_id, case_id) DO NOTHING
-		`, run.WorkspaceID, testCase.ProjectID, run.ID, testCase.ID); err != nil {
+		`, run.WorkspaceID, testCase.ProjectID, run.ID, testCase.ID, index+1); err != nil {
 			return err
 		}
 	}
@@ -2232,6 +2233,7 @@ func listTestRunItems(ctx context.Context, q queryer, workspaceID, runID string)
 			i.project_id::text,
 			i.run_id::text,
 			i.case_id::text,
+			i.sort_order,
 			COALESCE(i.execution_issue_id::text, ''),
 			i.agent_session_id,
 			i.status,
@@ -2244,7 +2246,7 @@ func listTestRunItems(ctx context.Context, q queryer, workspaceID, runID string)
 		FROM test_run_items i
 		JOIN test_cases tc ON tc.id = i.case_id
 		WHERE i.workspace_id = $1 AND i.run_id = $2
-		ORDER BY i.created_at ASC, i.id ASC
+		ORDER BY i.sort_order ASC, i.created_at ASC, i.id ASC
 	`, strings.TrimSpace(workspaceID), strings.TrimSpace(runID))
 	if err != nil {
 		return nil, err
@@ -2273,6 +2275,7 @@ func scanTestRunItem(row scanner) (TestRunItem, error) {
 		&item.ProjectID,
 		&item.RunID,
 		&item.TestCaseID,
+		&item.SortOrder,
 		&item.ExecutionIssueID,
 		&item.AgentSessionID,
 		&item.Status,
@@ -2334,6 +2337,7 @@ func scanTestCaseRunItem(row scanner) (TestCaseRunItem, error) {
 		&item.ProjectID,
 		&item.RunID,
 		&item.TestCaseID,
+		&item.SortOrder,
 		&item.ExecutionIssueID,
 		&item.AgentSessionID,
 		&item.Status,
@@ -2489,7 +2493,7 @@ func testRunCasesForRetry(ctx context.Context, q queryer, workspaceID, runID str
 		FROM test_run_items i
 		JOIN test_cases tc ON tc.workspace_id = i.workspace_id AND tc.project_id = i.project_id AND tc.id = i.case_id
 		WHERE `+where+`
-		ORDER BY i.created_at ASC, i.id ASC
+		ORDER BY i.sort_order ASC, i.created_at ASC, i.id ASC
 	`, args...)
 	if err != nil {
 		return nil, err

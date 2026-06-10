@@ -404,6 +404,7 @@ func loadTestRunItemByRunAndCase(ctx context.Context, q queryer, workspaceID, ru
 			i.project_id::text,
 			i.run_id::text,
 			i.case_id::text,
+			i.sort_order,
 			COALESCE(i.execution_issue_id::text, ''),
 			i.agent_session_id,
 			i.status,

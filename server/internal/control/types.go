@@ -650,6 +650,7 @@ type TestRunItem struct {
 	ProjectID        string          `json:"projectId"`
 	RunID            string          `json:"runId"`
 	TestCaseID       string          `json:"testCaseId"`
+	SortOrder        int             `json:"sortOrder"`
 	ExecutionIssueID string          `json:"executionIssueId"`
 	AgentSessionID   string          `json:"agentSessionId"`
 	Status           string          `json:"status"`

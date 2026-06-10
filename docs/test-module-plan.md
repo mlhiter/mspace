@@ -97,6 +97,7 @@ The executability signal should start as a deterministic rule set rather than an
 - phrases such as "verify it works" or "check whether it is normal" lower the score;
 - missing environment requirements lower the score;
 - highly similar title or steps compared with existing cases lowers the score.
+- cases that delete, update, rename, archive, enable, or disable existing data should say whether the target data is created by the case, prepared by setup, or provided by a dependency; otherwise the case gets a `missing_data_source` finding.
 
 ### Test Case Revision
 
@@ -311,12 +312,14 @@ The plan needs:
 - target type: branch, commit, source session, image, offline package, version URL, or preview URL;
 - environment: selected Environment or an existing Issue Test Environment snapshot;
 - optional setup steps that run once before case execution;
-- selected ready cases;
+- selected ready cases in explicit execution order;
 - execution scope: full, failed retry, blocked retry, incremental, or custom;
 - whether parallel execution is allowed;
 - whether human review is required.
 
 The create/edit plan UI should stay focused on fields that change execution behavior: title, target type, Environment, setup steps, and selected ready cases. Do not expose a standalone description box or target-value input in the primary modal unless a later workflow makes those values actionable for the user. Existing stored description or target value data may still be displayed when present for historical plans and runs.
+
+The selected-case list is ordered. Users can move selected cases up or down in the create/edit plan form, the Plan Detail page shows that order, and each run freezes the order onto its run items. This is intentionally a linear order, not a dependency graph or workflow scheduler.
 
 Plan-level setup is intentionally simple in the current slice. It is free-text operational guidance stored on the plan, not a reusable template or graph engine. The text can describe browser, Kubernetes, VM, SSH, Sealos, mock-data, or deployment preparation in the user's own words. When the plan starts a run, mspace freezes those setup steps onto the run so later edits do not rewrite historical execution context.
 
@@ -334,6 +337,8 @@ Examples:
 When a test run starts, mspace creates one parent Issue for the run and execution Issues for batches.
 
 These Issues preserve the normal Issue-backed audit trail, but the Test Run remains the user-facing list and detail entry. The default Issues list should hide test run parent Issues and execution batch Issues; manually created `type:test` Issues remain ordinary user work and should still be listed.
+
+Run items preserve the plan's frozen case order with `sortOrder`. Execution Issues receive cases in that order inside each batch, and Run Detail renders the same ordering so users can compare expected sequence and result sequence without relying on creation timestamps.
 
 By default, mspace should not create one Issue per case. That would flood the issue list during large regression runs. Suggested batching:
 

@@ -357,6 +357,7 @@ export interface TestRunItem {
   projectId: string;
   runId: string;
   testCaseId: string;
+  sortOrder: number;
   executionIssueId: string;
   agentSessionId: string;
   status: string;

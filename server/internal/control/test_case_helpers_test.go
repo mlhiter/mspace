@@ -86,6 +86,45 @@ func TestParseChineseCSVImportColumns(t *testing.T) {
 	}
 }
 
+func TestScoreTestCaseQualityFlagsMissingDataSource(t *testing.T) {
+	input := TestCaseInput{
+		Title:                   "Delete bucket",
+		Preconditions:           "A bucket exists.",
+		Steps:                   []TestCaseStep{{Action: "Delete the bucket from Object Storage.", Expected: "The bucket disappears from the list."}},
+		ExpectedResult:          "The deleted bucket cannot be opened.",
+		EnvironmentRequirements: "Object Storage preview is available.",
+	}
+	score, findings := scoreTestCaseQuality(input)
+	if score >= 90 {
+		t.Fatalf("expected missing data source to reduce score, got %d with %+v", score, findings)
+	}
+	if !hasQualityFinding(findings, "missing_data_source") {
+		t.Fatalf("expected missing_data_source finding, got %+v", findings)
+	}
+
+	input.Dependencies = []string{"Create bucket"}
+	_, findings = scoreTestCaseQuality(input)
+	if hasQualityFinding(findings, "missing_data_source") {
+		t.Fatalf("dependency should satisfy data source, got %+v", findings)
+	}
+
+	input.Dependencies = nil
+	input.Steps = []TestCaseStep{{Action: "Create a temporary bucket for this test."}, {Action: "Delete the temporary bucket.", Expected: "The bucket disappears."}}
+	_, findings = scoreTestCaseQuality(input)
+	if hasQualityFinding(findings, "missing_data_source") {
+		t.Fatalf("in-case creation should satisfy data source, got %+v", findings)
+	}
+}
+
+func hasQualityFinding(values []TestCaseQualityFinding, code string) bool {
+	for _, value := range values {
+		if value.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func hasImportColumnMapping(values []TestCaseImportColumnMapping, source, field string) bool {
 	for _, value := range values {
 		if value.Source == source && value.Field == field && value.Matched {

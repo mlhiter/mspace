@@ -2656,10 +2656,16 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if plan.Plan.Status != "ready" || plan.Plan.CaseCount != 2 || len(plan.Cases) != 2 || !strings.Contains(plan.Plan.SetupSteps, "Update the target deployment image") {
 		t.Fatalf("unexpected created plan: %+v", plan)
 	}
+	if plan.Cases[0].SortOrder != 1 || plan.Cases[1].SortOrder != 2 || plan.Cases[0].TestCaseID != existingCase.ID || plan.Cases[1].TestCaseID != createdFromProposal.TestCase.ID {
+		t.Fatalf("expected plan case order to match selection order, got %+v", plan.Cases)
+	}
 
 	run := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":1,"resultLocale":"zh-CN"}`)
 	if run.Run.Status != "setup_running" || run.Run.SetupStatus != "running" || run.Run.ResultLocale != "zh-CN" || run.Run.SetupIssueID == "" || run.Run.SetupSessionID == "" || run.Run.TotalCount != 2 || run.Run.ParentIssueID == "" || len(run.Items) != 2 {
 		t.Fatalf("unexpected started run: %+v", run)
+	}
+	if run.Items[0].SortOrder != 1 || run.Items[1].SortOrder != 2 || run.Items[0].TestCaseID != existingCase.ID || run.Items[1].TestCaseID != createdFromProposal.TestCase.ID {
+		t.Fatalf("expected run items to freeze plan order, got %+v", run.Items)
 	}
 	parentIssue, err := store.GetIssue(context.Background(), user.ID, workspaceID, run.Run.ParentIssueID)
 	if err != nil {
@@ -2883,7 +2889,7 @@ func TestWorkspaceTestPlanCanSpanProjects(t *testing.T) {
 	if plan.Plan.CaseCount != 2 || len(plan.Cases) != 2 {
 		t.Fatalf("expected two cases in workspace plan, got %+v", plan)
 	}
-	if plan.Cases[0].ProjectID != firstProject.ID || plan.Cases[1].ProjectID != secondProject.ID {
+	if plan.Cases[0].ProjectID != firstProject.ID || plan.Cases[1].ProjectID != secondProject.ID || plan.Cases[0].SortOrder != 1 || plan.Cases[1].SortOrder != 2 {
 		t.Fatalf("expected plan cases to preserve project ids, got %+v", plan.Cases)
 	}
 
@@ -2900,6 +2906,9 @@ func TestWorkspaceTestPlanCanSpanProjects(t *testing.T) {
 	run := startWorkspaceTestRunViaHTTP(t, router, sessionToken, workspaceID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":1}`)
 	if run.Run.TotalCount != 2 || len(run.Items) != 2 || run.Run.ProjectID != firstProject.ID {
 		t.Fatalf("unexpected workspace run: %+v", run)
+	}
+	if run.Items[0].SortOrder != 1 || run.Items[1].SortOrder != 2 || run.Items[0].TestCaseID != firstCase.ID || run.Items[1].TestCaseID != secondCase.ID {
+		t.Fatalf("expected workspace run items to preserve plan order, got %+v", run.Items)
 	}
 	firstItem := findTestRunItem(t, run.Items, firstCase.ID)
 	secondItem := findTestRunItem(t, run.Items, secondCase.ID)
