@@ -1764,17 +1764,51 @@ func (s *PostgresStore) ClaimRuntimeTask(ctx Context, registration RuntimeRegist
 		return nil, ErrForbidden
 	}
 
-	row := tx.QueryRow(dbctx, `
+	task, err := claimPostgresRuntimeTask(dbctx, tx, workerID, registration.WorkspaceID, true)
+	if errors.Is(err, pgx.ErrNoRows) {
+		task, err = claimPostgresRuntimeTask(dbctx, tx, workerID, registration.WorkspaceID, false)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := tx.Commit(dbctx); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := insertRuntimeTaskEvent(dbctx, tx, task.WorkspaceID, task.ID, workerID, "", "claimed", map[string]any{
+		"status": task.Status,
+	}); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func claimPostgresRuntimeTask(ctx context.Context, q queryer, workerID, workspaceID string, resumeRunning bool) (RuntimeTask, error) {
+	whereStatus := "t.status = 'queued'"
+	orderBy := "t.priority DESC, t.created_at ASC, t.id ASC"
+	claimedBy := ""
+	if resumeRunning {
+		whereStatus = "t.status = 'running'"
+		orderBy = "t.updated_at ASC, t.created_at ASC, t.id ASC"
+		claimedBy = fmt.Sprintf("AND t.claimed_by_worker_id = w.id AND t.updated_at < now() - interval '%d seconds'", int(staleRunningTaskReclaimAge.Seconds()))
+	}
+	row := q.QueryRow(ctx, `
 		WITH next_task AS (
 			SELECT t.id
 			FROM runtime_tasks t
 			JOIN runtime_workers w ON w.id = $1 AND w.workspace_id = t.workspace_id
 			WHERE t.workspace_id = $2
-				AND t.status = 'queued'
+				AND `+whereStatus+`
+				`+claimedBy+`
 				AND t.runtime_mode = w.mode
 				AND w.status = 'online'
 				AND w.capabilities @> t.required_capabilities
-			ORDER BY t.priority DESC, t.created_at ASC, t.id ASC
+			ORDER BY `+orderBy+`
 			FOR UPDATE OF t SKIP LOCKED
 			LIMIT 1
 		)
@@ -1782,7 +1816,7 @@ func (s *PostgresStore) ClaimRuntimeTask(ctx Context, registration RuntimeRegist
 		SET
 			status = 'claimed',
 			claimed_by_worker_id = $1,
-			claimed_at = now(),
+			claimed_at = COALESCE(t.claimed_at, now()),
 			updated_at = now()
 		FROM next_task
 		WHERE t.id = next_task.id
@@ -1806,26 +1840,8 @@ func (s *PostgresStore) ClaimRuntimeTask(ctx Context, registration RuntimeRegist
 			t.error,
 			t.created_at,
 			t.updated_at
-	`, workerID, registration.WorkspaceID)
-	task, err := scanRuntimeTask(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if err := tx.Commit(dbctx); err != nil {
-			return nil, err
-		}
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if err := insertRuntimeTaskEvent(dbctx, tx, task.WorkspaceID, task.ID, workerID, "", "claimed", map[string]any{
-		"status": task.Status,
-	}); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(dbctx); err != nil {
-		return nil, err
-	}
-	return &task, nil
+	`, workerID, workspaceID)
+	return scanRuntimeTask(row)
 }
 
 func (s *PostgresStore) GetRuntimeTaskForWorker(ctx Context, registration RuntimeRegistration, workerID, taskID string) (RuntimeTask, error) {

@@ -4744,36 +4744,84 @@ func (s *MemoryStore) ClaimRuntimeTask(_ Context, registration RuntimeRegistrati
 		return nil, ErrForbidden
 	}
 	candidates := []RuntimeTask{}
+	nowTime := time.Now().UTC()
 	for _, task := range s.runtimeTasks {
-		if task.WorkspaceID != registration.WorkspaceID ||
-			task.Status != "queued" ||
-			task.RuntimeMode != worker.Mode ||
-			!jsonObjectContains(worker.Capabilities, task.RequiredCapabilities) {
-			continue
+		if task.WorkspaceID == registration.WorkspaceID &&
+			task.ClaimedByWorkerID == worker.ID &&
+			task.Status == "running" &&
+			task.RuntimeMode == worker.Mode &&
+			jsonObjectContains(worker.Capabilities, task.RequiredCapabilities) &&
+			runtimeTaskUpdatedBefore(task, nowTime.Add(-staleRunningTaskReclaimAge)) {
+			candidates = append(candidates, task)
 		}
-		candidates = append(candidates, task)
+	}
+	if len(candidates) == 0 {
+		for _, task := range s.runtimeTasks {
+			if task.WorkspaceID != registration.WorkspaceID ||
+				task.Status != "queued" ||
+				task.RuntimeMode != worker.Mode ||
+				!jsonObjectContains(worker.Capabilities, task.RequiredCapabilities) {
+				continue
+			}
+			candidates = append(candidates, task)
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].Priority == candidates[j].Priority {
+				if candidates[i].CreatedAt == candidates[j].CreatedAt {
+					return candidates[i].ID < candidates[j].ID
+				}
+				return candidates[i].CreatedAt < candidates[j].CreatedAt
+			}
+			return candidates[i].Priority > candidates[j].Priority
+		})
+	} else {
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].UpdatedAt == candidates[j].UpdatedAt {
+				if candidates[i].CreatedAt == candidates[j].CreatedAt {
+					return candidates[i].ID < candidates[j].ID
+				}
+				return candidates[i].CreatedAt < candidates[j].CreatedAt
+			}
+			return candidates[i].UpdatedAt < candidates[j].UpdatedAt
+		})
 	}
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].Priority == candidates[j].Priority {
-			if candidates[i].CreatedAt == candidates[j].CreatedAt {
-				return candidates[i].ID < candidates[j].ID
-			}
-			return candidates[i].CreatedAt < candidates[j].CreatedAt
-		}
-		return candidates[i].Priority > candidates[j].Priority
-	})
 	task := s.runtimeTasks[candidates[0].ID]
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := nowTime.Format(time.RFC3339Nano)
 	task.Status = "claimed"
 	task.ClaimedByWorkerID = worker.ID
-	task.ClaimedAt = now
+	if task.ClaimedAt == "" {
+		task.ClaimedAt = now
+	}
 	task.UpdatedAt = now
 	s.runtimeTasks[task.ID] = task
 	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, worker.ID, "", "claimed", json.RawMessage(fmt.Sprintf(`{"status":%q}`, task.Status)))
 	return &task, nil
+}
+
+func runtimeTaskUpdatedBefore(task RuntimeTask, cutoff time.Time) bool {
+	updatedAt, ok := parseRuntimeTimestamp(task.UpdatedAt)
+	if !ok {
+		return false
+	}
+	return updatedAt.Before(cutoff)
+}
+
+func parseRuntimeTimestamp(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, value)
+	}
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed.UTC(), true
 }
 
 func (s *MemoryStore) GetRuntimeTaskForWorker(_ Context, registration RuntimeRegistration, workerID, taskID string) (RuntimeTask, error) {

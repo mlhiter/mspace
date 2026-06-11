@@ -7,6 +7,7 @@ import (
 )
 
 const activeWorkerMaxAge = 45 * time.Second
+const staleRunningTaskReclaimAge = 30 * time.Minute
 
 func isActiveCodexWorker(worker RuntimeWorker, workspaceID, runtimeMode string, now time.Time) bool {
 	return isActiveWorkerWithCapabilities(worker, workspaceID, runtimeMode, json.RawMessage(`{"codex":true}`), now)

@@ -22,6 +22,8 @@ The product and runtime state for signed-in workspaces lives in the server store
 | `<artifact-dir>/branch-name.json` | Optional agent-proposed source branch name. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-learned project runbook artifact. |
 
+For Tests setup and execution sessions, `test-setup-result.json` and `test-result.json` are also runtime completion checkpoints. If a Codex turn writes the matching artifact but the app-server turn never reports final completion, the worker should still complete the runtime task from the artifact. If the worker is restarted with the same worker name, it may reclaim its own stale `running` task, reuse the existing session workdir, and submit the already-written artifact so the server can reconcile the run.
+
 The server store records users, local password credentials, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, project test cases, test case revisions, test case suggestions, test plans, test runs, issues, comments, reactions, labels, Inbox receipts, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs. Postgres stores these in migrated tables. SQLite personal mode stores a server-owned snapshot in `store_snapshots` and persists after mutating requests plus the OAuth GET routes that create or consume login state.
 
 Docker-backed workers store target project source under the worker root volume, not in the host checkout. The dry-run worker defaults to the `mspace-worker-dev-root` Docker volume, and the Codex-capable worker defaults to `mspace-worker-codex-dev-root`; both mount that volume at `/var/lib/mspace-worker`.
@@ -488,6 +490,17 @@ curl -H "Authorization: Bearer <msp-token>" \
 The task's `runtimeMode` and `requiredCapabilities` must match the worker heartbeat.
 
 If a Tests plan includes any `ui` cases, the server requires a fresh worker with `{"codex":true,"browser":true,"chrome_cdp":true}`. In personal desktop mode, restart the desktop app or stop/start the personal worker so Electron can launch a managed CDP endpoint and refresh the worker heartbeat. If Chrome exists but CDP never becomes reachable, Electron should fall back to its bundled Chromium host in local dev. If the worker still shows Codex-only capabilities, provide a reachable `MSPACE_CHROME_CDP_URL`, or set `MSPACE_CHROME_EXECUTABLE` / `MSPACE_ELECTRON_EXECUTABLE` before starting the desktop app.
+
+### Test run stays running after artifacts exist
+
+If a Tests run stays `running` while the worker workdir already contains a matching `test-result.json` or `test-setup-result.json`, inspect the runtime task before changing data by hand:
+
+```bash
+curl -H "Authorization: Bearer <msp-token>" \
+  "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks?limit=20&offset=0"
+```
+
+The fixed path is to restart the same worker process so it registers with the same stable worker name. The server allows that worker to reclaim its own stale `running` task before new queued work, and the worker should recover the existing session workdir, attach the artifact, and complete the task through the normal runtime status API. Do not edit the SQLite or Postgres run rows directly unless a user explicitly asks for database repair.
 
 ### VM Environment stays unreachable
 

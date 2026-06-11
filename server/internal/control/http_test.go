@@ -3487,6 +3487,36 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 		t.Fatalf("unexpected running task: %+v", task)
 	}
 
+	freshResumeRecorder := httptest.NewRecorder()
+	freshResumeReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	freshResumeReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(freshResumeRecorder, freshResumeReq)
+	if freshResumeRecorder.Code != http.StatusNoContent {
+		t.Fatalf("fresh running task should not be reclaimed, status=%d body=%s", freshResumeRecorder.Code, freshResumeRecorder.Body.String())
+	}
+
+	store.mu.Lock()
+	staleTask := store.runtimeTasks[task.ID]
+	staleTask.UpdatedAt = time.Now().UTC().Add(-staleRunningTaskReclaimAge - time.Minute).Format(time.RFC3339Nano)
+	store.runtimeTasks[task.ID] = staleTask
+	store.mu.Unlock()
+
+	staleResumeRecorder := httptest.NewRecorder()
+	staleResumeReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	staleResumeReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(staleResumeRecorder, staleResumeReq)
+	if staleResumeRecorder.Code != http.StatusOK {
+		t.Fatalf("resume stale running task claim status=%d body=%s", staleResumeRecorder.Code, staleResumeRecorder.Body.String())
+	}
+	var resumedTask RuntimeTask
+	if err := json.Unmarshal(staleResumeRecorder.Body.Bytes(), &resumedTask); err != nil {
+		t.Fatalf("parse resumed task: %v", err)
+	}
+	if resumedTask.ID != task.ID || resumedTask.Status != "claimed" || resumedTask.ClaimedByWorkerID != worker.ID || resumedTask.ClaimedAt != task.ClaimedAt {
+		t.Fatalf("expected same worker to resume running task before new work, got %+v original=%+v", resumedTask, task)
+	}
+	task = resumedTask
+
 	getWorkerTaskRecorder := httptest.NewRecorder()
 	getWorkerTaskReq := httptest.NewRequest(http.MethodGet, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID, nil)
 	getWorkerTaskReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
@@ -3498,7 +3528,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	if err := json.Unmarshal(getWorkerTaskRecorder.Body.Bytes(), &workerVisibleTask); err != nil {
 		t.Fatalf("parse worker-visible task: %v", err)
 	}
-	if workerVisibleTask.ID != task.ID || workerVisibleTask.Status != "running" {
+	if workerVisibleTask.ID != task.ID || workerVisibleTask.Status != "claimed" {
 		t.Fatalf("unexpected worker-visible task: %+v", workerVisibleTask)
 	}
 

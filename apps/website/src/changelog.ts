@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-06-11",
+    title: "Recovered artifact-backed test runs",
+    summary:
+      "mspace hardened Tests execution so runs do not stay in progress after the worker has already written the result artifact.",
+    items: [
+      "Let test setup and execution sessions complete from matching `test-setup-result.json` or `test-result.json` when Codex does not emit a final turn completion notification.",
+      "Allowed the same worker to reclaim its own stale `running` runtime task before taking new queued work, preserving the original claim time while letting recovery continue.",
+      "Recovered existing worker workdirs that already contain the matching test artifact so restart recovery can reconcile the run instead of failing on an existing session directory.",
+      "Documented the runtime recovery path for Tests runs that appear stuck even though artifacts are present.",
+    ],
+  },
+  {
     date: "2026-06-10",
     title: "Browser-capable personal test worker",
     summary:

@@ -137,6 +137,8 @@ type agentSessionPayload struct {
 	IssueID               string            `json:"issueId"`
 	SessionID             string            `json:"sessionId"`
 	ProjectID             string            `json:"projectId"`
+	Automation            string            `json:"automation"`
+	TestRunID             string            `json:"testRunId"`
 	Branch                string            `json:"branch"`
 	SourceCommitSHA       string            `json:"sourceCommitSha"`
 	ContextMarkdown       string            `json:"contextMarkdown"`
@@ -1185,6 +1187,8 @@ func parseAgentSessionPayload(raw json.RawMessage) (agentSessionPayload, error) 
 	payload.IssueID = strings.TrimSpace(payload.IssueID)
 	payload.SessionID = strings.TrimSpace(payload.SessionID)
 	payload.ProjectID = strings.TrimSpace(payload.ProjectID)
+	payload.Automation = strings.TrimSpace(payload.Automation)
+	payload.TestRunID = strings.TrimSpace(payload.TestRunID)
 	payload.Branch = strings.TrimSpace(payload.Branch)
 	payload.SourceCommitSHA = strings.TrimSpace(payload.SourceCommitSHA)
 	payload.ArtifactDir = strings.TrimSpace(payload.ArtifactDir)
@@ -1226,6 +1230,11 @@ func runCodexAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg
 		return agentSessionResult{}, err
 	}
 	payload = prepared
+	if testArtifactsReady(payload) {
+		if result, ok := completedAgentSessionResultFromArtifacts(ctx, runtimeClient, workerID, taskID, payload, "", ""); ok {
+			return result, nil
+		}
+	}
 	codexPath, err := exec.LookPath("codex")
 	if err != nil {
 		return agentSessionResult{}, errors.New("codex CLI is not available on PATH")
@@ -1301,8 +1310,19 @@ func runCodexAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg
 	}
 	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Codex turn: " + turnResp.Turn.ID})
 
-	if err := waitCodexTurn(ctx, runtimeClient, appClient, workerID, taskID, threadResp.Thread.ID, turnResp.Turn.ID); err != nil {
+	artifactCompleted, err := waitCodexTurnOrTestArtifact(ctx, runtimeClient, appClient, workerID, taskID, threadResp.Thread.ID, turnResp.Turn.ID, payload)
+	if err != nil {
+		if fallback, ok := completedAgentSessionResultFromArtifacts(ctx, runtimeClient, workerID, taskID, payload, threadResp.Thread.ID, turnResp.Turn.ID); ok {
+			return fallback, nil
+		}
 		return agentSessionResult{}, err
+	}
+	if artifactCompleted {
+		result, ok := completedAgentSessionResultFromArtifacts(ctx, runtimeClient, workerID, taskID, payload, threadResp.Thread.ID, turnResp.Turn.ID)
+		if !ok {
+			return agentSessionResult{}, errors.New("test artifact completion was detected but no artifact could be attached")
+		}
+		return result, nil
 	}
 	result := agentSessionResult{
 		ThreadID:    threadResp.Thread.ID,
@@ -1320,6 +1340,113 @@ func runCodexAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg
 	result.Source = source
 	result.attachArtifacts(payload)
 	return result, nil
+}
+
+func waitCodexTurnOrTestArtifact(ctx context.Context, runtimeClient *runtimeClient, appClient *codexAppServerClient, workerID, taskID, threadID, turnID string, payload agentSessionPayload) (bool, error) {
+	if !canCompleteFromTestArtifacts(payload) {
+		return false, waitCodexTurn(ctx, runtimeClient, appClient, workerID, taskID, threadID, turnID)
+	}
+	outputBuffers := map[string]*strings.Builder{}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		if testArtifactsReady(payload) {
+			return true, nil
+		}
+		select {
+		case <-ctx.Done():
+			interruptCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = appClient.request(interruptCtx, "turn/interrupt", map[string]any{
+				"threadId": threadID,
+				"turnId":   turnID,
+			}, nil)
+			cancel()
+			return false, context.Canceled
+		case <-ticker.C:
+		case notification, ok := <-appClient.notifications:
+			if !ok {
+				return false, errors.New("codex app-server exited before the turn completed")
+			}
+			done, err := handleCodexNotification(ctx, runtimeClient, workerID, taskID, threadID, turnID, notification, outputBuffers)
+			if done {
+				return false, err
+			}
+		}
+	}
+}
+
+func canCompleteFromTestArtifacts(payload agentSessionPayload) bool {
+	switch strings.TrimSpace(payload.Automation) {
+	case "test_run_execution", "test_run_setup":
+		return strings.TrimSpace(payload.TestRunID) != ""
+	default:
+		return false
+	}
+}
+
+func testArtifactsReady(payload agentSessionPayload) bool {
+	switch strings.TrimSpace(payload.Automation) {
+	case "test_run_execution":
+		artifact, ok := readTestResultArtifact(payload)
+		return ok && artifactMatchesRun(payload.TestRunID, artifact.RunID)
+	case "test_run_setup":
+		artifact, ok := readTestSetupResultArtifact(payload)
+		return ok && artifactMatchesRun(payload.TestRunID, artifact.RunID)
+	default:
+		return false
+	}
+}
+
+func artifactMatchesRun(expectedRunID, artifactRunID string) bool {
+	expectedRunID = strings.TrimSpace(expectedRunID)
+	if expectedRunID == "" {
+		return false
+	}
+	return strings.TrimSpace(artifactRunID) == expectedRunID
+}
+
+func completedAgentSessionResultFromArtifacts(ctx context.Context, runtimeClient *runtimeClient, workerID, taskID string, payload agentSessionPayload, threadID, turnID string) (agentSessionResult, bool) {
+	result := agentSessionResult{
+		ThreadID:    threadID,
+		TurnID:      turnID,
+		Status:      "completed",
+		CompletedAt: time.Now().UTC().Format(time.RFC3339),
+		DryRun:      false,
+		Workdir:     payload.Workdir,
+		ArtifactDir: payload.ArtifactDir,
+	}
+	if !result.attachMatchingTestCompletionArtifact(payload) {
+		return agentSessionResult{}, false
+	}
+	source, err := captureAgentSessionSource(ctx, runtimeClient, workerID, taskID, payload)
+	if err != nil {
+		_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Artifact completion fallback skipped source capture: " + err.Error()})
+		source = agentSessionSource{}
+	}
+	result.Source = source
+	_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Completing task from session artifacts after Codex turn ended without a final completion notification."})
+	return result, true
+}
+
+func (result *agentSessionResult) attachMatchingTestCompletionArtifact(payload agentSessionPayload) bool {
+	switch strings.TrimSpace(payload.Automation) {
+	case "test_run_execution":
+		artifact, ok := readTestResultArtifact(payload)
+		if !ok || !artifactMatchesRun(payload.TestRunID, artifact.RunID) {
+			return false
+		}
+		result.TestResult = &artifact
+		return true
+	case "test_run_setup":
+		artifact, ok := readTestSetupResultArtifact(payload)
+		if !ok || !artifactMatchesRun(payload.TestRunID, artifact.RunID) {
+			return false
+		}
+		result.TestSetup = &artifact
+		return true
+	default:
+		return false
+	}
 }
 
 func (result *agentSessionResult) attachArtifacts(payload agentSessionPayload) {
@@ -1744,7 +1871,14 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 	if err := os.MkdirAll(filepath.Dir(workdir), 0o755); err != nil {
 		return payload, fmt.Errorf("create worker workdir parent: %w", err)
 	}
+	payload.Workdir = workdir
+	payload.ArtifactDir = filepath.Join(workdir, ".mspace", "session")
 	if _, err := os.Stat(workdir); err == nil {
+		if testArtifactsReady(payload) {
+			payload.Env = withPayloadRuntimeEnv(payload)
+			_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Recovered existing worker workspace from completed test artifacts: " + payload.Workdir})
+			return payload, nil
+		}
 		return payload, fmt.Errorf("worker session workdir already exists: %s", workdir)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return payload, fmt.Errorf("inspect worker session workdir: %w", err)
@@ -1766,8 +1900,6 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 			return payload, fmt.Errorf("create worker branch %q: %w", branch, err)
 		}
 	}
-	payload.Workdir = workdir
-	payload.ArtifactDir = filepath.Join(workdir, ".mspace", "session")
 	if err := os.MkdirAll(payload.ArtifactDir, 0o755); err != nil {
 		return payload, fmt.Errorf("create artifact dir: %w", err)
 	}

@@ -114,6 +114,26 @@ func TestReadTestResultArtifactAcceptsArrayShape(t *testing.T) {
 	}
 }
 
+func TestArtifactCompletionRequiresMatchingRun(t *testing.T) {
+	artifactDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(artifactDir, testResultArtifactName), []byte(`{"runId":"other-run","items":[{"caseId":"case-1","status":"passed"}]}`), 0o644); err != nil {
+		t.Fatalf("write mismatched test result: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, testSetupResultArtifactName), []byte(`{"runId":"other-run","status":"passed","summary":"ok"}`), 0o644); err != nil {
+		t.Fatalf("write mismatched setup result: %v", err)
+	}
+
+	for _, payload := range []agentSessionPayload{
+		{Automation: "test_run_execution", TestRunID: "expected-run", ArtifactDir: artifactDir},
+		{Automation: "test_run_setup", TestRunID: "expected-run", ArtifactDir: artifactDir},
+	} {
+		var result agentSessionResult
+		if result.attachMatchingTestCompletionArtifact(payload) {
+			t.Fatalf("expected mismatched artifact to be rejected for automation %s", payload.Automation)
+		}
+	}
+}
+
 func TestParseImportMappingResultNormalizesSuggestions(t *testing.T) {
 	payload := importMappingPayload{
 		Format:   "csv",
@@ -361,6 +381,206 @@ func TestRunOnceCompletesAgentSessionWithCodexAppServer(t *testing.T) {
 	}
 	if !strings.Contains(joinedLogs, "turn-completed") {
 		t.Fatalf("expected turn completion log, got %s", joinedLogs)
+	}
+}
+
+func TestRunOnceCompletesTestRunFromArtifactWhenCodexTurnDoesNotFinish(t *testing.T) {
+	installArtifactOnlyFakeCodex(t)
+
+	repoDir := createTestGitRepo(t)
+	workRoot := filepath.Join(t.TempDir(), "worker-root")
+	var mu sync.Mutex
+	statuses := []string{}
+	logs := []appendTaskLogInput{}
+	var completedResult agentSessionResult
+
+	payload, err := json.Marshal(agentSessionPayload{
+		Prompt:     "execute test run and write the artifact",
+		IssueID:    "issue-artifact",
+		SessionID:  "session-artifact",
+		ProjectID:  "project-artifact",
+		Automation: "test_run_execution",
+		TestRunID:  "test-run-artifact",
+		Branch:     "mspace/issue/session-artifact",
+		Repository: repositorySpec{
+			URL:           repoDir,
+			DefaultBranch: "main",
+			Provider:      "local",
+			Owner:         "test",
+			Repo:          "artifact-demo",
+		},
+		ContextMarkdown: "# artifact context\n",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer msw_test" {
+			t.Fatalf("missing worker token on %s", r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/api/runtime/workers/register":
+			writeJSON(t, w, http.StatusCreated, runtimeWorker{ID: "worker-1", WorkspaceID: "workspace-1", Name: "worker-test", Mode: "team", Status: "online"})
+		case "/api/runtime/workers/worker-1/heartbeat":
+			writeJSON(t, w, http.StatusOK, runtimeWorker{ID: "worker-1", WorkspaceID: "workspace-1", Name: "worker-test", Mode: "team", Status: "online"})
+		case "/api/runtime/workers/worker-1/tasks/claim":
+			writeJSON(t, w, http.StatusOK, runtimeTask{
+				ID:                   "task-artifact",
+				WorkspaceID:          "workspace-1",
+				Kind:                 "agent_session",
+				RuntimeMode:          "team",
+				RequiredCapabilities: json.RawMessage(`{"codex":true}`),
+				Payload:              payload,
+			})
+		case "/api/runtime/workers/worker-1/tasks/task-artifact":
+			writeJSON(t, w, http.StatusOK, runtimeTask{ID: "task-artifact", WorkspaceID: "workspace-1", Kind: "agent_session", Status: "running"})
+		case "/api/runtime/workers/worker-1/tasks/task-artifact/logs":
+			assertMethod(t, r, http.MethodPost)
+			var input appendTaskLogInput
+			decodeBody(t, r, &input)
+			mu.Lock()
+			logs = append(logs, input)
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+		case "/api/runtime/workers/worker-1/tasks/task-artifact/status":
+			assertMethod(t, r, http.MethodPost)
+			var input updateTaskStatusInput
+			decodeBody(t, r, &input)
+			mu.Lock()
+			statuses = append(statuses, input.Status)
+			if input.Status == "completed" {
+				if err := json.Unmarshal(input.Result, &completedResult); err != nil {
+					t.Fatalf("decode completed result: %v", err)
+				}
+			}
+			mu.Unlock()
+			writeJSON(t, w, http.StatusOK, runtimeTask{ID: "task-artifact", WorkspaceID: "workspace-1", Kind: "agent_session", Status: input.Status, Result: input.Result})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := testConfig(server.URL)
+	cfg.Capabilities = json.RawMessage(`{"protocolSmoke":true,"codex":true,"dryRun":false}`)
+	cfg.WorkRoot = workRoot
+	if err := run(context.Background(), cfg, discardLogger()); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if got := strings.Join(statuses, ","); got != "running,completed" {
+		t.Fatalf("unexpected statuses: %s logs=%s", got, taskLogMessages(logs))
+	}
+	if completedResult.TestResult == nil || completedResult.TestResult.RunID != "test-run-artifact" || len(completedResult.TestResult.Items) != 1 {
+		t.Fatalf("expected artifact-backed test result, got %+v", completedResult.TestResult)
+	}
+	if !strings.Contains(taskLogMessages(logs), "Completing task from session artifacts") {
+		t.Fatalf("expected artifact completion fallback log, got %s", taskLogMessages(logs))
+	}
+}
+
+func TestRunOnceRecoversExistingTestRunWorkdirFromArtifact(t *testing.T) {
+	repoDir := createTestGitRepo(t)
+	workRoot := filepath.Join(t.TempDir(), "worker-root")
+	workdir := filepath.Join(workRoot, "workdirs", "project-recover", "session-recover")
+	artifactDir := filepath.Join(workdir, ".mspace", "session")
+	runGit(t, repoDir, "worktree", "add", "--detach", workdir, "HEAD")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create existing artifact dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "test-result.json"), []byte(`{"runId":"test-run-recover","items":[{"caseId":"test-case-recover","status":"passed","actualResult":"Recovered from existing artifact.","evidence":{"log":"ok"}}]}`), 0o600); err != nil {
+		t.Fatalf("write existing test artifact: %v", err)
+	}
+
+	var mu sync.Mutex
+	statuses := []string{}
+	logs := []appendTaskLogInput{}
+	var completedResult agentSessionResult
+
+	payload, err := json.Marshal(agentSessionPayload{
+		Prompt:     "recover the existing test artifact",
+		IssueID:    "issue-recover",
+		SessionID:  "session-recover",
+		ProjectID:  "project-recover",
+		Automation: "test_run_execution",
+		TestRunID:  "test-run-recover",
+		Branch:     "mspace/issue/session-recover",
+		Repository: repositorySpec{
+			URL:           repoDir,
+			DefaultBranch: "main",
+			Provider:      "local",
+			Owner:         "test",
+			Repo:          "recover-demo",
+		},
+		ContextMarkdown: "# recover context\n",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer msw_test" {
+			t.Fatalf("missing worker token on %s", r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/api/runtime/workers/register":
+			writeJSON(t, w, http.StatusCreated, runtimeWorker{ID: "worker-1", WorkspaceID: "workspace-1", Name: "worker-test", Mode: "team", Status: "online"})
+		case "/api/runtime/workers/worker-1/heartbeat":
+			writeJSON(t, w, http.StatusOK, runtimeWorker{ID: "worker-1", WorkspaceID: "workspace-1", Name: "worker-test", Mode: "team", Status: "online"})
+		case "/api/runtime/workers/worker-1/tasks/claim":
+			writeJSON(t, w, http.StatusOK, runtimeTask{
+				ID:                   "task-recover",
+				WorkspaceID:          "workspace-1",
+				Kind:                 "agent_session",
+				RuntimeMode:          "team",
+				RequiredCapabilities: json.RawMessage(`{"codex":true}`),
+				Payload:              payload,
+			})
+		case "/api/runtime/workers/worker-1/tasks/task-recover/logs":
+			assertMethod(t, r, http.MethodPost)
+			var input appendTaskLogInput
+			decodeBody(t, r, &input)
+			mu.Lock()
+			logs = append(logs, input)
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+		case "/api/runtime/workers/worker-1/tasks/task-recover/status":
+			assertMethod(t, r, http.MethodPost)
+			var input updateTaskStatusInput
+			decodeBody(t, r, &input)
+			mu.Lock()
+			statuses = append(statuses, input.Status)
+			if input.Status == "completed" {
+				if err := json.Unmarshal(input.Result, &completedResult); err != nil {
+					t.Fatalf("decode completed result: %v", err)
+				}
+			}
+			mu.Unlock()
+			writeJSON(t, w, http.StatusOK, runtimeTask{ID: "task-recover", WorkspaceID: "workspace-1", Kind: "agent_session", Status: input.Status, Result: input.Result})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := testConfig(server.URL)
+	cfg.Capabilities = json.RawMessage(`{"protocolSmoke":true,"codex":true,"dryRun":false}`)
+	cfg.WorkRoot = workRoot
+	if err := run(context.Background(), cfg, discardLogger()); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if got := strings.Join(statuses, ","); got != "running,completed" {
+		t.Fatalf("unexpected statuses: %s logs=%s", got, taskLogMessages(logs))
+	}
+	if completedResult.TestResult == nil || completedResult.TestResult.RunID != "test-run-recover" || len(completedResult.TestResult.Items) != 1 {
+		t.Fatalf("expected recovered test result, got %+v", completedResult.TestResult)
+	}
+	joinedLogs := taskLogMessages(logs)
+	if !strings.Contains(joinedLogs, "Recovered existing worker workspace from completed test artifacts") {
+		t.Fatalf("expected recovered workspace log, got %s", joinedLogs)
+	}
+	if !strings.Contains(joinedLogs, "Completing task from session artifacts") {
+		t.Fatalf("expected artifact completion log, got %s", joinedLogs)
 	}
 }
 
@@ -723,6 +943,59 @@ for line in sys.stdin:
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake codex: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func installArtifactOnlyFakeCodex(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+if [ "$1" != "app-server" ] || [ "$2" != "--listen" ] || [ "$3" != "stdio://" ]; then
+  echo "unexpected fake codex args: $*" >&2
+  exit 2
+fi
+python3 -u -c '
+import json
+import os
+import sys
+import time
+
+thread_id = "thread-artifact"
+turn_id = "turn-artifact"
+
+def emit(payload):
+    print(json.dumps(payload, separators=(",", ":")), flush=True)
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    request = json.loads(line)
+    request_id = request.get("id")
+    method = request.get("method")
+    if method == "initialize":
+        emit({"id": request_id, "result": {"userAgent": "fake-codex", "codexHome": "/tmp/fake-codex"}})
+    elif method == "thread/start":
+        emit({"id": request_id, "result": {"thread": {"id": thread_id}, "model": "fake-model", "modelProvider": "fake-provider"}})
+    elif method == "turn/start":
+        artifact_dir = os.environ.get("MSPACE_SESSION_ARTIFACT_DIR")
+        if artifact_dir:
+            os.makedirs(artifact_dir, exist_ok=True)
+            with open(os.path.join(artifact_dir, "test-result.json"), "w", encoding="utf-8") as handle:
+                json.dump({"runId":"test-run-artifact","items":[{"caseId":"test-case-artifact","status":"passed","actualResult":"Passed from artifact.","evidence":{"log":"ok"}}]}, handle)
+        emit({"id": request_id, "result": {"turn": {"id": turn_id, "status": "running", "items": []}}})
+        emit({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "running", "items": []}}})
+        time.sleep(60)
+    elif method == "turn/interrupt":
+        emit({"id": request_id, "result": {}})
+    else:
+        emit({"id": request_id, "error": {"code": -32601, "message": "method not found"}})
+'
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write artifact-only fake codex: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
