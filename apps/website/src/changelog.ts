@@ -15,6 +15,7 @@ export const changelog: ChangelogEntry[] = [
       "Let test setup and execution sessions complete from matching `test-setup-result.json` or `test-result.json` when Codex does not emit a final turn completion notification.",
       "Allowed the same worker to reclaim its own stale `running` runtime task before taking new queued work, preserving the original claim time while letting recovery continue.",
       "Recovered existing worker workdirs that already contain the matching test artifact so restart recovery can reconcile the run instead of failing on an existing session directory.",
+      "Waited for screenshot files referenced by `test-result.json` before completing artifact-backed runs, so evidence is persisted as authenticated screenshots instead of path-only placeholders.",
       "Documented the runtime recovery path for Tests runs that appear stuck even though artifacts are present.",
     ],
   },

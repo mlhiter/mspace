@@ -226,6 +226,57 @@ func TestReadTestResultArtifactEmbedsScreenshotImages(t *testing.T) {
 	}
 }
 
+func TestTestResultArtifactWaitsForReferencedScreenshots(t *testing.T) {
+	artifactDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(artifactDir, "screenshots"), 0o755); err != nil {
+		t.Fatalf("create screenshots dir: %v", err)
+	}
+	data := `{
+		"runId": "test-run-1",
+		"items": [
+			{
+				"caseId": "test-case-1",
+				"status": "passed",
+				"actualResult": "Passed through CDP.",
+				"evidence": {
+					"screenshotPaths": ["screenshots/homepage.png"],
+					"screenshotImages": [{"path": "screenshots/detail.png"}]
+				}
+			}
+		]
+	}`
+	if err := os.WriteFile(filepath.Join(artifactDir, testResultArtifactName), []byte(data), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	payload := agentSessionPayload{Automation: "test_run_execution", TestRunID: "test-run-1", ArtifactDir: artifactDir}
+	if readiness := testArtifactsReadiness(payload); readiness != testArtifactPending {
+		t.Fatalf("expected missing referenced screenshots to keep artifact pending, got %v", readiness)
+	}
+	pending := testResultArtifactPendingScreenshotPaths(payload)
+	if got := strings.Join(pending, ","); got != "screenshots/homepage.png,screenshots/detail.png" {
+		t.Fatalf("unexpected pending screenshots: %s", got)
+	}
+
+	pngBytes := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	for _, name := range []string{"homepage.png", "detail.png"} {
+		if err := os.WriteFile(filepath.Join(artifactDir, "screenshots", name), pngBytes, 0o644); err != nil {
+			t.Fatalf("write screenshot %s: %v", name, err)
+		}
+	}
+	if readiness := testArtifactsReadiness(payload); readiness != testArtifactReady {
+		t.Fatalf("expected screenshots to make artifact ready, got %v", readiness)
+	}
+	artifact, ok := readTestResultArtifact(payload)
+	if !ok || len(artifact.Items) != 1 {
+		t.Fatalf("expected enriched artifact, got %+v", artifact)
+	}
+	evidence := string(artifact.Items[0].Evidence)
+	if strings.Count(evidence, "data:image/png;base64") != 2 {
+		t.Fatalf("expected both screenshots to be embedded, got %s", evidence)
+	}
+}
+
 func TestRunOnceFailsInvalidAgentSessionPayload(t *testing.T) {
 	var completedStatus string
 	var completedError string
@@ -474,6 +525,10 @@ func TestRunOnceCompletesTestRunFromArtifactWhenCodexTurnDoesNotFinish(t *testin
 	if completedResult.TestResult == nil || completedResult.TestResult.RunID != "test-run-artifact" || len(completedResult.TestResult.Items) != 1 {
 		t.Fatalf("expected artifact-backed test result, got %+v", completedResult.TestResult)
 	}
+	evidence := string(completedResult.TestResult.Items[0].Evidence)
+	if !strings.Contains(evidence, `"screenshotImages"`) || !strings.Contains(evidence, `data:image/png;base64`) {
+		t.Fatalf("expected delayed screenshot to be embedded before completion, got %s", evidence)
+	}
 	if !strings.Contains(taskLogMessages(logs), "Completing task from session artifacts") {
 		t.Fatalf("expected artifact completion fallback log, got %s", taskLogMessages(logs))
 	}
@@ -581,6 +636,93 @@ func TestRunOnceRecoversExistingTestRunWorkdirFromArtifact(t *testing.T) {
 	}
 	if !strings.Contains(joinedLogs, "Completing task from session artifacts") {
 		t.Fatalf("expected artifact completion log, got %s", joinedLogs)
+	}
+}
+
+func TestRunOnceWaitsForReferencedScreenshotsWhenRecoveringWorkdir(t *testing.T) {
+	repoDir := createTestGitRepo(t)
+	workRoot := filepath.Join(t.TempDir(), "worker-root")
+	workdir := filepath.Join(workRoot, "workdirs", "project-recover-screenshot", "session-recover-screenshot")
+	artifactDir := filepath.Join(workdir, ".mspace", "session")
+	screenshotDir := filepath.Join(artifactDir, "screenshots")
+	runGit(t, repoDir, "worktree", "add", "--detach", workdir, "HEAD")
+	if err := os.MkdirAll(screenshotDir, 0o755); err != nil {
+		t.Fatalf("create screenshot dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "test-result.json"), []byte(`{"runId":"test-run-recover-screenshot","items":[{"caseId":"test-case-recover-screenshot","status":"passed","actualResult":"Recovered from existing artifact.","evidence":{"screenshotPaths":["screenshots/recovered.png"]}}]}`), 0o600); err != nil {
+		t.Fatalf("write existing test artifact: %v", err)
+	}
+
+	var completedResult agentSessionResult
+	payload, err := json.Marshal(agentSessionPayload{
+		Prompt:     "recover the existing test artifact",
+		IssueID:    "issue-recover-screenshot",
+		SessionID:  "session-recover-screenshot",
+		ProjectID:  "project-recover-screenshot",
+		Automation: "test_run_execution",
+		TestRunID:  "test-run-recover-screenshot",
+		Branch:     "mspace/issue/session-recover-screenshot",
+		Repository: repositorySpec{
+			URL:           repoDir,
+			DefaultBranch: "main",
+			Provider:      "local",
+			Owner:         "test",
+			Repo:          "recover-screenshot-demo",
+		},
+		ContextMarkdown: "# recover screenshot context\n",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/runtime/workers/register":
+			writeJSON(t, w, http.StatusCreated, runtimeWorker{ID: "worker-1", WorkspaceID: "workspace-1", Name: "worker-test", Mode: "team", Status: "online"})
+		case "/api/runtime/workers/worker-1/heartbeat":
+			writeJSON(t, w, http.StatusOK, runtimeWorker{ID: "worker-1", WorkspaceID: "workspace-1", Name: "worker-test", Mode: "team", Status: "online"})
+		case "/api/runtime/workers/worker-1/tasks/claim":
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+				_ = os.WriteFile(filepath.Join(screenshotDir, "recovered.png"), []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, 0o644)
+			}()
+			writeJSON(t, w, http.StatusOK, runtimeTask{
+				ID:                   "task-recover-screenshot",
+				WorkspaceID:          "workspace-1",
+				Kind:                 "agent_session",
+				RuntimeMode:          "team",
+				RequiredCapabilities: json.RawMessage(`{"codex":true}`),
+				Payload:              payload,
+			})
+		case "/api/runtime/workers/worker-1/tasks/task-recover-screenshot/logs":
+			w.WriteHeader(http.StatusCreated)
+		case "/api/runtime/workers/worker-1/tasks/task-recover-screenshot/status":
+			var input updateTaskStatusInput
+			decodeBody(t, r, &input)
+			if input.Status == "completed" {
+				if err := json.Unmarshal(input.Result, &completedResult); err != nil {
+					t.Fatalf("decode completed result: %v", err)
+				}
+			}
+			writeJSON(t, w, http.StatusOK, runtimeTask{ID: "task-recover-screenshot", WorkspaceID: "workspace-1", Kind: "agent_session", Status: input.Status, Result: input.Result})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := testConfig(server.URL)
+	cfg.Capabilities = json.RawMessage(`{"protocolSmoke":true,"codex":true,"dryRun":false}`)
+	cfg.WorkRoot = workRoot
+	if err := run(context.Background(), cfg, discardLogger()); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if completedResult.TestResult == nil || len(completedResult.TestResult.Items) != 1 {
+		t.Fatalf("expected recovered test result, got %+v", completedResult.TestResult)
+	}
+	evidence := string(completedResult.TestResult.Items[0].Evidence)
+	if !strings.Contains(evidence, `data:image/png;base64`) {
+		t.Fatalf("expected recovered screenshot to be embedded, got %s", evidence)
 	}
 }
 
@@ -956,10 +1098,12 @@ if [ "$1" != "app-server" ] || [ "$2" != "--listen" ] || [ "$3" != "stdio://" ];
   echo "unexpected fake codex args: $*" >&2
   exit 2
 fi
-python3 -u -c '
+script_file="${TMPDIR:-/tmp}/mspace-artifact-only-fake-codex-$$.py"
+cat > "$script_file" <<'PY'
 import json
 import os
 import sys
+import threading
 import time
 
 thread_id = "thread-artifact"
@@ -967,6 +1111,11 @@ turn_id = "turn-artifact"
 
 def emit(payload):
     print(json.dumps(payload, separators=(",", ":")), flush=True)
+
+def write_delayed_screenshot(screenshot_path):
+    time.sleep(1)
+    with open(screenshot_path, "wb") as handle:
+        handle.write(b"\x89PNG\r\n\x1a\n")
 
 for line in sys.stdin:
     line = line.strip()
@@ -983,8 +1132,11 @@ for line in sys.stdin:
         artifact_dir = os.environ.get("MSPACE_SESSION_ARTIFACT_DIR")
         if artifact_dir:
             os.makedirs(artifact_dir, exist_ok=True)
+            screenshot_dir = os.path.join(artifact_dir, "screenshots")
+            os.makedirs(screenshot_dir, exist_ok=True)
             with open(os.path.join(artifact_dir, "test-result.json"), "w", encoding="utf-8") as handle:
-                json.dump({"runId":"test-run-artifact","items":[{"caseId":"test-case-artifact","status":"passed","actualResult":"Passed from artifact.","evidence":{"log":"ok"}}]}, handle)
+                json.dump({"runId":"test-run-artifact","items":[{"caseId":"test-case-artifact","status":"passed","actualResult":"Passed from artifact.","evidence":{"screenshotPaths":["screenshots/artifact.png"],"log":"ok"}}]}, handle)
+            threading.Thread(target=write_delayed_screenshot, args=(os.path.join(screenshot_dir, "artifact.png"),), daemon=True).start()
         emit({"id": request_id, "result": {"turn": {"id": turn_id, "status": "running", "items": []}}})
         emit({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "running", "items": []}}})
         time.sleep(60)
@@ -992,7 +1144,8 @@ for line in sys.stdin:
         emit({"id": request_id, "result": {}})
     else:
         emit({"id": request_id, "error": {"code": -32601, "message": "method not found"}})
-'
+PY
+exec python3 -u "$script_file"
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write artifact-only fake codex: %v", err)

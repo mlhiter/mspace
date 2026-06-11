@@ -34,6 +34,15 @@ const testCaseProposalsArtifactName = "test-case-proposals.json"
 const testSetupResultArtifactName = "test-setup-result.json"
 const testResultArtifactName = "test-result.json"
 const maxTestResultScreenshotBytes = 2 * 1024 * 1024
+const testArtifactCompletionSettleTimeout = 10 * time.Second
+
+type testArtifactReadiness int
+
+const (
+	testArtifactMissing testArtifactReadiness = iota
+	testArtifactPending
+	testArtifactReady
+)
 
 var branchSlugUnsafePattern = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -1369,7 +1378,20 @@ func waitCodexTurnOrTestArtifact(ctx context.Context, runtimeClient *runtimeClie
 			}
 			done, err := handleCodexNotification(ctx, runtimeClient, workerID, taskID, threadID, turnID, notification, outputBuffers)
 			if done {
-				return false, err
+				if err != nil {
+					return false, err
+				}
+				if testArtifactsReadiness(payload) == testArtifactPending {
+					ready, waitErr := waitForTestArtifactsReady(ctx, payload, testArtifactCompletionSettleTimeout)
+					if waitErr != nil {
+						return false, waitErr
+					}
+					if ready {
+						return true, nil
+					}
+					return false, fmt.Errorf("test result references screenshot files that are not available: %s", strings.Join(testResultArtifactPendingScreenshotPaths(payload), ", "))
+				}
+				return false, nil
 			}
 		}
 	}
@@ -1385,15 +1407,53 @@ func canCompleteFromTestArtifacts(payload agentSessionPayload) bool {
 }
 
 func testArtifactsReady(payload agentSessionPayload) bool {
+	return testArtifactsReadiness(payload) == testArtifactReady
+}
+
+func testArtifactsReadiness(payload agentSessionPayload) testArtifactReadiness {
 	switch strings.TrimSpace(payload.Automation) {
 	case "test_run_execution":
 		artifact, ok := readTestResultArtifact(payload)
-		return ok && artifactMatchesRun(payload.TestRunID, artifact.RunID)
+		if !ok || !artifactMatchesRun(payload.TestRunID, artifact.RunID) {
+			return testArtifactMissing
+		}
+		if !testResultArtifactScreenshotsReady(payload.ArtifactDir, artifact) {
+			return testArtifactPending
+		}
+		return testArtifactReady
 	case "test_run_setup":
 		artifact, ok := readTestSetupResultArtifact(payload)
-		return ok && artifactMatchesRun(payload.TestRunID, artifact.RunID)
+		if ok && artifactMatchesRun(payload.TestRunID, artifact.RunID) {
+			return testArtifactReady
+		}
+		return testArtifactMissing
 	default:
-		return false
+		return testArtifactMissing
+	}
+}
+
+func waitForTestArtifactsReady(ctx context.Context, payload agentSessionPayload, timeout time.Duration) (bool, error) {
+	if timeout <= 0 {
+		return testArtifactsReady(payload), nil
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		switch testArtifactsReadiness(payload) {
+		case testArtifactReady:
+			return true, nil
+		case testArtifactMissing:
+			return false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-deadline.C:
+			return false, nil
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -1433,6 +1493,9 @@ func (result *agentSessionResult) attachMatchingTestCompletionArtifact(payload a
 	case "test_run_execution":
 		artifact, ok := readTestResultArtifact(payload)
 		if !ok || !artifactMatchesRun(payload.TestRunID, artifact.RunID) {
+			return false
+		}
+		if !testResultArtifactScreenshotsReady(payload.ArtifactDir, artifact) {
 			return false
 		}
 		result.TestResult = &artifact
@@ -1874,7 +1937,17 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 	payload.Workdir = workdir
 	payload.ArtifactDir = filepath.Join(workdir, ".mspace", "session")
 	if _, err := os.Stat(workdir); err == nil {
-		if testArtifactsReady(payload) {
+		readiness := testArtifactsReadiness(payload)
+		if readiness == testArtifactPending {
+			ready, waitErr := waitForTestArtifactsReady(ctx, payload, testArtifactCompletionSettleTimeout)
+			if waitErr != nil {
+				return payload, waitErr
+			}
+			if ready {
+				readiness = testArtifactReady
+			}
+		}
+		if readiness == testArtifactReady {
 			payload.Env = withPayloadRuntimeEnv(payload)
 			_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Recovered existing worker workspace from completed test artifacts: " + payload.Workdir})
 			return payload, nil
@@ -2214,14 +2287,11 @@ func enrichTestResultEvidence(artifactDir string, evidence json.RawMessage) json
 	if err := json.Unmarshal(evidence, &record); err != nil || len(record) == 0 {
 		return evidence
 	}
-	if _, exists := record["screenshotImages"]; exists {
-		return evidence
-	}
-	paths := evidenceScreenshotPaths(record)
+	paths := localEvidenceScreenshotPaths(record)
 	if len(paths) == 0 {
 		return evidence
 	}
-	images := []map[string]string{}
+	images := existingEvidenceScreenshotImages(record["screenshotImages"])
 	for _, path := range paths {
 		image, ok := readTestResultScreenshotDataURL(artifactDir, path)
 		if !ok {
@@ -2240,23 +2310,109 @@ func enrichTestResultEvidence(artifactDir string, evidence json.RawMessage) json
 	return data
 }
 
-func evidenceScreenshotPaths(record map[string]any) []string {
-	paths := []string{}
-	if value, ok := record["screenshot"].(string); ok && strings.TrimSpace(value) != "" {
-		paths = append(paths, strings.TrimSpace(value))
+func existingEvidenceScreenshotImages(value any) []any {
+	values, ok := value.([]any)
+	if !ok {
+		return nil
 	}
-	for _, key := range []string{"screenshots", "screenshotPaths"} {
-		values, ok := record[key].([]any)
-		if !ok {
+	images := []any{}
+	for _, item := range values {
+		record, ok := item.(map[string]any)
+		if !ok || !hasEmbeddedOrRemoteScreenshotSource(record) {
 			continue
 		}
-		for _, item := range values {
-			if value, ok := item.(string); ok && strings.TrimSpace(value) != "" {
-				paths = append(paths, strings.TrimSpace(value))
+		images = append(images, record)
+	}
+	return images
+}
+
+func testResultArtifactScreenshotsReady(artifactDir string, artifact testResultArtifact) bool {
+	return len(testResultArtifactPendingScreenshotPathsFromArtifact(artifactDir, artifact)) == 0
+}
+
+func testResultArtifactPendingScreenshotPaths(payload agentSessionPayload) []string {
+	artifact, ok := readTestResultArtifact(payload)
+	if !ok || !artifactMatchesRun(payload.TestRunID, artifact.RunID) {
+		return nil
+	}
+	return testResultArtifactPendingScreenshotPathsFromArtifact(payload.ArtifactDir, artifact)
+}
+
+func testResultArtifactPendingScreenshotPathsFromArtifact(artifactDir string, artifact testResultArtifact) []string {
+	pending := []string{}
+	for _, item := range artifact.Items {
+		record := map[string]any{}
+		if len(item.Evidence) == 0 || json.Unmarshal(item.Evidence, &record) != nil || len(record) == 0 {
+			continue
+		}
+		for _, path := range localEvidenceScreenshotPaths(record) {
+			if _, ok := readTestResultScreenshotDataURL(artifactDir, path); !ok {
+				pending = append(pending, path)
 			}
 		}
 	}
-	return paths
+	return dedupeStrings(pending)
+}
+
+func localEvidenceScreenshotPaths(record map[string]any) []string {
+	paths := screenshotPathReferences(record["screenshot"])
+	for _, key := range []string{"screenshots", "screenshotPaths"} {
+		paths = append(paths, screenshotPathReferences(record[key])...)
+	}
+	paths = append(paths, screenshotImagePathReferences(record["screenshotImages"])...)
+	return dedupeStrings(paths)
+}
+
+func screenshotPathReferences(value any) []string {
+	switch typed := value.(type) {
+	case string:
+		if isLocalScreenshotPathReference(typed) {
+			return []string{strings.TrimSpace(typed)}
+		}
+	case []any:
+		paths := []string{}
+		for _, item := range typed {
+			paths = append(paths, screenshotPathReferences(item)...)
+		}
+		return paths
+	}
+	return nil
+}
+
+func screenshotImagePathReferences(value any) []string {
+	switch typed := value.(type) {
+	case []any:
+		paths := []string{}
+		for _, item := range typed {
+			paths = append(paths, screenshotImagePathReferences(item)...)
+		}
+		return paths
+	case map[string]any:
+		if hasEmbeddedOrRemoteScreenshotSource(typed) {
+			return nil
+		}
+		if path, ok := typed["path"].(string); ok && isLocalScreenshotPathReference(path) {
+			return []string{strings.TrimSpace(path)}
+		}
+	}
+	return nil
+}
+
+func hasEmbeddedOrRemoteScreenshotSource(record map[string]any) bool {
+	for _, key := range []string{"dataUrl", "dataURL", "data_url", "base64", "url", "artifactUrl", "artifactURL", "artifact_url", "thumbnailUrl", "thumbnailURL", "thumbnail_url"} {
+		if value, ok := record[key].(string); ok && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func isLocalScreenshotPathReference(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "data:") || strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "/api/") || strings.HasPrefix(value, "/artifacts/") {
+		return false
+	}
+	return true
 }
 
 func readTestResultScreenshotDataURL(artifactDir, screenshotPath string) (map[string]string, bool) {
@@ -2290,6 +2446,20 @@ func readTestResultScreenshotDataURL(artifactDir, screenshotPath string) (map[st
 		"mime":    mimeType,
 		"dataUrl": "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content),
 	}, true
+}
+
+func dedupeStrings(values []string) []string {
+	seen := map[string]bool{}
+	deduped := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		deduped = append(deduped, value)
+	}
+	return deduped
 }
 
 func normalizeSemanticBranchArtifact(artifact branchNameArtifact) (string, error) {

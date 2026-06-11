@@ -824,7 +824,7 @@ Shape:
 
 The server stores the whole setup result on the run and copies the `outputs` object into `runContext`. Later execution Issues include that context in their prompt, so a setup step can hand off concrete facts such as `previewUrl`, `image`, `namespace`, or `sshTarget` without adding a new product object. `status:"failed"`, a failed setup task, cancellation, or a missing setup artifact stops the run before any case session starts.
 
-When a UI test writes screenshot paths inside `evidence`, the worker may embed small screenshot files from the session artifact directory as `evidence.screenshotImages[]` data URLs. The server extracts supported image data into `test_artifacts`, removes embedded image payloads from run item evidence, and writes artifact refs back into `evidence.artifacts` and `evidence.screenshotImages`. Case Detail and Run Detail render those refs as authenticated thumbnails with an in-app preview.
+When a UI test writes screenshot paths inside `evidence`, the worker waits briefly for those referenced files to become readable under the session artifact directory, then embeds small screenshot files as `evidence.screenshotImages[]` data URLs before completing the runtime task from `test-result.json`. The same readiness rule applies when a restarted worker recovers an existing session workdir. The server extracts supported image data into `test_artifacts`, removes embedded image payloads from run item evidence, and writes artifact refs back into `evidence.artifacts` and `evidence.screenshotImages`. Case Detail and Run Detail render those refs as authenticated thumbnails with an in-app preview.
 
 Future UI testing can write:
 
