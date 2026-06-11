@@ -195,6 +195,9 @@ func (s *PostgresStore) reconcileTestResultArtifact(ctx context.Context, q query
 	if err != nil {
 		return err
 	}
+	if run.Status == "cancelled" {
+		return nil
+	}
 	for _, item := range artifact.Items {
 		if isBatchTestResultArtifactItem(item) {
 			if err := s.updateTestRunBatchItemsFromArtifact(ctx, q, task, run, item); err != nil {
@@ -223,6 +226,9 @@ func (s *PostgresStore) reconcileTestSetupArtifact(ctx context.Context, q querye
 	run, err := loadTestRun(ctx, q, task.WorkspaceID, runID)
 	if err != nil {
 		return err
+	}
+	if run.Status == "cancelled" {
+		return nil
 	}
 	if strings.TrimSpace(run.SetupSteps) == "" {
 		return nil
@@ -279,6 +285,9 @@ func (s *PostgresStore) updateTestRunItemFromArtifact(ctx context.Context, q que
 	if err != nil {
 		return err
 	}
+	if isFinalTestRunItemStatus(runItem.Status) {
+		return nil
+	}
 	evidence := cloneRawJSONObject(item.Evidence)
 	artifacts, err := s.storeTestResultEvidenceArtifacts(ctx, q, task, run, runItem, evidence)
 	if err != nil {
@@ -292,11 +301,12 @@ func (s *PostgresStore) updateTestRunItemFromArtifact(ctx context.Context, q que
 			failure_summary = $7,
 			evidence = $8::jsonb,
 			updated_at = now()
-		WHERE workspace_id = $1
-			AND project_id = $2
-			AND run_id = $3
-			AND case_id::text = $4
-	`, run.WorkspaceID, runItem.ProjectID, run.ID, caseID, status, strings.TrimSpace(item.ActualResult), strings.TrimSpace(item.FailureSummary), evidence)
+			WHERE workspace_id = $1
+				AND project_id = $2
+				AND run_id = $3
+				AND case_id::text = $4
+				AND status IN ('queued', 'running')
+		`, run.WorkspaceID, runItem.ProjectID, run.ID, caseID, status, strings.TrimSpace(item.ActualResult), strings.TrimSpace(item.FailureSummary), evidence)
 	if err != nil {
 		return err
 	}
@@ -581,6 +591,9 @@ func (s *MemoryStore) reconcileTestResultArtifactLocked(task RuntimeTask, artifa
 	if !ok || run.WorkspaceID != task.WorkspaceID {
 		return
 	}
+	if run.Status == "cancelled" {
+		return
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, artifactItem := range artifact.Items {
 		status := normalizeTestRunItemStatus(artifactItem.Status)
@@ -611,6 +624,9 @@ func (s *MemoryStore) reconcileTestResultArtifactLocked(task RuntimeTask, artifa
 		}
 		for id, item := range s.testRunItems {
 			if item.RunID == run.ID && item.TestCaseID == strings.TrimSpace(artifactItem.CaseID) {
+				if isFinalTestRunItemStatus(item.Status) {
+					continue
+				}
 				item.Status = status
 				item.ActualResult = strings.TrimSpace(artifactItem.ActualResult)
 				item.FailureSummary = strings.TrimSpace(artifactItem.FailureSummary)
@@ -629,7 +645,13 @@ func (s *MemoryStore) reconcileTestResultArtifactLocked(task RuntimeTask, artifa
 	}
 	run.TotalCount = len(items)
 	run.PassedCount, run.FailedCount, run.BlockedCount, run.SkippedCount = testRunCounts(items)
-	if run.TotalCount > 0 && run.PassedCount+run.FailedCount+run.BlockedCount+run.SkippedCount >= run.TotalCount {
+	finalCount := 0
+	for _, item := range items {
+		if isFinalTestRunItemStatus(item.Status) {
+			finalCount++
+		}
+	}
+	if run.TotalCount > 0 && finalCount >= run.TotalCount {
 		run.Status = "needs_acceptance"
 		run.CompletedAt = now
 	} else {
@@ -649,6 +671,9 @@ func (s *MemoryStore) reconcileTestSetupArtifactLocked(task RuntimeTask, artifac
 	}
 	run, ok := s.testRuns[runID]
 	if !ok || run.WorkspaceID != task.WorkspaceID || run.ProjectID != task.ProjectID || strings.TrimSpace(run.SetupSteps) == "" {
+		return
+	}
+	if run.Status == "cancelled" {
 		return
 	}
 	setupResult, status, runContext := buildTestSetupReconciliation(task, artifact)

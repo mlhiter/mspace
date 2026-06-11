@@ -1175,6 +1175,91 @@ func (s *PostgresStore) RetryProjectTestRun(ctx Context, user User, workspaceID,
 	return detail, nil
 }
 
+func (s *PostgresStore) CancelWorkspaceTestRun(ctx Context, user User, workspaceID, runID string, input CancelRuntimeTaskInput) (TestRunDetail, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	runID = strings.TrimSpace(runID)
+	if _, err := loadWorkspaceForUser(dbctx, s.pool, workspaceID, user.ID); err != nil {
+		return TestRunDetail{}, err
+	}
+	reason := normalizeRuntimeTaskCancelReason(input.Reason)
+	tx, err := s.pool.Begin(dbctx)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	defer tx.Rollback(dbctx)
+
+	run, err := loadTestRun(dbctx, tx, workspaceID, runID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if !isCancellableTestRunStatus(run.Status) {
+		return TestRunDetail{}, ErrNotFound
+	}
+	taskIDs, err := cancelPostgresTestRunRuntimeTasks(dbctx, tx, workspaceID, runID, run.SetupSessionID, reason)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	setupStatus := run.SetupStatus
+	if setupStatus == "queued" || setupStatus == "running" {
+		setupStatus = "cancelled"
+	}
+	if _, err := tx.Exec(dbctx, `
+		UPDATE test_run_items
+		SET status = 'cancelled',
+			actual_result = CASE WHEN actual_result = '' THEN $3 ELSE actual_result END,
+			failure_summary = CASE WHEN failure_summary = '' THEN $3 ELSE failure_summary END,
+			updated_at = now()
+		WHERE workspace_id = $1
+			AND run_id = $2
+			AND status IN ('queued', 'running')
+	`, workspaceID, runID, reason); err != nil {
+		return TestRunDetail{}, err
+	}
+	tag, err := tx.Exec(dbctx, `
+		UPDATE test_runs
+		SET status = 'cancelled',
+			setup_status = $3,
+			acceptance_status = 'pending',
+			acceptance_note = '',
+			completed_at = now(),
+			updated_at = now()
+		WHERE workspace_id = $1
+			AND id = $2
+			AND status IN ('queued', 'setup_running', 'running')
+	`, workspaceID, runID, setupStatus)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return TestRunDetail{}, ErrNotFound
+	}
+	if len(taskIDs) > 0 {
+		for _, taskID := range taskIDs {
+			if err := insertRuntimeTaskEvent(dbctx, tx, workspaceID, taskID, "", user.ID, "cancel_requested", map[string]any{
+				"status":    "cancelled",
+				"reason":    reason,
+				"source":    "test_run",
+				"testRunId": runID,
+			}); err != nil {
+				return TestRunDetail{}, err
+			}
+		}
+	}
+	if err := tx.Commit(dbctx); err != nil {
+		return TestRunDetail{}, err
+	}
+	return s.GetWorkspaceTestRun(ctx, user.ID, workspaceID, runID)
+}
+
+func (s *PostgresStore) CancelProjectTestRun(ctx Context, user User, workspaceID, projectID, runID string, input CancelRuntimeTaskInput) (TestRunDetail, error) {
+	projectID = strings.TrimSpace(projectID)
+	if _, err := s.GetProjectTestRun(ctx, user.ID, workspaceID, projectID, runID); err != nil {
+		return TestRunDetail{}, err
+	}
+	return s.CancelWorkspaceTestRun(ctx, user, workspaceID, runID, input)
+}
+
 func (s *PostgresStore) AcceptWorkspaceTestRun(ctx Context, userID, workspaceID, runID string, input ReviewTestRunInput) (TestRun, error) {
 	return reviewTestRunRecord(asContext(ctx), s.pool, userID, workspaceID, runID, "accepted", input.Note)
 }
@@ -2516,6 +2601,96 @@ func testRunCasesForRetry(ctx context.Context, q queryer, workspaceID, runID str
 	return cases, nil
 }
 
+func isCancellableTestRunStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "queued", "setup_running", "running":
+		return true
+	default:
+		return false
+	}
+}
+
+func cancelPostgresTestRunRuntimeTasks(ctx context.Context, q queryer, workspaceID, runID, setupSessionID, reason string) ([]string, error) {
+	sessionIDs := []string{}
+	if setupSessionID = strings.TrimSpace(setupSessionID); setupSessionID != "" {
+		sessionIDs = append(sessionIDs, setupSessionID)
+	}
+	rows, err := q.Query(ctx, `
+		SELECT DISTINCT agent_session_id
+		FROM test_run_items
+		WHERE workspace_id = $1
+			AND run_id = $2
+			AND agent_session_id <> ''
+			AND status IN ('queued', 'running')
+	`, workspaceID, runID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var sessionID string
+		if err := rows.Scan(&sessionID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(sessionIDs) == 0 {
+		return nil, nil
+	}
+	seen := map[string]struct{}{}
+	uniqueSessionIDs := make([]string, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		sessionID = strings.TrimSpace(sessionID)
+		if sessionID == "" {
+			continue
+		}
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		uniqueSessionIDs = append(uniqueSessionIDs, sessionID)
+	}
+	if len(uniqueSessionIDs) == 0 {
+		return nil, nil
+	}
+	taskRows, err := q.Query(ctx, `
+		UPDATE runtime_tasks
+		SET status = 'cancelled',
+			started_at = CASE
+				WHEN status IN ('claimed', 'running') THEN COALESCE(started_at, now())
+				ELSE started_at
+			END,
+			finished_at = now(),
+			error = $3,
+			updated_at = now()
+		WHERE workspace_id = $1
+			AND session_id = ANY($2::text[])
+			AND status IN ('queued', 'claimed', 'running')
+		RETURNING id::text
+	`, workspaceID, uniqueSessionIDs, reason)
+	if err != nil {
+		return nil, err
+	}
+	defer taskRows.Close()
+	taskIDs := []string{}
+	for taskRows.Next() {
+		var taskID string
+		if err := taskRows.Scan(&taskID); err != nil {
+			return nil, err
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	if err := taskRows.Err(); err != nil {
+		return nil, err
+	}
+	return taskIDs, nil
+}
+
 func reviewTestRunRecord(ctx context.Context, q queryer, userID, workspaceID, runID, status, note string) (TestRun, error) {
 	tag, err := q.Exec(ctx, `
 		UPDATE test_runs
@@ -2543,7 +2718,12 @@ func updateTestRunCounts(ctx context.Context, q queryer, workspaceID, runID stri
 	}
 	passed, failed, blocked, skipped := testRunCounts(items)
 	runStatus := "running"
-	finalCount := passed + failed + blocked + skipped
+	finalCount := 0
+	for _, item := range items {
+		if isFinalTestRunItemStatus(item.Status) {
+			finalCount++
+		}
+	}
 	markCompleted := false
 	if len(items) > 0 && finalCount >= len(items) {
 		runStatus = "needs_acceptance"

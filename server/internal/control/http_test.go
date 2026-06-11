@@ -2859,6 +2859,69 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 			t.Fatalf("failed setup task should not start case execution, got %+v", item)
 		}
 	}
+	cancelSetupRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	cancelledSetupRun := cancelProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, cancelSetupRun.Run.ID, "User stopped setup.")
+	if cancelledSetupRun.Run.Status != "cancelled" || cancelledSetupRun.Run.SetupStatus != "cancelled" || cancelledSetupRun.Run.CompletedAt == "" {
+		t.Fatalf("expected setup run cancellation, got %+v", cancelledSetupRun.Run)
+	}
+	setupSession, err := store.GetSession(context.Background(), user.ID, workspaceID, cancelSetupRun.Run.SetupSessionID)
+	if err != nil {
+		t.Fatalf("get cancelled setup session: %v", err)
+	}
+	setupTask := mustRuntimeTaskBySession(t, store, workspaceID, cancelSetupRun.Run.SetupSessionID)
+	if setupSession.Session.Status != "cancelled" || setupTask.Status != "cancelled" || !strings.Contains(setupTask.Error, "User stopped setup.") {
+		t.Fatalf("expected cancelled setup session, got %+v", setupSession.Session)
+	}
+	for _, item := range cancelledSetupRun.Items {
+		if item.Status != "cancelled" || !strings.Contains(item.FailureSummary, "User stopped setup.") {
+			t.Fatalf("setup cancellation should cancel queued items, got %+v", item)
+		}
+	}
+	lateSetupResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testSetup":{"runId":%q,"status":"passed","summary":"Too late."}}}`, cancelSetupRun.Run.ID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, cancelSetupRun.Run.SetupSessionID, lateSetupResult); err != nil {
+		t.Fatalf("complete late setup task: %v", err)
+	}
+	cancelledSetupRun = getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, cancelSetupRun.Run.ID)
+	if cancelledSetupRun.Run.Status != "cancelled" || cancelledSetupRun.Run.SetupStatus != "cancelled" {
+		t.Fatalf("late setup artifact should not revive cancelled run, got %+v", cancelledSetupRun.Run)
+	}
+
+	cancelExecutionRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	cancelExecutionSetupResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testSetup":{"runId":%q,"status":"passed","summary":"Ready before cancellation.","outputs":{}}}}`, cancelExecutionRun.Run.ID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, cancelExecutionRun.Run.SetupSessionID, cancelExecutionSetupResult); err != nil {
+		t.Fatalf("complete cancel-execution setup task: %v", err)
+	}
+	cancelExecutionRun = getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, cancelExecutionRun.Run.ID)
+	cancelledExecutionRun := cancelProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, cancelExecutionRun.Run.ID, "User stopped execution.")
+	if cancelledExecutionRun.Run.Status != "cancelled" || cancelledExecutionRun.Run.SetupStatus != "passed" {
+		t.Fatalf("expected execution run cancellation, got %+v", cancelledExecutionRun.Run)
+	}
+	for _, item := range cancelledExecutionRun.Items {
+		if item.Status != "cancelled" || item.AgentSessionID == "" {
+			t.Fatalf("execution cancellation should cancel running items while preserving session links, got %+v", item)
+		}
+		sessionDetail, err := store.GetSession(context.Background(), user.ID, workspaceID, item.AgentSessionID)
+		if err != nil {
+			t.Fatalf("get cancelled execution session: %v", err)
+		}
+		task := mustRuntimeTaskBySession(t, store, workspaceID, item.AgentSessionID)
+		if sessionDetail.Session.Status != "cancelled" || task.Status != "cancelled" || !strings.Contains(task.Error, "User stopped execution.") {
+			t.Fatalf("expected cancelled execution session, got %+v", sessionDetail.Session)
+		}
+	}
+	lateExecutionResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"items":[{"caseId":%q,"status":"passed","actualResult":"Too late."}]}}}`, cancelExecutionRun.Run.ID, cancelExecutionRun.Items[0].TestCaseID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, cancelExecutionRun.Items[0].AgentSessionID, lateExecutionResult); err != nil {
+		t.Fatalf("complete late execution task: %v", err)
+	}
+	cancelledExecutionRun = getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, cancelExecutionRun.Run.ID)
+	if cancelledExecutionRun.Run.Status != "cancelled" {
+		t.Fatalf("late execution artifact should not revive cancelled run, got %+v", cancelledExecutionRun.Run)
+	}
+	for _, item := range cancelledExecutionRun.Items {
+		if item.Status != "cancelled" {
+			t.Fatalf("late execution artifact should not overwrite cancelled item, got %+v", item)
+		}
+	}
 	blockedRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
 	blockedSetupResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testSetup":{"runId":%q,"status":"passed","summary":"Ready for blocked review.","outputs":{}}}}`, blockedRun.Run.ID)
 	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, blockedRun.Run.SetupSessionID, blockedSetupResult); err != nil {
@@ -4514,6 +4577,22 @@ func getWorkspaceTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken,
 	return detail
 }
 
+func cancelProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, runID, reason string) TestRunDetail {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects/"+projectID+"/test-runs/"+runID+"/cancel", strings.NewReader(fmt.Sprintf(`{"reason":%q}`, reason)))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("cancel test run status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var detail TestRunDetail
+	if err := json.Unmarshal(recorder.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("parse cancelled test run: %v", err)
+	}
+	return detail
+}
+
 func reviewProjectTestRunViaHTTP(t *testing.T, router http.Handler, sessionToken, workspaceID, projectID, runID, action, note string) TestRun {
 	t.Helper()
 	recorder := httptest.NewRecorder()
@@ -4539,6 +4618,19 @@ func findTestRunItem(t *testing.T, items []TestRunItem, caseID string) TestRunIt
 	}
 	t.Fatalf("test run item for case %s not found in %+v", caseID, items)
 	return TestRunItem{}
+}
+
+func mustRuntimeTaskBySession(t *testing.T, store *MemoryStore, workspaceID, sessionID string) RuntimeTask {
+	t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, task := range store.runtimeTasks {
+		if task.WorkspaceID == workspaceID && task.SessionID == sessionID {
+			return task
+		}
+	}
+	t.Fatalf("runtime task for session %s not found", sessionID)
+	return RuntimeTask{}
 }
 
 func completeSessionTaskInMemoryStore(t *testing.T, store *MemoryStore, workerID, sessionID, completionPayload string) (RuntimeTask, error) {

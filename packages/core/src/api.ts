@@ -637,6 +637,12 @@ export const controlPlaneApi = {
       headers: authHeaders(token),
       body: JSON.stringify(input),
     }),
+  cancelWorkspaceTestRun: (token: string, workspaceId: string, runId: string, input: CancelRuntimeTaskInput = {}) =>
+    requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/test-runs/${runId}/cancel`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
   acceptWorkspaceTestRun: (token: string, workspaceId: string, runId: string, input: ReviewTestRunInput = {}) =>
     requestControlPlane<TestRun>(`/api/workspaces/${workspaceId}/test-runs/${runId}/accept`, {
       method: "POST",
@@ -700,6 +706,12 @@ export const controlPlaneApi = {
     }),
   retryProjectTestRun: (token: string, workspaceId: string, projectId: string, runId: string, input: RetryTestRunInput = {}) =>
     requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-runs/${runId}/retry`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  cancelProjectTestRun: (token: string, workspaceId: string, projectId: string, runId: string, input: CancelRuntimeTaskInput = {}) =>
+    requestControlPlane<TestRunDetail>(`/api/workspaces/${workspaceId}/projects/${projectId}/test-runs/${runId}/cancel`, {
       method: "POST",
       headers: authHeaders(token),
       body: JSON.stringify(input),

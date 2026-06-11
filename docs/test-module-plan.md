@@ -207,7 +207,7 @@ A Test Run stores:
 - linked parent Issue;
 - frozen setup steps, setup status, setup Issue, setup Session, setup result, and setup-derived run context when the source plan has setup;
 - linked environment snapshot;
-- status;
+- status: `queued`, `setup_running`, `setup_failed`, `running`, `needs_acceptance`, `accepted`, `blocked`, or `cancelled`;
 - passed, failed, blocked, and skipped counts;
 - pass rate;
 - start and completion time;
@@ -223,7 +223,7 @@ It stores:
 - linked Test Case;
 - linked execution Issue;
 - linked Agent Session;
-- status: `queued`, `running`, `passed`, `failed`, `blocked`, `skipped`, `needs_human_review`;
+- status: `queued`, `running`, `passed`, `failed`, `blocked`, `skipped`, or `cancelled`;
 - actual result;
 - failure summary;
 - screenshot, log, command, or resource evidence;
@@ -361,6 +361,8 @@ Test Plan: rc4 functional test
 Each execution Issue starts a Codex Agent Session through the existing `POST /issues/{issueID}/sessions` path.
 
 If the plan has setup steps, the run enters `setup_running` first and creates a single setup child Issue with automation marker `test_run_setup`. Case execution Issues are not created yet. The setup session must write `${MSPACE_SESSION_ARTIFACT_DIR}/test-setup-result.json`. Only a completed setup task with a passing setup artifact moves the run to `running` and starts the normal case batches. Failed, cancelled, missing-artifact, or artifact-level failed setup marks the run `setup_failed` and leaves every run item queued.
+
+A user-initiated stop is different from a failed setup. Stopping a run while it is `queued`, `setup_running`, or `running` marks the run `cancelled`, marks every queued/running item `cancelled`, and requests cancellation for the linked setup/execution runtime tasks. Late `test-setup-result.json` or `test-result.json` artifacts from interrupted workers must not revive the run or overwrite cancelled items.
 
 ### 6. Codex Performs The Actual Test
 
@@ -731,6 +733,7 @@ POST   /api/workspaces/{workspaceID}/test-runs
 GET    /api/workspaces/{workspaceID}/test-runs/{runID}
 GET    /api/workspaces/{workspaceID}/test-runs/{runID}/artifacts
 POST   /api/workspaces/{workspaceID}/test-runs/{runID}/retry
+POST   /api/workspaces/{workspaceID}/test-runs/{runID}/cancel
 POST   /api/workspaces/{workspaceID}/test-runs/{runID}/accept
 POST   /api/workspaces/{workspaceID}/test-runs/{runID}/block
 ```
@@ -747,6 +750,7 @@ GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-runs
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-runs
 GET    /api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry
+POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/cancel
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/accept
 POST   /api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block
 ```
@@ -933,6 +937,7 @@ Acceptance:
 - plan runs with setup start in `setup_running`, create a setup Issue/Session, and keep items queued until setup passes;
 - setup success stores `setupResult` plus `runContext` and then creates execution Issues;
 - setup failure or cancellation marks the run `setup_failed` without starting case sessions;
+- user can stop a queued/setup-running/running test run; linked runtime tasks are cancelled, run items become `cancelled`, and late artifacts do not reopen the run;
 - parent Issue and execution Issues are created;
 - default Issues browsing stays focused on human work and does not show those test automation Issues;
 - Codex sessions run through the normal worker path;

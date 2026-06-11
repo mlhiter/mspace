@@ -113,6 +113,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/workspaces/{workspaceID}/test-runs/{runID}", s.handleGetWorkspaceTestRun)
 	r.Get("/api/workspaces/{workspaceID}/test-runs/{runID}/artifacts", s.handleListWorkspaceTestRunArtifacts)
 	r.Post("/api/workspaces/{workspaceID}/test-runs/{runID}/retry", s.handleRetryWorkspaceTestRun)
+	r.Post("/api/workspaces/{workspaceID}/test-runs/{runID}/cancel", s.handleCancelWorkspaceTestRun)
 	r.Post("/api/workspaces/{workspaceID}/test-runs/{runID}/accept", s.handleAcceptWorkspaceTestRun)
 	r.Post("/api/workspaces/{workspaceID}/test-runs/{runID}/block", s.handleBlockWorkspaceTestRun)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/runbook", s.handleGetProjectRunbook)
@@ -138,6 +139,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}", s.handleGetProjectTestRun)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/artifacts", s.handleListProjectTestRunArtifacts)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/retry", s.handleRetryProjectTestRun)
+	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/cancel", s.handleCancelProjectTestRun)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/accept", s.handleAcceptProjectTestRun)
 	r.Post("/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block", s.handleBlockProjectTestRun)
 	r.Get("/api/workspaces/{workspaceID}/projects/{projectID}/test-cases/{caseID}", s.handleGetProjectTestCase)
@@ -1277,6 +1279,24 @@ func (s *Server) handleRetryWorkspaceTestRun(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, detail)
 }
 
+func (s *Server) handleCancelWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CancelRuntimeTaskInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.CancelWorkspaceTestRun(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "runID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
 func (s *Server) handleAcceptWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
 	s.handleReviewWorkspaceTestRun(w, r, true)
 }
@@ -1497,6 +1517,24 @@ func (s *Server) handleRetryProjectTestRun(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	detail, err := s.store.RetryProjectTestRun(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "runID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Server) handleCancelProjectTestRun(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := CancelRuntimeTaskInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	detail, err := s.store.CancelProjectTestRun(r.Context(), user, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "projectID")), strings.TrimSpace(chi.URLParam(r, "runID")), input)
 	if err != nil {
 		writeStoreError(w, err)
 		return

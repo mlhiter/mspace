@@ -3060,6 +3060,63 @@ func (s *MemoryStore) RetryProjectTestRun(ctx Context, user User, workspaceID, p
 	return detail, nil
 }
 
+func (s *MemoryStore) CancelWorkspaceTestRun(_ Context, user User, workspaceID, runID string, input CancelRuntimeTaskInput) (TestRunDetail, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	run, err := s.testRunForWorkspaceLocked(user.ID, workspaceID, runID)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
+	if !isCancellableTestRunStatus(run.Status) {
+		return TestRunDetail{}, ErrNotFound
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	reason := normalizeRuntimeTaskCancelReason(input.Reason)
+	sessionIDs := []string{}
+	if strings.TrimSpace(run.SetupSessionID) != "" {
+		sessionIDs = append(sessionIDs, strings.TrimSpace(run.SetupSessionID))
+	}
+	for id, item := range s.testRunItems {
+		if item.WorkspaceID != run.WorkspaceID || item.RunID != run.ID {
+			continue
+		}
+		if item.Status != "queued" && item.Status != "running" {
+			continue
+		}
+		if strings.TrimSpace(item.AgentSessionID) != "" {
+			sessionIDs = append(sessionIDs, strings.TrimSpace(item.AgentSessionID))
+		}
+		item.Status = "cancelled"
+		if item.ActualResult == "" {
+			item.ActualResult = reason
+		}
+		if item.FailureSummary == "" {
+			item.FailureSummary = reason
+		}
+		item.UpdatedAt = now
+		s.testRunItems[id] = item
+	}
+	s.cancelRuntimeTasksBySessionIDsLocked(run.WorkspaceID, sessionIDs, user.ID, reason, run.ID)
+	if run.SetupStatus == "queued" || run.SetupStatus == "running" {
+		run.SetupStatus = "cancelled"
+	}
+	run.Status = "cancelled"
+	run.AcceptanceStatus = "pending"
+	run.AcceptanceNote = ""
+	run.CompletedAt = now
+	run.UpdatedAt = now
+	s.testRuns[run.ID] = run
+	return s.testRunDetailLocked(run.ID)
+}
+
+func (s *MemoryStore) CancelProjectTestRun(ctx Context, user User, workspaceID, projectID, runID string, input CancelRuntimeTaskInput) (TestRunDetail, error) {
+	if _, err := s.GetProjectTestRun(ctx, user.ID, workspaceID, projectID, runID); err != nil {
+		return TestRunDetail{}, err
+	}
+	return s.CancelWorkspaceTestRun(ctx, user, workspaceID, runID, input)
+}
+
 func (s *MemoryStore) AcceptWorkspaceTestRun(_ Context, userID, workspaceID, runID string, input ReviewTestRunInput) (TestRun, error) {
 	return s.reviewTestRun(userID, workspaceID, runID, input, "accepted")
 }
@@ -4726,6 +4783,43 @@ func (s *MemoryStore) CancelRuntimeTask(_ Context, userID, workspaceID, taskID s
 	s.runtimeTasks[task.ID] = task
 	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, "", userID, "cancel_requested", json.RawMessage(fmt.Sprintf(`{"status":%q,"reason":%q}`, task.Status, reason)))
 	return task, nil
+}
+
+func (s *MemoryStore) cancelRuntimeTasksBySessionIDsLocked(workspaceID string, sessionIDs []string, userID, reason, testRunID string) []string {
+	seenSessions := map[string]struct{}{}
+	for _, sessionID := range sessionIDs {
+		sessionID = strings.TrimSpace(sessionID)
+		if sessionID != "" {
+			seenSessions[sessionID] = struct{}{}
+		}
+	}
+	if len(seenSessions) == 0 {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	cancelledTaskIDs := []string{}
+	for id, task := range s.runtimeTasks {
+		if task.WorkspaceID != strings.TrimSpace(workspaceID) {
+			continue
+		}
+		if _, ok := seenSessions[strings.TrimSpace(task.SessionID)]; !ok {
+			continue
+		}
+		if task.Status != "queued" && task.Status != "claimed" && task.Status != "running" {
+			continue
+		}
+		task.Status = "cancelled"
+		if task.StartedAt == "" && (task.ClaimedAt != "" || task.ClaimedByWorkerID != "") {
+			task.StartedAt = now
+		}
+		task.FinishedAt = now
+		task.Error = reason
+		task.UpdatedAt = now
+		s.runtimeTasks[id] = task
+		cancelledTaskIDs = append(cancelledTaskIDs, task.ID)
+		s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, "", userID, "cancel_requested", json.RawMessage(fmt.Sprintf(`{"status":%q,"reason":%q,"source":"test_run","testRunId":%q}`, task.Status, reason, testRunID)))
+	}
+	return cancelledTaskIDs
 }
 
 func (s *MemoryStore) ClaimRuntimeTask(_ Context, registration RuntimeRegistration, workerID string) (*RuntimeTask, error) {

@@ -9,6 +9,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  CircleStop,
   ClipboardCheck,
   FileUp,
   ListChecks,
@@ -957,6 +958,10 @@ function canRetryTestRun(status: string, items: TestRunItem[]) {
   return items.some((item) => item.status === "failed" || item.status === "blocked");
 }
 
+function canCancelTestRun(status: string) {
+  return status === "queued" || status === "setup_running" || status === "running";
+}
+
 function moveCaseId(values: string[], caseId: string, direction: "up" | "down") {
   const index = values.indexOf(caseId);
   if (index < 0) return values;
@@ -968,7 +973,9 @@ function moveCaseId(values: string[], caseId: string, direction: "up" | "down") 
 }
 
 function testRunReviewPendingMessageKey(status: string) {
-  return status === "setup_failed" ? "tests.runReviewSetupFailed" : "tests.runReviewPending";
+  if (status === "setup_failed") return "tests.runReviewSetupFailed";
+  if (status === "cancelled") return "tests.runReviewCancelled";
+  return "tests.runReviewPending";
 }
 
 function hasRunnableStep(steps: TestCaseStep[]) {
@@ -1834,7 +1841,15 @@ export function TestsPage() {
     },
   });
 
-  const agentActionError = optimizeCases.error || generateCases.error || startRun.error;
+  const cancelRun = useMutation({
+    mutationFn: (run: TestRun) => controlPlaneApi.cancelWorkspaceTestRun(auth.token, workspaceId, run.id, { reason: t("tests.cancelRunReason") }),
+    onSuccess: async () => {
+      setActionMessage(t("tests.runCancelled"));
+      await invalidateCaseWorkflow();
+    },
+  });
+
+  const agentActionError = optimizeCases.error || generateCases.error || startRun.error || cancelRun.error;
   const agentActionMessage = agentActionError?.message || actionMessage;
   const agentActionMessageClass = agentActionError ? "text-[color:var(--danger)]" : "text-[color:var(--muted)]";
 
@@ -2643,17 +2658,13 @@ export function TestsPage() {
                       const runTitle = testRunListTitle(run, planTitleById, runAttemptNumberById, t("tests.runFallbackTitle"), (title, attemptNumber) =>
                         t("tests.runAttemptTitle", { title, number: attemptNumber }),
                       );
+                      const cancellable = canCancelTestRun(run.status);
                       return (
-                        <Link
-                          key={run.id}
-                          to="/tests/runs/$runId"
-                          params={{ runId: run.id }}
-                          search={testsTabSearch("runs", effectiveProjectId)}
-                          className="grid w-full gap-3 px-4 py-3 text-left transition-colors hover:bg-[color:var(--hover)] md:grid-cols-[minmax(0,1fr)_220px_24px]"
-                        >
-                          <div className="min-w-0">
-                            <div className="flex min-w-0 flex-wrap items-center gap-2">
-                              <Play data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
+                        <div key={run.id} className="grid w-full gap-3 px-4 py-3 transition-colors hover:bg-[color:var(--hover)] md:grid-cols-[minmax(0,1fr)_220px_96px_24px]">
+                          <Link to="/tests/runs/$runId" params={{ runId: run.id }} search={testsTabSearch("runs", effectiveProjectId)} className="min-w-0 text-left">
+                            <div className="min-w-0">
+                              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                <Play data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
                               <span className="min-w-0 truncate text-[13px] font-medium text-[color:var(--text)]">{runTitle}</span>
                               <span className="shrink-0 text-[12px] text-[color:var(--muted)]">{t("tests.runShortId", { id: run.id.slice(0, 8) })}</span>
                               <span className="shrink-0 text-[12px] text-[color:var(--muted)]">{t(`tests.runSourceValue.${run.source || "ad_hoc"}`, { defaultValue: run.source || "ad_hoc" })}</span>
@@ -2666,13 +2677,24 @@ export function TestsPage() {
                               {t("tests.runCounts", { passed: run.passedCount, failed: run.failedCount, blocked: run.blockedCount, skipped: run.skippedCount })}
                             </div>
                           </div>
+                          </Link>
                           <div className="flex items-center text-[12px] text-[color:var(--muted)] md:justify-end">
                             <RelativeTime value={run.updatedAt} />
                           </div>
-                          <div className="hidden items-center justify-end md:flex">
-                            <ArrowRight data-icon className="text-[color:var(--faint)]" />
+                          <div className="flex items-center md:justify-end">
+                            {cancellable ? (
+                              <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[12px]" disabled={cancelRun.isPending && cancelRun.variables?.id === run.id} onClick={() => cancelRun.mutate(run)}>
+                                <CircleStop data-icon />
+                                {cancelRun.isPending && cancelRun.variables?.id === run.id ? t("tests.cancellingRun") : t("tests.cancelRun")}
+                              </Button>
+                            ) : null}
                           </div>
-                        </Link>
+                          <div className="hidden items-center justify-end md:flex">
+                            <Link to="/tests/runs/$runId" params={{ runId: run.id }} search={testsTabSearch("runs", effectiveProjectId)} aria-label={runTitle}>
+                              <ArrowRight data-icon className="text-[color:var(--faint)]" />
+                            </Link>
+                          </div>
+                        </div>
                       );
                     })
                   )}
@@ -3288,6 +3310,16 @@ function TestPlanDetailContent(props: {
       ]);
     },
   });
+  const cancelRun = useMutation({
+    mutationFn: (run: TestRun) => controlPlaneApi.cancelWorkspaceTestRun(auth.token, workspaceId, run.id, { reason: t("tests.cancelRunReason") }),
+    onSuccess: async () => {
+      setEditActionMessage(t("tests.runCancelled"));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestRuns(workspaceId, auth.token) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.workspaceTestPlan(workspaceId, plan.id, auth.token) }),
+      ]);
+    },
+  });
   const environments = environmentsQuery.data || emptyEnvironments;
   const planActionMessage = editActionMessage || actionMessage;
 
@@ -3366,8 +3398,8 @@ function TestPlanDetailContent(props: {
               {t("tests.environment")}: {plan.environmentKind || "environment"} · <span className="font-mono">{plan.environmentId}</span>
             </p>
           ) : null}
-          {startRun.error ? (
-            <p className="mt-3 text-[12px] text-[color:var(--danger)]">{startRun.error.message}</p>
+          {(startRun.error || cancelRun.error) ? (
+            <p className="mt-3 text-[12px] text-[color:var(--danger)]">{(startRun.error || cancelRun.error)?.message}</p>
           ) : planActionMessage ? (
             <p className="mt-3 text-[12px] text-[color:var(--muted)]">{planActionMessage}</p>
           ) : null}
@@ -3420,16 +3452,12 @@ function TestPlanDetailContent(props: {
                 const runTitle = testRunAttemptTitle(run, runAttemptNumberById, t("tests.runAttemptFallbackTitle"), (attemptNumber) =>
                   t("tests.runAttemptOnlyTitle", { number: attemptNumber }),
                 );
+                const cancellable = canCancelTestRun(run.status);
                 return (
-                  <Link
-                    key={run.id}
-                    to="/tests/runs/$runId"
-                    params={{ runId: run.id }}
-                    search={testsTabSearch("runs", projectId)}
-                    className="grid gap-3 px-4 py-3 transition-colors hover:bg-[color:var(--hover)] md:grid-cols-[minmax(0,1fr)_220px_24px]"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <div key={run.id} className="grid gap-3 px-4 py-3 transition-colors hover:bg-[color:var(--hover)] md:grid-cols-[minmax(0,1fr)_220px_96px_24px]">
+                    <Link to="/tests/runs/$runId" params={{ runId: run.id }} search={testsTabSearch("runs", projectId)} className="min-w-0">
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <Play data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
                         <span className="min-w-0 truncate text-[13px] font-medium text-[color:var(--text)]">{runTitle}</span>
                         <span className="shrink-0 text-[12px] text-[color:var(--muted)]">{t("tests.runShortId", { id: run.id.slice(0, 8) })}</span>
@@ -3442,13 +3470,24 @@ function TestPlanDetailContent(props: {
                         {t("tests.runCounts", { passed: run.passedCount, failed: run.failedCount, blocked: run.blockedCount, skipped: run.skippedCount })}
                       </p>
                     </div>
+                    </Link>
                     <div className="flex items-center text-[12px] text-[color:var(--muted)] md:justify-end">
                       <RelativeTime value={run.updatedAt} />
                     </div>
-                    <div className="hidden items-center justify-end md:flex">
-                      <ArrowRight data-icon className="text-[color:var(--faint)]" />
+                    <div className="flex items-center md:justify-end">
+                      {cancellable ? (
+                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-[12px]" disabled={cancelRun.isPending && cancelRun.variables?.id === run.id} onClick={() => cancelRun.mutate(run)}>
+                          <CircleStop data-icon />
+                          {cancelRun.isPending && cancelRun.variables?.id === run.id ? t("tests.cancellingRun") : t("tests.cancelRun")}
+                        </Button>
+                      ) : null}
                     </div>
-                  </Link>
+                    <div className="hidden items-center justify-end md:flex">
+                      <Link to="/tests/runs/$runId" params={{ runId: run.id }} search={testsTabSearch("runs", projectId)} aria-label={runTitle}>
+                        <ArrowRight data-icon className="text-[color:var(--faint)]" />
+                      </Link>
+                    </div>
+                  </div>
                 );
               })
             )}
@@ -3543,6 +3582,13 @@ export function TestRunDetailPage() {
       await invalidateRun();
     },
   });
+  const cancelRun = useMutation({
+    mutationFn: () => controlPlaneApi.cancelWorkspaceTestRun(auth.token, workspaceId, runId, { reason: t("tests.cancelRunReason") }),
+    onSuccess: async () => {
+      setActionMessage(t("tests.runCancelled"));
+      await invalidateRun();
+    },
+  });
   const acceptRun = useMutation({
     mutationFn: () => controlPlaneApi.acceptWorkspaceTestRun(auth.token, workspaceId, runId, { note: reviewNote }),
     onSuccess: async () => {
@@ -3601,6 +3647,7 @@ export function TestRunDetailPage() {
     return Date.parse(left.createdAt) - Date.parse(right.createdAt);
   });
   const showRetryRun = canRetryTestRun(detail.run.status, orderedRunItems);
+  const showCancelRun = canCancelTestRun(detail.run.status);
   const reviewPanelId = `${runId}-review-panel`;
 
   return (
@@ -3639,8 +3686,14 @@ export function TestRunDetailPage() {
             <TestRunSetupPanel run={detail.run} />
           ) : null}
 
-          {showRetryRun || showReviewControls ? (
+          {showCancelRun || showRetryRun || showReviewControls ? (
             <div className="mt-4 flex flex-wrap items-center gap-2">
+              {showCancelRun ? (
+                <Button type="button" variant="danger" onClick={() => cancelRun.mutate()} disabled={cancelRun.isPending}>
+                  <CircleStop data-icon />
+                  {cancelRun.isPending ? t("tests.cancellingRun") : t("tests.cancelRun")}
+                </Button>
+              ) : null}
               {showRetryRun ? (
                 <Button type="button" onClick={() => retryRun.mutate()} disabled={retryRun.isPending}>
                   <RotateCcw data-icon />
@@ -3702,8 +3755,8 @@ export function TestRunDetailPage() {
           ) : (
             <p className="mt-4 text-[12px] leading-5 text-[color:var(--muted)]">{t(testRunReviewPendingMessageKey(detail.run.status))}</p>
           )}
-          {(retryRun.error || acceptRun.error || blockRun.error) ? (
-            <p className="mt-3 text-[12px] text-[color:var(--danger)]">{(retryRun.error || acceptRun.error || blockRun.error)?.message}</p>
+          {(retryRun.error || cancelRun.error || acceptRun.error || blockRun.error) ? (
+            <p className="mt-3 text-[12px] text-[color:var(--danger)]">{(retryRun.error || cancelRun.error || acceptRun.error || blockRun.error)?.message}</p>
           ) : actionMessage ? (
             <p className="mt-3 text-[12px] text-[color:var(--muted)]">{actionMessage}</p>
           ) : null}

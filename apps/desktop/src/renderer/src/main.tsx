@@ -67,7 +67,7 @@ function joinSearchSubtitle(values: Array<string | number | null | undefined>): 
 }
 
 const inactiveIssueStatuses = new Set(["closed", "cancelled"]);
-const activeTestRunStatuses = new Set(["queued", "setup_running", "setup_failed", "running", "needs_acceptance", "blocked"]);
+const activeTestRunStatuses = new Set(["queued", "setup_running", "running", "needs_acceptance", "blocked"]);
 const reviewIssueStatuses = new Set(["needs_review", "changes_requested", "ready_for_test", "blocked"]);
 const testRunStatusPriority = new Map([
   ["needs_acceptance", 100],

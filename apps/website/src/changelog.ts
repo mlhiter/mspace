@@ -8,6 +8,18 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-06-11",
+    title: "Stoppable test runs",
+    summary:
+      "mspace made queued and running Tests runs stoppable without treating the whole issue workflow as closed.",
+    items: [
+      "Added stop actions to Tests run lists, plan details, and run details for queued, setup-running, and running runs.",
+      "Added workspace and compatibility project cancel APIs that mark the run and non-final items stopped while cancelling linked setup or execution runtime tasks.",
+      "Hardened setup/result reconciliation so late `test-setup-result.json` or `test-result.json` artifacts cannot revive a stopped run.",
+      "Kept setup failure, run cancellation, issue cancellation, and human review as separate states so the Tests surface stays auditable.",
+    ],
+  },
+  {
+    date: "2026-06-11",
     title: "Recovered artifact-backed test runs",
     summary:
       "mspace hardened Tests execution so runs do not stay in progress after the worker has already written the result artifact.",

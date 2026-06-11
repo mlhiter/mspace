@@ -384,7 +384,7 @@ func normalizeRetryTestRunInput(input RetryTestRunInput) RetryTestRunInput {
 
 func normalizeTestRunItemStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "queued", "running", "passed", "failed", "blocked", "skipped":
+	case "queued", "running", "passed", "failed", "blocked", "skipped", "cancelled":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""
@@ -393,7 +393,7 @@ func normalizeTestRunItemStatus(value string) string {
 
 func isFinalTestRunItemStatus(value string) bool {
 	switch strings.TrimSpace(value) {
-	case "passed", "failed", "blocked", "skipped":
+	case "passed", "failed", "blocked", "skipped", "cancelled":
 		return true
 	default:
 		return false

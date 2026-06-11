@@ -197,6 +197,7 @@ Successful acceptance returns the joined workspace. Desktop clients should selec
 | `GET` | `/api/workspaces/{workspaceID}/test-runs/{runID}` | Read a workspace test run with run items. |
 | `GET` | `/api/workspaces/{workspaceID}/test-runs/{runID}/artifacts` | List artifacts for one workspace test run. |
 | `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/retry` | Retry failed or blocked run items. |
+| `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/cancel` | Stop a queued, setup-running, or running test run and cancel linked runtime tasks. |
 | `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/accept` | Record that a user reviewed the run result. |
 | `POST` | `/api/workspaces/{workspaceID}/test-runs/{runID}/block` | Record that the run needs follow-up with a human note. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans` | Compatibility-filter workspace plans by project. |
@@ -206,6 +207,7 @@ Successful acceptance returns the joined workspace. Desktop clients should selec
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-plans/{planID}/runs` | Compatibility-start a workspace run from a plan that includes the project. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs` | Compatibility-filter workspace runs by project. |
 | `GET` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}` | Compatibility-read a workspace run that includes the project. |
+| `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/cancel` | Compatibility-stop a workspace run that includes the project. |
 | `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List Type and Priority label options. |
 | `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level issues. |
 | `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. |
@@ -347,7 +349,16 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/projects/<projec
   -d '{"note":"Looks executable after the added environment requirement."}'
 ```
 
-Workspace test plans select ready project cases and start issue-backed runs. A plan can include `setupSteps`, a free-text plan-level setup block that runs once before case execution. Setup uses the normal issue-backed agent-session path and worker artifact channel: workers write `test-setup-result.json`; the server stores the setup result, copies `outputs` into `runContext`, and starts case execution only when the setup task completed with `status:"passed"`. Failed, cancelled, or missing setup marks the run `setup_failed` and leaves items queued. Execution workers then report results through `test-result.json`; the server reconciles run items, persists supported screenshot evidence as test artifacts, and rewrites run item evidence to authenticated artifact refs. A human can call `accept` or `block` to record a review decision, but retry remains the primary follow-up action for failed or blocked items until a later release or plan gate consumes run review state. Run start and retry inputs may include `resultLocale:"en"|"zh-CN"`; the server stores it on the run and instructs setup/execution sessions to write user-facing `summary`, `actualResult`, and `failureSummary` text in that language. When a run spans projects, mspace groups queued items by project and creates separate execution Issues/agent sessions per project batch; one agent session should not span multiple repositories.
+Workspace test plans select ready project cases and start issue-backed runs. A plan can include `setupSteps`, a free-text plan-level setup block that runs once before case execution. Setup uses the normal issue-backed agent-session path and worker artifact channel: workers write `test-setup-result.json`; the server stores the setup result, copies `outputs` into `runContext`, and starts case execution only when the setup task completed with `status:"passed"`. Failed, cancelled, or missing setup marks the run `setup_failed` and leaves items queued. Execution workers then report results through `test-result.json`; the server reconciles run items, persists supported screenshot evidence as test artifacts, and rewrites run item evidence to authenticated artifact refs. A human can call `cancel` while a run is `queued`, `setup_running`, or `running`; cancellation marks the run and non-final items `cancelled`, cancels linked setup/execution runtime tasks with the supplied reason, and ignores late setup/result artifacts so the stopped run is not revived. A human can call `accept` or `block` to record a review decision, but retry remains the primary follow-up action for failed or blocked items until a later release or plan gate consumes run review state. Run start and retry inputs may include `resultLocale:"en"|"zh-CN"`; the server stores it on the run and instructs setup/execution sessions to write user-facing `summary`, `actualResult`, and `failureSummary` text in that language. When a run spans projects, mspace groups queued items by project and creates separate execution Issues/agent sessions per project batch; one agent session should not span multiple repositories.
+
+Stop a run:
+
+```bash
+curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/test-runs/<run-id>/cancel" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"Stopped from Tests."}'
+```
 
 Create a test plan pinned to an Environment:
 
