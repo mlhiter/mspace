@@ -2751,6 +2751,37 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 		t.Fatalf("unexpected failed item: %+v", failedItem)
 	}
 
+	batchFallbackRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2,"resultLocale":"zh-CN"}`)
+	setupBatchFallbackResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testSetup":{"runId":%q,"status":"passed","summary":"Preview is ready.","outputs":{"previewUrl":"https://rc5.example.test"}}}}`, batchFallbackRun.Run.ID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, batchFallbackRun.Run.SetupSessionID, setupBatchFallbackResult); err != nil {
+		t.Fatalf("complete batch fallback setup task: %v", err)
+	}
+	batchFallbackRun = getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, batchFallbackRun.Run.ID)
+	if batchFallbackRun.Run.Status != "running" || len(batchFallbackRun.Items) != 2 {
+		t.Fatalf("expected batch fallback run to start execution, got %+v", batchFallbackRun)
+	}
+	firstBatchItem := batchFallbackRun.Items[0]
+	secondBatchItem := batchFallbackRun.Items[1]
+	if firstBatchItem.AgentSessionID == "" || firstBatchItem.AgentSessionID != secondBatchItem.AgentSessionID {
+		t.Fatalf("expected both batch items to share one execution session, got %+v", batchFallbackRun.Items)
+	}
+	batchBlockedResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testResult":{"runId":%q,"summary":"Batch execution stopped.","items":[{"caseId":%q,"status":"passed","actualResult":"First case passed before the batch blocker.","evidence":{"commands":["pnpm test -- first"]}},{"caseId":"batch","status":"blocked","actualResult":"Batch execution script aborted.","failureSummary":"TypeError: fetch failed","evidence":{"networkStatuses":[{"method":"GET","url":"https://192.168.0.62.nip.io/","status":503}]}}]}}}`, batchFallbackRun.Run.ID, firstBatchItem.TestCaseID)
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, secondBatchItem.AgentSessionID, batchBlockedResult); err != nil {
+		t.Fatalf("complete batch blocker result: %v", err)
+	}
+	batchCompletedRun := getProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, batchFallbackRun.Run.ID)
+	if batchCompletedRun.Run.Status != "needs_acceptance" || batchCompletedRun.Run.PassedCount != 1 || batchCompletedRun.Run.BlockedCount != 1 || batchCompletedRun.Run.CompletedAt == "" {
+		t.Fatalf("expected batch fallback run to finish with one blocked item, got %+v", batchCompletedRun.Run)
+	}
+	preservedBatchItem := findTestRunItem(t, batchCompletedRun.Items, firstBatchItem.TestCaseID)
+	if preservedBatchItem.Status != "passed" || preservedBatchItem.ActualResult != "First case passed before the batch blocker." {
+		t.Fatalf("batch fallback should not overwrite already-final items, got %+v", preservedBatchItem)
+	}
+	blockedBatchItem := findTestRunItem(t, batchCompletedRun.Items, secondBatchItem.TestCaseID)
+	if blockedBatchItem.Status != "blocked" || blockedBatchItem.FailureSummary != "TypeError: fetch failed" || !strings.Contains(string(blockedBatchItem.Evidence), "192.168.0.62.nip.io") {
+		t.Fatalf("expected running batch item to be blocked from batch artifact, got %+v", blockedBatchItem)
+	}
+
 	adHocRun := startAdHocProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, fmt.Sprintf(`{"caseIds":[%q],"runtimeMode":"personal","agentProfile":"codex","batchSize":1}`, existingCase.ID))
 	if adHocRun.Run.Status != "running" || adHocRun.Run.Source != "ad_hoc" || adHocRun.Run.PlanID != "" || adHocRun.Plan != nil || adHocRun.Run.TotalCount != 1 || len(adHocRun.Items) != 1 {
 		t.Fatalf("unexpected direct started run: %+v", adHocRun)

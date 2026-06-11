@@ -196,6 +196,12 @@ func (s *PostgresStore) reconcileTestResultArtifact(ctx context.Context, q query
 		return err
 	}
 	for _, item := range artifact.Items {
+		if isBatchTestResultArtifactItem(item) {
+			if err := s.updateTestRunBatchItemsFromArtifact(ctx, q, task, run, item); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := s.updateTestRunItemFromArtifact(ctx, q, task, run, item); err != nil {
 			return err
 		}
@@ -298,6 +304,58 @@ func (s *PostgresStore) updateTestRunItemFromArtifact(ctx context.Context, q que
 		return ErrNotFound
 	}
 	return nil
+}
+
+func (s *PostgresStore) updateTestRunBatchItemsFromArtifact(ctx context.Context, q queryer, task RuntimeTask, run TestRun, item TestResultArtifactItem) error {
+	status := normalizeTestRunItemStatus(item.Status)
+	if status == "" || !isFinalTestRunItemStatus(status) {
+		return errors.New("test-result.json status must be passed, failed, blocked, or skipped")
+	}
+	sessionID := strings.TrimSpace(task.SessionID)
+	if sessionID == "" {
+		return nil
+	}
+	runItems, err := loadActiveTestRunItemsBySession(ctx, q, run.WorkspaceID, run.ID, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, runItem := range runItems {
+		evidence := cloneRawJSONObject(item.Evidence)
+		artifacts, err := s.storeTestResultEvidenceArtifacts(ctx, q, task, run, runItem, evidence)
+		if err != nil {
+			return err
+		}
+		evidence = rewriteTestResultEvidenceWithArtifacts(evidence, artifacts)
+		tag, err := q.Exec(ctx, `
+			UPDATE test_run_items
+			SET status = $5,
+				actual_result = $6,
+				failure_summary = $7,
+				evidence = $8::jsonb,
+				updated_at = now()
+			WHERE workspace_id = $1
+				AND project_id = $2
+				AND run_id = $3
+				AND id = $4
+				AND status IN ('queued', 'running')
+		`, run.WorkspaceID, runItem.ProjectID, run.ID, runItem.ID, status, strings.TrimSpace(item.ActualResult), strings.TrimSpace(item.FailureSummary), evidence)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+	}
+	return nil
+}
+
+func isBatchTestResultArtifactItem(item TestResultArtifactItem) bool {
+	switch strings.ToLower(strings.TrimSpace(item.CaseID)) {
+	case "batch", "__batch__", "all", "*":
+		return true
+	default:
+		return false
+	}
 }
 
 func buildTestSetupReconciliation(task RuntimeTask, artifact *TestSetupResultArtifact) (json.RawMessage, string, json.RawMessage) {
@@ -438,6 +496,47 @@ func loadTestRunItemByRunAndCase(ctx context.Context, q queryer, workspaceID, ru
 	return item, nil
 }
 
+func loadActiveTestRunItemsBySession(ctx context.Context, q queryer, workspaceID, runID, sessionID string) ([]TestRunItem, error) {
+	rows, err := q.Query(ctx, `
+		SELECT
+			i.id::text,
+			i.workspace_id::text,
+			i.project_id::text,
+			i.run_id::text,
+			i.case_id::text,
+			i.sort_order,
+			COALESCE(i.execution_issue_id::text, ''),
+			i.agent_session_id,
+			i.status,
+			i.actual_result,
+			i.failure_summary,
+			i.evidence,
+			i.created_at,
+			i.updated_at,
+			`+testCaseSelectColumnsForAlias("tc")+`
+		FROM test_run_items i
+		JOIN test_cases tc ON tc.id = i.case_id
+		WHERE i.workspace_id = $1
+			AND i.run_id = $2
+			AND i.agent_session_id = $3
+			AND i.status IN ('queued', 'running')
+		ORDER BY i.sort_order ASC, i.created_at ASC
+	`, workspaceID, runID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TestRunItem{}
+	for rows.Next() {
+		item, err := scanTestRunItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *PostgresStore) storeTestResultEvidenceArtifacts(ctx context.Context, q queryer, task RuntimeTask, run TestRun, item TestRunItem, evidence json.RawMessage) ([]TestArtifact, error) {
 	candidates := testEvidenceScreenshotCandidates(evidence)
 	if len(candidates) == 0 {
@@ -485,6 +584,28 @@ func (s *MemoryStore) reconcileTestResultArtifactLocked(task RuntimeTask, artifa
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, artifactItem := range artifact.Items {
 		status := normalizeTestRunItemStatus(artifactItem.Status)
+		if isBatchTestResultArtifactItem(artifactItem) {
+			if status == "" || !isFinalTestRunItemStatus(status) {
+				continue
+			}
+			sessionID := strings.TrimSpace(task.SessionID)
+			if sessionID == "" {
+				continue
+			}
+			for id, item := range s.testRunItems {
+				if item.RunID != run.ID || item.AgentSessionID != sessionID || isFinalTestRunItemStatus(item.Status) {
+					continue
+				}
+				item.Status = status
+				item.ActualResult = strings.TrimSpace(artifactItem.ActualResult)
+				item.FailureSummary = strings.TrimSpace(artifactItem.FailureSummary)
+				artifacts := s.storeMemoryTestResultEvidenceArtifactsLocked(task, run, item, artifactItem.Evidence)
+				item.Evidence = rewriteTestResultEvidenceWithArtifacts(cloneRawJSONObject(artifactItem.Evidence), artifacts)
+				item.UpdatedAt = now
+				s.testRunItems[id] = item
+			}
+			continue
+		}
 		if strings.TrimSpace(artifactItem.CaseID) == "" || status == "" || !isFinalTestRunItemStatus(status) {
 			continue
 		}

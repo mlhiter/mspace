@@ -539,6 +539,7 @@ func buildTestRunParentIssueBody(plan *TestPlan, run TestRun, cases []TestCase) 
 	builder.WriteString(testResultLanguageInstruction(run.ResultLocale) + "\n\n")
 	builder.WriteString("Codex execution sessions must write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with:\n\n")
 	builder.WriteString(`{"runId":"` + run.ID + `","items":[{"caseId":"...","status":"passed|failed|blocked|skipped","actualResult":"...","failureSummary":"...","evidence":{}}]}`)
+	builder.WriteString("\n\nUse only real case IDs from this run. Never use synthetic IDs such as `batch`, `all`, or `summary`; if a global blocker stops multiple cases, write one final result item per affected case with that case's real `caseId`.")
 	return strings.TrimSpace(builder.String())
 }
 
@@ -579,7 +580,7 @@ func buildTestRunExecutionIssueBody(run TestRun, cases []TestCase) string {
 		builder.WriteString(strings.TrimSpace(string(run.RunContext)))
 		builder.WriteString("\n```\n\n")
 	}
-	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with one item per case in this batch.\n\n")
+	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with one item per case in this batch. Use only the real case IDs listed below. Never use synthetic IDs such as `batch`, `all`, or `summary`; if a global setup, network, browser, or script failure stops this batch, write one `blocked` or `failed` item per affected case with that case's real `caseId`.\n\n")
 	if testRunBatchRequiresBrowser(cases) {
 		builder.WriteString("This batch includes UI cases. Use the browser-capable runtime (`MSPACE_CHROME_CDP_URL` when provided) to exercise the preview or target page, capture at least one screenshot per UI case, save screenshots under `${MSPACE_SESSION_ARTIFACT_DIR}/screenshots/`, and reference them from each result item with `evidence.screenshotPaths`. Also include useful `evidence.assertions` and `evidence.networkStatuses` when observable. If browser execution is impossible, mark the affected item `blocked` and put the concrete blocker in `failureSummary` instead of returning text-only evidence.\n\n")
 	}

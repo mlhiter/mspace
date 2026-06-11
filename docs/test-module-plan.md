@@ -789,6 +789,8 @@ Preferred shape:
 
 The worker also accepts a top-level array for Codex-authored single-run artifacts when each item includes `runId`; it normalizes that array into the object shape before returning `result.testResult`.
 
+Each result item should use a real Test Run Item case id. Codex should not emit synthetic ids such as `batch`, `all`, or `summary`; if a global blocker stops a batch, it should write one final item per affected case. The server still treats a legacy batch-level blocked/failed item as a recovery signal for the active, non-final run items owned by that same agent session, so a completed worker task cannot leave those items stuck in `running`.
+
 Codex plan setup writes:
 
 ```text
