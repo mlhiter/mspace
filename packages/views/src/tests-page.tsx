@@ -9,6 +9,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
   CircleStop,
   ClipboardCheck,
   FileUp,
@@ -837,6 +838,10 @@ function useTestCaseRunHistory(params: {
 
 function stringValue(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 }
 
 function networkStatusesValue(value: unknown): TestEvidenceNetworkStatus[] {
@@ -4478,6 +4483,7 @@ function TestRunSetupPanel(props: { run: TestRun }) {
   const { t } = useMspaceTranslation();
   const setupResult = props.run.setupResult && Object.keys(props.run.setupResult).length > 0 ? props.run.setupResult : null;
   const runContext = props.run.runContext && Object.keys(props.run.runContext).length > 0 ? props.run.runContext : null;
+  const setupFailure = setupResult ? setupFailureDetails(setupResult) : null;
 
   return (
     <section className="mt-4 min-w-0 overflow-hidden rounded-[8px] bg-[color:var(--paper)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
@@ -4494,6 +4500,7 @@ function TestRunSetupPanel(props: { run: TestRun }) {
           {props.run.setupSessionId ? <span>{t("tests.setupSession")}: <span className="font-mono">{props.run.setupSessionId.slice(0, 8)}</span></span> : null}
         </div>
       ) : null}
+      {(props.run.setupStatus === "failed" || props.run.status === "setup_failed") && setupFailure ? <SetupFailureSummary details={setupFailure} /> : null}
       {hasText(props.run.setupSteps) ? (
         <pre className="mt-3 max-h-40 max-w-full overflow-auto whitespace-pre-wrap rounded-[7px] bg-[color:var(--surface)] p-2 text-[11px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)] [overflow-wrap:anywhere]">
           {props.run.setupSteps}
@@ -4502,6 +4509,66 @@ function TestRunSetupPanel(props: { run: TestRun }) {
       {setupResult ? <SetupJSONBlock title={t("tests.setupResult")} value={setupResult} /> : null}
       {runContext ? <SetupJSONBlock title={t("tests.runContext")} value={runContext} /> : null}
     </section>
+  );
+}
+
+type SetupFailureStep = {
+  title: string;
+  summary: string;
+  command: string;
+};
+
+type SetupFailureDetails = {
+  summary: string;
+  steps: SetupFailureStep[];
+};
+
+function setupFailureDetails(setupResult: Record<string, unknown>): SetupFailureDetails | null {
+  const summary = stringValue(setupResult.failureSummary) || stringValue(setupResult.summary);
+  const failedSteps = Array.isArray(setupResult.steps)
+    ? setupResult.steps.flatMap((step) => {
+        const record = objectValue(step);
+        if (!record || stringValue(record.status).toLowerCase() !== "failed") return [];
+        return [{
+          title: stringValue(record.title),
+          summary: stringValue(record.failureSummary) || stringValue(record.summary),
+          command: stringValue(record.command),
+        }];
+      })
+    : [];
+
+  if (!summary && failedSteps.length === 0) return null;
+  return { summary, steps: failedSteps };
+}
+
+function SetupFailureSummary(props: { details: SetupFailureDetails }) {
+  const { t } = useMspaceTranslation();
+  return (
+    <div className="mt-3 rounded-[8px] bg-[color:var(--danger-soft)] p-3 text-[12px] leading-5 text-[color:var(--danger)] shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="flex min-w-0 gap-2">
+        <CircleAlert data-icon className="mt-0.5 size-4 shrink-0" />
+        <div className="min-w-0">
+          <div className="font-semibold text-[color:var(--danger)]">{t("tests.setupFailureReason")}</div>
+          {props.details.summary ? <p className="mt-1 text-pretty">{props.details.summary}</p> : null}
+        </div>
+      </div>
+      {props.details.steps.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          <div className="text-[11px] font-medium text-[color:var(--danger)]">{t("tests.setupFailedSteps")}</div>
+          {props.details.steps.map((step, index) => (
+            <div key={`${step.title || step.command || step.summary}-${index}`} className="rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="font-medium text-[color:var(--text)]">{step.title || t("tests.setupFailedStepFallback", { index: index + 1 })}</div>
+              {step.summary ? <p className="mt-1 text-[color:var(--muted-strong)]">{step.summary}</p> : null}
+              {step.command ? (
+                <code className="mt-1 block whitespace-pre-wrap break-words rounded-[5px] bg-[color:var(--block)] px-2 py-1 font-mono text-[11px] leading-5 text-[color:var(--muted-strong)]">
+                  {step.command}
+                </code>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

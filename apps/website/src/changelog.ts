@@ -7,6 +7,17 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-06-12",
+    title: "Visible setup failure reasons",
+    summary:
+      "mspace made failed Tests setup runs explain the blocker on the Run Detail page instead of hiding it inside raw setup JSON.",
+    items: [
+      "Showed the setup `failureSummary` directly in the setup panel when a run stops at `setup_failed`.",
+      "Listed the failed setup step with its summary and command so users can see where the preparation failed without expanding the raw artifact.",
+      "Kept the full setup result and run context available as collapsible debugging details.",
+    ],
+  },
+  {
     date: "2026-06-11",
     title: "Stoppable test runs",
     summary:
