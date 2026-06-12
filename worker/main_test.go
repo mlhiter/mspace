@@ -435,6 +435,100 @@ func TestRunOnceCompletesAgentSessionWithCodexAppServer(t *testing.T) {
 	}
 }
 
+func TestRunOnceFailsTestRunWhenCodexTurnCompletesWithoutArtifact(t *testing.T) {
+	installNoArtifactFakeCodex(t)
+
+	repoDir := createTestGitRepo(t)
+	workRoot := filepath.Join(t.TempDir(), "worker-root")
+	var mu sync.Mutex
+	statuses := []string{}
+	logs := []appendTaskLogInput{}
+	var failedError string
+
+	payload, err := json.Marshal(agentSessionPayload{
+		Prompt:     "execute test run but forget the artifact",
+		IssueID:    "issue-missing-artifact",
+		SessionID:  "session-missing-artifact",
+		ProjectID:  "project-missing-artifact",
+		Automation: "test_run_execution",
+		TestRunID:  "test-run-missing-artifact",
+		Branch:     "mspace/issue/session-missing-artifact",
+		Repository: repositorySpec{
+			URL:           repoDir,
+			DefaultBranch: "main",
+			Provider:      "local",
+			Owner:         "test",
+			Repo:          "missing-artifact-demo",
+		},
+		ContextMarkdown: "# missing artifact context\n",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer msw_test" {
+			t.Fatalf("missing worker token on %s", r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/api/runtime/workers/register":
+			writeJSON(t, w, http.StatusCreated, runtimeWorker{ID: "worker-1", WorkspaceID: "workspace-1", Name: "worker-test", Mode: "team", Status: "online"})
+		case "/api/runtime/workers/worker-1/heartbeat":
+			writeJSON(t, w, http.StatusOK, runtimeWorker{ID: "worker-1", WorkspaceID: "workspace-1", Name: "worker-test", Mode: "team", Status: "online"})
+		case "/api/runtime/workers/worker-1/tasks/claim":
+			writeJSON(t, w, http.StatusOK, runtimeTask{
+				ID:                   "task-missing-artifact",
+				WorkspaceID:          "workspace-1",
+				Kind:                 "agent_session",
+				RuntimeMode:          "team",
+				RequiredCapabilities: json.RawMessage(`{"codex":true}`),
+				Payload:              payload,
+			})
+		case "/api/runtime/workers/worker-1/tasks/task-missing-artifact/logs":
+			assertMethod(t, r, http.MethodPost)
+			var input appendTaskLogInput
+			decodeBody(t, r, &input)
+			mu.Lock()
+			logs = append(logs, input)
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+		case "/api/runtime/workers/worker-1/tasks/task-missing-artifact/status":
+			assertMethod(t, r, http.MethodPost)
+			var input updateTaskStatusInput
+			decodeBody(t, r, &input)
+			mu.Lock()
+			statuses = append(statuses, input.Status)
+			if input.Status == "failed" {
+				failedError = input.Error
+			}
+			mu.Unlock()
+			writeJSON(t, w, http.StatusOK, runtimeTask{ID: "task-missing-artifact", WorkspaceID: "workspace-1", Kind: "agent_session", Status: input.Status, Error: input.Error, Result: input.Result})
+		case "/api/runtime/workers/worker-1/tasks/task-missing-artifact":
+			assertMethod(t, r, http.MethodGet)
+			writeJSON(t, w, http.StatusOK, runtimeTask{ID: "task-missing-artifact", WorkspaceID: "workspace-1", Kind: "agent_session", Status: "running"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	cfg := testConfig(server.URL)
+	cfg.Capabilities = json.RawMessage(`{"protocolSmoke":true,"codex":true,"dryRun":false}`)
+	cfg.WorkRoot = workRoot
+	if err := run(context.Background(), cfg, discardLogger()); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	if got := strings.Join(statuses, ","); got != "running,failed" {
+		t.Fatalf("unexpected statuses: %s error=%q logs=%s", got, failedError, taskLogMessages(logs))
+	}
+	if !strings.Contains(failedError, "test-result.json") || !strings.Contains(failedError, "test-run-missing-artifact") {
+		t.Fatalf("expected missing test-result artifact error, got %q", failedError)
+	}
+	if !strings.Contains(taskLogMessages(logs), "test automation completed without matching test-result.json") {
+		t.Fatalf("expected missing artifact log, got %s", taskLogMessages(logs))
+	}
+}
+
 func TestRunOnceCompletesTestRunFromArtifactWhenCodexTurnDoesNotFinish(t *testing.T) {
 	installArtifactOnlyFakeCodex(t)
 
@@ -1149,6 +1243,54 @@ exec python3 -u "$script_file"
 `
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write artifact-only fake codex: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func installNoArtifactFakeCodex(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "codex")
+	script := `#!/bin/sh
+if [ "$1" != "app-server" ] || [ "$2" != "--listen" ] || [ "$3" != "stdio://" ]; then
+  echo "unexpected fake codex args: $*" >&2
+  exit 2
+fi
+python3 -u -c '
+import json
+import sys
+
+thread_id = "thread-no-artifact"
+turn_id = "turn-no-artifact"
+
+def emit(payload):
+    print(json.dumps(payload, separators=(",", ":")), flush=True)
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    request = json.loads(line)
+    request_id = request.get("id")
+    method = request.get("method")
+    if method == "initialize":
+        emit({"id": request_id, "result": {"userAgent": "fake-codex", "codexHome": "/tmp/fake-codex"}})
+    elif method == "thread/start":
+        emit({"id": request_id, "result": {"thread": {"id": thread_id}, "model": "fake-model", "modelProvider": "fake-provider"}})
+    elif method == "turn/start":
+        emit({"id": request_id, "result": {"turn": {"id": turn_id, "status": "running", "items": []}}})
+        emit({"method": "turn/started", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "running", "items": []}}})
+        emit({"method": "item/started", "params": {"threadId": thread_id, "turnId": turn_id, "item": {"id": "item-1", "type": "agentMessage"}}})
+        emit({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id, "item": {"id": "item-1", "type": "agentMessage", "text": "fake agent forgot the artifact"}}})
+        emit({"method": "turn/completed", "params": {"threadId": thread_id, "turn": {"id": turn_id, "status": "completed", "items": []}}})
+    elif method == "turn/interrupt":
+        emit({"id": request_id, "result": {}})
+    else:
+        emit({"id": request_id, "error": {"code": -32601, "message": "method not found"}})
+'
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write no-artifact fake codex: %v", err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }

@@ -1391,7 +1391,7 @@ func waitCodexTurnOrTestArtifact(ctx context.Context, runtimeClient *runtimeClie
 					}
 					return false, fmt.Errorf("test result references screenshot files that are not available: %s", strings.Join(testResultArtifactPendingScreenshotPaths(payload), ", "))
 				}
-				return false, nil
+				return false, missingTestCompletionArtifactError(payload)
 			}
 		}
 	}
@@ -1454,6 +1454,29 @@ func waitForTestArtifactsReady(ctx context.Context, payload agentSessionPayload,
 			return false, nil
 		case <-ticker.C:
 		}
+	}
+}
+
+func missingTestCompletionArtifactError(payload agentSessionPayload) error {
+	name := expectedTestCompletionArtifactName(payload)
+	if name == "" {
+		return errors.New("test automation completed without a required result artifact")
+	}
+	path := artifactPath(payload, name)
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("test automation completed without matching %s for run %s", name, payload.TestRunID)
+	}
+	return fmt.Errorf("test automation completed without matching %s for run %s at %s", name, payload.TestRunID, path)
+}
+
+func expectedTestCompletionArtifactName(payload agentSessionPayload) string {
+	switch strings.TrimSpace(payload.Automation) {
+	case "test_run_execution":
+		return testResultArtifactName
+	case "test_run_setup":
+		return testSetupResultArtifactName
+	default:
+		return ""
 	}
 }
 

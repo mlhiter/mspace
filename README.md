@@ -230,8 +230,8 @@ Local data paths:
 | `<artifact-dir>/test-environment.json` | Optional agent-written deployment result. |
 | `<artifact-dir>/review-evidence.json` | Optional agent-written review snapshot. |
 | `<artifact-dir>/test-case-proposals.json` | Optional Codex-written test case suggestion artifact reconciled into Case suggestions. |
-| `<artifact-dir>/test-setup-result.json` | Optional Codex-written setup artifact for plan-based test runs with setup steps. Passing setup stores `setupResult`, passes `outputs` into the run context, and starts case execution; failed/cancelled/missing setup marks the run `setup_failed`. |
-| `<artifact-dir>/test-result.json` | Optional Codex-written test run artifact reconciled into run items and review state. Supported screenshot evidence is transferred from the worker artifact directory, persisted as server-owned test artifacts, and shown from Case Detail / Run Detail. |
+| `<artifact-dir>/test-setup-result.json` | Required completion checkpoint for Tests setup automation. Passing setup stores `setupResult`, passes `outputs` into the run context, and starts case execution; failed/cancelled/missing setup marks the run `setup_failed`. |
+| `<artifact-dir>/test-result.json` | Required completion checkpoint for Tests execution automation, reconciled into run items and review state. Supported screenshot evidence is transferred from the worker artifact directory, persisted as server-owned test artifacts, and shown from Case Detail / Run Detail. |
 | `<artifact-dir>/branch-name.json` | Optional agent-written source branch proposal such as `{ "branch": "fix/pr-source-branch-selection" }`. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-written project runbook update. |
 
