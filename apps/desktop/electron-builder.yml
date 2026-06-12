@@ -3,6 +3,12 @@ productName: mspace
 copyright: Copyright © 2026 mspace
 asar: true
 
+extraMetadata:
+  description: Desktop workspace plus server control plane for coding agents, issue review, and Kubernetes validation evidence.
+  homepage: https://github.com/mlhiter/mspace
+  author:
+    name: mspace
+
 protocols:
   - name: mspace invite links
     schemes:
