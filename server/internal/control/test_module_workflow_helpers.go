@@ -560,7 +560,9 @@ func buildTestRunSetupIssueBody(run TestRun) string {
 	builder.WriteString("```json\n")
 	builder.WriteString(`{"runId":"` + run.ID + `","status":"passed|failed","summary":"what is ready","failureSummary":"","outputs":{},"evidence":{},"steps":[{"title":"...","status":"passed|failed","command":"...","summary":"..."}]}`)
 	builder.WriteString("\n```\n\n")
-	builder.WriteString("Put reusable outputs for later case execution in `outputs`, for example `previewUrl`, `image`, `namespace`, or `sshTarget`. If setup cannot safely complete, write `status:\"failed\"` and include a compact `failureSummary`.")
+	builder.WriteString("Put reusable outputs for later case execution in `outputs`. Keep this generic and environment-driven: examples include `previewUrl`, `frontendUrl`, `apiUrl`, `sealosUrl`, `image`, `namespace`, `sshTarget`, `browserSessionStrategy`, `preconditionStatus`, `sessionNotes`, or `bootstrapNotes`. Use `evidence` for compact proof such as checked URLs, command summaries, readiness signals, or bootstrap/session observations that later UI cases can trust.\n\n")
+	builder.WriteString("Do not persist plaintext secrets in `outputs`, `evidence`, `steps`, screenshots, notes, or summaries. When secret handling must be proven, record only safe metadata such as presence, changed/unchanged, last-four characters, or a non-reversible hash.\n\n")
+	builder.WriteString("If setup cannot safely complete, write `status:\"failed\"` and include a compact `failureSummary` plus any reusable blocker context, for example missing session bootstrap, unreachable frontend/API, failed namespace readiness, or unresolved preconditions.")
 	return strings.TrimSpace(builder.String())
 }
 
@@ -582,8 +584,10 @@ func buildTestRunExecutionIssueBody(run TestRun, cases []TestCase) string {
 	}
 	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with one item per case in this batch. Use only the real case IDs listed below. Never use synthetic IDs such as `batch`, `all`, or `summary`; if a global setup, network, browser, or script failure stops this batch, write one `blocked` or `failed` item per affected case with that case's real `caseId`.\n\n")
 	if testRunBatchRequiresBrowser(cases) {
-		builder.WriteString("This batch includes UI cases. Use the browser-capable runtime (`MSPACE_CHROME_CDP_URL` when provided) to exercise the preview or target page, capture at least one screenshot per UI case, save screenshots under `${MSPACE_SESSION_ARTIFACT_DIR}/screenshots/`, and reference them from each result item with `evidence.screenshotPaths`. Also include useful `evidence.assertions` and `evidence.networkStatuses` when observable. If browser execution is impossible, mark the affected item `blocked` and put the concrete blocker in `failureSummary` instead of returning text-only evidence.\n\n")
+		builder.WriteString("This batch includes UI cases. Use the browser-capable runtime (`MSPACE_CHROME_CDP_URL` when provided) to exercise the preview or target page. If the CDP endpoint does not support creating a new target/page, reuse an existing CDP page instead of failing immediately. Before running assertions, check setup context and app/session bootstrap blockers such as missing `frontendUrl`, `apiUrl`, `sealosUrl`, `browserSessionStrategy`, authentication/session state, or unresolved `preconditionStatus`.\n\n")
+		builder.WriteString("Capture at least one screenshot per UI case, save screenshots under `${MSPACE_SESSION_ARTIFACT_DIR}/screenshots/`, and reference them from each result item with `evidence.screenshotPaths`. Also include useful `evidence.assertions` and `evidence.networkStatuses` when observable. If browser/session execution is impossible, write one `blocked` or `failed` item per real case ID affected by the blocker, and put the concrete browser/session/app bootstrap reason in `failureSummary` instead of returning text-only evidence.\n\n")
 	}
+	builder.WriteString("Do not persist plaintext secrets in `test-result.json`, screenshots, notes, DOM snippets, network excerpts, or summaries. When a case validates secret behavior, record only safe metadata such as presence, changed/unchanged, last-four characters, or a non-reversible hash.\n\n")
 	builder.WriteString(testResultLanguageInstruction(run.ResultLocale) + "\n\n")
 	for _, testCase := range cases {
 		builder.WriteString("## " + testCase.ID + ": " + testCase.Title + "\n")
