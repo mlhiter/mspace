@@ -7,14 +7,29 @@ import pngToIco from "png-to-ico";
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const desktopRoot = resolve(repoRoot, "apps/desktop");
 const buildDir = resolve(desktopRoot, "build");
-const serverOut = resolve(desktopRoot, "resources/bin/mspace-server");
-const workerOut = resolve(desktopRoot, "resources/bin/mspace-worker");
+const resourcesBinDir = resolve(desktopRoot, "resources/bin");
 const serverBuildDir = resolve(buildDir, "server");
-const workerBuildDir = resolve(buildDir, "worker");
+const runtimeBuildDir = resolve(buildDir, "runtime");
 const pngIcon = resolve(desktopRoot, "assets/brand/mspace-icon.png");
 const icnsIcon = resolve(buildDir, "icon.icns");
 const icoIcon = resolve(buildDir, "icon.ico");
 const releaseEnv = process.env.MSPACE_RELEASE_ENV || "local";
+const targetPlatform =
+  process.argv.find((arg) => arg.startsWith("--target="))?.slice("--target=".length) ||
+  process.env.MSPACE_RELEASE_TARGET ||
+  process.platform;
+const targetArch =
+  process.argv.find((arg) => arg.startsWith("--arch="))?.slice("--arch=".length) ||
+  process.env.MSPACE_RELEASE_ARCH ||
+  process.arch;
+const hasWorkerRuntime = existsSync(resolve(repoRoot, "worker"));
+const hasRunnerRuntime = existsSync(resolve(repoRoot, "runner"));
+const runtimeDir = hasWorkerRuntime ? resolve(repoRoot, "worker") : resolve(repoRoot, "runner");
+const runtimeName = hasWorkerRuntime ? "mspace-worker" : "mspace-runner";
+const serverBinaryName = targetPlatform === "win32" ? "mspace-server.exe" : "mspace-server";
+const runtimeBinaryName = targetPlatform === "win32" ? `${runtimeName}.exe` : runtimeName;
+const serverOut = resolve(resourcesBinDir, serverBinaryName);
+const runtimeOut = resolve(resourcesBinDir, runtimeBinaryName);
 
 const goosByPlatform = {
   darwin: "darwin",
@@ -38,7 +53,12 @@ function exec(command, args, options = {}) {
   });
 }
 
-await mkdir(resolve(desktopRoot, "resources/bin"), { recursive: true });
+if (!hasWorkerRuntime && !hasRunnerRuntime) {
+  throw new Error("Unsupported release source: expected worker/ or runner/ runtime directory");
+}
+
+await rm(resourcesBinDir, { recursive: true, force: true });
+await mkdir(resourcesBinDir, { recursive: true });
 await mkdir(buildDir, { recursive: true });
 
 async function buildServer(output, goos, goarch) {
@@ -53,9 +73,9 @@ async function buildServer(output, goos, goarch) {
   });
 }
 
-async function buildWorker(output, goos, goarch) {
+async function buildRuntime(output, goos, goarch) {
   await exec("go", ["build", "-o", output, "."], {
-    cwd: resolve(repoRoot, "worker"),
+    cwd: runtimeDir,
     env: {
       ...process.env,
       CGO_ENABLED: "0",
@@ -65,29 +85,39 @@ async function buildWorker(output, goos, goarch) {
   });
 }
 
-if (process.platform === "darwin") {
+if (!goosByPlatform[targetPlatform]) {
+  throw new Error(`Unsupported release target: ${targetPlatform}`);
+}
+if (targetPlatform !== "darwin" && !goarchByArch[targetArch]) {
+  throw new Error(`Unsupported release architecture: ${targetArch}`);
+}
+
+if (targetPlatform === "darwin") {
+  if (process.platform !== "darwin") {
+    throw new Error("macOS desktop installers must be prepared on a macOS host");
+  }
   await rm(serverBuildDir, { recursive: true, force: true });
-  await rm(workerBuildDir, { recursive: true, force: true });
+  await rm(runtimeBuildDir, { recursive: true, force: true });
   await mkdir(serverBuildDir, { recursive: true });
-  await mkdir(workerBuildDir, { recursive: true });
+  await mkdir(runtimeBuildDir, { recursive: true });
   const arm64Server = resolve(serverBuildDir, "mspace-server-arm64");
   const x64Server = resolve(serverBuildDir, "mspace-server-x64");
-  const arm64Worker = resolve(workerBuildDir, "mspace-worker-arm64");
-  const x64Worker = resolve(workerBuildDir, "mspace-worker-x64");
+  const arm64Runtime = resolve(runtimeBuildDir, `${runtimeName}-arm64`);
+  const x64Runtime = resolve(runtimeBuildDir, `${runtimeName}-x64`);
   await buildServer(arm64Server, "darwin", "arm64");
   await buildServer(x64Server, "darwin", "amd64");
-  await buildWorker(arm64Worker, "darwin", "arm64");
-  await buildWorker(x64Worker, "darwin", "amd64");
+  await buildRuntime(arm64Runtime, "darwin", "arm64");
+  await buildRuntime(x64Runtime, "darwin", "amd64");
   await exec("lipo", ["-create", arm64Server, x64Server, "-output", serverOut]);
-  await exec("lipo", ["-create", arm64Worker, x64Worker, "-output", workerOut]);
+  await exec("lipo", ["-create", arm64Runtime, x64Runtime, "-output", runtimeOut]);
 } else {
-  const goos = goosByPlatform[process.platform];
-  const goarch = goarchByArch[process.arch];
+  const goos = goosByPlatform[targetPlatform];
+  const goarch = goarchByArch[targetArch];
   if (!goos || !goarch) {
-    throw new Error(`Unsupported release host for bundled server: ${process.platform}/${process.arch}`);
+    throw new Error(`Unsupported release target for bundled server: ${targetPlatform}/${targetArch}`);
   }
   await buildServer(serverOut, goos, goarch);
-  await buildWorker(workerOut, goos, goarch);
+  await buildRuntime(runtimeOut, goos, goarch);
 }
 
 await copyFile(pngIcon, resolve(buildDir, "icon.png"));

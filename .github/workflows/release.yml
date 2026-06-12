@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to package and attach release artifacts for"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -12,9 +18,22 @@ jobs:
   validate:
     name: Validate tagged release
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Check out tagged commit
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Verify tag supports packaged desktop
+        shell: bash
+        run: |
+          if [ ! -f apps/desktop/scripts/prepare-release.mjs ]; then
+            echo "::error::${RELEASE_TAG} predates packaged desktop support. Create a patched point release instead of attaching non-working installers to this tag."
+            exit 1
+          fi
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -44,9 +63,7 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: "1.24.0"
-          cache-dependency-path: |
-            server/go.sum
-            worker/go.sum
+          cache-dependency-path: "**/go.sum"
 
       - name: Test server
         working-directory: server
@@ -57,34 +74,39 @@ jobs:
         run: go build ./cmd/server
 
       - name: Test worker
-        working-directory: worker
-        run: go test ./...
-
-      - name: Build worker
-        working-directory: worker
-        run: go build ./...
+        run: |
+          if [ -d worker ]; then
+            (cd worker && go test ./...)
+            (cd worker && go build ./...)
+          elif [ -d runner ]; then
+            (cd runner && go test ./...)
+            (cd runner && go build ./...)
+          else
+            echo "No worker/ or runner/ runtime directory found." >&2
+            exit 1
+          fi
 
       - name: Write release verification summary
         run: |
           mkdir -p release-artifacts
           {
-            echo "# ${GITHUB_REF_NAME}"
+            echo "# ${RELEASE_TAG}"
             echo
-            echo "- Tag: ${GITHUB_REF_NAME}"
-            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Tag: ${RELEASE_TAG}"
+            echo "- Commit: $(git rev-parse HEAD)"
             echo "- TypeScript typecheck: passed"
             echo "- Desktop build: passed"
             echo "- Website build: passed"
             echo "- Server tests/build: passed"
-            echo "- Worker tests/build: passed"
+            echo "- Runtime tests/build: passed"
             echo
-            echo "This workflow validates the tagged source and publishes desktop installers from the macOS packaging job. It does not publish container images, npm packages, or production deployments."
+            echo "This workflow validates the tagged source and publishes desktop installers for macOS, Windows, and Linux. It does not publish container images, npm packages, or production deployments."
           } > release-artifacts/release-verification.md
 
       - name: Upload release verification artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-verification-${{ github.ref_name }}
+          name: release-verification-${{ env.RELEASE_TAG }}
           path: release-artifacts/release-verification.md
           if-no-files-found: error
 
@@ -93,28 +115,84 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           prerelease_flag=""
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+          if [[ "${RELEASE_TAG}" == *-* ]]; then
             prerelease_flag="--prerelease"
           fi
 
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" release-artifacts/release-verification.md --clobber
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" release-artifacts/release-verification.md --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" \
+            gh release create "${RELEASE_TAG}" \
               --draft \
               ${prerelease_flag} \
               --generate-notes \
-              --title "${GITHUB_REF_NAME}" \
+              --title "${RELEASE_TAG}" \
               release-artifacts/release-verification.md
           fi
 
-  package-desktop-macos:
-    name: Package macOS desktop app
-    runs-on: macos-latest
+  package-desktop:
+    name: Package ${{ matrix.name }} desktop app
+    runs-on: ${{ matrix.runner }}
     needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-latest
+            release-target: darwin
+            release-arch: universal
+            electron-builder-target: --mac
+            artifact-name: desktop-macos
+            artifact-path: |
+              apps/desktop/dist/*.dmg
+              apps/desktop/dist/*.zip
+            upload-globs: apps/desktop/dist/*.dmg apps/desktop/dist/*.zip
+          - name: Windows
+            runner: windows-latest
+            release-target: win32
+            release-arch: x64
+            electron-builder-target: --win --x64
+            artifact-name: desktop-windows
+            artifact-path: |
+              apps/desktop/dist/*.exe
+              apps/desktop/dist/*.zip
+            upload-globs: apps/desktop/dist/*.exe apps/desktop/dist/*.zip
+          - name: Linux
+            runner: ubuntu-latest
+            release-target: linux
+            release-arch: x64
+            electron-builder-target: --linux --x64
+            artifact-name: desktop-linux
+            artifact-path: |
+              apps/desktop/dist/*.AppImage
+              apps/desktop/dist/*.deb
+              apps/desktop/dist/*.rpm
+            upload-globs: apps/desktop/dist/*.AppImage apps/desktop/dist/*.deb apps/desktop/dist/*.rpm
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Check out tagged commit
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+
+      - name: Verify tag supports packaged desktop
+        shell: bash
+        run: |
+          if [ ! -f apps/desktop/scripts/prepare-release.mjs ]; then
+            echo "::error::${RELEASE_TAG} predates packaged desktop support. Create a patched point release instead of attaching non-working installers to this tag."
+            exit 1
+          fi
+
+      - name: Backfill current release packaging tools
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          git checkout "${GITHUB_SHA}" -- \
+            apps/desktop/electron-builder.yml \
+            apps/desktop/scripts/prepare-release.mjs
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -132,28 +210,30 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: "1.24.0"
-          cache-dependency-path: server/go.sum
+          cache-dependency-path: "**/go.sum"
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare bundled release binaries
+        run: node apps/desktop/scripts/prepare-release.mjs --target=${{ matrix.release-target }} --arch=${{ matrix.release-arch }}
+
+      - name: Build desktop app
+        run: pnpm --filter @mspace/desktop exec electron-vite build
+
       - name: Build desktop installers
-        run: pnpm dist:desktop:mac
+        run: pnpm --filter @mspace/desktop exec electron-builder ${{ matrix.electron-builder-target }}
 
       - name: Upload desktop artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-macos-${{ github.ref_name }}
-          path: |
-            apps/desktop/dist/*.dmg
-            apps/desktop/dist/*.zip
+          name: ${{ matrix.artifact-name }}-${{ env.RELEASE_TAG }}
+          path: ${{ matrix.artifact-path }}
           if-no-files-found: error
 
       - name: Attach desktop artifacts to draft GitHub Release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${GITHUB_REF_NAME}" \
-            apps/desktop/dist/*.dmg \
-            apps/desktop/dist/*.zip \
-            --clobber
+          gh release upload "${RELEASE_TAG}" ${{ matrix.upload-globs }} --clobber

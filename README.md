@@ -140,10 +140,12 @@ scripts/run-server-worker-codex-dev.sh
 
 For customer Kubernetes deployment, use the Helm chart and runbook under `deploy/helm/mspace` and `docs/kubernetes-deployment.md`. The fixed-worker path expects the operator to create the worker Codex home Secret first, using a worker-scoped `auth.json` plus the repository-owned `deploy/codex/worker-config.toml` or an untracked private-provider variant.
 
-Build a macOS desktop package for internal dogfood:
+Build desktop packages for internal dogfood:
 
 ```bash
 pnpm dist:desktop:mac
+pnpm dist:desktop:win
+pnpm dist:desktop:linux
 ```
 
 The packaged desktop app includes bundled `mspace-server` and `mspace-worker` binaries. When no remote server is configured, it starts the server in personal mode with a local SQLite store under the app user-data directory; the personal worker is kept alive against the selected personal workspace before Codex-backed agent turns, and its bootstrap credential is renewed in the background.
@@ -240,6 +242,8 @@ pnpm typecheck
 pnpm build:website
 pnpm build:desktop
 pnpm dist:desktop:mac
+pnpm dist:desktop:win
+pnpm dist:desktop:linux
 pnpm test:server
 (cd packages/ui && pnpm dlx shadcn@latest info --json)
 (cd worker && go test ./...)

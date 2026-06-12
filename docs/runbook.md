@@ -444,6 +444,9 @@ curl -X POST "http://127.0.0.1:8787/api/workspaces/<workspace-id>/projects/<proj
 pnpm typecheck
 pnpm --filter @mspace/desktop build
 pnpm --filter @mspace/website build
+pnpm dist:desktop:mac
+pnpm dist:desktop:win
+pnpm dist:desktop:linux
 pnpm test:server
 (cd packages/ui && pnpm dlx shadcn@latest info --json)
 (cd worker && go test ./...)

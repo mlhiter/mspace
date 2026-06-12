@@ -8,6 +8,8 @@
     "build:desktop": "pnpm --filter @mspace/desktop build",
     "dist:desktop": "pnpm --filter @mspace/desktop dist",
     "dist:desktop:mac": "pnpm --filter @mspace/desktop dist:mac",
+    "dist:desktop:win": "pnpm --filter @mspace/desktop dist:win",
+    "dist:desktop:linux": "pnpm --filter @mspace/desktop dist:linux",
     "dev:website": "pnpm --filter @mspace/website dev",
     "build:website": "pnpm --filter @mspace/website build",
     "preview:website": "pnpm --filter @mspace/website preview",

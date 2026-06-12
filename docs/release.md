@@ -51,7 +51,7 @@ git tag -a v0.1.0 <commit> -m "v0.1.0"
 git push origin v0.1.0
 ```
 
-After the tag is pushed, GitHub Actions creates or updates a draft GitHub Release, attaches the release verification summary, and uploads macOS desktop artifacts.
+After the tag is pushed, GitHub Actions creates or updates a draft GitHub Release, attaches the release verification summary, and uploads macOS, Windows, and Linux desktop artifacts. The same workflow also has a manual `workflow_dispatch` input named `tag` for backfilling desktop artifacts on an existing tag that already supports packaged desktop builds.
 
 ## Validation
 
@@ -62,6 +62,8 @@ pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm --filter @mspace/desktop build
 pnpm --filter @mspace/desktop dist:mac
+pnpm --filter @mspace/desktop dist:win
+pnpm --filter @mspace/desktop dist:linux
 pnpm --filter @mspace/website build
 (cd server && go test ./...)
 (cd server && go build ./cmd/server)
@@ -73,14 +75,16 @@ The workflow does not deploy production services, write databases, publish conta
 
 ## Desktop Artifacts
 
-macOS desktop releases are built with `electron-builder` from `apps/desktop`.
+Desktop releases are built with `electron-builder` from `apps/desktop`.
 
 The desktop package includes:
 
 - the Electron renderer/main/preload build from `electron-vite`;
-- a bundled `mspace-server` binary under app resources;
+- bundled `mspace-server` and `mspace-worker` binaries under app resources;
 - a local personal SQLite store at the app user-data path when no remote server is configured;
-- `.dmg` and `.zip` artifacts attached to the GitHub Release.
+- macOS `.dmg` and `.zip` artifacts for `arm64` and `x64`;
+- Windows `.exe` and `.zip` artifacts for `x64`;
+- Linux `.AppImage`, `.deb`, and `.rpm` artifacts for `x64`.
 
 The packaged app chooses its server in this order:
 
@@ -88,13 +92,17 @@ The packaged app chooses its server in this order:
 2. A user-configured server URL in the desktop settings connects to a remote team/customer server.
 3. The default personal mode starts the bundled local server with `MSPACE_STORE=sqlite` and `MSPACE_SQLITE_PATH=<userData>/mspace.db`.
 
-Build a local macOS package with:
+Build local desktop packages with:
 
 ```bash
 pnpm dist:desktop:mac
+pnpm dist:desktop:win
+pnpm dist:desktop:linux
 ```
 
 Unsigned artifacts are acceptable for internal dogfood. Public customer downloads should add Apple Developer ID signing and notarization before being marked ready.
+
+Tags earlier than packaged desktop support, including `v0.1.0`, should not be backfilled by attaching newly generated installers to the old release. Create a patched point release from a commit that contains packaged desktop support instead.
 
 ## Release Channels
 

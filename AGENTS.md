@@ -122,6 +122,8 @@ pnpm preview:website
 pnpm run server
 pnpm worker
 pnpm dist:desktop:mac
+pnpm dist:desktop:win
+pnpm dist:desktop:linux
 ```
 
 The desktop app uses `MSPACE_SERVER_URL` first, then a saved Team server URL, then the local bundled/dev server on `127.0.0.1:8787`. The default local personal server uses SQLite unless `DATABASE_URL` or `MSPACE_STORE=postgres` is configured. Default local personal sign-in opens on account creation and hides third-party OAuth; use `MSPACE_SERVER_URL=http://127.0.0.1:8787 pnpm dev:desktop` when intentionally testing local GitHub OAuth.
@@ -132,6 +134,9 @@ Validation:
 pnpm typecheck
 pnpm --filter @mspace/desktop build
 pnpm --filter @mspace/website build
+pnpm dist:desktop:mac
+pnpm dist:desktop:win
+pnpm dist:desktop:linux
 pnpm test:server
 (cd packages/ui && pnpm dlx shadcn@latest info --json)
 (cd worker && go test ./...)
