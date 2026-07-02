@@ -272,6 +272,11 @@ function defaultPasswordAuthMode(source: ServerBaseUrlSource): PasswordAuthMode 
   return isConfiguredTeamServer(source) ? "login" : "register";
 }
 
+function formatPasswordAuthError(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  return error.message === "login already exists" ? t("auth.loginExistsError") : error.message;
+}
+
 function normalizeInviteToken(value: string): string {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -714,6 +719,11 @@ function RootShell() {
   }
 
   const authError = passwordAuthMutation.error || signInMutation.error || pollQuery.error || (authToken !== "" ? meQuery.error : null);
+  const authErrorMessage = passwordAuthMutation.error
+    ? formatPasswordAuthError(passwordAuthMutation.error)
+    : authError instanceof Error
+      ? authError.message
+      : undefined;
   const configuredTeamServer = isConfiguredTeamServer(serverBaseUrlSource);
   const githubAuthAvailable = configuredTeamServer && serverSupportsGitHubAuth(serverHealthQuery.data);
   const inviteAccepting = pendingInviteToken !== "" && acceptInviteMutation.isPending;
@@ -862,7 +872,7 @@ function RootShell() {
             icon: workspace.icon,
             description: workspace.description,
           })),
-          error: authError instanceof Error ? authError.message : undefined,
+          error: authErrorMessage,
           actionLabel: pendingAuthState ? t("workspace.waitingForGitHub") : undefined,
         }}
         onSignIn={() => {
@@ -881,7 +891,7 @@ function RootShell() {
       {accountStatus !== "signed-in" ? (
         <AuthRequiredOverlay
           status={accountStatus}
-          error={authError instanceof Error ? authError.message : undefined}
+          error={authErrorMessage}
           actionLabel={pendingAuthState ? t("workspace.waitingForGitHub") : undefined}
           mode={passwordAuthMode}
           login={passwordAuthLogin}
@@ -1016,6 +1026,12 @@ function AuthRequiredOverlay(props: {
       : props.serverBaseUrlSource === "user"
         ? t("auth.serverSource.user")
         : t("auth.serverSource.default");
+  const registerScopeNotice =
+    props.mode === "register"
+      ? props.configuredTeamServer
+        ? t("auth.teamRegisterScopeNotice")
+        : t("auth.localRegisterScopeNotice")
+      : "";
 
   return (
     <div className="fixed inset-0 z-[90] grid place-items-center bg-[color:var(--canvas)] px-6">
@@ -1039,9 +1055,13 @@ function AuthRequiredOverlay(props: {
                   ? t("auth.teamServerDescription")
                   : t("auth.localAccountDescription")}
             </p>
+            <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted-strong)]">
+              {t("auth.currentServer", { source: serverSourceLabel, url: props.serverBaseUrl })}
+            </p>
           </div>
         </div>
         {props.error ? <div className="mt-4"><Notice tone="danger">{props.error}</Notice></div> : null}
+        {registerScopeNotice ? <div className="mt-4"><Notice>{registerScopeNotice}</Notice></div> : null}
         {props.invite?.accepting ? (
           <div className="mt-4 inline-flex items-center gap-2 text-[12px] font-medium leading-5 text-[color:var(--muted-strong)]">
             <LoaderCircle data-icon className="animate-spin" />

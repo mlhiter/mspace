@@ -8,6 +8,17 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-07-02",
+    title: "Clearer local account registration",
+    summary:
+      "mspace made the desktop sign-in screen clearer when usernames already exist or when users are switching between local and deployed servers.",
+    items: [
+      "Changed duplicate local-account registration errors from raw server text into a clear instruction to sign in with the existing password or choose another username.",
+      "Showed the active authentication server directly in the sign-in panel so local personal accounts are not confused with deployed team-server accounts.",
+      "Added register-mode notices that explain local accounts are scoped to the current server and existing usernames cannot be reused.",
+    ],
+  },
+  {
+    date: "2026-07-02",
     title: "Public desktop downloads",
     summary:
       "mspace made the public website point to packaged desktop installers instead of source-only startup commands.",
