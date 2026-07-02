@@ -7,7 +7,7 @@
 The repository contains a runnable desktop MVP with server-owned product and runtime state:
 
 - Electron desktop shell built with electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript, pnpm workspaces, and Turbo.
-- Public website in `apps/website`, built with Vite, React 19, Tailwind CSS 4, and lucide-react, deployed as a static Vercel site from the root `vercel.json`.
+- Public website in `apps/website`, built with Vite, React 19, Tailwind CSS 4, and lucide-react, deployed as a static Vercel site from the root `vercel.json`. It includes the homepage, static Changelog, and Download entrypoint for GitHub Release desktop installers.
 - Shared UI layer built on shadcn/ui source components, Radix UI primitives, lucide-react icons, Material Icon Theme file icons, and the `cn()` helper in `packages/ui/src/lib/utils.ts`.
 - Shared desktop localization lives in `packages/i18n` for `en` and `zh-CN`.
 - Go server control plane in `server/`, built with chi. Team/shared deployments use PostgreSQL through `pgx`; packaged personal desktop mode can use a server-owned SQLite snapshot store. Project-level test cases and case suggestions plus workspace-level plans, plan setup steps, and runs live in this same server store.

@@ -1,11 +1,15 @@
 import {
+  Apple,
   ArrowUpRight,
   Box,
   CalendarDays,
   CircleDot,
   ClipboardCheck,
+  Download,
   GitBranch,
+  Laptop,
   Network,
+  Package,
   ShieldCheck,
   TerminalSquare,
 } from "lucide-react";
@@ -17,7 +21,7 @@ import teamRuntimeImage from "../../../docs/images/mspace-team-runtime.png";
 import brandMark from "./assets/mspace-mark-transparent.png";
 import { changelog } from "./changelog";
 
-type SiteView = "home" | "changelog";
+type SiteView = "home" | "changelog" | "download";
 
 const workflow = [
   {
@@ -75,6 +79,85 @@ const controlPoints = [
 const quickStart = ["pnpm install", "pnpm dev:desktop", "pnpm dev:website"];
 const changelogItemCount = changelog.reduce((total, entry) => total + entry.items.length, 0);
 
+const release = {
+  version: "v0.2.0-rc.1",
+  label: "Release candidate",
+  date: "2026-06-12",
+  url: "https://github.com/mlhiter/mspace/releases/tag/v0.2.0-rc.1",
+};
+
+const downloadOptions = [
+  {
+    platform: "macOS",
+    audience: "Apple Silicon and Intel",
+    icon: Apple,
+    summary: "Use the DMG for normal installation. ZIP builds are available for manual app bundle checks.",
+    primary: {
+      label: "Apple Silicon DMG",
+      meta: "arm64 · 179 MB",
+      url: "https://github.com/mlhiter/mspace/releases/download/v0.2.0-rc.1/mspace-0.2.0-rc.1-mac-arm64.dmg",
+    },
+    secondary: [
+      {
+        label: "Intel DMG",
+        meta: "x64 · 184 MB",
+        url: "https://github.com/mlhiter/mspace/releases/download/v0.2.0-rc.1/mspace-0.2.0-rc.1-mac-x64.dmg",
+      },
+      {
+        label: "Apple Silicon ZIP",
+        meta: "arm64 · 174 MB",
+        url: "https://github.com/mlhiter/mspace/releases/download/v0.2.0-rc.1/mspace-0.2.0-rc.1-mac-arm64.zip",
+      },
+      {
+        label: "Intel ZIP",
+        meta: "x64 · 179 MB",
+        url: "https://github.com/mlhiter/mspace/releases/download/v0.2.0-rc.1/mspace-0.2.0-rc.1-mac-x64.zip",
+      },
+    ],
+  },
+  {
+    platform: "Windows",
+    audience: "x64 installer",
+    icon: Laptop,
+    summary: "Start with the NSIS installer. The ZIP is useful when you need to inspect the packaged app.",
+    primary: {
+      label: "Windows EXE",
+      meta: "x64 · 127 MB",
+      url: "https://github.com/mlhiter/mspace/releases/download/v0.2.0-rc.1/mspace-0.2.0-rc.1-win-x64.exe",
+    },
+    secondary: [
+      {
+        label: "Windows ZIP",
+        meta: "x64 · 172 MB",
+        url: "https://github.com/mlhiter/mspace/releases/download/v0.2.0-rc.1/mspace-0.2.0-rc.1-win-x64.zip",
+      },
+    ],
+  },
+  {
+    platform: "Linux",
+    audience: "AppImage, DEB, and RPM",
+    icon: Package,
+    summary: "Use AppImage for a portable first run, or pick the package format that matches your distro.",
+    primary: {
+      label: "Linux AppImage",
+      meta: "x86_64 · 156 MB",
+      url: "https://github.com/mlhiter/mspace/releases/download/v0.2.0-rc.1/mspace-0.2.0-rc.1-linux-x86_64.AppImage",
+    },
+    secondary: [
+      {
+        label: "Debian package",
+        meta: "amd64 · 123 MB",
+        url: "https://github.com/mlhiter/mspace/releases/download/v0.2.0-rc.1/mspace-0.2.0-rc.1-linux-amd64.deb",
+      },
+      {
+        label: "RPM package",
+        meta: "x86_64 · 110 MB",
+        url: "https://github.com/mlhiter/mspace/releases/download/v0.2.0-rc.1/mspace-0.2.0-rc.1-linux-x86_64.rpm",
+      },
+    ],
+  },
+];
+
 const selectedSurfaces = [
   {
     label: "Evidence",
@@ -101,7 +184,15 @@ function getCurrentView(): SiteView {
     return "home";
   }
 
-  return window.location.hash === "#changelog" ? "changelog" : "home";
+  if (window.location.hash === "#changelog") {
+    return "changelog";
+  }
+
+  if (window.location.hash === "#download") {
+    return "download";
+  }
+
+  return "home";
 }
 
 export function App() {
@@ -112,7 +203,17 @@ export function App() {
 
   useEffect(() => {
     const syncViewFromHash = () => {
-      setCurrentView(getCurrentView());
+      const nextView = getCurrentView();
+      const hash = window.location.hash;
+      setCurrentView(nextView);
+
+      if (nextView === "home" && hash && hash !== "#top") {
+        window.setTimeout(() => {
+          document.getElementById(hash.slice(1))?.scrollIntoView({ block: "start" });
+        }, 0);
+        return;
+      }
+
       window.scrollTo({ top: 0, behavior: "auto" });
     };
 
@@ -124,6 +225,14 @@ export function App() {
     return (
       <main className="site-shell site-shell-changelog">
         <ChangelogPage currentView={currentView} />
+      </main>
+    );
+  }
+
+  if (currentView === "download") {
+    return (
+      <main className="site-shell site-shell-download">
+        <DownloadPage currentView={currentView} />
       </main>
     );
   }
@@ -144,9 +253,9 @@ export function App() {
             session, branch, namespace, preview URL, logs, and cleanup decision in one place.
           </p>
           <div className="hero-actions" aria-label="Hero actions">
-            <a href="#quick-start" className="primary-link">
-              Run locally
-              <TerminalSquare aria-hidden="true" size={18} strokeWidth={2} />
+            <a href="#download" className="primary-link">
+              Download app
+              <Download aria-hidden="true" size={18} strokeWidth={2} />
             </a>
             <a href="#proof" className="secondary-link">
               Inspect the proof
@@ -348,8 +457,9 @@ export function App() {
           <div className="section-kicker">Run the local MVP</div>
           <h2>Start with a real repository and a real issue.</h2>
           <p>
-            The website is only useful if it points back to the working loop. Install dependencies,
-            launch the desktop app, then create an issue and attach an agent session.
+            The installer is the shortest path to the desktop loop. If you are developing mspace
+            itself, install dependencies, launch the desktop app, then create an issue and attach an
+            agent session.
           </p>
         </div>
         <div className="terminal-panel" aria-label="Quick start commands">
@@ -388,6 +498,9 @@ function SiteHeader({ currentView, page = false }: { currentView: SiteView; page
         <a href="#changelog" aria-current={currentView === "changelog" ? "page" : undefined}>
           Changelog
         </a>
+        <a href="#download" aria-current={currentView === "download" ? "page" : undefined}>
+          Download
+        </a>
       </nav>
       <a
         className="nav-action"
@@ -399,6 +512,78 @@ function SiteHeader({ currentView, page = false }: { currentView: SiteView; page
         <ArrowUpRight aria-hidden="true" size={16} strokeWidth={2} />
       </a>
     </header>
+  );
+}
+
+function DownloadPage({ currentView }: { currentView: SiteView }) {
+  return (
+    <section className="download-page" id="download" aria-label="Download mspace">
+      <SiteHeader currentView={currentView} page />
+      <div className="download-shell">
+        <div className="download-hero">
+          <div>
+            <div className="section-kicker">Desktop installers</div>
+            <h1>Install the issue evidence workspace.</h1>
+          </div>
+          <div className="release-card" aria-label="Current packaged release">
+            <span>{release.label}</span>
+            <strong>{release.version}</strong>
+            <p>
+              Packaged {release.date}. The stable v0.1.0 tag does not carry installers yet, so the
+              website points at this packaged candidate.
+            </p>
+            <a href={release.url} target="_blank" rel="noreferrer">
+              View all assets
+              <ArrowUpRight aria-hidden="true" size={16} strokeWidth={2} />
+            </a>
+          </div>
+        </div>
+
+        <div className="download-grid" aria-label="mspace desktop downloads">
+          {downloadOptions.map((option) => {
+            const Icon = option.icon;
+            return (
+              <article className="download-card" key={option.platform}>
+                <div className="download-card-head">
+                  <span>
+                    <Icon aria-hidden="true" size={24} strokeWidth={2} />
+                  </span>
+                  <div>
+                    <h2>{option.platform}</h2>
+                    <p>{option.audience}</p>
+                  </div>
+                </div>
+                <p className="download-summary">{option.summary}</p>
+                <a className="download-primary" href={option.primary.url}>
+                  <Download aria-hidden="true" size={18} strokeWidth={2} />
+                  <span>{option.primary.label}</span>
+                  <small>{option.primary.meta}</small>
+                </a>
+                <div className="download-secondary" aria-label={`${option.platform} alternatives`}>
+                  {option.secondary.map((asset) => (
+                    <a href={asset.url} key={asset.label}>
+                      <span>{asset.label}</span>
+                      <small>{asset.meta}</small>
+                    </a>
+                  ))}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+
+        <div className="download-footnote">
+          <div>
+            <div className="section-kicker">Prefer source?</div>
+            <h2>Run the same loop from the repository.</h2>
+          </div>
+          <a href="#quick-start">
+            See local commands
+            <TerminalSquare aria-hidden="true" size={16} strokeWidth={2} />
+          </a>
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -2,10 +2,11 @@
 
 This app is the public brand site for mspace. It is a static Vite/React/Tailwind site that tells the issue-to-evidence story: issue document, Codex session, source change, Kubernetes namespace preview, review evidence, and cleanup decision.
 
-The site has two navigation views:
+The site has three navigation views:
 
 - `Home`: the issue-to-evidence brand narrative;
-- `Changelog`: a static day-level build log backed by `src/changelog.ts`.
+- `Changelog`: a static day-level build log backed by `src/changelog.ts`;
+- `Download`: a static installer entrypoint that links to packaged GitHub Release assets.
 
 Production site: [mspace-website-blue.vercel.app](https://mspace-website-blue.vercel.app)
 
@@ -42,6 +43,7 @@ Do not commit `.vercel/`; it is a local project link and is ignored by git.
 - Brand mark: `apps/desktop/assets/brand/mspace-icon.png`; transparent website mark: `apps/website/src/assets/mspace-mark-transparent.png`
 - Product screenshots: current Issues, Issue Detail, Evidence, and Team Runtime captures in `docs/images`
 - Changelog data: `apps/website/src/changelog.ts`
+- Download links: packaged desktop assets on the GitHub Release page for `v0.2.0-rc.1`
 - Website backlog: `apps/website/TODO.md`
 
 Keep screenshot usage curated. The homepage should show a small set of representative running surfaces, not every Issue Detail tab. Full tab coverage can stay in `docs/images` or external article assets, while the README should keep only one or two screenshots.

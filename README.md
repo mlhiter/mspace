@@ -39,7 +39,7 @@ The README intentionally shows only a representative pair. Current and task-spec
 
 Public site: [mspace-website-blue.vercel.app](https://mspace-website-blue.vercel.app)
 
-The website is a Vite/React/Tailwind brand surface in `apps/website`. It is intentionally bolder than the desktop product shell, but it stays anchored to the product story: issue workspace, Codex-backed sessions, source diffs, Kubernetes namespace previews, review evidence, and cleanup decisions. It also exposes a static `Changelog` navigation view backed by `apps/website/src/changelog.ts`.
+The website is a Vite/React/Tailwind brand surface in `apps/website`. It is intentionally bolder than the desktop product shell, but it stays anchored to the product story: issue workspace, Codex-backed sessions, source diffs, Kubernetes namespace previews, review evidence, and cleanup decisions. It also exposes a static `Changelog` navigation view backed by `apps/website/src/changelog.ts` and a `Download` view that links to packaged desktop installers on GitHub Releases.
 
 ```bash
 pnpm dev:website
@@ -263,7 +263,7 @@ curl http://127.0.0.1:8787/health
 
 ```text
 apps/desktop/        Electron desktop shell and renderer entrypoint
-apps/website/        Public Vite/React brand site and changelog for the issue-to-evidence story
+apps/website/        Public Vite/React brand site, changelog, and installer download entrypoint
 packages/core/       Shared API client and TypeScript types
 packages/i18n/       Shared English and Simplified Chinese desktop localization
 packages/ui/         Shared UI primitives and shadcn/ui source components

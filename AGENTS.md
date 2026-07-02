@@ -15,7 +15,7 @@ The product should stay narrow:
 ## Current Implementation
 
 - Desktop app: Electron, electron-vite, React 19, TanStack Router, React Query 5, Tailwind CSS 4, TypeScript.
-- Public website: Vite, React 19, Tailwind CSS 4, and lucide-react in `apps/website`, deployed through Vercel with the root `vercel.json`. It has a homepage plus a static `Changelog` navigation view backed by `apps/website/src/changelog.ts`; the nav logo uses `apps/website/src/assets/mspace-mark-transparent.png` inside its own gray-white tile.
+- Public website: Vite, React 19, Tailwind CSS 4, and lucide-react in `apps/website`, deployed through Vercel with the root `vercel.json`. It has a homepage, a static `Changelog` navigation view backed by `apps/website/src/changelog.ts`, and a `Download` view that links to packaged desktop installers on GitHub Releases; the nav logo uses `apps/website/src/assets/mspace-mark-transparent.png` inside its own gray-white tile.
 - UI system: shadcn/ui source components in `packages/ui/src/components/ui`, Radix UI primitives, lucide-react icons, Material Icon Theme file icons for file surfaces, shared exports through `@mspace/ui`, and shared desktop localization through `@mspace/i18n`.
 - Workspace tooling: pnpm workspaces and Turbo.
 - Server control plane: Go and chi. Team/shared server deployments use PostgreSQL through `pgx` with embedded migrations under `server/internal/control/migrations`; packaged personal desktop mode can run the same server contract on a server-owned SQLite snapshot store.

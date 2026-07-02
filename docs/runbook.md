@@ -163,6 +163,8 @@ pnpm preview:website
 
 The public changelog is a static website view, not product runtime state. Update `apps/website/src/changelog.ts` whenever a task ships meaningful product, engineering, documentation, or website progress.
 
+The website Download view links to packaged desktop installers on GitHub Releases. Keep those links pointed at a release that actually carries desktop assets; as verified on 2026-07-02, `v0.2.0-rc.1` has macOS, Windows, and Linux packages, while `v0.1.0` does not. Do not present candidate artifacts as stable customer downloads until release signing and notarization are ready.
+
 ## Desktop Localization
 
 Desktop localization is centralized in `packages/i18n` and currently supports English (`en`) and Simplified Chinese (`zh-CN`). The selected locale is stored in `localStorage["mspace.locale"]` and mirrored to `<html lang="...">`.

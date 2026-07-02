@@ -8,6 +8,17 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-07-02",
+    title: "Public desktop downloads",
+    summary:
+      "mspace made the public website point to packaged desktop installers instead of source-only startup commands.",
+    items: [
+      "Added a Download navigation view for macOS, Windows, and Linux installer assets from the packaged v0.2.0-rc.1 release candidate.",
+      "Made the homepage primary action lead to the installer page while keeping source-based local development commands available as a secondary path.",
+      "Linked each platform to the matching GitHub Release asset and kept the full Release page available for checksums, alternate formats, and release notes.",
+    ],
+  },
+  {
+    date: "2026-07-02",
     title: "Server-only Sealos deployment hardening",
     summary:
       "mspace hardened the Helm path used for public management-plane-only Sealos deployments.",
