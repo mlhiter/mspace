@@ -457,6 +457,23 @@ pnpm test:server
 
 ## Troubleshooting
 
+### Codex desktop run fails before Electron starts
+
+`scripts/run-mspace-codex-dev.sh` writes the active run to `~/.mspace/logs/codex-run-latest.log`. If the log stops around `electron-vite dev` with `Error: Electron uninstall`, or `pnpm --filter @mspace/desktop exec electron --version` reports `Electron failed to install correctly`, check whether pnpm skipped native install scripts:
+
+```bash
+pnpm ignored-builds
+pnpm --filter @mspace/desktop exec electron --version
+```
+
+The root `pnpm-workspace.yaml` must allow install scripts for `electron`, `electron-winstaller`, and `esbuild` through `allowBuilds`. After that, reinstall with the lockfile:
+
+```bash
+pnpm install --frozen-lockfile
+```
+
+If the current `node_modules` was already installed while those scripts were ignored, rebuild pending packages or reinstall dependencies before retrying the Codex dev runner.
+
 ### GitHub sign-in does not complete
 
 Local password sign-in does not require GitHub. Use GitHub only when the server has OAuth values and the environment can reach GitHub.
