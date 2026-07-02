@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-02",
+    title: "Server-only Sealos deployment hardening",
+    summary:
+      "mspace hardened the Helm path used for public management-plane-only Sealos deployments.",
+    items: [
+      "Verified that the server can be installed publicly with the worker, BuildKit, team workspace bootstrap, runtime token, kubeconfig mount, and Codex home Secret disabled.",
+      "Kept the public server control plane Codex-free while still exposing password auth, workspace collaboration, runtime task queue, and worker registration capabilities for later worker connection.",
+      "Set the built-in Postgres container `PGDATA` to a data subdirectory so filesystem PVCs that contain entries such as `lost+found` can initialize cleanly.",
+      "Documented the server-only Helm values and the Postgres PVC troubleshooting path for future demos and control-plane-only installs.",
+    ],
+  },
+  {
     date: "2026-06-12",
     title: "Visible setup failure reasons",
     summary:

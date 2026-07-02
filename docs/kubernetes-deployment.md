@@ -113,6 +113,28 @@ With `bootstrap.teamWorkspace.enabled=true`, Helm creates one `msw_...` runtime 
 
 Keep `buildkit.enabled=false` for the first worker registration unless the customer cluster accepts rootless BuildKit's `Unconfined` seccomp profile.
 
+For a public management-plane-only deployment, keep the worker and build surfaces disabled:
+
+```yaml
+bootstrap:
+  teamWorkspace:
+    enabled: false
+
+buildkit:
+  enabled: false
+
+worker:
+  enabled: false
+
+codexHome:
+  existingSecret: ""
+
+kubeconfig:
+  existingSecret: ""
+```
+
+Do not configure `secrets.runtimeToken`, `secrets.runtimeTokenExistingSecret`, or a worker Codex home Secret in this mode. The server can still expose password auth, workspace collaboration, runtime task queue, and runtime worker registration capabilities, but no team Codex worker should appear online until an operator connects one later.
+
 Install:
 
 ```bash
@@ -128,6 +150,8 @@ kubectl -n mspace-system rollout status deployment/mspace-server
 kubectl -n mspace-system port-forward svc/mspace 8787:8787
 curl http://127.0.0.1:8787/health
 ```
+
+The chart sets the built-in Postgres container `PGDATA` to `/var/lib/postgresql/data/pgdata`. Some storage provisioners, including OpenEBS-backed filesystem PVCs, create entries such as `lost+found` at the mount root; the official Postgres image refuses to initialize into a non-empty directory. If Postgres fails with `directory "/var/lib/postgresql/data" exists but is not empty`, verify the rendered StatefulSet has this `PGDATA` subdirectory and roll the Postgres pod after applying the chart. Do not delete the PVC unless intentionally discarding the database.
 
 Open the desktop app with:
 
