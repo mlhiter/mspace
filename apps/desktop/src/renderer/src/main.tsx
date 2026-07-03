@@ -53,6 +53,62 @@ import "./globals.css";
 
 const queryClient = new QueryClient();
 initializeMspaceI18n();
+const ACTIVE_WORKER_MAX_AGE_MS = 45 * 1000;
+
+type PersonalWorkerRecord = {
+  workspaceId: string;
+  mode: string;
+  status: string;
+  capabilities?: Record<string, unknown>;
+  lastSeenAt: string;
+};
+
+let personalWorkerReadinessInFlightKey = "";
+
+function hasCodexCapability(worker: PersonalWorkerRecord) {
+  return worker.capabilities?.codex === true;
+}
+
+function isFreshWorkerHeartbeat(value: string) {
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= ACTIVE_WORKER_MAX_AGE_MS;
+}
+
+function activePersonalCodexWorker(workers: PersonalWorkerRecord[], workspaceId: string) {
+  return workers.find(
+    (worker) =>
+      worker.workspaceId === workspaceId &&
+      worker.mode === "personal" &&
+      worker.status === "online" &&
+      hasCodexCapability(worker) &&
+      isFreshWorkerHeartbeat(worker.lastSeenAt),
+  );
+}
+
+async function ensurePersonalWorkerReadiness(input: { authToken: string; workspaceId: string }) {
+  if (!window.mspaceDesktop?.ensurePersonalWorker) return;
+  const serverUrl = getControlPlaneBaseUrl();
+  const key = `${serverUrl}:${input.workspaceId}`;
+  if (personalWorkerReadinessInFlightKey === key) return;
+  personalWorkerReadinessInFlightKey = key;
+  try {
+    const workers = await controlPlaneApi.listRuntimeWorkers(input.authToken, input.workspaceId);
+    if (activePersonalCodexWorker(workers, input.workspaceId)) return;
+    await window.mspaceDesktop.ensurePersonalWorker({
+      authToken: input.authToken,
+      workspaceId: input.workspaceId,
+      serverUrl,
+      requiredCapabilities: { codex: true },
+    });
+    await queryClient.invalidateQueries({ queryKey: queryKeys.runtimeWorkers(input.workspaceId, input.authToken) });
+  } catch (error) {
+    console.warn(`Failed to ensure personal worker readiness: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    if (personalWorkerReadinessInFlightKey === key) {
+      personalWorkerReadinessInFlightKey = "";
+    }
+  }
+}
 
 function defaultTeamWorkspaceName(name: string | undefined) {
   const owner = name?.trim();
@@ -686,6 +742,11 @@ function RootShell() {
     if (!serverWorkspaceReady) return;
     void fetch(`${getControlPlaneBaseUrl()}/health`).catch(() => undefined);
   }, [serverWorkspaceReady]);
+
+  useEffect(() => {
+    if (!serverWorkspaceReady || currentWorkspace?.kind === "team" || !currentWorkspace?.id) return;
+    void ensurePersonalWorkerReadiness({ authToken, workspaceId: currentWorkspace.id });
+  }, [authToken, currentWorkspace?.id, currentWorkspace?.kind, serverWorkspaceReady]);
 
   const handleSignOut = () => {
     clearAuthState();

@@ -61,11 +61,11 @@ Desktop
 
 Personal and team workspaces use the same server API and runtime task protocol. `runtimeMode` controls which workers can claim the task, not which product model is used.
 
-In desktop personal mode, Electron manages the local worker bootstrap credential lifecycle. It creates a short-lived personal `msw_...` credential, writes it to an Electron user-data token file, starts a host-local worker with `MSPACE_RUNTIME_TOKEN_FILE`, renews the credential before expiry, and revokes the previous token after a grace period. The worker rereads the token file for runtime calls, so renewal normally does not require user action or a worker restart.
+In desktop personal mode, Electron manages the local worker bootstrap credential lifecycle and treats the worker as platform readiness after auth and workspace selection. It creates a short-lived personal `msw_...` credential when needed, writes it to an Electron user-data token file, starts a host-local worker with `MSPACE_RUNTIME_TOKEN_FILE`, renews the credential before expiry, and revokes the previous token after a grace period. The worker rereads the token file for runtime calls, so renewal normally does not require user action or a worker restart.
 
 In customer Helm deployments, the fixed-worker path can bootstrap the team workspace and runtime token in one install. When `bootstrap.teamWorkspace.enabled=true`, the chart stores one `msw_...` token in the release Secret, passes it to the server as `MSPACE_BOOTSTRAP_RUNTIME_TOKEN`, and passes the same Secret key to the worker as `MSPACE_RUNTIME_TOKEN`. Server startup ensures the bootstrap admin, creates or finds the named team workspace owned by that admin, and registers the token against that workspace. Codex auth/config still stays out of the server: the worker mounts `mspace-codex-home` with `auth.json` and `config.toml`, while the server only sees the mspace runtime registration token.
 
-Agent session creation is guarded rather than left to wait in the queue. Issue Detail refreshes runtime worker liveness before writing the trigger comment; personal desktop mode may start the host-local worker and wait for a fresh heartbeat. The server repeats the same active Codex worker check and returns HTTP `409` with `no active codex worker` when no matching online worker exists.
+Agent session creation is guarded rather than left to wait in the queue. Issue Detail refreshes runtime worker liveness before writing the trigger comment; personal desktop mode may reuse the shell-started worker or start it as a fallback and wait for a fresh heartbeat. The server repeats the same active Codex worker check and returns HTTP `409` with `no active codex worker` when no matching online worker exists.
 
 Issue type triage follows the same boundary:
 

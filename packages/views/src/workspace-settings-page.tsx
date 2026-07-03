@@ -297,7 +297,7 @@ export function WorkspaceSettingsPage() {
 	const invitations = invitationsQuery.data || [];
 	const canManageWorkspace = auth.workspace?.role === "owner" || auth.workspace?.role === "admin";
 	const canConnectWorker = runtimeEnabled && canManageWorkspace;
-	const onlineWorkerCount = workers.filter((worker) => worker.status === "online").length;
+	const onlineWorkerCount = workers.filter((worker) => workerDisplayStatus(worker) === "online").length;
 	const queuedTaskCount = tasksPage.statusCounts?.queued || 0;
 	const runtimeError = isTeamWorkspace
 		? membersQuery.error || invitationsQuery.error || tokensQuery.error || workersQuery.error || tasksQuery.error

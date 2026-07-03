@@ -7,6 +7,17 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-03",
+    title: "Proactive desktop runtime readiness",
+    summary:
+      "mspace now treats the personal runtime worker as platform readiness instead of waiting for a specific agent action to notice it is missing.",
+    items: [
+      "Proactively checks for a fresh personal Codex worker after desktop auth and workspace selection are ready, then starts the local worker when needed.",
+      "Keeps team workspaces on the explicit connected-worker path so remote team runtimes are not replaced by a local personal worker.",
+      "Counts only fresh worker heartbeats as online in Workspace Settings so old snapshots do not hide a disconnected runtime.",
+    ],
+  },
+  {
     date: "2026-07-02",
     title: "Clearer local account registration",
     summary:

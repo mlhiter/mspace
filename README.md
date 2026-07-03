@@ -20,7 +20,7 @@
 
 ## Overview
 
-mspace is a review Inbox and Issue workspace for software teams that want coding agents to work in real repositories and validate changes against explicit team-owned Environments. Current Environments are Kubernetes clusters and virtual machines; issue deploys use Kubernetes namespaces today.
+mspace is a review Inbox and Issue workspace for software teams that want coding agents to work in real repositories and validate changes against explicit team-owned Environments. Current Environments are Kubernetes clusters and virtual machines; issue deploys use Kubernetes namespaces in this MVP.
 
 The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, child tasks, comments, agent sessions, source branch state, runtime logs, deployment evidence, preview URL, and cleanup decision in one place.
 
@@ -120,7 +120,7 @@ cp .env.example .env.local
 pnpm run server
 ```
 
-Personal desktop workspaces start a host-local Codex worker automatically before an agent mention is submitted. The desktop creates a short-lived `msw_...` credential, stores it in an Electron user-data token file, renews it before expiry, and revokes the previous credential after the worker has had time to pick up the replacement. Workspace Settings labels these desktop-managed credentials as automatic and keeps expired or replaced credentials in audit history so renewals do not look like duplicate manual tokens. For UI test batches, the desktop personal worker also starts or reuses a reachable CDP endpoint and advertises `browser` / `chrome_cdp` capability. It prefers a reachable configured CDP URL or local Chrome/Chromium, then falls back to an Electron-managed Chromium host when desktop Chrome cannot expose CDP.
+Personal desktop workspaces proactively keep a host-local Codex worker ready once auth and workspace selection are available, with action-level worker preflight still acting as a fallback before an agent turn is queued. The desktop creates a short-lived `msw_...` credential, stores it in an Electron user-data token file, renews it before expiry, and revokes the previous credential after the worker has had time to pick up the replacement. Workspace Settings labels these desktop-managed credentials as automatic and keeps expired or replaced credentials in audit history so renewals do not look like duplicate manual tokens. For UI test batches, the desktop personal worker also starts or reuses a reachable CDP endpoint and advertises `browser` / `chrome_cdp` capability. It prefers a reachable configured CDP URL or local Chrome/Chromium, then falls back to an Electron-managed Chromium host when desktop Chrome cannot expose CDP.
 
 Team workspaces normally connect external worker runtime hosts from Workspace Settings with a one-time install command. Run that command on the server, VM, DevBox, or other Docker-capable host that should claim agent tasks; the worker registers itself and appears online after its first heartbeat. Customer Helm installs can also enable `bootstrap.teamWorkspace.enabled=true` to create an admin-owned default team workspace and register the chart-managed fixed worker during server startup. The raw `msw_...` token flow is still available through the API for development and recovery, but it is not the product setup path.
 
@@ -148,7 +148,7 @@ pnpm dist:desktop:win
 pnpm dist:desktop:linux
 ```
 
-The packaged desktop app includes bundled `mspace-server` and `mspace-worker` binaries. When no remote server is configured, it starts the server in personal mode with a local SQLite store under the app user-data directory; the personal worker is kept alive against the selected personal workspace before Codex-backed agent turns, and its bootstrap credential is renewed in the background.
+The packaged desktop app includes bundled `mspace-server` and `mspace-worker` binaries. When no remote server is configured, it starts the server in personal mode with a local SQLite store under the app user-data directory; the personal worker is kept alive against the selected personal workspace as platform readiness, and its bootstrap credential is renewed in the background.
 
 ### First workflow
 
@@ -157,7 +157,7 @@ The packaged desktop app includes bundled `mspace-server` and `mspace-worker` bi
 3. Attach or create a project before agent execution, PR handoff, project runbook access, Tests, or issue test environments. Personal workspaces can use a local folder or GitHub URL; team workspaces require a GitHub URL so connected workers can clone the repository.
 4. In Tests, import or create project cases. Imports first preview the parsed count, importable count, skipped rows, missing field counts, quality findings, and sample cases before the user confirms. Markdown/text imports use one non-empty line per case; CSV and `.xlsx` workbooks use the same column contract: `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags`. Valid case types are `functional`, `ui`, `api`, and `deployment`.
 5. Create/import an Environment. Import kubeconfigs for Kubernetes targets, or add a virtual machine target with SSH password or private-key validation for SSH-oriented deployment testing.
-6. For personal desktop workspaces, let mspace start the local worker when you mention an agent. For team workspaces, connect a worker runtime host from Workspace Settings and run the generated install command on that host. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
+6. For personal desktop workspaces, let mspace prepare the local worker after sign-in and workspace selection. For team workspaces, connect a worker runtime host from Workspace Settings and run the generated install command on that host. Self-registered users stay in personal workspaces until a team owner/admin invites them; only server admins can create team workspaces.
 7. Mention an enabled agent profile, such as `@codex`, in an issue comment, or create a workspace test plan from ready cases and start the run from that plan. A plan may include ready cases from multiple projects, but mspace groups execution by project so each agent session still runs against one repository. If the plan has setup steps, mspace runs that setup once before case execution and passes setup outputs such as preview URL, image, namespace, or SSH target into later case prompts.
 8. Review session status, logs, branch state, and diffs from Issue Detail or Session Detail.
 9. Use Commits for source review and PR handoff.

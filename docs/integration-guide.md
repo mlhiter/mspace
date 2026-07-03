@@ -525,10 +525,10 @@ Kubernetes Environments currently use the existing `clusters` storage and remain
 
 ## Server Agent Sessions
 
-Issue Detail starts a worker turn only after a worker preflight:
+The desktop shell proactively ensures a personal Codex worker after auth and workspace selection. Issue Detail still starts a worker turn only after an action-level worker preflight:
 
 1. Refresh `GET /api/workspaces/{workspaceID}/runtime-workers` and look for a worker in the selected workspace and runtime mode with `codex:true`, `status:"online"`, and a fresh heartbeat.
-2. In personal desktop mode, ask Electron to ensure the host-local personal worker, then wait briefly for it to heartbeat. Team workspaces do not auto-start a worker; the user must connect a matching team worker.
+2. In personal desktop mode, ask Electron to ensure the host-local personal worker when no fresh worker is visible yet, then wait briefly for it to heartbeat. Team workspaces do not auto-start a worker; the user must connect a matching team worker.
 3. Write the human comment through `POST /api/workspaces/{workspaceID}/issues/{issueID}/comments`.
 4. Call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions` with the comment id as `triggerCommentId`.
 

@@ -183,7 +183,7 @@ A user creates a session by writing an issue comment that mentions an enabled ag
 - streams agent messages, command execution items, status changes, and diagnostics;
 - passes the selected Environment plus environment-specific Kubernetes context, issue namespace, image registry, and exposure settings into the app-server process and turn prompt for deploy/test sessions.
 
-Before the trigger comment is written, mspace checks that a matching active Codex worker exists. Personal desktop workspaces can auto-start the host-local personal worker and wait for it to heartbeat; team workspaces require a connected team worker. The server enforces the same check and returns a visible conflict instead of creating an unclaimable agent session.
+Before the trigger comment is written, mspace checks that a matching active Codex worker exists. Personal desktop workspaces proactively keep the host-local personal worker ready after sign-in and workspace selection, and can still start it as a fallback before an action waits for the next heartbeat; team workspaces require a connected team worker. The server enforces the same check and returns a visible conflict instead of creating an unclaimable agent session.
 
 Scoped namespace, ServiceAccount, and kubeconfig generation are target behavior, not implemented behavior in the current local MVP.
 
