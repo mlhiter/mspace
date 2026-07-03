@@ -77,6 +77,7 @@ import type {
   RetryTestRunInput,
   WorkspaceInboxItem,
   UpdateCommentInput,
+  UpdateCurrentUserProfileInput,
   UpdateIssueLabelsInput,
   UpdateIssueInput,
   UpdateProjectInput,
@@ -324,6 +325,12 @@ export const controlPlaneApi = {
   me: (token: string) =>
     requestControlPlane<AuthMeResult>("/api/auth/me", {
       headers: authHeaders(token),
+    }),
+  updateCurrentUserProfile: (token: string, input: UpdateCurrentUserProfileInput) =>
+    requestControlPlane<AuthMeResult>("/api/auth/me", {
+      method: "PUT",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
     }),
   listWorkspaces: (token: string) =>
     requestControlPlane<AuthMeResult["workspaces"]>("/api/workspaces", {

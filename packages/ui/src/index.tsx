@@ -28,6 +28,7 @@ import {
   Settings,
   Sparkles,
   SquareTerminal,
+  UserRound,
   X,
 } from "lucide-react";
 import {
@@ -38,6 +39,7 @@ import {
   useRef,
   useState,
   type ComponentProps,
+  type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PropsWithChildren,
   type ReactNode,
@@ -352,6 +354,7 @@ export function AppShell(
     onSignOut?: () => void;
     onSelectWorkspace?: (workspaceId: string) => void;
     onCreateTeamWorkspace?: () => void;
+    onUpdateAccountProfile?: (input: { name: string; avatarUrl: string }) => Promise<void> | void;
   } = {},
 ) {
   const activeWorkItems = props.activeWorkItems || [];
@@ -381,6 +384,7 @@ export function AppShell(
           onSignOut={props.onSignOut}
           onSelectWorkspace={props.onSelectWorkspace}
           onCreateTeamWorkspace={props.onCreateTeamWorkspace}
+          onUpdateAccountProfile={props.onUpdateAccountProfile}
         />
 
         <button
@@ -637,6 +641,7 @@ function WorkspaceMenu(props: {
   onSignOut?: () => void;
   onSelectWorkspace?: (workspaceId: string) => void;
   onCreateTeamWorkspace?: () => void;
+  onUpdateAccountProfile?: (input: { name: string; avatarUrl: string }) => Promise<void> | void;
 }) {
   const account = props.account || { status: "signed-out" as const };
   const { t } = useMspaceTranslation();
@@ -644,6 +649,11 @@ function WorkspaceMenu(props: {
   const isSignedIn = account.status === "signed-in";
   const actionLabel = account.actionLabel || (isBusy ? t("workspace.waitingForGitHub") : t("workspace.signInWithGitHub"));
   const [open, setOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileName, setProfileName] = useState(account.name || "");
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState(account.avatarUrl || "");
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
   const workspaceLabel = account.workspaceName || (isSignedIn ? t("workspace.personalWorkspace") : t("workspace.localWorkspace"));
   const workspaceKindLabel = workspaceKindLabelFor(account.workspaceKind);
@@ -669,6 +679,36 @@ function WorkspaceMenu(props: {
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      setProfileOpen(false);
+      setProfileError("");
+      return;
+    }
+    setProfileName(account.name || "");
+    setProfileAvatarUrl(account.avatarUrl || "");
+  }, [account.avatarUrl, account.name, open]);
+
+  async function submitProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = profileName.trim();
+    const avatarUrl = profileAvatarUrl.trim();
+    if (!name) {
+      setProfileError(t("workspace.profileNameRequired"));
+      return;
+    }
+    setProfileSaving(true);
+    setProfileError("");
+    try {
+      await props.onUpdateAccountProfile?.({ name, avatarUrl });
+      setProfileOpen(false);
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : t("workspace.profileSaveFailed"));
+    } finally {
+      setProfileSaving(false);
+    }
+  }
 
   return (
     <div ref={rootRef} className="relative mb-4">
@@ -795,6 +835,72 @@ function WorkspaceMenu(props: {
                   <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{accountIdentityLabel}</div>
                 </div>
               </div>
+              {props.onUpdateAccountProfile ? (
+                <WorkspaceMenuAction
+                  icon={UserRound}
+                  label={t("workspace.editProfile")}
+                  onClick={() => {
+                    setProfileOpen((value) => !value);
+                    setProfileError("");
+                  }}
+                />
+              ) : null}
+              {profileOpen && props.onUpdateAccountProfile ? (
+                <form className="mx-1 mb-1 grid gap-2 rounded-[8px] bg-[color:var(--block-subtle)] p-2 shadow-[inset_0_0_0_1px_var(--line)]" onSubmit={submitProfile}>
+                  <div className="flex items-center gap-2">
+                    <UserAvatar name={profileName} avatarUrl={profileAvatarUrl} size="md" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[12px] font-medium leading-5 text-[color:var(--text)]">{t("workspace.profile")}</div>
+                      <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{accountIdentityLabel}</div>
+                    </div>
+                  </div>
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-medium leading-4 text-[color:var(--muted-strong)]">{t("workspace.displayName")}</span>
+                    <ShadcnInput
+                      value={profileName}
+                      maxLength={120}
+                      disabled={profileSaving}
+                      className="h-8 rounded-[7px] border-0 bg-[color:var(--paper)] px-2 text-[12px] shadow-[0_0_0_1px_var(--line)] focus-visible:ring-0 focus-visible:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)]"
+                      onChange={(event) => setProfileName(event.target.value)}
+                    />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-medium leading-4 text-[color:var(--muted-strong)]">{t("workspace.avatarUrl")}</span>
+                    <ShadcnInput
+                      value={profileAvatarUrl}
+                      maxLength={2048}
+                      disabled={profileSaving}
+                      placeholder="https://..."
+                      className="h-8 rounded-[7px] border-0 bg-[color:var(--paper)] px-2 text-[12px] shadow-[0_0_0_1px_var(--line)] focus-visible:ring-0 focus-visible:shadow-[0_0_0_1px_var(--accent),0_0_0_3px_var(--accent-soft)]"
+                      onChange={(event) => setProfileAvatarUrl(event.target.value)}
+                    />
+                  </label>
+                  <div className="rounded-[6px] bg-[color:var(--block)] px-2 py-1.5 text-[11px] leading-4 text-[color:var(--muted)]">
+                    <span className="font-medium text-[color:var(--muted-strong)]">{t("workspace.identity")}</span>
+                    <span className="ml-1">{accountIdentityLabel}</span>
+                  </div>
+                  {profileError ? <p className="text-[11px] leading-4 text-[color:var(--danger)]">{profileError}</p> : null}
+                  <div className="flex items-center justify-end gap-1">
+                    <ShadcnButton
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 rounded-[6px] px-2 text-[11px]"
+                      disabled={profileSaving}
+                      onClick={() => {
+                        setProfileOpen(false);
+                        setProfileError("");
+                      }}
+                    >
+                      {t("common.cancel")}
+                    </ShadcnButton>
+                    <ShadcnButton type="submit" size="sm" className="h-7 rounded-[6px] px-2 text-[11px]" disabled={profileSaving}>
+                      {profileSaving ? <LoaderCircle data-icon className="animate-spin" /> : <CheckCircle2 data-icon />}
+                      {profileSaving ? t("workspace.profileSaving") : t("workspace.saveProfile")}
+                    </ShadcnButton>
+                  </div>
+                </form>
+              ) : null}
               <LanguageMenuItem />
               <WorkspaceMenuAction
                 icon={LogOut}

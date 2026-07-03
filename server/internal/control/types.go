@@ -59,6 +59,11 @@ type User struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+type UpdateCurrentUserProfileInput struct {
+	Name      string `json:"name"`
+	AvatarURL string `json:"avatarUrl"`
+}
+
 type Workspace struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -1745,6 +1750,7 @@ type Store interface {
 	CreatePasswordIdentity(ctx Context, input PasswordAuthInput) (User, []Workspace, error)
 	AuthenticatePassword(ctx Context, input PasswordAuthInput) (User, []Workspace, error)
 	GetUserAuthIdentity(ctx Context, userID string) (AuthIdentityInfo, error)
+	UpdateCurrentUserProfile(ctx Context, userID string, input UpdateCurrentUserProfileInput) (User, error)
 	CreateAuthSession(ctx Context, userID string, ttl time.Duration) (token string, expiresAt time.Time, err error)
 	GetUserBySessionToken(ctx Context, token string) (User, []Workspace, error)
 	CreateWorkspace(ctx Context, userID string, input CreateWorkspaceInput) (Workspace, []Workspace, error)

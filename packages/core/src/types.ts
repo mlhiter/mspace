@@ -1300,6 +1300,11 @@ export interface MspaceUser {
   updatedAt: string;
 }
 
+export interface UpdateCurrentUserProfileInput {
+  name: string;
+  avatarUrl: string;
+}
+
 export interface MspaceWorkspace {
   id: string;
   name: string;

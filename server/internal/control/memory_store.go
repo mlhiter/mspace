@@ -433,6 +433,29 @@ func (s *MemoryStore) GetUserBySessionToken(_ Context, token string) (User, []Wo
 	return user, s.workspaces[session.UserID], nil
 }
 
+func (s *MemoryStore) UpdateCurrentUserProfile(_ Context, userID string, input UpdateCurrentUserProfileInput) (User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return User{}, ErrNotFound
+	}
+	normalized, err := normalizeUpdateCurrentUserProfileInput(input)
+	if err != nil {
+		return User{}, err
+	}
+	user, ok := s.users[userID]
+	if !ok {
+		return User{}, ErrNotFound
+	}
+	user.Name = normalized.Name
+	user.AvatarURL = normalized.AvatarURL
+	user.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	s.users[userID] = user
+	return user, nil
+}
+
 func (s *MemoryStore) CreateWorkspace(_ Context, userID string, input CreateWorkspaceInput) (Workspace, []Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

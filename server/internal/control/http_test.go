@@ -357,6 +357,67 @@ func TestPasswordAuthIssuesMspaceSession(t *testing.T) {
 		t.Fatalf("me status=%d body=%s", meRecorder.Code, meRecorder.Body.String())
 	}
 
+	updateRecorder := httptest.NewRecorder()
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/auth/me", strings.NewReader(`{"name":"Updated Admin","avatarUrl":"https://avatars.example.test/local-admin.png","login":"should-not-change"}`))
+	updateReq.Header.Set("Authorization", "Bearer "+register.Token)
+	router.ServeHTTP(updateRecorder, updateReq)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("update profile status=%d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	var updated AuthResult
+	if err := json.Unmarshal(updateRecorder.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("parse update profile response: %v", err)
+	}
+	if updated.User.Name != "Updated Admin" || updated.User.AvatarURL != "https://avatars.example.test/local-admin.png" {
+		t.Fatalf("unexpected updated user: %+v", updated.User)
+	}
+	if updated.Identity.Provider != "password" || updated.Identity.Login != "local-admin" {
+		t.Fatalf("profile update should not change identity, got %+v", updated.Identity)
+	}
+	if !updated.IsServerAdmin {
+		t.Fatalf("profile update should preserve server admin status")
+	}
+
+	updatedMeRecorder := httptest.NewRecorder()
+	updatedMeReq := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	updatedMeReq.Header.Set("Authorization", "Bearer "+register.Token)
+	router.ServeHTTP(updatedMeRecorder, updatedMeReq)
+	if updatedMeRecorder.Code != http.StatusOK {
+		t.Fatalf("updated me status=%d body=%s", updatedMeRecorder.Code, updatedMeRecorder.Body.String())
+	}
+	var updatedMe AuthResult
+	if err := json.Unmarshal(updatedMeRecorder.Body.Bytes(), &updatedMe); err != nil {
+		t.Fatalf("parse updated me response: %v", err)
+	}
+	if updatedMe.User.Name != "Updated Admin" || updatedMe.User.AvatarURL != "https://avatars.example.test/local-admin.png" {
+		t.Fatalf("expected persisted profile in me response, got %+v", updatedMe.User)
+	}
+	if updatedMe.Identity.Login != "local-admin" {
+		t.Fatalf("expected identity login to stay local-admin, got %+v", updatedMe.Identity)
+	}
+
+	unauthorizedUpdateRecorder := httptest.NewRecorder()
+	router.ServeHTTP(unauthorizedUpdateRecorder, httptest.NewRequest(http.MethodPut, "/api/auth/me", strings.NewReader(`{"name":"Nope","avatarUrl":""}`)))
+	if unauthorizedUpdateRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized update status=%d body=%s", unauthorizedUpdateRecorder.Code, unauthorizedUpdateRecorder.Body.String())
+	}
+
+	blankNameRecorder := httptest.NewRecorder()
+	blankNameReq := httptest.NewRequest(http.MethodPut, "/api/auth/me", strings.NewReader(`{"name":"   ","avatarUrl":""}`))
+	blankNameReq.Header.Set("Authorization", "Bearer "+register.Token)
+	router.ServeHTTP(blankNameRecorder, blankNameReq)
+	if blankNameRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("blank profile name status=%d body=%s", blankNameRecorder.Code, blankNameRecorder.Body.String())
+	}
+
+	invalidAvatarRecorder := httptest.NewRecorder()
+	invalidAvatarReq := httptest.NewRequest(http.MethodPut, "/api/auth/me", strings.NewReader(`{"name":"Updated Admin","avatarUrl":"javascript:alert(1)"}`))
+	invalidAvatarReq.Header.Set("Authorization", "Bearer "+register.Token)
+	router.ServeHTTP(invalidAvatarRecorder, invalidAvatarReq)
+	if invalidAvatarRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid avatar URL status=%d body=%s", invalidAvatarRecorder.Code, invalidAvatarRecorder.Body.String())
+	}
+
 	loginRecorder := httptest.NewRecorder()
 	router.ServeHTTP(loginRecorder, httptest.NewRequest(http.MethodPost, "/api/auth/password/login", strings.NewReader(`{"login":"local-admin","password":"correct-password"}`)))
 	if loginRecorder.Code != http.StatusOK {

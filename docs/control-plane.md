@@ -84,7 +84,7 @@ Desktop
 
 The server may use a GitHub OAuth client secret because it is a trusted backend environment. The desktop app must not embed GitHub client secrets. Password hashes are server-side only and stored separately from `user_identities`. Local password registration does not verify email ownership, so the user row keeps its canonical email blank and stores any provided email only on the password identity record; password auth must not merge into an OAuth identity by matching email.
 
-Auth responses expose the selected identity as `identity.provider` plus `identity.login`. The desktop workspace menu should use this explicit provider to show local password accounts separately from GitHub accounts, not infer GitHub connection from `user.email` or avatar state.
+Auth responses expose the selected identity as `identity.provider` plus `identity.login`. The desktop workspace menu should use this explicit provider to show local password accounts separately from GitHub accounts, not infer GitHub connection from `user.email` or avatar state. Current-user profile editing updates only the canonical display `users.name` and `users.avatar_url` through `PUT /api/auth/me`; it does not rewrite auth login/provider fields or historical issue/comment display snapshots.
 
 Future GitHub repository automation should use GitHub App installation tokens stored and rotated by the control plane. Do not build long-lived repository automation on personal GitHub OAuth tokens stored by desktop or workers.
 
@@ -94,7 +94,7 @@ Open registration creates a personal workspace only. Server admin status is a co
 
 The server module provides:
 
-- local password auth, GitHub auth, and mspace session endpoints: `/api/auth/password/register`, `/api/auth/password/login`, `/api/auth/github/start`, `/api/auth/github/callback`, `/api/auth/github/result`, `/api/auth/me`;
+- local password auth, GitHub auth, current-user profile editing, and mspace session endpoints: `/api/auth/password/register`, `/api/auth/password/login`, `/api/auth/github/start`, `/api/auth/github/callback`, `/api/auth/github/result`, `/api/auth/me`;
 - workspace listing and creation: `/api/workspaces`;
 - team access: members, safe unauthenticated invitation previews, one-time join links, and invite acceptance;
 - Inbox events and per-user receipts;

@@ -72,7 +72,7 @@ GitHub OAuth is optional. The server advertises OAuth availability through `/hea
 
 GitHub tokens are not the product session. They are used only to prove GitHub identity. Local password registration does not verify email ownership, so it must not merge identities by email. Repository automation should later use GitHub App installation tokens owned by this service.
 
-Password and GitHub auth responses, plus `GET /api/auth/me`, include `identity.provider` and `identity.login`. UI clients should display account type from that explicit provider. Do not treat an empty `user.email` as a GitHub connection fallback; password accounts intentionally keep canonical email blank.
+Password and GitHub auth responses, plus `GET /api/auth/me`, include `identity.provider` and `identity.login`. UI clients should display account type from that explicit provider. Do not treat an empty `user.email` as a GitHub connection fallback; password accounts intentionally keep canonical email blank. `PUT /api/auth/me` may update the current user's display `name` and `avatarUrl`, but it must not update the auth provider, auth login, password credential, or GitHub identity link.
 
 Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` lists local password logins or GitHub logins with that right. Emails are not used for admin matching because local password registration does not verify email ownership. `MSPACE_BOOTSTRAP_ADMIN_LOGIN` plus `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` creates the first local admin account on startup if it does not already exist; the server does not reset the password for an existing account. If `MSPACE_BOOTSTRAP_TEAM_WORKSPACE_NAME` and `MSPACE_BOOTSTRAP_RUNTIME_TOKEN` are also set, startup creates or finds that admin-owned team workspace and registers the supplied `msw_...` token for the fixed worker. Other registered users still get a personal workspace and can join a team workspace through an owner/admin invitation.
 
@@ -87,6 +87,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `GET` | `/api/auth/github/callback` | Complete GitHub OAuth, link identity, create an mspace session, and render the browser success page. |
 | `GET` | `/api/auth/github/result` | Poll the state-bound login result from the desktop app. Returns `202` while pending and consumes the result once ready. |
 | `GET` | `/api/auth/me` | Return the current mspace user, workspaces, auth identity provider/login, and admin status for a bearer token. |
+| `PUT` | `/api/auth/me` | Update the current user's display name and avatar URL while keeping auth identity fields read-only. |
 | `GET` | `/api/workspaces` | List the authenticated user's workspaces. |
 | `POST` | `/api/workspaces` | Create an explicit team workspace for the authenticated user. |
 | `PUT` | `/api/workspaces/{workspaceID}` | Update team workspace identity fields: name, mark, and description. Owner/admin only. |

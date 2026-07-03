@@ -33,6 +33,7 @@ type Server struct {
 const serverProtocolVersion = 1
 const maxIssueAttachmentBytes = 10 << 20
 const maxPasswordAuthBodyBytes = 4 << 10
+const maxProfileBodyBytes = 4 << 10
 const maxTestCaseImportBodyBytes = 5 << 20
 const defaultTestCaseListLimit = 50
 const maxTestCaseListLimit = 200
@@ -86,6 +87,7 @@ func (s *Server) Routes() http.Handler {
 	r.Post("/api/auth/password/register", s.handlePasswordRegister)
 	r.Post("/api/auth/password/login", s.handlePasswordLogin)
 	r.Get("/api/auth/me", s.handleMe)
+	r.Put("/api/auth/me", s.handleUpdateMe)
 	r.Get("/api/workspaces", s.handleWorkspaces)
 	r.Post("/api/workspaces", s.handleCreateWorkspace)
 	r.Put("/api/workspaces/{workspaceID}", s.handleUpdateWorkspace)
@@ -464,6 +466,35 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"user":          user,
 		"workspaces":    workspaces,
 		"isServerAdmin": s.isServerAdmin(user),
+		"identity":      identity,
+	})
+}
+
+func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
+	user, workspaces, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := UpdateCurrentUserProfileInput{}
+	r.Body = http.MaxBytesReader(w, r.Body, maxProfileBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	updatedUser, err := s.store.UpdateCurrentUserProfile(r.Context(), user.ID, input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	identity, err := s.store.GetUserAuthIdentity(r.Context(), updatedUser.ID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"user":          updatedUser,
+		"workspaces":    workspaces,
+		"isServerAdmin": s.isServerAdmin(updatedUser),
 		"identity":      identity,
 	})
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -409,6 +410,34 @@ func (s *PostgresStore) GetUserBySessionToken(ctx Context, token string) (User, 
 		return User{}, nil, err
 	}
 	return user, workspaces, nil
+}
+
+func (s *PostgresStore) UpdateCurrentUserProfile(ctx Context, userID string, input UpdateCurrentUserProfileInput) (User, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return User{}, ErrNotFound
+	}
+	normalized, err := normalizeUpdateCurrentUserProfileInput(input)
+	if err != nil {
+		return User{}, err
+	}
+	var user User
+	var createdAt, updatedAt time.Time
+	err = s.pool.QueryRow(asContext(ctx), `
+		UPDATE users
+		SET name = $1, avatar_url = $2, updated_at = now()
+		WHERE id = $3
+		RETURNING id::text, name, email, avatar_url, created_at, updated_at
+	`, normalized.Name, normalized.AvatarURL, userID).Scan(&user.ID, &user.Name, &user.Email, &user.AvatarURL, &createdAt, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	if err != nil {
+		return User{}, err
+	}
+	user.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	user.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return user, nil
 }
 
 func (s *PostgresStore) CreateWorkspace(ctx Context, userID string, input CreateWorkspaceInput) (Workspace, []Workspace, error) {
@@ -2739,6 +2768,31 @@ func normalizePasswordAuthInput(input PasswordAuthInput, requireProfile bool) (P
 	}
 	if len(input.Password) > 1024 {
 		return PasswordAuthInput{}, errors.New("password must be 1024 characters or less")
+	}
+	return input, nil
+}
+
+func normalizeUpdateCurrentUserProfileInput(input UpdateCurrentUserProfileInput) (UpdateCurrentUserProfileInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	input.AvatarURL = strings.TrimSpace(input.AvatarURL)
+	if input.Name == "" {
+		return UpdateCurrentUserProfileInput{}, errors.New("name is required")
+	}
+	if len([]rune(input.Name)) > 120 {
+		return UpdateCurrentUserProfileInput{}, errors.New("name must be 120 characters or less")
+	}
+	if len([]rune(input.AvatarURL)) > 2048 {
+		return UpdateCurrentUserProfileInput{}, errors.New("avatar URL must be 2048 characters or less")
+	}
+	if input.AvatarURL != "" {
+		parsed, err := url.Parse(input.AvatarURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return UpdateCurrentUserProfileInput{}, errors.New("avatar URL must be a valid http or https URL")
+		}
+		scheme := strings.ToLower(parsed.Scheme)
+		if scheme != "http" && scheme != "https" {
+			return UpdateCurrentUserProfileInput{}, errors.New("avatar URL must be a valid http or https URL")
+		}
 	}
 	return input, nil
 }

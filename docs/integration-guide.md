@@ -58,6 +58,7 @@ The desktop owns native shell behavior, local UI state, file pickers, and openin
 | `GET` | `/api/auth/github/callback` | Complete GitHub OAuth and render a browser success page. |
 | `GET` | `/api/auth/github/result` | Poll the single-use state-bound desktop login result. |
 | `GET` | `/api/auth/me` | Return the current user, workspaces, auth identity provider/login, and `isServerAdmin` for a bearer token. |
+| `PUT` | `/api/auth/me` | Update the current user's display name and avatar URL without changing auth provider/login. |
 | `GET` | `/api/workspaces` | List the authenticated user's workspaces. |
 | `POST` | `/api/workspaces` | Create a team workspace. Server admins only. |
 | `PUT` | `/api/workspaces/{workspaceID}` | Update team workspace identity fields: name, mark, and description. Owner/admin only. |
@@ -100,6 +101,17 @@ Both endpoints return the normal auth shape:
 ```
 
 `identity.provider` is the source of truth for account-type display. Password users return `provider: "password"` and a local login; GitHub OAuth users return `provider: "github"` and a GitHub login. Do not infer GitHub connection from `user.email`: local password accounts intentionally keep canonical `user.email` blank because password email is not verified.
+
+Update the current account's display profile:
+
+```bash
+curl -X PUT "$MSPACE_SERVER_BASE/api/auth/me" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Local Admin","avatarUrl":"https://example.test/avatar.png"}'
+```
+
+This updates only `user.name` and `user.avatarUrl`. The returned `identity.provider` and `identity.login` stay read-only and continue to drive account-type display, admin matching, and audit-sensitive identity.
 
 Usernames are normalized to lowercase and must use letters, numbers, dots, underscores, or hyphens. Passwords must be 8 to 1024 characters. Duplicate registration returns `409`, and invalid login/password returns `401` without distinguishing missing, wrong, or disabled accounts.
 

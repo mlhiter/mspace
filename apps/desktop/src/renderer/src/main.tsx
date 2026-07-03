@@ -481,6 +481,15 @@ function RootShell() {
     enabled: authToken !== "",
     retry: false,
   });
+  const updateProfileMutation = useMutation({
+    mutationFn: (input: { name: string; avatarUrl: string }) =>
+      controlPlaneApi.updateCurrentUserProfile(authToken, input),
+    onSuccess: async (result) => {
+      setStoredAuthIdentity(result.user);
+      queryClient.setQueriesData<AuthMeResult | undefined>({ queryKey: queryKeys.authMe(authToken) }, () => result);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.authMe(authToken) });
+    },
+  });
   const serverHealthQuery = useQuery({
     queryKey: ["server-health", serverBaseUrl],
     queryFn: async () => {
@@ -943,6 +952,9 @@ function RootShell() {
         }}
         onSignOut={handleSignOut}
         onSelectWorkspace={handleSelectWorkspace}
+        onUpdateAccountProfile={async (input) => {
+          await updateProfileMutation.mutateAsync(input);
+        }}
         onCreateTeamWorkspace={() => {
           if (!meQuery.data?.isServerAdmin) return;
           setTeamWorkspaceName((value) => value.trim() || defaultTeamWorkspaceName(meQuery.data?.user.name));

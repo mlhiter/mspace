@@ -49,8 +49,69 @@ func TestSQLiteStorePersistsSnapshot(t *testing.T) {
 	if loadedAuth.ID != auth.ID {
 		t.Fatalf("expected user %q, got %q", auth.ID, loadedAuth.ID)
 	}
+	if loadedAuth.Name != "Local User" {
+		t.Fatalf("expected persisted user name, got %+v", loadedAuth)
+	}
 	if len(loadedWorkspaces) != 1 || loadedWorkspaces[0].ID != workspaces[0].ID {
 		t.Fatalf("expected persisted workspace %+v, got %+v", workspaces, loadedWorkspaces)
+	}
+}
+
+func TestSQLiteStorePersistsProfileUpdate(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/mspace.db"
+
+	store, err := NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	user, _, err := store.CreatePasswordIdentity(ctx, PasswordAuthInput{
+		Login:    "profile-user",
+		Password: "password-123456",
+		Name:     "Profile User",
+	})
+	if err != nil {
+		t.Fatalf("create local identity: %v", err)
+	}
+	updated, err := store.UpdateCurrentUserProfile(ctx, user.ID, UpdateCurrentUserProfileInput{
+		Name:      "Updated Profile",
+		AvatarURL: "https://avatars.example.test/profile.png",
+	})
+	if err != nil {
+		t.Fatalf("update profile: %v", err)
+	}
+	if updated.Name != "Updated Profile" || updated.AvatarURL != "https://avatars.example.test/profile.png" {
+		t.Fatalf("unexpected updated profile: %+v", updated)
+	}
+	if err := store.Persist(); err != nil {
+		t.Fatalf("persist sqlite store: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close sqlite store: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen sqlite store: %v", err)
+	}
+	defer reopened.Close()
+
+	loaded, _, err := reopened.AuthenticatePassword(ctx, PasswordAuthInput{
+		Login:    "profile-user",
+		Password: "password-123456",
+	})
+	if err != nil {
+		t.Fatalf("authenticate persisted identity: %v", err)
+	}
+	if loaded.ID != user.ID || loaded.Name != "Updated Profile" || loaded.AvatarURL != "https://avatars.example.test/profile.png" {
+		t.Fatalf("expected persisted profile update, got %+v", loaded)
+	}
+	identity, err := reopened.GetUserAuthIdentity(ctx, loaded.ID)
+	if err != nil {
+		t.Fatalf("get auth identity: %v", err)
+	}
+	if identity.Provider != "password" || identity.Login != "profile-user" {
+		t.Fatalf("profile update should not change auth identity, got %+v", identity)
 	}
 }
 

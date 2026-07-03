@@ -8,6 +8,17 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-07-03",
+    title: "Editable account profiles",
+    summary:
+      "mspace now lets signed-in users update their display name and avatar without changing the authentication identity behind their account.",
+    items: [
+      "Added a compact profile editor to the desktop account menu for display name and avatar URL updates.",
+      "Kept local or GitHub account identity read-only, so admin matching, invitations, and audit trails continue to use the original auth login.",
+      "Stored profile edits in the server control plane for both shared Postgres deployments and packaged local SQLite mode.",
+    ],
+  },
+  {
+    date: "2026-07-03",
     title: "Proactive desktop runtime readiness",
     summary:
       "mspace now treats the personal runtime worker as platform readiness instead of waiting for a specific agent action to notice it is missing.",
