@@ -116,6 +116,26 @@ function defaultTeamWorkspaceName(name: string | undefined) {
   return owner ? t("workspace.defaultTeamWorkspaceName", { name: owner }) : t("workspace.defaultTeamWorkspaceFallback");
 }
 
+function defaultPersonalWorkspaceDisplayName(name: string | undefined) {
+  const owner = name?.trim();
+  if (!owner) return "";
+  const workspaceName = `${owner}'s workspace`;
+  return [...workspaceName].slice(0, 120).join("");
+}
+
+function isGeneratedPersonalWorkspaceName(name: string | undefined) {
+  const value = name?.trim();
+  return value === "" || Boolean(value?.endsWith("'s workspace"));
+}
+
+function workspaceDisplayName(workspace: { name?: string; kind?: string } | undefined, userName: string | undefined) {
+  const storedName = workspace?.name?.trim() || "";
+  if (workspace?.kind === "personal" && isGeneratedPersonalWorkspaceName(storedName)) {
+    return defaultPersonalWorkspaceDisplayName(userName) || storedName;
+  }
+  return storedName;
+}
+
 function joinSearchSubtitle(values: Array<string | number | null | undefined>): string {
   return values
     .map((value) => String(value || "").trim())
@@ -697,6 +717,7 @@ function RootShell() {
     if (workspaces.length === 0) return undefined;
     return workspaces.find((workspace) => workspace.id === selectedWorkspaceId) || workspaces[0];
   }, [selectedWorkspaceId, workspaces]);
+  const currentUserName = meQuery.data?.user.name;
 
   useEffect(() => {
     if (workspaces.length === 0) return;
@@ -923,14 +944,14 @@ function RootShell() {
           identityLogin: meQuery.data?.identity?.login,
           isServerAdmin: meQuery.data?.isServerAdmin,
           workspaceId: currentWorkspace?.id,
-          workspaceName: currentWorkspace?.name,
+          workspaceName: workspaceDisplayName(currentWorkspace, currentUserName),
           workspaceIcon: currentWorkspace?.icon,
           workspaceDescription: currentWorkspace?.description,
           workspaceKind: currentWorkspace?.kind,
           workspaceRole: currentWorkspace?.role,
           workspaces: workspaces.map((workspace) => ({
             id: workspace.id,
-            name: workspace.name,
+            name: workspaceDisplayName(workspace, currentUserName),
             role: workspace.role,
             kind: workspace.kind,
             icon: workspace.icon,

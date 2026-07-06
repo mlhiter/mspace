@@ -13,6 +13,7 @@ export const changelog: ChangelogEntry[] = [
       "mspace now gives signed-in users a dedicated account settings page for display name and avatar updates without changing authentication identity.",
     items: [
       "Moved display name and avatar URL editing into a dedicated Account Settings page instead of expanding a form inside the workspace menu.",
+      "Kept the default personal workspace title in the left rail aligned with the updated display name while preserving explicit team workspace names.",
       "Kept local or GitHub account identity read-only, so admin matching, invitations, and audit trails continue to use the original auth login.",
       "Stored profile edits in the server control plane for both shared Postgres deployments and packaged local SQLite mode.",
     ],

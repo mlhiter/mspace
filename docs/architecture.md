@@ -146,7 +146,7 @@ Do not add a renderer-owned product database or local sidecar API. The local SQL
 
 Main server-owned state groups:
 
-- Identity: `users`, `user_password_credentials`, `user_identities`, `auth_sessions`, `oauth_states`, `oauth_results`. `/api/auth/me` and auth result payloads expose a lightweight `identity` object derived from `user_identities` for UI display and admin-login matching. Current-user profile editing updates only `users.name` and `users.avatar_url`, leaving `user_identities` login/provider values and historical display snapshots unchanged.
+- Identity: `users`, `user_password_credentials`, `user_identities`, `auth_sessions`, `oauth_states`, `oauth_results`. `/api/auth/me` and auth result payloads expose a lightweight `identity` object derived from `user_identities` for UI display and admin-login matching. Current-user profile editing updates only `users.name` and `users.avatar_url`, leaving `user_identities` login/provider values, workspace records, and historical display snapshots unchanged.
 - Workspaces: `workspaces`, `workspace_members`, `workspace_invitations`. Invitation tokens are stored as server-side secrets and surfaced to users only as one-time join links. The signed-out preview API returns safe metadata such as workspace name, role, inviter display fields, expiry, and status; it does not expose member lists, raw internal ids, or token debug fields.
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
 - Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`, and `test_artifacts`. Cases and suggestions are project-level. Plans and runs are workspace-level orchestration records that keep a primary project for compatibility and preserve per-case/per-item project identity. Plans can store lightweight setup steps; runs freeze setup text plus setup status, setup issue/session, setup result, and run context. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
@@ -255,7 +255,7 @@ Preview probing is internal/background-driven. It updates test-environment state
 
 ## UI Architecture
 
-Account Settings is accessed from the workspace identity menu and owns the signed-in user's display profile: display name and avatar URL through `PUT /api/auth/me`, with auth provider/login shown read-only.
+Account Settings is accessed from the workspace identity menu and owns the signed-in user's display profile: display name and avatar URL through `PUT /api/auth/me`, with auth provider/login shown read-only. The shell may re-label a generated default personal workspace from the current display name for readability, but that is a presentation-layer label rather than a workspace rename.
 
 Workspace Settings is accessed from the workspace identity menu. It owns:
 
