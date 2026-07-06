@@ -6,6 +6,8 @@ export interface MspaceAuthContextValue {
   user?: MspaceUser;
   workspaces?: MspaceWorkspace[];
   workspace?: MspaceWorkspace;
+  identityProvider?: string;
+  identityLogin?: string;
   selectedWorkspaceId?: string;
   selectWorkspace?: (workspaceId: string) => void;
   refreshAuth?: () => Promise<unknown>;

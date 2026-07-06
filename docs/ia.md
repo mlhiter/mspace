@@ -90,6 +90,7 @@ Current implemented desktop routes:
 /environments
 /clusters
 /projects
+/account
 /settings
 /invite/:token
 /sessions/:sessionId
@@ -102,7 +103,7 @@ Planned but not implemented yet:
 /sessions
 ```
 
-The current sidebar exposes Inbox, Issues, Tests, Agents, Environments, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. `/clusters` remains a compatibility route for existing Kubernetes records, but product navigation should use `/environments`. The workspace menu owns workspace switching, team workspace creation, language switching, and the entry into Workspace Settings. Workspace Settings owns workspace automation, team-only access controls, and runtime worker/queue controls for the selected workspace. The invite route is a deep-link entry that resolves the target team server, shows safe invitation context, handles login or registration, accepts the invite, and lands in the invited workspace. Session detail remains deep-linked from issue work.
+The current sidebar exposes Inbox, Issues, Tests, Agents, Environments, and Projects, with a global search / Command+K palette for issues and projects plus a quick issue creation link. `/clusters` remains a compatibility route for existing Kubernetes records, but product navigation should use `/environments`. The workspace menu owns workspace switching, team workspace creation, language switching, and entries into Account Settings and Workspace Settings. Account Settings owns the signed-in user's display profile. Workspace Settings owns workspace automation, team-only access controls, and runtime worker/queue controls for the selected workspace. The invite route is a deep-link entry that resolves the target team server, shows safe invitation context, handles login or registration, accepts the invite, and lands in the invited workspace. Session detail remains deep-linked from issue work.
 
 ## Visual Language
 
@@ -419,6 +420,8 @@ Current implementation:
 ### Purpose
 
 Workspace Settings owns workspace automation, team access, and runtime worker policy for the current workspace.
+
+Account Settings is separate from Workspace Settings. It owns the current user's display name and avatar URL, while the auth provider and login remain read-only control-plane identity fields.
 
 ### Current implementation
 

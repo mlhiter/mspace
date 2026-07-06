@@ -13,7 +13,7 @@ The repository now has a runnable local desktop MVP:
 - create personal projects from a local folder picker or GitHub repository URL, create team projects from a GitHub repository URL that connected workers can clone, and manage settings later;
 - create and manage issues in the Issues tab;
 - jump to issues and projects from the sidebar global search or `Command+K` palette;
-- sign in with a local username/password account, or optional GitHub OAuth when available, through the server control plane and show the current user/workspace state in the sidebar;
+- sign in with a local username/password account, or optional GitHub OAuth when available, through the server control plane, show the current user/workspace state in the sidebar, and edit the user's display profile from Account Settings;
 - store signed-in workspace projects, project runbooks, project test cases, test case suggestions, test plans, test runs, issues, child issue tasks, comments, reactions, labels, and Inbox receipts in the server store: Postgres for team/shared deployments, local SQLite for packaged personal desktop mode;
 - write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page, where they can be toggled or deleted;
 - classify new issues asynchronously by queueing `issue_type_triage` runtime tasks that are claimed by Codex-capable workers and reconciled into one Conventional Commit type label by the server;

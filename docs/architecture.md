@@ -174,6 +174,7 @@ Desktop routes:
 - `/agents`
 - `/environments` plus `/clusters` compatibility
 - `/projects`
+- `/account`
 - `/settings`
 - `/invite/:token`
 - `/sessions/:sessionId`
@@ -253,6 +254,8 @@ The Resources API uses Kubernetes typed clients and fixes the namespace from the
 Preview probing is internal/background-driven. It updates test-environment state only and should not create review evidence, deployment evidence, failure records, or top-level issue timeline events.
 
 ## UI Architecture
+
+Account Settings is accessed from the workspace identity menu and owns the signed-in user's display profile: display name and avatar URL through `PUT /api/auth/me`, with auth provider/login shown read-only.
 
 Workspace Settings is accessed from the workspace identity menu. It owns:
 

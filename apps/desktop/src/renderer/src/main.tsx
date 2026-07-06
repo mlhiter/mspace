@@ -13,6 +13,7 @@ import {
 } from "@tanstack/react-router";
 import { GitBranch, LoaderCircle, LogIn, Server, UsersRound, X } from "lucide-react";
 import {
+  AccountSettingsPage,
   AgentsPage,
   ClustersPage,
   IssueCommitDetailPage,
@@ -481,15 +482,6 @@ function RootShell() {
     enabled: authToken !== "",
     retry: false,
   });
-  const updateProfileMutation = useMutation({
-    mutationFn: (input: { name: string; avatarUrl: string }) =>
-      controlPlaneApi.updateCurrentUserProfile(authToken, input),
-    onSuccess: async (result) => {
-      setStoredAuthIdentity(result.user);
-      queryClient.setQueriesData<AuthMeResult | undefined>({ queryKey: queryKeys.authMe(authToken) }, () => result);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.authMe(authToken) });
-    },
-  });
   const serverHealthQuery = useQuery({
     queryKey: ["server-health", serverBaseUrl],
     queryFn: async () => {
@@ -908,6 +900,8 @@ function RootShell() {
         user: meQuery.data?.user,
         workspaces,
         workspace: currentWorkspace,
+        identityProvider: meQuery.data?.identity?.provider,
+        identityLogin: meQuery.data?.identity?.login,
         selectedWorkspaceId: currentWorkspace?.id,
         selectWorkspace: handleSelectWorkspace,
         refreshAuth: () => queryClient.invalidateQueries({ queryKey: queryKeys.authMe(authToken) }),
@@ -952,9 +946,6 @@ function RootShell() {
         }}
         onSignOut={handleSignOut}
         onSelectWorkspace={handleSelectWorkspace}
-        onUpdateAccountProfile={async (input) => {
-          await updateProfileMutation.mutateAsync(input);
-        }}
         onCreateTeamWorkspace={() => {
           if (!meQuery.data?.isServerAdmin) return;
           setTeamWorkspaceName((value) => value.trim() || defaultTeamWorkspaceName(meQuery.data?.user.name));
@@ -1408,6 +1399,12 @@ const projectsRoute = createRoute({
   component: ProjectsPage,
 });
 
+const accountSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/account",
+  component: AccountSettingsPage,
+});
+
 const workspaceSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
@@ -1442,6 +1439,7 @@ const routeTree = rootRoute.addChildren([
   environmentsRoute,
   clustersRoute,
   projectsRoute,
+  accountSettingsRoute,
   workspaceSettingsRoute,
   workspaceInviteRoute,
   sessionDetailRoute,

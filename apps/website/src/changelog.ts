@@ -7,12 +7,12 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
-    date: "2026-07-03",
-    title: "Editable account profiles",
+    date: "2026-07-06",
+    title: "Account settings for profiles",
     summary:
-      "mspace now lets signed-in users update their display name and avatar without changing the authentication identity behind their account.",
+      "mspace now gives signed-in users a dedicated account settings page for display name and avatar updates without changing authentication identity.",
     items: [
-      "Added a compact profile editor to the desktop account menu for display name and avatar URL updates.",
+      "Moved display name and avatar URL editing into a dedicated Account Settings page instead of expanding a form inside the workspace menu.",
       "Kept local or GitHub account identity read-only, so admin matching, invitations, and audit trails continue to use the original auth login.",
       "Stored profile edits in the server control plane for both shared Postgres deployments and packaged local SQLite mode.",
     ],

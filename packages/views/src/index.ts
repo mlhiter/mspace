@@ -1,4 +1,5 @@
 export * from "./agents-page";
+export * from "./account-settings-page";
 export * from "./auth-context";
 export * from "./clusters-page";
 export * from "./inbox-page";
