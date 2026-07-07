@@ -615,7 +615,7 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 		SessionID:            sessionID,
 		ProjectID:            project.ID,
 		Kind:                 "agent_session",
-		Priority:             0,
+		Priority:             agentSessionPriority(normalized),
 		RuntimeMode:          normalized.RuntimeMode,
 		RequiredCapabilities: requiredCapabilities,
 		Payload:              payload,
@@ -1572,16 +1572,18 @@ func scanRuntimeTaskAgentSessionRow(row scanner) (RuntimeTask, error) {
 
 func runtimeTaskToAgentSession(task RuntimeTask) (AgentSession, error) {
 	var payload struct {
-		Prompt           string `json:"prompt"`
-		AgentProfile     string `json:"agentProfile"`
-		Provider         string `json:"provider"`
-		Branch           string `json:"branch"`
-		SourceSessionID  string `json:"sourceSessionId"`
-		SourceCommitSHA  string `json:"sourceCommitSha"`
-		TriggerCommentID string `json:"triggerCommentId"`
-		ArtifactDir      string `json:"artifactDir"`
-		Automation       string `json:"automation"`
-		TestRunID        string `json:"testRunId"`
+		Prompt           string                       `json:"prompt"`
+		AgentProfile     string                       `json:"agentProfile"`
+		Provider         string                       `json:"provider"`
+		Branch           string                       `json:"branch"`
+		SourceSessionID  string                       `json:"sourceSessionId"`
+		SourceCommitSHA  string                       `json:"sourceCommitSha"`
+		TriggerCommentID string                       `json:"triggerCommentId"`
+		ArtifactDir      string                       `json:"artifactDir"`
+		Automation       string                       `json:"automation"`
+		TestRunID        string                       `json:"testRunId"`
+		RequiredSkills   []AgentSessionSkillReference `json:"requiredSkills"`
+		Skills           []AgentSessionSkillReference `json:"skills"`
 	}
 	_ = json.Unmarshal(task.Payload, &payload)
 
@@ -1616,10 +1618,36 @@ func runtimeTaskToAgentSession(task RuntimeTask) (AgentSession, error) {
 		SourceSessionID:  payload.SourceSessionID,
 		SourceCommitSHA:  firstNonEmpty(result.Source.CommitSHA, payload.SourceCommitSHA),
 		TriggerCommentID: payload.TriggerCommentID,
+		Automation:       payload.Automation,
+		Payload:          compactAgentSessionPayload(task.Payload),
+		RequiredSkills:   payload.RequiredSkills,
+		Skills:           payload.Skills,
 		CleanupStatus:    "retained",
 		CreatedAt:        task.CreatedAt,
 		UpdatedAt:        task.UpdatedAt,
 	}, nil
+}
+
+func compactAgentSessionPayload(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload struct {
+		Automation     string                       `json:"automation,omitempty"`
+		RequiredSkills []AgentSessionSkillReference `json:"requiredSkills,omitempty"`
+		Skills         []AgentSessionSkillReference `json:"skills,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(payload.Automation) == "" && len(payload.RequiredSkills) == 0 && len(payload.Skills) == 0 {
+		return nil
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return json.RawMessage(body)
 }
 
 func runtimeTaskSessionStatus(status, errorText, runtimeMode string) (string, string) {
@@ -1652,13 +1680,13 @@ func runtimeTaskSessionStatus(status, errorText, runtimeMode string) (string, st
 }
 
 func buildAgentSessionPayload(sessionID string, issue Issue, project Project, runbook ProjectRunbook, comments []Comment, labels []IssueLabel, childIssues []IssueListItem, input CreateAgentSessionInput) map[string]any {
-	return map[string]any{
+	payload := map[string]any{
 		"workdir":               "",
 		"provider":              input.Provider,
 		"prompt":                input.Command,
 		"developerInstructions": defaultAgentSessionDeveloperInstructions(input.RuntimeMode),
 		"approvalPolicy":        "never",
-		"sandbox":               "danger-full-access",
+		"sandbox":               agentSessionSandbox(input),
 		"env": map[string]string{
 			"MSPACE_API_BASE_URL":      "",
 			"MSPACE_ISSUE_ID":          issue.ID,
@@ -1677,6 +1705,7 @@ func buildAgentSessionPayload(sessionID string, issue Issue, project Project, ru
 		"sourceCommitSha":  input.SourceCommitSHA,
 		"triggerCommentId": input.TriggerCommentID,
 		"automation":       input.Automation,
+		"sourceCapture":    agentSessionSourceCaptureEnabled(input),
 		"testRunId":        input.TestRunID,
 		"testRunBatchSize": input.TestRunBatchSize,
 		"contextMarkdown":  buildAgentSessionContext(issue, project, runbook, comments, labels, childIssues, input),
@@ -1690,6 +1719,21 @@ func buildAgentSessionPayload(sessionID string, issue Issue, project Project, ru
 			"repo":          project.GitRepo,
 		},
 	}
+	if len(input.SkillBundles) > 0 {
+		payload["requiredSkills"] = input.SkillBundles
+	}
+	return payload
+}
+
+func agentSessionSourceCaptureEnabled(input CreateAgentSessionInput) bool {
+	return strings.TrimSpace(input.Automation) != issueAnalysisAutomation
+}
+
+func agentSessionSandbox(input CreateAgentSessionInput) string {
+	if strings.TrimSpace(input.Automation) == issueAnalysisAutomation {
+		return "read-only"
+	}
+	return "danger-full-access"
 }
 
 func defaultAgentSessionDeveloperInstructions(runtimeMode string) string {

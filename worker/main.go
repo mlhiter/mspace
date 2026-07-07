@@ -151,6 +151,7 @@ type agentSessionPayload struct {
 	SessionID             string            `json:"sessionId"`
 	ProjectID             string            `json:"projectId"`
 	Automation            string            `json:"automation"`
+	SourceCapture         *bool             `json:"sourceCapture,omitempty"`
 	TestRunID             string            `json:"testRunId"`
 	Branch                string            `json:"branch"`
 	SourceCommitSHA       string            `json:"sourceCommitSha"`
@@ -1132,9 +1133,15 @@ func runDryRunAgentSession(ctx context.Context, runtimeClient *runtimeClient, cf
 	if err := writeDryRunAgentSessionFiles(payload, taskID); err != nil {
 		return agentSessionResult{}, err
 	}
-	source, err := captureAgentSessionSource(ctx, runtimeClient, workerID, taskID, payload)
-	if err != nil {
-		return agentSessionResult{}, err
+	source := agentSessionSource{}
+	if sourceCaptureEnabled(payload) {
+		var err error
+		source, err = captureAgentSessionSource(ctx, runtimeClient, workerID, taskID, payload)
+		if err != nil {
+			return agentSessionResult{}, err
+		}
+	} else {
+		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Source capture disabled for this agent session."})
 	}
 	result := agentSessionResult{
 		ThreadID:    "dry-run-thread-" + shortTaskID(taskID),
@@ -1178,8 +1185,10 @@ func writeDryRunAgentSessionFiles(payload agentSessionPayload, taskID string) er
 		summary,
 		"",
 	}, "\n")
-	if err := os.WriteFile(filepath.Join(payload.Workdir, "TEAM_RUNTIME_DRY_RUN.md"), []byte(sourceContent), 0o644); err != nil {
-		return fmt.Errorf("write dry-run source file: %w", err)
+	if sourceCaptureEnabled(payload) {
+		if err := os.WriteFile(filepath.Join(payload.Workdir, "TEAM_RUNTIME_DRY_RUN.md"), []byte(sourceContent), 0o644); err != nil {
+			return fmt.Errorf("write dry-run source file: %w", err)
+		}
 	}
 	if payload.ArtifactDir == "" {
 		return nil
@@ -1369,11 +1378,15 @@ func runCodexAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg
 		Workdir:     payload.Workdir,
 		ArtifactDir: payload.ArtifactDir,
 	}
-	source, err := captureAgentSessionSource(ctx, runtimeClient, workerID, taskID, payload)
-	if err != nil {
-		return agentSessionResult{}, err
+	if sourceCaptureEnabled(payload) {
+		source, err := captureAgentSessionSource(ctx, runtimeClient, workerID, taskID, payload)
+		if err != nil {
+			return agentSessionResult{}, err
+		}
+		result.Source = source
+	} else {
+		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Source capture disabled for this agent session."})
 	}
-	result.Source = source
 	result.attachArtifacts(payload)
 	return result, nil
 }
@@ -1528,14 +1541,24 @@ func completedAgentSessionResultFromArtifacts(ctx context.Context, runtimeClient
 	if !result.attachMatchingTestCompletionArtifact(payload) {
 		return agentSessionResult{}, false
 	}
-	source, err := captureAgentSessionSource(ctx, runtimeClient, workerID, taskID, payload)
-	if err != nil {
-		_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Artifact completion fallback skipped source capture: " + err.Error()})
-		source = agentSessionSource{}
+	source := agentSessionSource{}
+	if sourceCaptureEnabled(payload) {
+		var err error
+		source, err = captureAgentSessionSource(ctx, runtimeClient, workerID, taskID, payload)
+		if err != nil {
+			_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Artifact completion fallback skipped source capture: " + err.Error()})
+			source = agentSessionSource{}
+		}
+	} else {
+		_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Source capture disabled for this agent session."})
 	}
 	result.Source = source
 	_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Completing task from session artifacts after Codex turn ended without a final completion notification."})
 	return result, true
+}
+
+func sourceCaptureEnabled(payload agentSessionPayload) bool {
+	return payload.SourceCapture == nil || *payload.SourceCapture
 }
 
 func (result *agentSessionResult) attachMatchingTestCompletionArtifact(payload agentSessionPayload) bool {

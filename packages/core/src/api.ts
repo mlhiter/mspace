@@ -59,6 +59,7 @@ import type {
   RuntimeTaskLog,
   RuntimeWorker,
   SessionDetail,
+  SkillCatalogItem,
   StartTestDeployInput,
   SuggestIssueTitleInput,
   SuggestIssueTitleResult,
@@ -109,6 +110,7 @@ export interface StoredAuthIdentity {
 
 export const queryKeys = {
   agents: (workspaceId: string, token: string) => ["agents", workspaceId, token] as const,
+  skills: (workspaceId: string, token: string) => ["skills", workspaceId, token] as const,
   authMe: (token: string) => ["auth-me", token] as const,
   authPoll: (state: string) => ["auth-github-result", state] as const,
 	workspaceInbox: (workspaceId: string, token: string) => ["workspace-inbox", workspaceId, token] as const,
@@ -751,6 +753,10 @@ export const controlPlaneApi = {
     }),
   listAgents: (token: string, workspaceId: string) =>
     requestControlPlane<AgentProfile[]>(`/api/workspaces/${workspaceId}/agents`, {
+      headers: authHeaders(token),
+    }),
+  listSkills: (token: string, workspaceId: string) =>
+    requestControlPlane<SkillCatalogItem[]>(`/api/workspaces/${workspaceId}/skills`, {
       headers: authHeaders(token),
     }),
   createAgent: (token: string, workspaceId: string, input: AgentProfileInput) =>

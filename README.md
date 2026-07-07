@@ -56,8 +56,8 @@ Production deployment uses the root `vercel.json`:
 ## Features
 
 - Electron desktop app with Inbox, Issues, Tests, Agents, Environments, Projects, Account Settings, Workspace Settings, Issue Detail, and Session Detail screens.
-- Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, editable display profiles, mspace session tokens, personal/team workspaces, workspace membership, one-time team join links with safe signed-out previews, Inbox receipts, projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, comments, reactions, labels, runtime worker registration, agent profiles, environments, Kubernetes cluster compatibility records, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
-- Runtime worker daemon in `worker/` that registers with `msw_...`, heartbeats, claims matching server tasks, prepares its own repo cache/workdir, runs `codex app-server --listen stdio://`, streams logs, captures source metadata, and reports task results.
+- Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, editable display profiles, mspace session tokens, personal/team workspaces, workspace membership, one-time team join links with safe signed-out previews, Inbox receipts, projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, comments, reactions, labels, runtime worker registration, built-in workflow skills, agent profiles, environments, Kubernetes cluster compatibility records, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
+- Runtime worker daemon in `worker/` that registers with `msw_...`, heartbeats, claims matching server tasks, materializes server-provided skill bundles per session, prepares its own repo cache/workdir, runs `codex app-server --listen stdio://`, streams logs, captures source metadata, and reports task results.
 - Codex execution belongs to runtime workers. The server image does not install Codex or mount Codex credentials.
 - Workspace Settings for team access, worker host installation, worker liveness, issue-linked runtime tasks, task events, task logs, and workspace automation.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, Material Icon Theme file icons, and shadcn/ui source components in `@mspace/ui`.
@@ -86,7 +86,7 @@ mspace separates collaboration, execution, and validation:
 
 | Layer | What it owns | Current implementation |
 | --- | --- | --- |
-| Control plane | Users, workspaces, product data, membership, local password credentials, GitHub identity, explicit auth identity display, mspace auth sessions, agents, environments, Kubernetes cluster compatibility records, test environments, PR handoffs, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, Postgres for team/shared deployments, local SQLite for packaged personal desktop mode |
+| Control plane | Users, workspaces, product data, membership, local password credentials, GitHub identity, explicit auth identity display, mspace auth sessions, agents, built-in workflow skills, environments, Kubernetes cluster compatibility records, test environments, PR handoffs, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, Postgres for team/shared deployments, local SQLite for packaged personal desktop mode |
 | Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review, language preference | Electron, React, TanStack Router, React Query, shared `@mspace/ui` and `@mspace/i18n` |
 | Runtime worker | Personal or team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
 | Agent runtime | One issue-bound turn in an isolated working directory | Worker-managed git workdir under the selected runtime mode |
@@ -153,7 +153,7 @@ The packaged desktop app includes bundled `mspace-server` and `mspace-worker` bi
 ### First workflow
 
 1. Sign in with a local account, or use GitHub OAuth when it is configured, then select the personal or team workspace. For team access from an invitation, open the join link; the desktop switches to the invited team server, shows a safe preview, lets you sign in or create an account if needed, accepts the invitation, and opens the invited workspace.
-2. Create an issue in the Issues tab with a document-style note.
+2. Create an issue in the Issues tab with a document-style note. When the issue already has a project and a matching Codex worker is online, mspace queues an automatic read-only issue analysis session using the server-managed `think` workflow skill, so the next implementation turn starts from a framed plan instead of a cold `@codex` mention.
 3. Attach or create a project before agent execution, PR handoff, project runbook access, Tests, or issue test environments. Personal workspaces can use a local folder or GitHub URL; team workspaces require a GitHub URL so connected workers can clone the repository.
 4. In Tests, import or create project cases. Imports first preview the parsed count, importable count, skipped rows, missing field counts, quality findings, and sample cases before the user confirms. Markdown/text imports use one non-empty line per case; CSV and `.xlsx` workbooks use the same column contract: `title`, `type`, `area`, `priority`, `preconditions`, `steps`, `expected_result`, `environment_requirements`, and `tags`. Valid case types are `functional`, `ui`, `api`, and `deployment`.
 5. Create/import an Environment. Import kubeconfigs for Kubernetes targets, or add a virtual machine target with SSH password or private-key validation for SSH-oriented deployment testing.
@@ -227,6 +227,8 @@ Local data paths:
 | `/var/lib/mspace-worker/repos/<cache-key>` | Repository cache inside Docker-backed workers. |
 | `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>` | Per-session worker workdir inside Docker-backed workers. |
 | `<worker-root>/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory. |
+| `<artifact-dir>/skills/` | Worker-materialized server skill bundles for the current task. |
+| `<artifact-dir>/skills/manifest.json` | Per-session manifest of materialized skill names, revisions, directories, bundle hashes, and file hashes. |
 | `<artifact-dir>/test-environment.json` | Optional agent-written deployment result. |
 | `<artifact-dir>/review-evidence.json` | Optional agent-written review snapshot. |
 | `<artifact-dir>/test-case-proposals.json` | Optional Codex-written test case suggestion artifact reconciled into Case suggestions. |

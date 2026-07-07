@@ -253,6 +253,34 @@ func TestMaterializePayloadSkillBundlesRejectsSha256Mismatch(t *testing.T) {
 	}
 }
 
+func TestSourceCaptureDisabledSkipsDryRunSourceFile(t *testing.T) {
+	workdir := t.TempDir()
+	artifactDir := filepath.Join(workdir, ".mspace", "session")
+	disabled := false
+	payload := agentSessionPayload{
+		Workdir:       workdir,
+		ArtifactDir:   artifactDir,
+		Prompt:        "Analyze only.",
+		SourceCapture: &disabled,
+	}
+
+	if sourceCaptureEnabled(payload) {
+		t.Fatalf("expected source capture to be disabled")
+	}
+	if err := writeDryRunAgentSessionFiles(payload, "task-1"); err != nil {
+		t.Fatalf("write dry-run files: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "TEAM_RUNTIME_DRY_RUN.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source file should not be written when source capture is disabled, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(artifactDir, "team-runtime-dry-run.json")); err != nil {
+		t.Fatalf("dry-run artifact should still be written: %v", err)
+	}
+	if !sourceCaptureEnabled(agentSessionPayload{}) {
+		t.Fatalf("source capture should default to enabled")
+	}
+}
+
 func TestParseImportMappingResultNormalizesSuggestions(t *testing.T) {
 	payload := importMappingPayload{
 		Format:   "csv",

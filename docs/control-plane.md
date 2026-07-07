@@ -1,6 +1,6 @@
 # mspace Control Plane
 
-> Status: server-owned runtime and test-module surfaces, updated 2026-06-05
+> Status: server-owned runtime, workflow skill, and test-module surfaces, updated 2026-07-07
 
 ## Decision
 
@@ -18,7 +18,7 @@ The control plane owns:
 - GitHub identity links;
 - future GitHub App installation state;
 - workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts;
-- workspace settings, agent profiles, reusable Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review/failure/source records;
+- workspace settings, agent profiles, built-in workflow skill catalog and revisions, reusable Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review/failure/source records;
 - audit and collaboration sync;
 - runtime registration tokens;
 - runtime worker identity, liveness, and capability snapshots;
@@ -42,7 +42,7 @@ Runtime workers own:
 - session artifacts while running;
 - streaming logs and final task results back to the server.
 
-The control plane intentionally has no Codex runtime dependency. It does not install the Codex CLI, mount `CODEX_HOME`, read Codex credentials, or start `codex app-server`. It queues work, records logs/results, and applies validated results. Codex auth/config is injected only into worker runtimes.
+The control plane intentionally has no Codex runtime dependency. It does not install the Codex CLI, mount `CODEX_HOME`, read Codex credentials, or start `codex app-server`. It queues work, records logs/results, and applies validated results. It may own workflow skill content and attach pinned skill bundles to runtime tasks, but Codex auth/config and skill materialization stay in worker runtimes.
 
 ## Auth Shape
 
@@ -102,6 +102,7 @@ The server module provides:
 - project test cases, test case revisions, test case suggestions, test plans, test runs, and run items;
 - issue labels, issues, child tasks, comments, comment edits, and comment reactions;
 - workspace settings;
+- built-in workflow skill metadata through `/api/workspaces/{workspaceID}/skills`;
 - workspace agent profiles;
 - Environment APIs plus Kubernetes cluster compatibility APIs and kubeconfig discovery/import;
 - issue test deployment, cleanup, retain, preview probe, and namespace resources;
@@ -118,6 +119,8 @@ Workspaces have an explicit `kind`: `personal` or `team`. The first password reg
 The desktop requires an mspace session before product data is available. In personal desktop mode, the shell proactively checks for a fresh host-local Codex worker once auth and workspace selection are ready. For agent mentions, Issue Detail still verifies a matching active Codex worker before writing the trigger comment; team workspaces require an explicitly registered team worker and never replace that path with a local personal worker. Only after that preflight does the renderer write the server comment and call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`. The server repeats the worker-liveness check and returns HTTP `409` with `no active codex worker` if the task cannot be claimed, so unsupported `@codex` comments do not sit in the queue waiting for a worker that is not there.
 
 New issue type classification is also a runtime task. When an issue has `triage_status=pending` and no explicit type label, the server queues `runtime_tasks.kind="issue_type_triage"` with `required_capabilities={"codex":true}` and a classification-only prompt. A matching worker runs Codex, returns a compact JSON result, and the server validates the type before writing the `type:*` label. The server never falls back to keyword matching or an in-process Codex client.
+
+Project-backed issue creation can also queue one read-only `runtime_tasks.kind="agent_session"` with payload `automation:"issue_analysis"` when a matching Codex worker is already online. That task is queued before asynchronous type triage, uses `sandbox:"read-only"` plus `sourceCapture:false`, includes the built-in server-owned `think` skill bundle from `mlhiter/skills`, asks the worker to materialize it under the session artifact directory, and produces first-pass analysis without requiring an immediate manual `@codex` mention. Missing project, missing worker, child issue, or existing analysis task are recoverable skips and must not fail issue creation. Server reconciliation ignores source/test/deploy/review artifacts from `issue_analysis`.
 
 The test module follows the same ownership rule. Canonical cases, revisions, suggestions, plans, runs, setup state, run items, and test evidence artifacts live in server tables. Markdown/text/CSV/Excel imports are parsed by the server. Optimize/generate actions and test run execution create issue-backed agent sessions; workers may return `test-case-proposals.json`, `test-setup-result.json`, or `test-result.json`, but the server validates those artifacts. Human apply actions are required before Codex suggestions change canonical case knowledge, while test run accept/block decisions are lightweight review records until a later release or plan gate consumes them. Plan setup is a lightweight free-text pre-run session, not a template library or separate workflow engine: setup outputs are copied into the run context and only a completed passing setup starts case execution. Screenshot evidence may be transferred through worker artifacts, then the server persists it as `test_artifacts` and rewrites run item evidence to artifact refs.
 
@@ -145,7 +148,7 @@ Worker mode is part of the workspace trust boundary. Personal workspace tokens c
 
 Desktop personal workers are managed by Electron rather than by a human copying a token. Once a personal workspace is selected, the desktop creates a 12-hour workspace registration credential when needed, writes it to an Electron user-data token file, starts or reuses a host-local worker in `personal` mode, and schedules renewal before expiry. The same ensure path is reused as an action-level fallback before agent or test work is queued. The worker reads the token file for runtime API calls, so renewal is normally invisible; Electron revokes the previous credential after a short grace period and also revokes the active credential when the personal worker is stopped or the server source changes.
 
-The first worker daemon exists as `worker/`. It registers, heartbeats, claims matching tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks from server payloads, and can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers keep repository caches and worktrees under `/var/lib/mspace-worker`, backed by a Docker volume, so target project source is isolated from the host checkout.
+The first worker daemon exists as `worker/`. It registers, heartbeats, claims matching tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks from server payloads, and can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. When an agent-session payload contains `requiredSkills`, the worker validates bundle paths and hashes, writes the files under `<artifact-dir>/skills/`, sets `MSPACE_SESSION_SKILLS_DIR` and `MSPACE_SESSION_SKILL_MANIFEST`, and leaves global `CODEX_HOME` untouched. Docker-backed workers keep repository caches and worktrees under `/var/lib/mspace-worker`, backed by a Docker volume, so target project source is isolated from the host checkout.
 
 Workers forward system, status, agent, command, file, and tool logs to `runtime_task_logs`, poll claimed tasks for cancellation, interrupt Codex when requested, capture a source commit when code changed, and return worker workdir, artifact dir, source commit, changed files, and diff preview in the task result.
 

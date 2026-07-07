@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, CheckCircle2, Circle, Clock3, Plus, Save, Settings2, SquareTerminal, X } from "lucide-react";
-import { controlPlaneApi, queryKeys, type AgentProfile, type AgentProfileInput } from "@mspace/core";
+import { controlPlaneApi, queryKeys, type AgentProfile, type AgentProfileInput, type SkillCatalogItem } from "@mspace/core";
 import { useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
@@ -62,9 +62,15 @@ export function AgentsPage() {
   const workspaceId = auth.workspace?.id || "";
   const workspaceReady = auth.status === "signed-in" && Boolean(auth.token && workspaceId);
   const agentsQueryKey = queryKeys.agents(workspaceId, auth.token);
+  const skillsQueryKey = queryKeys.skills(workspaceId, auth.token);
   const agentsQuery = useQuery({
     queryKey: agentsQueryKey,
     queryFn: () => controlPlaneApi.listAgents(auth.token, workspaceId),
+    enabled: workspaceReady,
+  });
+  const skillsQuery = useQuery({
+    queryKey: skillsQueryKey,
+    queryFn: () => controlPlaneApi.listSkills(auth.token, workspaceId),
     enabled: workspaceReady,
   });
   const agents = useMemo(() => agentsQuery.data || [], [agentsQuery.data]);
@@ -129,6 +135,7 @@ export function AgentsPage() {
       }
     >
       {!workspaceReady ? <Notice>{t("workspace.signInRequired")}</Notice> : null}
+      {workspaceReady ? <WorkflowSkillsPanel skills={skillsQuery.data || []} /> : null}
       {agentsQuery.isPending ? (
         <div className="rounded-[10px] bg-[color:var(--surface)] px-4 py-6 text-[13px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
           {t("agents.loading")}
@@ -197,6 +204,67 @@ export function AgentsPage() {
         />
       ) : null}
     </PageFrame>
+  );
+}
+
+function WorkflowSkillsPanel(props: { skills: SkillCatalogItem[] }) {
+  const { t } = useMspaceTranslation();
+  const thinkSkill = props.skills.find((skill) => skill.slug === "think");
+  const scope = props.skills.length > 0 ? `${t("agents.workflowSkills.scope")} · ${props.skills.length}` : t("agents.workflowSkills.scope");
+  const items = [
+    {
+      icon: SquareTerminal,
+      label: t("agents.workflowSkills.thinkLabel"),
+      value: thinkSkill?.revision ? `${t("agents.workflowSkills.thinkValue")} @${thinkSkill.revision}` : t("agents.workflowSkills.thinkValue"),
+      body: t("agents.workflowSkills.thinkBody"),
+    },
+    {
+      icon: CheckCircle2,
+      label: t("agents.workflowSkills.managedLabel"),
+      value: t("agents.workflowSkills.managedValue"),
+      body: t("agents.workflowSkills.managedBody"),
+    },
+    {
+      icon: Clock3,
+      label: t("agents.workflowSkills.analysisLabel"),
+      value: t("agents.workflowSkills.analysisValue"),
+      body: t("agents.workflowSkills.analysisBody"),
+    },
+  ];
+
+  return (
+    <section className="rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[color:var(--line)] px-4 py-3">
+        <div className="min-w-0">
+          <h2 className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">{t("agents.workflowSkills.title")}</h2>
+          <p className="mt-1 max-w-[72ch] text-pretty text-[12px] leading-5 text-[color:var(--muted)]">
+            {t("agents.workflowSkills.description")}
+          </p>
+        </div>
+        <span className="shrink-0 rounded-full bg-[color:var(--block)] px-2 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted-strong)]">
+          {scope}
+        </span>
+      </div>
+      <div className="grid divide-y divide-[color:var(--line)] md:grid-cols-3 md:divide-x md:divide-y-0">
+        {items.map((item) => {
+          const Icon = item.icon;
+          return (
+            <div key={item.label} className="min-w-0 px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="grid size-7 shrink-0 place-items-center rounded-[7px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+                  <Icon data-icon />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium uppercase leading-4 text-[color:var(--faint)]">{item.label}</div>
+                  <div className="truncate text-[13px] font-semibold leading-5 text-[color:var(--text)]">{item.value}</div>
+                </div>
+              </div>
+              <p className="mt-2 text-pretty text-[12px] leading-5 text-[color:var(--muted)]">{item.body}</p>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

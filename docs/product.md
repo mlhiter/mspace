@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-06-04
+> Status: local MVP implementation snapshot, updated 2026-07-07
 
 ## One-Line Definition
 
@@ -12,6 +12,7 @@ The repository now has a runnable local desktop MVP:
 
 - create personal projects from a local folder picker or GitHub repository URL, create team projects from a GitHub repository URL that connected workers can clone, and manage settings later;
 - create and manage issues in the Issues tab;
+- automatically start a read-only first analysis session for new project-backed issues when a Codex worker is ready, using the server-managed `think` workflow skill instead of requiring an immediate manual `@codex` comment;
 - jump to issues and projects from the sidebar global search or `Command+K` palette;
 - sign in with a local username/password account, or optional GitHub OAuth when available, through the server control plane, show the current user/workspace state in the sidebar, and edit the user's display profile from Account Settings;
 - store signed-in workspace projects, project runbooks, project test cases, test case suggestions, test plans, test runs, issues, child issue tasks, comments, reactions, labels, and Inbox receipts in the server store: Postgres for team/shared deployments, local SQLite for packaged personal desktop mode;
@@ -31,6 +32,7 @@ The repository now has a runnable local desktop MVP:
 - manage project-level test cases and case suggestions plus workspace-level test plans and issue-backed test runs that start from plans in the Tests route, including modal create/import flows, preview-before-confirm Markdown/text/CSV/Excel `.xlsx` import, field-level case revision summaries, readiness scoring, retry for failed run items, and lightweight human review records for run outcomes;
 - keep signed-in workspace product and runtime state in the server store, including sessions, logs, evidence, environments, Kubernetes cluster compatibility records, issue test environments, handoffs, and execution metadata;
 - keep the server control plane free of Codex runtime dependencies: no Codex CLI in the server image, no Codex home mount in the server Deployment, and no in-process Codex app-server client;
+- keep built-in workflow skills server-owned and worker-materialized per task, so workers can use the same pinned skill revision without depending on local global skill installs;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage workspace automation policy, keeping source commit capture always on while recording branch / PR handoff state from captured source commits;
 - optionally queue an automatic issue test-environment deployment after a successful source session captures a commit, using the same source commit and deploy/test path as manual deployment;

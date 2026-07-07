@@ -890,27 +890,40 @@ type IssueDetail struct {
 }
 
 type AgentSession struct {
-	ID               string `json:"id"`
-	IssueID          string `json:"issueId"`
-	Provider         string `json:"provider"`
-	AgentProfile     string `json:"agentProfile"`
-	RuntimeMode      string `json:"runtimeMode"`
-	RuntimeTaskID    string `json:"runtimeTaskId"`
-	Command          string `json:"command"`
-	Status           string `json:"status"`
-	Branch           string `json:"branch"`
-	Workdir          string `json:"workdir"`
-	CodexThreadID    string `json:"codexThreadId"`
-	CodexTurnID      string `json:"codexTurnId"`
-	AgentStatus      string `json:"agentStatus"`
-	ArtifactDir      string `json:"artifactDir"`
-	SourceSessionID  string `json:"sourceSessionId"`
-	SourceCommitSHA  string `json:"sourceCommitSha"`
-	TriggerCommentID string `json:"triggerCommentId"`
-	CleanupStatus    string `json:"cleanupStatus"`
-	CleanedAt        string `json:"cleanedAt"`
-	CreatedAt        string `json:"createdAt"`
-	UpdatedAt        string `json:"updatedAt"`
+	ID               string                       `json:"id"`
+	IssueID          string                       `json:"issueId"`
+	Provider         string                       `json:"provider"`
+	AgentProfile     string                       `json:"agentProfile"`
+	RuntimeMode      string                       `json:"runtimeMode"`
+	RuntimeTaskID    string                       `json:"runtimeTaskId"`
+	Command          string                       `json:"command"`
+	Status           string                       `json:"status"`
+	Branch           string                       `json:"branch"`
+	Workdir          string                       `json:"workdir"`
+	CodexThreadID    string                       `json:"codexThreadId"`
+	CodexTurnID      string                       `json:"codexTurnId"`
+	AgentStatus      string                       `json:"agentStatus"`
+	ArtifactDir      string                       `json:"artifactDir"`
+	SourceSessionID  string                       `json:"sourceSessionId"`
+	SourceCommitSHA  string                       `json:"sourceCommitSha"`
+	TriggerCommentID string                       `json:"triggerCommentId"`
+	Automation       string                       `json:"automation,omitempty"`
+	Payload          json.RawMessage              `json:"payload,omitempty"`
+	RequiredSkills   []AgentSessionSkillReference `json:"requiredSkills,omitempty"`
+	Skills           []AgentSessionSkillReference `json:"skills,omitempty"`
+	CleanupStatus    string                       `json:"cleanupStatus"`
+	CleanedAt        string                       `json:"cleanedAt"`
+	CreatedAt        string                       `json:"createdAt"`
+	UpdatedAt        string                       `json:"updatedAt"`
+}
+
+type AgentSessionSkillReference struct {
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Source      string `json:"source"`
+	Revision    string `json:"revision"`
+	ContentHash string `json:"contentHash"`
+	BuiltIn     bool   `json:"builtIn"`
 }
 
 type SessionLog struct {
@@ -1287,18 +1300,47 @@ type SessionDetail struct {
 }
 
 type CreateAgentSessionInput struct {
-	Provider             string          `json:"provider"`
-	AgentProfile         string          `json:"agentProfile"`
-	RuntimeMode          string          `json:"runtimeMode"`
-	Command              string          `json:"command"`
-	Branch               string          `json:"branch"`
-	SourceSessionID      string          `json:"sourceSessionId"`
-	SourceCommitSHA      string          `json:"sourceCommitSha"`
-	TriggerCommentID     string          `json:"triggerCommentId"`
-	Automation           string          `json:"automation"`
-	TestRunID            string          `json:"testRunId"`
-	TestRunBatchSize     int             `json:"testRunBatchSize"`
-	RequiredCapabilities json.RawMessage `json:"requiredCapabilities,omitempty"`
+	Provider             string               `json:"provider"`
+	AgentProfile         string               `json:"agentProfile"`
+	RuntimeMode          string               `json:"runtimeMode"`
+	Command              string               `json:"command"`
+	Branch               string               `json:"branch"`
+	SourceSessionID      string               `json:"sourceSessionId"`
+	SourceCommitSHA      string               `json:"sourceCommitSha"`
+	TriggerCommentID     string               `json:"triggerCommentId"`
+	Automation           string               `json:"automation"`
+	TestRunID            string               `json:"testRunId"`
+	TestRunBatchSize     int                  `json:"testRunBatchSize"`
+	RequiredCapabilities json.RawMessage      `json:"requiredCapabilities,omitempty"`
+	SkillBundles         []RuntimeSkillBundle `json:"-"`
+}
+
+type SkillCatalogItem struct {
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Source      string `json:"source"`
+	Revision    string `json:"revision"`
+	ContentHash string `json:"contentHash"`
+	BuiltIn     bool   `json:"builtIn"`
+	FileCount   int    `json:"fileCount"`
+}
+
+type RuntimeSkillBundle struct {
+	Slug        string             `json:"slug"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Source      string             `json:"source"`
+	Revision    string             `json:"revision"`
+	ContentHash string             `json:"contentHash"`
+	BuiltIn     bool               `json:"builtIn"`
+	Files       []RuntimeSkillFile `json:"files"`
+}
+
+type RuntimeSkillFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	SHA256  string `json:"sha256"`
 }
 
 type CreateIssueInput struct {
@@ -1814,6 +1856,7 @@ type Store interface {
 	ListIssueLabelDefinitions(ctx Context, userID, workspaceID string) ([]IssueLabelDefinition, error)
 	GetWorkspaceSettings(ctx Context, userID, workspaceID string) (WorkspaceSettings, error)
 	UpdateWorkspaceSettings(ctx Context, userID, workspaceID string, input WorkspaceSettingsInput) (WorkspaceSettings, error)
+	ListSkills(ctx Context, userID, workspaceID string) ([]SkillCatalogItem, error)
 	ListAgentProfiles(ctx Context, userID, workspaceID string) ([]AgentProfile, error)
 	CreateAgentProfile(ctx Context, userID, workspaceID string, input AgentProfileInput) (AgentProfile, error)
 	UpdateAgentProfile(ctx Context, userID, workspaceID, agentID string, input AgentProfileInput) (AgentProfile, error)

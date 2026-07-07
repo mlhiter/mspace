@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-06-04
+> Status: local MVP implementation snapshot, updated 2026-07-07
 
 ## IA Goal
 
@@ -36,7 +36,7 @@ Navigation rules:
 - Inbox is the unread review surface for issue and session updates.
 - Issues is the durable knowledge surface and issue creation home.
 - Tests is the workspace quality surface for project-level cases/suggestions and workspace-level plans/runs. It sits after Issues because test execution still routes through issue-backed worker sessions.
-- Agents is the managed profile surface for Codex-backed collaborators and mentions.
+- Agents is the managed profile surface for Codex-backed collaborators and mentions, plus a compact view of server-managed workflow skills that power automatic issue analysis.
 - Environments is reusable target access: Kubernetes kubeconfig import, reachability status, registry/exposure defaults, and virtual machine SSH target metadata with password/private-key login validation.
 - Projects is configuration and project-level history.
 - Workspace Settings is accessed from the workspace identity menu instead of the main rail, because it controls automation, membership, and runtime worker policy for the current workspace rather than daily issue work.
@@ -327,6 +327,7 @@ Current implementation:
 - checks worker liveness before saving an agent trigger comment; personal desktop mode may auto-start the local worker, while team workspaces require a connected team worker;
 - saves the trigger comment before queuing the worker-backed Codex session, so accepted turns are visible in the issue history;
 - sends the mention-stripped comment as the current turn request, ahead of the original issue context;
+- shows server-queued `issue_analysis` sessions as read-only Issue analysis using the `think` workflow skill, rather than as a generic runtime task or hidden background job;
 - shows Type and Priority controls in the quiet metadata sidebar, with a `Classifying...` state while a worker-backed `issue_type_triage` task assigns type;
 - keeps the quiet metadata sidebar on Overview only, while Commits, Sessions, and Evidence use the full page width for review-heavy content;
 - exposes a Stop action for queued or running sessions, cancelling only that session and rendering the stop as a compact, non-editable event while leaving the issue status unchanged;
@@ -523,7 +524,7 @@ Must-have for MVP:
 - Issues list and issue creation flow
 - Issue detail as the main work surface
 - Comments, reactions, and progress updates
-- Manage Agents and queue worker-backed Codex sessions from enabled agent-profile issue comments
+- Manage Agents, show server-managed workflow skills, and queue worker-backed Codex sessions from enabled agent-profile issue comments
 - Issue labels
 - Stop queued or running sessions
 - Agent turns inline on the issue timeline

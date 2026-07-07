@@ -4,7 +4,7 @@
 
 The desktop app and runtime workers are clients of this service. They do not own collaboration identity or product truth.
 
-The server is intentionally Codex-free. It does not install the Codex CLI, mount `CODEX_HOME`, read Codex credentials, or start `codex app-server`. LLM-backed work is expressed as runtime tasks and executed by workers.
+The server is intentionally Codex-free. It does not install the Codex CLI, mount `CODEX_HOME`, read Codex credentials, or start `codex app-server`. LLM-backed work is expressed as runtime tasks and executed by workers. The server can still own workflow skill metadata and bundle content, so every worker receives the same required skill revision with a task instead of depending on worker-local skill installs.
 
 ## Run
 
@@ -147,6 +147,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block` | Compatibility-block a workspace run that includes the project. |
 | `GET` | `/api/workspaces/{workspaceID}/workspace/settings` | Read workspace automation settings. |
 | `PUT` | `/api/workspaces/{workspaceID}/workspace/settings` | Update workspace automation settings. |
+| `GET` | `/api/workspaces/{workspaceID}/skills` | List server-managed built-in workflow skills available to workspace automation and runtime tasks. |
 | `GET` | `/api/workspaces/{workspaceID}/agents` | List workspace agent profiles. |
 | `POST` | `/api/workspaces/{workspaceID}/agents` | Create a workspace agent profile. |
 | `PUT` | `/api/workspaces/{workspaceID}/agents/{agentID}` | Update a workspace agent profile. |
@@ -164,7 +165,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `POST` | `/api/workspaces/{workspaceID}/clusters/import` | Import selected kubeconfig files into workspace clusters. |
 | `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List issue type and priority label definitions. |
 | `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level workspace issues. |
-| `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. `projectId` is optional; issues can remain projectless until execution is needed. |
+| `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. `projectId` is optional; issues can remain projectless until execution is needed. Project-backed issues queue automatic read-only `issue_analysis` when a matching Codex worker is online. |
 | `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Load issue detail with optional project, child tasks, labels, comments, and sessions. |
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update issue project attachment, title, body, or workflow status. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks` | Create a child issue task. |
@@ -236,5 +237,7 @@ Normal team worker setup should use the Workspace Settings worker install action
 Runtime registration credentials use the `msw_` prefix and are returned only once. The server stores a hash and prefix, then workers use the credential to register, heartbeat, claim eligible tasks, and report task status.
 
 The current queue is intentionally narrow: it records workspace task metadata, required capability JSON, payload/result JSON, claim ownership, timestamps, a compact audit event stream, and worker-appended task logs. Product UI should present these records as issue-linked runtime tasks with the Issue title and worker/status context first, while leaving protocol fields in details. Workers can stream Codex app-server status and output back through the log endpoint without the server needing direct network access to the worker host or any Codex runtime dependency. Workspace users can request task cancellation; workers poll their claimed task while executing and interrupt Codex app-server when cancellation is requested.
+
+Runtime task payloads may include `requiredSkills`, which are full server-provided skill bundles for worker consumption. Session responses and workspace-user runtime task APIs expose only compact skill references so UI clients can show the workflow context without receiving every bundled `SKILL.md` body; full files are returned only to runtime workers claiming or inspecting their assigned task. The first product use is `issue_analysis`: after a project-backed issue is created, the server queues a higher-priority read-only `agent_session` with `sandbox:"read-only"`, `sourceCapture:false`, and the built-in `think` skill when an active Codex worker is available.
 
 The first worker-side implementation lives in `../worker`. It uses only the server HTTP contract: register with `Authorization: Bearer msw_...`, send heartbeat updates, claim matching tasks, inspect its claimed task for cancellation, append logs, and report status. It completes `protocol_smoke` and `noop` tasks, runs `issue_type_triage` tasks for issue type classification, and it can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Docker-backed workers store target project source under `/var/lib/mspace-worker/repos` and `/var/lib/mspace-worker/workdirs` on the configured worker volume, not in the host repository checkout. Issue Detail routes agent turns directly to `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`; returned worker source commit metadata, changed files, and diff preview are exposed from the runtime task result. Dry-run worker commits are diagnostic records and should not be used as PR source candidates.

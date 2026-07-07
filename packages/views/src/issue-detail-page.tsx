@@ -298,6 +298,72 @@ function sessionAgent(session: AgentSession, agents: AgentProfile[]) {
   return findAgent(agents, session.agentProfile || session.provider) || fallbackAgent(session.agentProfile || session.provider);
 }
 
+function objectValue(value: unknown, key: string) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
+}
+
+function normalizedMarker(value: unknown) {
+  return typeof value === "string" ? value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") : "";
+}
+
+function markerIndicatesIssueAnalysis(value: unknown) {
+  const marker = normalizedMarker(value);
+  if (!marker) return false;
+  if (["issue_analysis", "automatic_issue_analysis", "issue_created_analysis", "created_issue_analysis"].includes(marker)) return true;
+  return marker.includes("issue") && (marker.includes("analysis") || marker.includes("analyze") || marker.includes("analyse"));
+}
+
+function skillReferenceName(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return "";
+  const record = value as Record<string, unknown>;
+  for (const key of ["skill", "name", "slug", "key", "id"]) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate;
+  }
+  return "";
+}
+
+function skillToken(value: unknown) {
+  const name = skillReferenceName(value).trim().toLowerCase();
+  if (!name) return "";
+  const withoutRevision = name.split("@")[0] || name;
+  return withoutRevision.split(/[/:]/).filter(Boolean).at(-1)?.replace(/[^a-z0-9_-]+/g, "") || "";
+}
+
+function sessionUsesSkill(session: AgentSession, skill: string) {
+  const payload = session.payload || {};
+  const skillSources = [
+    session.requiredSkills,
+    session.skills,
+    objectValue(payload, "requiredSkills"),
+    objectValue(payload, "skills"),
+    objectValue(payload, "workflowSkills"),
+    objectValue(payload, "skill"),
+    objectValue(payload, "defaultSkill"),
+  ];
+  return skillSources.some((source) => {
+    const values = Array.isArray(source) ? source : [source];
+    return values.some((value) => skillToken(value) === skill);
+  });
+}
+
+function isIssueAnalysisSession(session: AgentSession) {
+  const payload = session.payload || {};
+  const markers = [
+    session.automation,
+    objectValue(payload, "automation"),
+    objectValue(payload, "purpose"),
+    objectValue(payload, "workflow"),
+    objectValue(payload, "workflowKind"),
+    objectValue(payload, "taskKind"),
+    objectValue(payload, "sessionType"),
+    objectValue(payload, "analysisType"),
+  ];
+  if (markers.some(markerIndicatesIssueAnalysis)) return true;
+  return sessionUsesSkill(session, "think") && [session.command, ...markers].some(markerIndicatesIssueAnalysis);
+}
+
 function formatMentionPlaceholder(agents: AgentProfile[]) {
   if (agents.length === 0) return translate("issueDetail.composer.noAgentsPlaceholder");
   const mentions = agents.slice(0, 3).map((agent) => agent.mention).join(", ");
@@ -1891,15 +1957,25 @@ function IssueSessionsTab(props: { sessions: AgentSession[]; agents: AgentProfil
     <section className="grid gap-2">
       {sessions.map((session) => {
         const agent = sessionAgent(session, props.agents);
+        const isAnalysisSession = isIssueAnalysisSession(session);
+        const title = isAnalysisSession ? t("issueDetail.sessions.analysisTitle") : agent.name;
+        const sessionDetail = isAnalysisSession ? t("issueDetail.sessions.analysisDescription") : session.branch || session.workdir;
         return (
           <div id={issueSessionDomId(session.id)} key={session.id} className="scroll-mt-8 grid gap-1 rounded-[9px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <ActorMark actor={codexActor(agent.name)} size="sm" />
-              <span className="font-medium text-[13px] leading-5 text-[color:var(--text)]">{agent.name}</span>
+              <span className="font-medium text-[13px] leading-5 text-[color:var(--text)]">{title}</span>
               <StatusBadge value={session.status} />
+              {isAnalysisSession ? (
+                <span className="rounded-full bg-[color:var(--block)] px-2 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted-strong)]">
+                  {t("issueDetail.sessions.thinkSkill")}
+                </span>
+              ) : null}
               {session.sourceCommitSha ? <span className="font-mono text-[11px] text-[color:var(--faint)]">deploy {session.sourceCommitSha.slice(0, 12)}</span> : null}
             </div>
-            <div className="min-w-0 break-all font-mono text-[12px] leading-5 text-[color:var(--muted)]">{session.branch || session.workdir}</div>
+            <div className={cn("min-w-0 text-[12px] leading-5 text-[color:var(--muted)]", isAnalysisSession ? "" : "break-all font-mono")}>
+              {sessionDetail}
+            </div>
             <TimeMeta value={session.updatedAt || session.createdAt} />
           </div>
         );
@@ -3562,6 +3638,21 @@ function DeployTimelineItem(props: {
   );
 }
 
+function AnalysisSessionNote(props: { compact?: boolean }) {
+  const { t } = useMspaceTranslation();
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-start gap-2 rounded-[8px] bg-[color:var(--paper)] px-2.5 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]",
+        props.compact ? "mt-2 py-1.5" : "mt-2",
+      )}
+    >
+      <WandSparkles data-icon className="mt-0.5 shrink-0 text-[color:var(--muted-strong)]" />
+      <span>{t("issueDetail.timeline.analysisUsesThink")}</span>
+    </div>
+  );
+}
+
 function SessionTimelineItem(props: {
   session: AgentSession;
   logs: LogLine[];
@@ -3579,8 +3670,16 @@ function SessionTimelineItem(props: {
   const agent = sessionAgent(session, props.agents);
   const agentMessage = latestAgentMessage(logs);
   const isActive = ["queued", "running"].includes(session.status);
+  const isAnalysisSession = isIssueAnalysisSession(session);
+  const sessionDisplayName = isAnalysisSession ? t("issueDetail.timeline.issueAnalysis") : agent.name;
   const isEmptyCancelledSession = session.status === "cancelled" && !agentMessage && props.changes.length === 0;
-  const title = isActive ? t("issueDetail.timeline.agentIsWorking", { name: agent.name }) : agent.name;
+  const title = isAnalysisSession
+    ? isActive
+      ? t("issueDetail.timeline.analysisIsRunning")
+      : t("issueDetail.timeline.issueAnalysis")
+    : isActive
+      ? t("issueDetail.timeline.agentIsWorking", { name: agent.name })
+      : agent.name;
   if (isEmptyCancelledSession && props.hasStopAction) {
     return null;
   }
@@ -3591,7 +3690,7 @@ function SessionTimelineItem(props: {
         actor={codexActor(agent.name)}
         title={
           <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
-            <span className="font-semibold text-[color:var(--text)]">{agent.name}</span>
+            <span className="font-semibold text-[color:var(--text)]">{sessionDisplayName}</span>
             <span className="font-normal text-[color:var(--muted)]">{t("issueDetail.timeline.runWasCancelled")}</span>
             <StatusBadge value="cancelled" className="h-5 px-2 py-0 text-[11px]" />
           </span>
@@ -3611,10 +3710,17 @@ function SessionTimelineItem(props: {
       {isActive ? (
         <div>
           <div className="flex min-w-0 items-center justify-between gap-3">
-            <WorkingSessionLine status={session.status} agentName={agent.name} runtimeMode={session.runtimeMode} agentStatus={session.agentStatus} runtimeTaskId={session.runtimeTaskId} />
+            <WorkingSessionLine
+              status={session.status}
+              agentName={sessionDisplayName}
+              runtimeMode={session.runtimeMode}
+              agentStatus={session.agentStatus}
+              runtimeTaskId={isAnalysisSession ? undefined : session.runtimeTaskId}
+            />
             {props.onStop ? <StopSessionButton isStopping={props.isStopping} onStop={props.onStop} /> : null}
           </div>
           {props.stopError ? <div className="mt-1 text-[12px] leading-5 text-[color:var(--danger)]">{props.stopError.message}</div> : null}
+          {isAnalysisSession ? <AnalysisSessionNote /> : null}
           {agentMessage ? (
             <RichText agents={props.agents} basePath={session.workdir} className="mt-3 rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
               {agentMessage}
@@ -3628,8 +3734,9 @@ function SessionTimelineItem(props: {
             <SessionStatusMark status={session.status} />
           </div>
 
+          {isAnalysisSession ? <AnalysisSessionNote compact /> : null}
           {agentMessage ? (
-            <RichText agents={props.agents} basePath={session.workdir} className="mt-2">
+            <RichText agents={props.agents} basePath={session.workdir} className={cn("mt-2", isAnalysisSession ? "pt-1" : "")}>
               {agentMessage}
             </RichText>
           ) : props.isSnapshotPending ? (

@@ -1,6 +1,6 @@
 # mspace API Integration Guide
 
-> Status: server-owned local MVP API guide, updated 2026-06-05
+> Status: server-owned local MVP API guide, updated 2026-07-07
 
 This guide covers the current server control-plane API used by the desktop and workers. The control plane normally runs on `http://127.0.0.1:8787`.
 
@@ -42,10 +42,10 @@ The server control plane owns:
 - local password auth, optional GitHub auth, and mspace `msp_...` sessions;
 - users, workspaces, members, invitations, and identity;
 - projects, project runbooks, project test cases, test case revisions, test case suggestions, test plans, test runs, issues, child tasks, comments, reactions, labels, Inbox events, and per-user receipts;
-- workspace settings, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
+- workspace settings, agent profiles, built-in workflow skill catalog, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
 - runtime worker registration, worker heartbeat/capability state, runtime task queue state, task events, task logs, cancellation, and task results.
 
-The desktop owns native shell behavior, local UI state, file pickers, and opening browser auth flows. Workers own execution: repository cache, per-session workdir, Codex app-server lifecycle, command execution, source capture, artifacts, and logs while running. The server never starts Codex and never requires Codex credentials; it only queues Codex-capable runtime tasks and reconciles worker results.
+The desktop owns native shell behavior, local UI state, file pickers, and opening browser auth flows. Workers own execution: repository cache, per-session workdir, Codex app-server lifecycle, command execution, source capture, artifacts, and logs while running. The server never starts Codex and never requires Codex credentials; it only queues Codex-capable runtime tasks, attaches any required server-owned skill bundles, and reconciles worker results.
 
 ## Auth And Workspace APIs
 
@@ -437,6 +437,7 @@ Use `status:"failed"` plus `failureSummary` when setup cannot safely complete. T
 | `GET` | `/api/workspaces/{workspaceID}/workspace/settings` | Read workspace automation settings. |
 | `PUT` | `/api/workspaces/{workspaceID}/workspace/settings` | Update workspace automation settings. |
 | `GET` | `/api/workspaces/{workspaceID}/agents` | List mentionable agent profiles. |
+| `GET` | `/api/workspaces/{workspaceID}/skills` | List server-managed built-in workflow skill metadata. |
 | `POST` | `/api/workspaces/{workspaceID}/agents` | Create an agent profile. |
 | `PUT` | `/api/workspaces/{workspaceID}/agents/{agentID}` | Update an agent profile. |
 | `GET` | `/api/workspaces/{workspaceID}/environments` | List Kubernetes and virtual machine Environments. Kubernetes rows are projected from cluster compatibility records. |
@@ -560,6 +561,8 @@ The server validates that the issue has an attached project, that `runtimeMode` 
 
 When accepted, the server snapshots issue/project/runbook/comment/child issue/label context into the runtime task payload and returns the server `AgentSession`. The worker prepares its own repo cache and workdir, appends logs to `runtime_task_logs`, and reports Codex thread/turn ids plus source branch and commit metadata in `runtime_tasks.result`. Server Issue Detail includes matching sessions by mapping `runtime_tasks` with `kind="agent_session"` back into its `sessions` field, and the Commits tab derives change nodes from task results.
 
+New project-backed issues may also create an automatic `agent_session` with payload `automation:"issue_analysis"` when a matching Codex worker is online. That payload is queued before type triage, includes `sandbox:"read-only"`, `sourceCapture:false`, and the pinned server-owned `think` skill bundle in `requiredSkills`; workers materialize the skill under the session artifact directory and expose `MSPACE_SESSION_SKILLS_DIR` to Codex. Issue creation does not fail when the analysis cannot be queued, and server reconciliation ignores source/test/deploy/review artifacts from this automation.
+
 ## Test Environment Flow
 
 Start a test deploy from captured source evidence:
@@ -635,7 +638,7 @@ The server rejects runtime worker registration and runtime task creation when th
 
 Desktop personal workers use the same token endpoints, but the user normally never sees the raw credential. Electron creates a 12-hour personal worker credential, writes it to an Electron user-data token file, renews it before expiry, and revokes the replaced credential after a short grace period. The worker supports `MSPACE_RUNTIME_TOKEN_FILE` and rereads that file for runtime API calls, so token renewal is designed to be invisible to personal users.
 
-Workspace Settings lists runtime tasks as an operations surface: task purpose, linked Issue title when available, status, worker, update time, and detail/cancel actions. Agent-session task links include `sessionId` so Issue Detail can scroll to the relevant session card. Pure protocol tasks such as `issue_type_triage` may only open the Issue page because they do not have a session card. Raw protocol payloads remain in expanded details instead of the primary row.
+Workspace Settings lists runtime tasks as an operations surface: task purpose, linked Issue title when available, status, worker, update time, and detail/cancel actions. Agent-session task links include `sessionId` so Issue Detail can scroll to the relevant session card. Pure protocol tasks such as `issue_type_triage` may only open the Issue page because they do not have a session card. Protocol payloads remain in expanded details instead of the primary row, but server-provided skill bundles are redacted to compact references on workspace user APIs; full bundled files are returned only through worker claim/get endpoints.
 
 The runtime task list endpoint returns `{ tasks, total, limit, offset, statusCounts }`. Use `limit` and `offset` for paged UI lists; the server clamps invalid limits and keeps the result ordered by newest task first. Desktop clients normalize older array responses defensively so a renderer update does not crash while a local or remote server is still restarting onto the paged contract.
 

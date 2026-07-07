@@ -56,6 +56,15 @@ func (s *PostgresStore) UpdateWorkspaceSettings(ctx Context, userID, workspaceID
 	return scanWorkspaceSettings(row)
 }
 
+func (s *PostgresStore) ListSkills(ctx Context, userID, workspaceID string) ([]SkillCatalogItem, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
+		return nil, err
+	}
+	return listBuiltinSkills()
+}
+
 func ensureWorkspaceSettings(ctx context.Context, q queryer, workspaceID string) (WorkspaceSettings, error) {
 	row := q.QueryRow(ctx, `
 		INSERT INTO workspace_settings (workspace_id)
@@ -2358,6 +2367,12 @@ func (s *PostgresStore) reconcileAgentSessionRuntimeResult(ctx context.Context, 
 	if err != nil {
 		return err
 	}
+	if runtimeTaskAutomation(task) == issueAnalysisAutomation {
+		if task.Status == "failed" || task.Status == "cancelled" {
+			return s.storeRuntimeSessionFailure(ctx, q, task, session)
+		}
+		return nil
+	}
 	if task.Status == "cancelled" {
 		if err := s.markIssueTestEnvironmentInterrupted(ctx, q, task); err != nil {
 			return err
@@ -2407,7 +2422,7 @@ func (s *PostgresStore) reconcileAgentSessionRuntimeResult(ctx context.Context, 
 }
 
 func (s *PostgresStore) queueAutomaticTestDeployIfEnabled(ctx context.Context, q queryer, task RuntimeTask) error {
-	if strings.TrimSpace(task.IssueID) == "" || isIssueTestDeployTask(task) || runtimeTaskIsDryRun(task) {
+	if strings.TrimSpace(task.IssueID) == "" || isIssueTestDeployTask(task) || runtimeTaskAutomation(task) == issueAnalysisAutomation || runtimeTaskIsDryRun(task) {
 		return nil
 	}
 	source := runtimeTaskSource(task)

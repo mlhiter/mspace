@@ -775,6 +775,31 @@ export interface AgentProfile {
   updatedAt: string;
 }
 
+export interface SkillCatalogItem {
+  slug: string;
+  name: string;
+  description: string;
+  source: string;
+  revision: string;
+  contentHash: string;
+  builtIn: boolean;
+  fileCount: number;
+}
+
+export type AgentSessionSkillReference =
+  | string
+  | {
+      id?: string;
+      key?: string;
+      name?: string;
+      slug?: string;
+      skill?: string;
+      source?: string;
+      revision?: string;
+      contentHash?: string;
+      builtIn?: boolean;
+    };
+
 export interface AgentSession {
   id: string;
   issueId: string;
@@ -793,6 +818,10 @@ export interface AgentSession {
   sourceSessionId: string;
   sourceCommitSha: string;
   triggerCommentId: string;
+  automation?: string;
+  payload?: Record<string, unknown>;
+  requiredSkills?: AgentSessionSkillReference[];
+  skills?: AgentSessionSkillReference[];
   cleanupStatus: string;
   cleanedAt: string;
   createdAt: string;

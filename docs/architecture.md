@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: server-owned runtime and test-module surfaces, updated 2026-06-05
+> Status: server-owned runtime, workflow skill, and test-module surfaces, updated 2026-07-07
 
 ## Current Implementation Snapshot
 
@@ -33,6 +33,8 @@ Workers own:
 - streaming logs and final results back to the server.
 
 The server does not own any Codex process or credential lifecycle. It queues tasks that require `{"codex":true}`, records task events/logs/results, and reconciles final output back into product state. The Codex CLI, `CODEX_HOME`, `auth.json`, and `config.toml` belong to worker runtimes only.
+
+The server does own the built-in workflow skill catalog. The current catalog is embedded from `mlhiter/skills` under `server/internal/control/builtin_skills/` and exposed as lightweight metadata through `/api/workspaces/{workspaceID}/skills`. When a product flow requires a skill, the server pins the skill bundle and includes the files in the runtime task payload. Workers materialize those files into the session artifact directory and point Codex at that session-scoped skill root; workers do not choose local installed skills as the source of truth.
 
 ## Runtime Flow
 
@@ -83,6 +85,24 @@ Server
 ```
 
 Failed, cancelled, or invalid triage task results mark the issue triage as failed rather than falling back to keyword classification.
+
+Automatic issue analysis is a separate agent-session automation, not part of type triage:
+
+```text
+Issue create
+  -> server writes the issue
+  -> if the issue has a project and a matching Codex worker is online, synchronously queue one agent_session automation="issue_analysis"
+Server
+  -> attaches the built-in think skill bundle from the server catalog
+  -> uses sandbox="read-only" and sourceCapture=false
+Worker
+  -> materializes the skill under <artifact-dir>/skills
+  -> starts codex app-server in the normal session workdir
+Codex
+  -> reads the session-scoped think skill and produces read-only analysis
+```
+
+The analysis session is conservative: it is skipped when the issue has no project, no active worker, or an existing `issue_analysis` task. It is queued before asynchronous type triage, runs with a read-only sandbox, disables worker source capture, and server reconciliation ignores source/test/deploy/review artifacts from that automation. It should not edit files, create commits, or replace the normal human-triggered implementation turn. The UI presents it as `Issue analysis` so the first next-step analysis does not require a manual `@codex` comment.
 
 ## Test Module Flow
 
@@ -151,9 +171,10 @@ Main server-owned state groups:
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
 - Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`, and `test_artifacts`. Cases and suggestions are project-level. Plans and runs are workspace-level orchestration records that keep a primary project for compatibility and preserve per-case/per-item project identity. Plans can store lightweight setup steps; runs freeze setup text plus setup status, setup issue/session, setup result, and run context. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
-- Runtime surfaces: `workspace_settings`, `agent_profiles`, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`.
+- Runtime surfaces: `workspace_settings`, `agent_profiles`, embedded built-in workflow skill catalog, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`.
 - Runtime queue: `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, `runtime_task_logs`.
 - Issue type triage is represented as `runtime_tasks.kind="issue_type_triage"` and reconciled when the task reaches a final state.
+- Automatic issue analysis is represented as `runtime_tasks.kind="agent_session"` with payload `automation="issue_analysis"`, `sandbox="read-only"`, `sourceCapture=false`, and a required server-owned `think` skill bundle.
 
 Issue Detail should treat this server state as authoritative. Do not create a second local issue/session/environment store.
 
@@ -186,7 +207,7 @@ Server route groups:
 - project and runbook APIs;
 - project test case, case revision, case proposal, test plan, and test run APIs;
 - issue/comment/task/label/reaction APIs;
-- workspace setting, agent profile, environment, and cluster compatibility APIs;
+- workspace setting, agent profile, skill catalog, environment, and cluster compatibility APIs;
 - issue test environment deploy/cleanup/retain/resources/probe APIs;
 - issue handoff create/refresh APIs;
 - session creation/detail/cancellation APIs;
@@ -277,7 +298,7 @@ Team invitation setup follows the same user-centered rule. Workspace Settings cr
 
 Open account registration creates a personal workspace and a personal runtime boundary. Only server-admin logins configured by `MSPACE_SERVER_ADMIN_LOGINS` or `MSPACE_BOOTSTRAP_ADMIN_LOGIN` can create team workspaces. Team server runners are reachable only through membership in a team workspace, and runtime worker/task mode must match the workspace kind.
 
-Tests stays focused on project-level cases/suggestions plus workspace-level plans, runs, retry, and run review records. Agents stays focused on mentionable Codex-backed role behavior. Environments stays focused on reusable Kubernetes and VM validation targets. Projects stays focused on repository metadata and project runbooks.
+Tests stays focused on project-level cases/suggestions plus workspace-level plans, runs, retry, and run review records. Agents stays focused on mentionable Codex-backed role behavior plus visibility into server-managed workflow skills. Environments stays focused on reusable Kubernetes and VM validation targets. Projects stays focused on repository metadata and project runbooks. Built-in workflow skills are an execution contract for mspace product flows, not a generic user skill marketplace.
 
 The desktop visual language is a quiet Notion-like workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, restrained icon actions, and no decorative dashboard language.
 

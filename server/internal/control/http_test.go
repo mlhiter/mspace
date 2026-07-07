@@ -3,7 +3,9 @@ package control
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -3199,6 +3201,284 @@ func TestIssueTypeTriageRuntimeTaskResultAppliesLabel(t *testing.T) {
 	}
 }
 
+func TestListSkillsReturnsBuiltinThink(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "skills-user",
+		Login:          "skills-user",
+		Name:           "Skills User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/skills", nil)
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("list skills status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var skills []SkillCatalogItem
+	if err := json.Unmarshal(recorder.Body.Bytes(), &skills); err != nil {
+		t.Fatalf("parse skills: %v", err)
+	}
+	var think SkillCatalogItem
+	for _, skill := range skills {
+		if skill.Slug == issueAnalysisSkillSlug {
+			think = skill
+			break
+		}
+	}
+	if think.Slug != issueAnalysisSkillSlug || !think.BuiltIn || think.Source != builtinSkillSource || think.FileCount == 0 || !strings.HasPrefix(think.ContentHash, "sha256:") || think.Revision == "" {
+		t.Fatalf("expected built-in think skill, got %+v from %+v", think, skills)
+	}
+}
+
+func TestCreateIssueQueuesAutomaticThinkAnalysis(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "issue-analysis-user",
+		Login:          "issue-analysis-user",
+		Name:           "Issue Analysis User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	tokenResult, worker := registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true,"docker":true,"kubectl":true}`)
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "issue-analysis")
+	settings, err := store.UpdateWorkspaceSettings(context.Background(), user.ID, workspaceID, WorkspaceSettingsInput{AutoDeployTestEnvironment: true})
+	if err != nil {
+		t.Fatalf("enable auto deploy: %v", err)
+	}
+	if !settings.AutoDeployTestEnvironment {
+		t.Fatalf("expected auto deploy setting enabled")
+	}
+	clusterResult, err := store.ImportKubeconfigs(context.Background(), user.ID, workspaceID, []string{"/tmp/mspace-issue-analysis-kubeconfig"})
+	if err != nil {
+		t.Fatalf("import kubeconfig: %v", err)
+	}
+	if len(clusterResult.Imported) != 1 {
+		t.Fatalf("expected one imported cluster, got %+v", clusterResult)
+	}
+	project, err = store.UpdateProject(context.Background(), user.ID, workspaceID, project.ID, ProjectInput{
+		Name:                 project.Name,
+		SourceType:           "local",
+		RepoPath:             project.RepoPath,
+		DefaultBranch:        project.DefaultBranch,
+		DefaultClusterID:     clusterResult.Imported[0].ID,
+		DefaultEnvironmentID: clusterResult.Imported[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("attach default cluster: %v", err)
+	}
+
+	createRecorder := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues", strings.NewReader(`{"projectId":"`+project.ID+`","body":"After creating an issue, analyze what Codex should do next."}`))
+	createReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createRecorder, createReq)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create issue status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created struct {
+		IssueID string `json:"issueId"`
+	}
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("parse created issue: %v", err)
+	}
+	analysisTask := waitForIssueAnalysisTask(t, store, user.ID, workspaceID, created.IssueID)
+	if analysisTask.Priority != 10 || analysisTask.Kind != "agent_session" || analysisTask.SessionID == "" {
+		t.Fatalf("unexpected analysis task: %+v", analysisTask)
+	}
+	if !strings.Contains(string(analysisTask.RequiredCapabilities), `"codex":true`) {
+		t.Fatalf("analysis task should require codex, got %s", analysisTask.RequiredCapabilities)
+	}
+	var payload struct {
+		Automation     string               `json:"automation"`
+		Prompt         string               `json:"prompt"`
+		Sandbox        string               `json:"sandbox"`
+		SourceCapture  bool                 `json:"sourceCapture"`
+		RequiredSkills []RuntimeSkillBundle `json:"requiredSkills"`
+	}
+	if err := json.Unmarshal(analysisTask.Payload, &payload); err != nil {
+		t.Fatalf("parse analysis payload: %v", err)
+	}
+	if payload.Automation != issueAnalysisAutomation || !strings.Contains(payload.Prompt, "read-only planning pass") {
+		t.Fatalf("unexpected analysis payload: %+v", payload)
+	}
+	if payload.SourceCapture {
+		t.Fatalf("issue analysis must disable source capture, got payload %+v", payload)
+	}
+	if payload.Sandbox != "read-only" {
+		t.Fatalf("issue analysis must run with read-only sandbox, got %q", payload.Sandbox)
+	}
+	if len(payload.RequiredSkills) != 1 || payload.RequiredSkills[0].Slug != issueAnalysisSkillSlug || len(payload.RequiredSkills[0].Files) == 0 {
+		t.Fatalf("expected think skill bundle, got %+v", payload.RequiredSkills)
+	}
+	if payload.RequiredSkills[0].ContentHash == "" || !strings.HasPrefix(payload.RequiredSkills[0].ContentHash, "sha256:") {
+		t.Fatalf("expected bundle content hash, got %+v", payload.RequiredSkills[0])
+	}
+	if got, want := payload.RequiredSkills[0].ContentHash, workerCompatibleSkillBundleContentHash(payload.RequiredSkills[0].Files); got != want {
+		t.Fatalf("bundle content hash must match worker digest: got %s want %s", got, want)
+	}
+
+	detail, err := store.GetIssue(context.Background(), user.ID, workspaceID, created.IssueID)
+	if err != nil {
+		t.Fatalf("get issue: %v", err)
+	}
+	if len(detail.Sessions) == 0 || detail.Sessions[0].Automation != issueAnalysisAutomation || len(detail.Sessions[0].RequiredSkills) != 1 || detail.Sessions[0].RequiredSkills[0].Slug != issueAnalysisSkillSlug {
+		t.Fatalf("expected analysis session metadata, got %+v", detail.Sessions)
+	}
+	if strings.Contains(string(detail.Sessions[0].Payload), "SKILL.md") {
+		t.Fatalf("session payload response should not expose full skill bundle: %s", detail.Sessions[0].Payload)
+	}
+	listRecorder := httptest.NewRecorder()
+	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/runtime-tasks?limit=20", nil)
+	listReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(listRecorder, listReq)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list runtime tasks status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	if strings.Contains(listRecorder.Body.String(), `"files":[`) || strings.Contains(listRecorder.Body.String(), `"content":`) {
+		t.Fatalf("runtime task list should redact full skill bundle: %s", listRecorder.Body.String())
+	}
+	var taskList RuntimeTaskListResult
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &taskList); err != nil {
+		t.Fatalf("parse runtime task list: %v", err)
+	}
+	foundRedactedAnalysis := false
+	for _, task := range taskList.Tasks {
+		if task.IssueID != created.IssueID || task.Kind != "agent_session" || runtimeTaskAutomation(task) != issueAnalysisAutomation {
+			continue
+		}
+		var publicPayload struct {
+			RequiredSkills []AgentSessionSkillReference `json:"requiredSkills"`
+		}
+		if err := json.Unmarshal(task.Payload, &publicPayload); err != nil {
+			t.Fatalf("parse redacted task payload: %v", err)
+		}
+		if len(publicPayload.RequiredSkills) != 1 || publicPayload.RequiredSkills[0].Slug != issueAnalysisSkillSlug {
+			t.Fatalf("expected compact skill reference, got %s", task.Payload)
+		}
+		foundRedactedAnalysis = true
+	}
+	if !foundRedactedAnalysis {
+		t.Fatalf("expected redacted analysis task in runtime task list, got %+v", taskList.Tasks)
+	}
+	if err := server.enqueueIssueAnalysis(context.Background(), user.ID, workspaceID, created.IssueID); !errors.Is(err, errIssueAnalysisNotNeeded) {
+		t.Fatalf("duplicate issue analysis should be skipped, got %v", err)
+	}
+	waitForIssueTypeTriageTask(t, store, user.ID, workspaceID, created.IssueID)
+	claimRecorder := httptest.NewRecorder()
+	claimReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
+	claimReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(claimRecorder, claimReq)
+	if claimRecorder.Code != http.StatusOK {
+		t.Fatalf("claim runtime task status=%d body=%s", claimRecorder.Code, claimRecorder.Body.String())
+	}
+	var claimed RuntimeTask
+	if err := json.Unmarshal(claimRecorder.Body.Bytes(), &claimed); err != nil {
+		t.Fatalf("parse claimed task: %v", err)
+	}
+	if claimed.ID != analysisTask.ID || runtimeTaskAutomation(claimed) != issueAnalysisAutomation {
+		t.Fatalf("expected worker to claim issue analysis first, got %+v", claimed)
+	}
+	maliciousResult := `{"status":"completed","result":{"exitCode":0,"source":{"commitSha":"9999999999999999999999999999999999999999","shortCommitSha":"999999999999","branch":"fix/should-not-capture","subject":"fix injected change","filesChanged":1,"changes":[],"diffPreview":"diff --git a/app.go b/app.go"},"testCaseProposals":{"summary":"should be ignored","proposals":[{"type":"create","title":"Injected case","proposedCase":{"title":"Injected case","area":"security","priority":"p1","status":"ready","preconditions":"none","steps":[{"action":"do it","expected":"done"}],"expectedResult":"done","tags":["injected"]}}]}}}`
+	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, analysisTask.SessionID, maliciousResult); err != nil {
+		t.Fatalf("complete issue analysis with injected artifacts: %v", err)
+	}
+	proposals, err := store.ListProjectTestCaseProposals(context.Background(), user.ID, workspaceID, project.ID, TestCaseProposalListOptions{})
+	if err != nil {
+		t.Fatalf("list proposals: %v", err)
+	}
+	if len(proposals) != 0 {
+		t.Fatalf("issue analysis must not store test-case proposals, got %+v", proposals)
+	}
+	tasksAfterCompletion, err := store.ListRuntimeTasks(context.Background(), user.ID, workspaceID)
+	if err != nil {
+		t.Fatalf("list tasks after completion: %v", err)
+	}
+	for _, task := range tasksAfterCompletion {
+		if task.ID != analysisTask.ID && isAutoDeployTestEnvironmentTask(task) {
+			t.Fatalf("issue analysis must not queue auto deploy, got %+v", task)
+		}
+	}
+}
+
+func TestCreateRuntimeTaskRejectsClientSkillBundles(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "client-skill-user",
+		Login:          "client-skill-user",
+		Name:           "Client Skill User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{
+		"kind":"noop",
+		"runtimeMode":"personal",
+		"requiredCapabilities":{},
+		"payload":{"requiredSkills":[{"slug":"think","files":[{"path":"SKILL.md","content":"unsafe"}]}]}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("create runtime task status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "skill bundles are server-managed") {
+		t.Fatalf("expected server-managed skill bundle error, got %s", recorder.Body.String())
+	}
+}
+
+func TestIssueAnalysisSkipsIssuesWithoutProject(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "issue-analysis-no-project-user",
+		Login:          "issue-analysis-no-project-user",
+		Name:           "Issue Analysis No Project User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{Body: "No project yet"})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	if err := server.enqueueIssueAnalysis(context.Background(), user.ID, workspaceID, issueID); !errors.Is(err, errIssueAnalysisNotNeeded) {
+		t.Fatalf("analysis without a project should be skipped, got %v", err)
+	}
+}
+
 func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
@@ -4760,6 +5040,57 @@ func findAutoDeployTask(t *testing.T, store *MemoryStore, userID, workspaceID, i
 	}
 	t.Fatalf("expected auto deploy task, got %+v", tasks)
 	return RuntimeTask{}
+}
+
+func waitForIssueAnalysisTask(t *testing.T, store *MemoryStore, userID, workspaceID, issueID string) RuntimeTask {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		tasks, err := store.ListRuntimeTasks(context.Background(), userID, workspaceID)
+		if err != nil {
+			t.Fatalf("list tasks: %v", err)
+		}
+		for _, task := range tasks {
+			if task.IssueID == issueID && task.Kind == "agent_session" && runtimeTaskAutomation(task) == issueAnalysisAutomation {
+				return task
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected issue analysis task, got %+v", tasks)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func waitForIssueTypeTriageTask(t *testing.T, store *MemoryStore, userID, workspaceID, issueID string) RuntimeTask {
+	t.Helper()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		tasks, err := store.ListRuntimeTasks(context.Background(), userID, workspaceID)
+		if err != nil {
+			t.Fatalf("list tasks: %v", err)
+		}
+		for _, task := range tasks {
+			if task.IssueID == issueID && task.Kind == "issue_type_triage" {
+				return task
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected issue type triage task, got %+v", tasks)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func workerCompatibleSkillBundleContentHash(files []RuntimeSkillFile) string {
+	hash := sha256.New()
+	for _, file := range files {
+		_, _ = hash.Write([]byte(file.Path))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(strings.TrimPrefix(strings.ToLower(strings.TrimSpace(file.SHA256)), "sha256:")))
+		_, _ = hash.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 func runtimeTaskBySession(store *MemoryStore, workspaceID, sessionID string) (RuntimeTask, error) {

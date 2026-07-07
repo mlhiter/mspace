@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-07",
+    title: "Automatic issue analysis with server-managed skills",
+    summary:
+      "mspace now starts the first project-backed issue analysis automatically when a Codex worker is ready, using built-in workflow skills owned by the server.",
+    items: [
+      "Added a server-owned built-in workflow skill catalog seeded from `mlhiter/skills`, with lightweight skill metadata available to the desktop.",
+      "Queued one read-only `issue_analysis` Codex session after issue creation when the issue has a project and a matching worker is online, so users do not need an immediate manual `@codex` comment just to get first-pass analysis.",
+      "Passed pinned skill bundles to workers in the runtime task payload, then materialized them into the session artifact directory instead of relying on worker-local installed skills; workspace user APIs expose only compact skill references.",
+      "Updated the Agents and Issue Detail surfaces so server-managed workflow skills and analysis sessions are visible without becoming a generic skill marketplace.",
+    ],
+  },
+  {
     date: "2026-07-06",
     title: "Account settings for profiles",
     summary:

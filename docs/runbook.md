@@ -1,6 +1,6 @@
 # mspace Runbook
 
-> Status: server-owned local MVP operations guide, updated 2026-06-05
+> Status: server-owned local MVP operations guide, updated 2026-07-07
 
 ## Local Data
 
@@ -14,6 +14,8 @@ The product and runtime state for signed-in workspaces lives in the server store
 | `/var/lib/mspace-worker/repos/<cache-key>` | Repository cache inside Docker-backed workers. |
 | `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>` | Per-session workdir inside Docker-backed workers. |
 | `<worker-root>/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory. |
+| `<artifact-dir>/skills/` | Session-scoped server-provided workflow skill bundles. Workers recreate this directory from task payloads and set `MSPACE_SESSION_SKILLS_DIR`. |
+| `<artifact-dir>/skills/manifest.json` | Manifest of materialized skill bundle names, revisions, hashes, and files for the current session. |
 | `<artifact-dir>/test-environment.json` | Optional deploy/test artifact with preview values. |
 | `<artifact-dir>/review-evidence.json` | Optional review artifact for commands, tests, build/deploy result, summary, risks, and follow-ups. |
 | `<artifact-dir>/test-case-proposals.json` | Optional Codex case suggestion artifact reconciled into project Case suggestions. |
@@ -82,11 +84,11 @@ export MSPACE_RUNTIME_TOKEN="msw_..."
 pnpm worker
 ```
 
-The worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks from server payloads, and can execute `agent_session` tasks by preparing its own repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, then starting `codex app-server --listen stdio://` there. Workspace Settings shows these tasks as issue-linked operational rows and keeps protocol payloads, results, events, and logs in expandable details.
+The worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks from server payloads, and can execute `agent_session` tasks by preparing its own repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, then starting `codex app-server --listen stdio://` there. If an `agent_session` payload carries `requiredSkills`, the worker verifies file paths and hashes, writes the skill bundle under `<artifact-dir>/skills/`, and injects `MSPACE_SESSION_SKILLS_DIR` plus `MSPACE_SESSION_SKILL_MANIFEST` without changing global Codex configuration. Workspace Settings shows these tasks as issue-linked operational rows and keeps protocol payloads, results, events, and logs in expandable details.
 
 Codex configuration and authentication belong to worker runtimes. The server control plane queues work and applies runtime results, but it does not install Codex or mount Codex credentials.
 
-Issue title suggestion is deterministic server fallback only. Issue type triage is LLM-backed, but it still runs through the worker queue as `runtime_tasks.kind="issue_type_triage"` with `requiredCapabilities={"codex":true}`. The server validates the worker result before writing the type label.
+Issue title suggestion is deterministic server fallback only. Issue type triage is LLM-backed, but it still runs through the worker queue as `runtime_tasks.kind="issue_type_triage"` with `requiredCapabilities={"codex":true}`. The server validates the worker result before writing the type label. New project-backed issues can also queue one read-only `agent_session` automation marked `issue_analysis` before type triage starts when a matching Codex worker is already online; that task receives the server-owned `think` skill bundle, runs with a read-only sandbox and source capture disabled, and produces first-pass analysis without requiring a manual `@codex` comment. If no project or worker is available, issue creation still succeeds and the analysis task is skipped.
 
 ## Tests Workflow
 
@@ -133,6 +135,8 @@ Workspace Settings has two automation switches:
 
 - Source commit capture is always on and records source changes as issue change nodes.
 - `autoDeployTestEnvironment` is opt-in and queues a deploy/test session after a successful source session captures a commit.
+
+Issue-created `issue_analysis` is not a Workspace Settings toggle in this version. It is a conservative product default for project-backed issues with an active Codex worker. The session is read-only planning and should not edit files, commit, deploy, or create PRs. The worker does not capture source for this automation, and the server ignores source/test/deploy/review artifacts if they appear in the result.
 
 Automatic test deploy uses the same `agent_session` path as a manual test deploy. It is intentionally conservative: the triggering task must be completed, non-dry-run, and not itself a deploy/test task; it must have a source commit and no source error; the issue must have an attached project; Kubernetes Environment and deploy settings must resolve; no other agent session can be active for the issue; and a matching online Codex worker must exist. If no worker is connected or deploy settings cannot be resolved, the server adds a compact system comment explaining why the deploy was skipped.
 

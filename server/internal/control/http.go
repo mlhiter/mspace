@@ -153,6 +153,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/workspaces/{workspaceID}/issue-label-definitions", s.handleListIssueLabelDefinitions)
 	r.Get("/api/workspaces/{workspaceID}/workspace/settings", s.handleGetWorkspaceSettings)
 	r.Put("/api/workspaces/{workspaceID}/workspace/settings", s.handleUpdateWorkspaceSettings)
+	r.Get("/api/workspaces/{workspaceID}/skills", s.handleListSkills)
 	r.Get("/api/workspaces/{workspaceID}/agents", s.handleListAgentProfiles)
 	r.Post("/api/workspaces/{workspaceID}/agents", s.handleCreateAgentProfile)
 	r.Put("/api/workspaces/{workspaceID}/agents/{agentID}", s.handleUpdateAgentProfile)
@@ -960,7 +961,7 @@ func (s *Server) handleCreateImportMappingTask(w http.ResponseWriter, r *http.Re
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, task)
+	writeJSON(w, http.StatusCreated, publicRuntimeTask(task))
 }
 
 func (s *Server) handleImportProjectTestCases(w http.ResponseWriter, r *http.Request) {
@@ -1708,6 +1709,19 @@ func (s *Server) handleUpdateWorkspaceSettings(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, settings)
 }
 
+func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	skills, err := s.store.ListSkills(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, skills)
+}
+
 func (s *Server) handleListAgentProfiles(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.authenticate(w, r)
 	if !ok {
@@ -1994,7 +2008,17 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	s.startIssueTypeTriage(user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), issueID)
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	if err := s.enqueueIssueAnalysis(r.Context(), user.ID, workspaceID, issueID); err != nil {
+		if !errors.Is(err, errIssueAnalysisNotNeeded) {
+			slog.Warn("failed to enqueue issue analysis", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
+		}
+	} else if persistent, ok := s.store.(interface{ Persist() error }); ok {
+		if err := persistent.Persist(); err != nil {
+			slog.Warn("failed to persist issue analysis state", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
+		}
+	}
+	s.startIssueTypeTriage(user.ID, workspaceID, issueID)
 	writeJSON(w, http.StatusCreated, map[string]string{"issueId": issueID})
 }
 
@@ -2094,7 +2118,7 @@ func (s *Server) handleCancelAgentSession(w http.ResponseWriter, r *http.Request
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, http.StatusOK, publicRuntimeTask(task))
 }
 
 func (s *Server) handleStartIssueTestDeploy(w http.ResponseWriter, r *http.Request) {
@@ -2513,13 +2537,17 @@ func (s *Server) handleCreateRuntimeTask(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if err := rejectClientRuntimeTaskSkillBundles(input.Payload); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
 	task, err := s.store.CreateRuntimeTask(r.Context(), user.ID, workspaceID, input)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, task)
+	writeJSON(w, http.StatusCreated, publicRuntimeTask(task))
 }
 
 func (s *Server) handleListRuntimeTasks(w http.ResponseWriter, r *http.Request) {
@@ -2536,11 +2564,11 @@ func (s *Server) handleListRuntimeTasks(w http.ResponseWriter, r *http.Request) 
 	}
 	if _, hasLimit := query["limit"]; !hasLimit {
 		if _, hasOffset := query["offset"]; !hasOffset {
-			writeJSON(w, http.StatusOK, tasks.Tasks)
+			writeJSON(w, http.StatusOK, publicRuntimeTasks(tasks.Tasks))
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, tasks)
+	writeJSON(w, http.StatusOK, publicRuntimeTaskListResult(tasks))
 }
 
 func parseRuntimeTaskListOptions(values url.Values) RuntimeTaskListOptions {
@@ -2635,7 +2663,7 @@ func (s *Server) handleCancelRuntimeTask(w http.ResponseWriter, r *http.Request)
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, task)
+	writeJSON(w, http.StatusOK, publicRuntimeTask(task))
 }
 
 func (s *Server) handleRegisterRuntimeWorker(w http.ResponseWriter, r *http.Request) {
@@ -2935,6 +2963,98 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func publicRuntimeTaskListResult(result RuntimeTaskListResult) RuntimeTaskListResult {
+	result.Tasks = publicRuntimeTasks(result.Tasks)
+	return result
+}
+
+func publicRuntimeTasks(tasks []RuntimeTask) []RuntimeTask {
+	if len(tasks) == 0 {
+		return tasks
+	}
+	redacted := make([]RuntimeTask, 0, len(tasks))
+	for _, task := range tasks {
+		redacted = append(redacted, publicRuntimeTask(task))
+	}
+	return redacted
+}
+
+func publicRuntimeTask(task RuntimeTask) RuntimeTask {
+	task.Payload = redactRuntimeTaskSkillPayload(task.Payload)
+	return task
+}
+
+func rejectClientRuntimeTaskSkillBundles(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	for _, key := range []string{"requiredSkills", "skills"} {
+		if _, ok := payload[key]; ok {
+			return errors.New("runtime task skill bundles are server-managed")
+		}
+	}
+	return nil
+}
+
+func redactRuntimeTaskSkillPayload(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return raw
+	}
+	changed := false
+	for _, key := range []string{"requiredSkills", "skills"} {
+		if value, ok := payload[key]; ok {
+			payload[key] = redactRuntimeTaskSkillReferences(value)
+			changed = true
+		}
+	}
+	if !changed {
+		return raw
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return raw
+	}
+	return json.RawMessage(body)
+}
+
+func redactRuntimeTaskSkillReferences(value any) any {
+	switch typed := value.(type) {
+	case []any:
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			result = append(result, redactRuntimeTaskSkillReference(item))
+		}
+		return result
+	default:
+		return redactRuntimeTaskSkillReference(value)
+	}
+}
+
+func redactRuntimeTaskSkillReference(value any) any {
+	record, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	reference := map[string]any{}
+	for _, key := range []string{"slug", "name", "source", "revision", "contentHash", "builtIn"} {
+		if field, ok := record[key]; ok {
+			reference[key] = field
+		}
+	}
+	if len(reference) == 0 {
+		return map[string]any{"redacted": true}
+	}
+	return reference
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {

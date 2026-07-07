@@ -1311,6 +1311,16 @@ func (s *MemoryStore) UpdateWorkspaceSettings(_ Context, userID, workspaceID str
 	return settings, nil
 }
 
+func (s *MemoryStore) ListSkills(_ Context, userID, workspaceID string) ([]SkillCatalogItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return nil, ErrNotFound
+	}
+	return listBuiltinSkills()
+}
+
 func (s *MemoryStore) ListAgentProfiles(_ Context, userID, workspaceID string) ([]AgentProfile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3456,7 +3466,7 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 		ProjectID:            project.ID,
 		Kind:                 "agent_session",
 		Status:               "queued",
-		Priority:             0,
+		Priority:             agentSessionPriority(normalized),
 		RuntimeMode:          normalized.RuntimeMode,
 		RequiredCapabilities: requiredCapabilities,
 		Payload:              json.RawMessage(payload),
@@ -3938,6 +3948,12 @@ func (s *MemoryStore) reconcileAgentSessionRuntimeResultLocked(task RuntimeTask)
 	_ = json.Unmarshal(task.Result, &artifacts)
 	session, err := runtimeTaskToAgentSession(task)
 	if err != nil {
+		return
+	}
+	if runtimeTaskAutomation(task) == issueAnalysisAutomation {
+		if task.Status == "failed" || task.Status == "cancelled" {
+			s.storeRuntimeSessionFailureLocked(task, session)
+		}
 		return
 	}
 	switch task.Status {
