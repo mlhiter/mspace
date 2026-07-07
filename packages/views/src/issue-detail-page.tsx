@@ -409,6 +409,21 @@ function isNoActiveCodexWorkerError(error: unknown) {
   return error instanceof Error && /no active codex worker/i.test(error.message);
 }
 
+function formatRuntimeAvailabilityReason(
+  availability: { reasonCode?: string; missingCapabilities?: string[] },
+  fallback: string,
+  t: ReturnType<typeof useMspaceTranslation>["t"],
+) {
+  const capabilities = availability.missingCapabilities?.filter(Boolean).join(", ") || "";
+  if (availability.reasonCode === "missing_capability" && capabilities) {
+    return t("issueDetail.composer.workerMissingCapabilities", { capabilities });
+  }
+  if (availability.reasonCode === "worker_draining") return t("issueDetail.composer.workerDraining");
+  if (availability.reasonCode === "worker_offline") return t("issueDetail.composer.workerOffline");
+  if (availability.reasonCode === "stale_heartbeat") return t("issueDetail.composer.workerStale");
+  return fallback;
+}
+
 function namespaceStatusLabel(status: string) {
   if (!status) return translate("issueDetail.environment.notRequested");
   if (status === "not_requested") return translate("issueDetail.environment.notRequested");
@@ -5218,9 +5233,10 @@ export function IssueDetailPage() {
       requiredCapabilities: agentRequiredCapabilities,
       unavailableMessage: workerUnavailableText,
       startingMessage: workerStartingText,
+      formatUnavailableMessage: (availability) => formatRuntimeAvailabilityReason(availability, workerUnavailableText, t),
       ensurePersonalWorker: window.mspaceDesktop?.ensurePersonalWorker,
     });
-  }, [agentRequiredCapabilities, auth.token, queryClient, runtimeMode, workerStartingText, workerUnavailableText, workspaceId]);
+  }, [agentRequiredCapabilities, auth.token, queryClient, runtimeMode, t, workerStartingText, workerUnavailableText, workspaceId]);
   const syncEditingCommentEditorSnapshot = useCallback((editor: Editor) => {
     const match = mentionMatchInEditor(editor);
     setEditingCommentMentionMatch(match);

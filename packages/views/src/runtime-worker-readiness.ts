@@ -10,6 +10,7 @@ export type RuntimeReadyInput = RuntimeAvailabilityInput & {
   queryClient: QueryClient;
   unavailableMessage: string;
   startingMessage: string;
+  formatUnavailableMessage?: (availability: RuntimeAvailability) => string;
   ensurePersonalWorker?: EnsurePersonalWorker;
   onStatus?: (message: string) => void;
   statusMessage?: string;
@@ -48,6 +49,8 @@ function readinessError(input: RuntimeReadyInput, availability?: RuntimeAvailabi
   if (availability?.reasonCode === "wrong_runtime_mode") return new Error(input.unavailableMessage);
   if (availability?.reasonCode === "stale_heartbeat" && input.runtimeMode === "personal") return new Error(input.startingMessage);
   if (availability?.canAutoStart && input.runtimeMode === "personal" && input.ensurePersonalWorker) return new Error(input.startingMessage);
+  const formatted = availability ? input.formatUnavailableMessage?.(availability) : "";
+  if (formatted) return new Error(formatted);
   return new Error(input.unavailableMessage);
 }
 

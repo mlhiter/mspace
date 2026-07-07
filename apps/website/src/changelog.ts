@@ -14,6 +14,7 @@ export const changelog: ChangelogEntry[] = [
     items: [
       "Added a workspace runtime availability API that returns structured readiness states such as ready, stale heartbeat, missing capability, draining, offline, no worker, and wrong runtime mode.",
       "Moved Issue Detail, Tests, and desktop personal-worker startup onto a shared readiness helper that polls server availability and auto-starts only the desktop-managed personal worker when allowed.",
+      "Surfaced specific worker availability blockers in agent and Tests actions, including missing capabilities, stale heartbeats, draining workers, and offline workers.",
       "Kept Workspace Settings worker rows as an operational list while action preflight uses the server-owned availability contract.",
     ],
   },

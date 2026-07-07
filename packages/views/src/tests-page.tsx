@@ -1284,6 +1284,21 @@ function requiredTestWorkerCapabilities(options?: { browser?: boolean }): Record
   };
 }
 
+function formatRuntimeAvailabilityReason(
+  availability: { reasonCode?: string; missingCapabilities?: string[] },
+  fallback: string,
+  t: ReturnType<typeof useMspaceTranslation>["t"],
+) {
+  const capabilities = availability.missingCapabilities?.filter(Boolean).join(", ") || "";
+  if (availability.reasonCode === "missing_capability" && capabilities) {
+    return t("tests.workerMissingCapabilities", { capabilities });
+  }
+  if (availability.reasonCode === "worker_draining") return t("tests.workerDraining");
+  if (availability.reasonCode === "worker_offline") return t("tests.workerOffline");
+  if (availability.reasonCode === "stale_heartbeat") return t("tests.workerStale");
+  return fallback;
+}
+
 function TestDetailUnavailableState(props: {
   title: string;
   body: string;
@@ -1357,6 +1372,7 @@ function useTestsWorkerReadiness(
           requiredCapabilities,
           unavailableMessage: workerUnavailableText,
           startingMessage: workerStartingText,
+          formatUnavailableMessage: (availability) => formatRuntimeAvailabilityReason(availability, workerUnavailableText, t),
           statusMessage: t("tests.startingPersonalWorker"),
           ensurePersonalWorker: window.mspaceDesktop?.ensurePersonalWorker,
           onStatus,

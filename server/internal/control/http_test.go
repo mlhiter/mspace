@@ -3670,6 +3670,21 @@ func TestRuntimeAvailabilityFlow(t *testing.T) {
 		t.Fatalf("create auth session: %v", err)
 	}
 	workspaceID := workspaces[0].ID
+	outsider, outsiderWorkspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "runtime-availability-outsider",
+		Login:          "runtime-availability-outsider",
+		Name:           "Runtime Availability Outsider",
+		Email:          "runtime-availability-outsider@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert outsider identity: %v", err)
+	}
+	outsiderToken, _, err := store.CreateAuthSession(context.Background(), outsider.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create outsider auth session: %v", err)
+	}
+	outsiderWorkspaceID := outsiderWorkspaces[0].ID
 	teamWorkspace, _, err := store.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Availability Team", Kind: "team"})
 	if err != nil {
 		t.Fatalf("create team workspace: %v", err)
@@ -3677,12 +3692,19 @@ func TestRuntimeAvailabilityFlow(t *testing.T) {
 	server := NewServer(Config{}, store, fakeGitHubClient{})
 	router := server.Routes()
 
-	getAvailability := func(path string) RuntimeAvailability {
+	requestAvailability := func(path, token string) *httptest.ResponseRecorder {
 		t.Helper()
 		recorder := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.Header.Set("Authorization", "Bearer "+sessionToken)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 		router.ServeHTTP(recorder, req)
+		return recorder
+	}
+	getAvailability := func(path string) RuntimeAvailability {
+		t.Helper()
+		recorder := requestAvailability(path, sessionToken)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("availability status=%d body=%s", recorder.Code, recorder.Body.String())
 		}
@@ -3693,9 +3715,21 @@ func TestRuntimeAvailabilityFlow(t *testing.T) {
 		return availability
 	}
 
+	unauthorized := requestAvailability("/api/workspaces/"+workspaceID+"/runtime/availability?runtimeMode=personal", "")
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("availability should require auth, status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+	forbiddenWorkspace := requestAvailability("/api/workspaces/"+workspaceID+"/runtime/availability?runtimeMode=personal", outsiderToken)
+	if forbiddenWorkspace.Code != http.StatusNotFound {
+		t.Fatalf("availability should hide non-member workspaces, status=%d body=%s", forbiddenWorkspace.Code, forbiddenWorkspace.Body.String())
+	}
+	_, outsiderWorker := registerTestRuntimeWorkerWithCapabilities(t, router, outsiderToken, outsiderWorkspaceID, `{"codex":true}`)
+	if outsiderWorker.WorkspaceID != outsiderWorkspaceID {
+		t.Fatalf("unexpected outsider worker workspace: %+v", outsiderWorker)
+	}
 	availability := getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal")
 	if availability.State != "unavailable" || availability.ReasonCode != "no_worker" || availability.CanQueue || !availability.CanAutoStart {
-		t.Fatalf("unexpected no-worker availability: %+v", availability)
+		t.Fatalf("unexpected no-worker availability with only other workspace workers online: %+v", availability)
 	}
 	if !strings.Contains(string(availability.RequiredCapabilities), `"codex":true`) {
 		t.Fatalf("default availability should require codex, got %s", availability.RequiredCapabilities)
