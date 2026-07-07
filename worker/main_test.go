@@ -203,6 +203,46 @@ func TestMaterializePayloadSkillBundlesWritesSessionSkills(t *testing.T) {
 	}
 }
 
+func TestResolveWorkerRepositoryUsesGitRootForLocalSubdirectory(t *testing.T) {
+	repoDir := createTestGitRepo(t)
+	expectedRoot := repoDir
+	if evaluated, err := filepath.EvalSymlinks(expectedRoot); err == nil {
+		expectedRoot = evaluated
+	}
+	projectSubdir := filepath.Join(repoDir, "frontend", "desktop")
+	if err := os.MkdirAll(projectSubdir, 0o755); err != nil {
+		t.Fatalf("create project subdir: %v", err)
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is required")
+	}
+
+	resolved, err := resolveWorkerRepository(context.Background(), gitPath, repositorySpec{
+		URL:        projectSubdir,
+		SourceType: "local",
+	})
+	if err != nil {
+		t.Fatalf("resolve local repository: %v", err)
+	}
+	if resolved.URL != expectedRoot {
+		t.Fatalf("expected repository root %q, got %q", expectedRoot, resolved.URL)
+	}
+	if resolved.OriginalURL != projectSubdir {
+		t.Fatalf("expected original URL %q, got %q", projectSubdir, resolved.OriginalURL)
+	}
+	if resolved.Subdir != "frontend/desktop" {
+		t.Fatalf("expected project subdir frontend/desktop, got %q", resolved.Subdir)
+	}
+	env := withPayloadRuntimeEnv(agentSessionPayload{Repository: resolved})
+	if env["MSPACE_PROJECT_REPOSITORY_PATH"] != projectSubdir {
+		t.Fatalf("expected original path env, got %q", env["MSPACE_PROJECT_REPOSITORY_PATH"])
+	}
+	if env["MSPACE_PROJECT_SUBDIR"] != "frontend/desktop" {
+		t.Fatalf("expected project subdir env, got %q", env["MSPACE_PROJECT_SUBDIR"])
+	}
+}
+
 func TestMaterializePayloadSkillBundlesRejectsUnsafePaths(t *testing.T) {
 	for _, unsafePath := range []string{"../escape.md", "/abs.md", "references\\notes.md", "safe/../../escape.md"} {
 		t.Run(unsafePath, func(t *testing.T) {
@@ -462,6 +502,19 @@ func TestRunOnceCompletesAgentSessionWithCodexAppServer(t *testing.T) {
 	installFakeCodex(t)
 
 	repoDir := createTestGitRepo(t)
+	expectedRoot := repoDir
+	if evaluated, err := filepath.EvalSymlinks(expectedRoot); err == nil {
+		expectedRoot = evaluated
+	}
+	projectSubdir := filepath.Join(repoDir, "frontend", "desktop")
+	if err := os.MkdirAll(projectSubdir, 0o755); err != nil {
+		t.Fatalf("create project subdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectSubdir, "package.json"), []byte(`{"name":"desktop"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write project file: %v", err)
+	}
+	runGit(t, repoDir, "add", "frontend/desktop/package.json")
+	runGit(t, repoDir, "commit", "-m", "add desktop project")
 	workRoot := filepath.Join(t.TempDir(), "worker-root")
 	var mu sync.Mutex
 	statuses := []string{}
@@ -476,8 +529,9 @@ func TestRunOnceCompletesAgentSessionWithCodexAppServer(t *testing.T) {
 		ProjectID: "project-1",
 		Branch:    "mspace/issue/session-1",
 		Repository: repositorySpec{
-			URL:           repoDir,
+			URL:           projectSubdir,
 			DefaultBranch: "main",
+			SourceType:    "local",
 			Provider:      "local",
 			Owner:         "test",
 			Repo:          "demo",
@@ -552,13 +606,26 @@ func TestRunOnceCompletesAgentSessionWithCodexAppServer(t *testing.T) {
 	if completedResult.Workdir == "" || !strings.HasPrefix(completedResult.Workdir, workRoot) {
 		t.Fatalf("expected worker-managed workdir under %s, got %+v", workRoot, completedResult)
 	}
+	if !strings.HasSuffix(filepath.ToSlash(completedResult.Workdir), "/frontend/desktop") {
+		t.Fatalf("expected Codex workdir to point at project subdir, got %+v", completedResult)
+	}
 	if completedResult.ArtifactDir == "" || !strings.HasPrefix(completedResult.ArtifactDir, completedResult.Workdir) {
 		t.Fatalf("expected worker-managed artifact dir, got %+v", completedResult)
+	}
+	if _, err := os.Stat(filepath.Join(completedResult.Workdir, "package.json")); err != nil {
+		t.Fatalf("expected worker workdir to be cloned from git root with project subdir: %v", err)
+	}
+	contextData, err := os.ReadFile(filepath.Join(completedResult.ArtifactDir, "context.md"))
+	if err != nil {
+		t.Fatalf("read session context: %v", err)
+	}
+	if !strings.Contains(string(contextData), "Project subdirectory: frontend/desktop") {
+		t.Fatalf("expected session context to include project subdir, got:\n%s", string(contextData))
 	}
 	if completedResult.Source.CommitSHA == "" || completedResult.Source.FilesChanged == 0 {
 		t.Fatalf("expected worker source commit metadata, got %+v", completedResult.Source)
 	}
-	if completedResult.Source.Changes[0].Path != "worker-output.txt" {
+	if completedResult.Source.Changes[0].Path != "frontend/desktop/worker-output.txt" {
 		t.Fatalf("expected fake codex file change to be captured, got %+v", completedResult.Source.Changes)
 	}
 	if completedResult.TestCaseProposals == nil || len(completedResult.TestCaseProposals.Proposals) != 1 {
@@ -568,6 +635,10 @@ func TestRunOnceCompletesAgentSessionWithCodexAppServer(t *testing.T) {
 		t.Fatalf("expected test result artifact, got %+v", completedResult.TestResult)
 	}
 	joinedLogs := taskLogMessages(logs)
+	expectedResolvedLog := "Resolved local project path to repository root: " + expectedRoot + " (project subdirectory: frontend/desktop)"
+	if !strings.Contains(joinedLogs, expectedResolvedLog) {
+		t.Fatalf("expected local repository resolution log, got %s", joinedLogs)
+	}
 	if !strings.Contains(joinedLogs, "Prepared worker workspace: "+completedResult.Workdir) {
 		t.Fatalf("expected worker workspace log, got %s", joinedLogs)
 	}
@@ -1212,6 +1283,8 @@ func TestDefaultAgentSessionDeveloperInstructionsAvoidDevServerPreviewURLs(t *te
 	required := []string{
 		"team runtime worker",
 		"Do not start or keep a development server running unless the user explicitly asks",
+		"If ${MSPACE_SESSION_CONTEXT} is set, read that file before acting",
+		"If ${MSPACE_PROJECT_SUBDIR} is set, treat that path inside the workdir as the project focus",
 		"prefer non-interactive checks",
 		"If a temporary server is required for validation, stop it before finishing",
 		"Do not present container-local localhost or 127.0.0.1 URLs as user-accessible preview URLs",

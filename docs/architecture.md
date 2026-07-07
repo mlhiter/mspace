@@ -51,6 +51,7 @@ Server
 Worker
   -> claim matching task
   -> prepare repo cache and session workdir
+  -> resolve local git subdirectory projects to repo root plus agent cwd
   -> start codex app-server --listen stdio://
   -> stream logs to runtime_task_logs
   -> capture source metadata and artifacts
@@ -62,6 +63,8 @@ Desktop
 ```
 
 Personal and team workspaces use the same server API and runtime task protocol. `runtimeMode` controls which workers can claim the task, not which product model is used.
+
+For personal local projects, the selected project path may be the repository root or a directory inside a git repository. The worker resolves the git root for clone/cache and worktree creation, then points the agent working directory at the selected subdirectory inside that session worktree. Team projects still use GitHub URLs so remote team workers do not depend on a user's Mac-local folder path.
 
 In desktop personal mode, Electron manages the local worker bootstrap credential lifecycle and treats the worker as platform readiness after auth and workspace selection. It creates a short-lived personal `msw_...` credential when needed, writes it to an Electron user-data token file, starts a host-local worker with `MSPACE_RUNTIME_TOKEN_FILE`, renews the credential before expiry, and revokes the previous token after a grace period. The worker rereads the token file for runtime calls, so renewal normally does not require user action or a worker restart.
 

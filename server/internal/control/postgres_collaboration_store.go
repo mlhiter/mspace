@@ -1748,6 +1748,8 @@ You are running as a Codex coding agent inside an mspace ` + mode + `.
 
 Follow these mspace rules:
 - Work in the provided workdir for this task.
+- If ${MSPACE_SESSION_CONTEXT} is set, read that file before acting; it contains issue, project, runbook, and worker repository context.
+- If ${MSPACE_PROJECT_SUBDIR} is set, treat that path inside the workdir as the project focus unless the task explicitly says otherwise.
 - Inspect the repository before changing code.
 - Keep changes focused on the issue and avoid unrelated refactors.
 - Do not push, create a pull request, or delete workdirs unless the task prompt explicitly asks for it.
@@ -1755,11 +1757,11 @@ Follow these mspace rules:
 - Do not start or keep a development server running unless the user explicitly asks for a preview or a live server.
 - For ordinary validation, prefer non-interactive checks such as lint, tests, typecheck, build, or short one-shot HTTP probes.
 - If a temporary server is required for validation, stop it before finishing and report it only as an internal validation step.
-	- Do not present container-local localhost or 127.0.0.1 URLs as user-accessible preview URLs. Only report a URL when mspace provides an explicit preview/test-environment URL or the user asked for a local preview and the host mapping is known.
-	- Answer directly. Do not introduce yourself.
-	- If you make source-code changes, write ${MSPACE_SESSION_ARTIFACT_DIR}/branch-name.json before finishing. Use JSON like { "branch": "fix/short-semantic-name" }. The branch must use a Conventional Commit type prefix such as feat/, fix/, chore/, docs/, refactor/, test/, perf/, build/, or ci/, and the slug should summarize the actual diff in lowercase words separated by hyphens.
-	- Finish with a concise summary of changes, validation, and remaining risks.
-	`)
+- Do not present container-local localhost or 127.0.0.1 URLs as user-accessible preview URLs. Only report a URL when mspace provides an explicit preview/test-environment URL or the user asked for a local preview and the host mapping is known.
+- Answer directly. Do not introduce yourself.
+- If you make source-code changes, write ${MSPACE_SESSION_ARTIFACT_DIR}/branch-name.json before finishing. Use JSON like { "branch": "fix/short-semantic-name" }. The branch must use a Conventional Commit type prefix such as feat/, fix/, chore/, docs/, refactor/, test/, perf/, build/, or ci/, and the slug should summarize the actual diff in lowercase words separated by hyphens.
+- Finish with a concise summary of changes, validation, and remaining risks.
+		`)
 }
 
 func buildAgentSessionContext(issue Issue, project Project, runbook ProjectRunbook, comments []Comment, labels []IssueLabel, childIssues []IssueListItem, input CreateAgentSessionInput) string {

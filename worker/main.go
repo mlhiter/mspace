@@ -244,6 +244,8 @@ type repositorySpec struct {
 	Provider      string `json:"provider"`
 	Owner         string `json:"owner"`
 	Repo          string `json:"repo"`
+	OriginalURL   string `json:"originalUrl,omitempty"`
+	Subdir        string `json:"subdir,omitempty"`
 }
 
 type agentSessionResult struct {
@@ -1240,6 +1242,8 @@ func parseAgentSessionPayload(raw json.RawMessage) (agentSessionPayload, error) 
 	payload.Repository.Provider = strings.TrimSpace(payload.Repository.Provider)
 	payload.Repository.Owner = strings.TrimSpace(payload.Repository.Owner)
 	payload.Repository.Repo = strings.TrimSpace(payload.Repository.Repo)
+	payload.Repository.OriginalURL = strings.TrimSpace(payload.Repository.OriginalURL)
+	payload.Repository.Subdir = normalizeRepositorySubdir(payload.Repository.Subdir)
 	if payload.Prompt == "" {
 		return agentSessionPayload{}, errors.New("agent_session payload requires prompt")
 	}
@@ -2006,17 +2010,32 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 	if err := os.MkdirAll(cfg.WorkRoot, 0o755); err != nil {
 		return payload, fmt.Errorf("create worker work root: %w", err)
 	}
+	payload.Repository, err = resolveWorkerRepository(ctx, gitPath, payload.Repository)
+	if err != nil {
+		return payload, err
+	}
+	if payload.Repository.OriginalURL != "" && payload.Repository.OriginalURL != payload.Repository.URL {
+		message := "Resolved local project path to repository root: " + payload.Repository.URL
+		if payload.Repository.Subdir != "" {
+			message += " (project subdirectory: " + payload.Repository.Subdir + ")"
+		}
+		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: message})
+	}
 	repoDir := filepath.Join(cfg.WorkRoot, "repos", repositoryCacheKey(payload.Repository))
 	if err := ensureWorkerRepository(ctx, gitPath, payload.Repository.URL, repoDir); err != nil {
 		return payload, err
 	}
-	workdir := filepath.Join(cfg.WorkRoot, "workdirs", safePathPart(firstNonEmpty(payload.ProjectID, "project")), safePathPart(firstNonEmpty(payload.SessionID, taskID)))
-	if err := os.MkdirAll(filepath.Dir(workdir), 0o755); err != nil {
+	worktreeDir := filepath.Join(cfg.WorkRoot, "workdirs", safePathPart(firstNonEmpty(payload.ProjectID, "project")), safePathPart(firstNonEmpty(payload.SessionID, taskID)))
+	agentWorkdir := worktreeDir
+	if subdir := normalizeRepositorySubdir(payload.Repository.Subdir); subdir != "" {
+		agentWorkdir = filepath.Join(worktreeDir, filepath.FromSlash(subdir))
+	}
+	if err := os.MkdirAll(filepath.Dir(worktreeDir), 0o755); err != nil {
 		return payload, fmt.Errorf("create worker workdir parent: %w", err)
 	}
-	payload.Workdir = workdir
-	payload.ArtifactDir = filepath.Join(workdir, ".mspace", "session")
-	if _, err := os.Stat(workdir); err == nil {
+	payload.Workdir = agentWorkdir
+	payload.ArtifactDir = filepath.Join(agentWorkdir, ".mspace", "session")
+	if _, err := os.Stat(worktreeDir); err == nil {
 		readiness := testArtifactsReadiness(payload)
 		if readiness == testArtifactPending {
 			ready, waitErr := waitForTestArtifactsReady(ctx, payload, testArtifactCompletionSettleTimeout)
@@ -2039,7 +2058,7 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 			_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Recovered existing worker workspace from completed test artifacts: " + payload.Workdir})
 			return payload, nil
 		}
-		return payload, fmt.Errorf("worker session workdir already exists: %s", workdir)
+		return payload, fmt.Errorf("worker session workdir already exists: %s", worktreeDir)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return payload, fmt.Errorf("inspect worker session workdir: %w", err)
 	}
@@ -2051,14 +2070,21 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 		}
 		baseRef = resolved
 	}
-	if err := runGitCommand(ctx, gitPath, repoDir, "worktree", "add", "--detach", workdir, baseRef); err != nil {
+	if err := runGitCommand(ctx, gitPath, repoDir, "worktree", "add", "--detach", worktreeDir, baseRef); err != nil {
 		return payload, fmt.Errorf("create worker worktree from %q: %w", baseRef, err)
 	}
 	if branch := strings.TrimSpace(payload.Branch); branch != "" && payload.SourceCommitSHA == "" {
-		if err := runGitCommand(ctx, gitPath, workdir, "checkout", "-B", branch); err != nil {
-			_ = runGitCommand(context.Background(), gitPath, repoDir, "worktree", "remove", "--force", workdir)
+		if err := runGitCommand(ctx, gitPath, worktreeDir, "checkout", "-B", branch); err != nil {
+			_ = runGitCommand(context.Background(), gitPath, repoDir, "worktree", "remove", "--force", worktreeDir)
 			return payload, fmt.Errorf("create worker branch %q: %w", branch, err)
 		}
+	}
+	if info, err := os.Stat(agentWorkdir); err != nil {
+		_ = runGitCommand(context.Background(), gitPath, repoDir, "worktree", "remove", "--force", worktreeDir)
+		return payload, fmt.Errorf("project subdirectory is not present in worker worktree: %s: %w", agentWorkdir, err)
+	} else if !info.IsDir() {
+		_ = runGitCommand(context.Background(), gitPath, repoDir, "worktree", "remove", "--force", worktreeDir)
+		return payload, fmt.Errorf("project subdirectory is not a directory in worker worktree: %s", agentWorkdir)
 	}
 	if err := os.MkdirAll(payload.ArtifactDir, 0o755); err != nil {
 		return payload, fmt.Errorf("create artifact dir: %w", err)
@@ -2068,6 +2094,7 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 	if err != nil {
 		return payload, err
 	}
+	payload.ContextMarkdown = appendWorkerRepositoryContext(payload.ContextMarkdown, payload.Repository)
 	contextPath := filepath.Join(payload.ArtifactDir, "context.md")
 	if strings.TrimSpace(payload.ContextMarkdown) != "" {
 		if err := os.WriteFile(contextPath, []byte(payload.ContextMarkdown), 0o600); err != nil {
@@ -2102,6 +2129,78 @@ func ensureWorkerRepository(ctx context.Context, gitPath, repoURL, repoDir strin
 		return fmt.Errorf("clone worker repo: %w", err)
 	}
 	return nil
+}
+
+func resolveWorkerRepository(ctx context.Context, gitPath string, repository repositorySpec) (repositorySpec, error) {
+	repository.URL = strings.TrimSpace(repository.URL)
+	if repository.URL == "" || !isLocalRepository(repository) {
+		return repository, nil
+	}
+	originalURL := repository.URL
+	info, err := os.Stat(originalURL)
+	if err != nil {
+		return repository, fmt.Errorf("local project path is not visible to this worker: %s: %w", originalURL, err)
+	}
+	if !info.IsDir() {
+		return repository, fmt.Errorf("local project path is not a directory: %s", originalURL)
+	}
+	root, err := runGitOutput(ctx, gitPath, originalURL, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return repository, fmt.Errorf("local project path is not inside a git work tree visible to this worker: %s: %w", originalURL, err)
+	}
+	root = filepath.Clean(root)
+	selectedPath := filepath.Clean(originalURL)
+	if abs, err := filepath.Abs(selectedPath); err == nil {
+		selectedPath = filepath.Clean(abs)
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = filepath.Clean(abs)
+	}
+	if evaluated, err := filepath.EvalSymlinks(selectedPath); err == nil {
+		selectedPath = filepath.Clean(evaluated)
+	}
+	if evaluated, err := filepath.EvalSymlinks(root); err == nil {
+		root = filepath.Clean(evaluated)
+	}
+	subdir, err := filepath.Rel(root, selectedPath)
+	if err != nil {
+		return repository, fmt.Errorf("resolve project subdirectory relative to git root: %w", err)
+	}
+	if subdir == "." {
+		subdir = ""
+	}
+	if subdir != "" && (subdir == ".." || strings.HasPrefix(subdir, ".."+string(os.PathSeparator)) || filepath.IsAbs(subdir)) {
+		return repository, fmt.Errorf("local project path %s is outside resolved git root %s", originalURL, root)
+	}
+	repository.OriginalURL = originalURL
+	repository.URL = root
+	repository.Subdir = normalizeRepositorySubdir(subdir)
+	return repository, nil
+}
+
+func appendWorkerRepositoryContext(markdown string, repository repositorySpec) string {
+	root := strings.TrimSpace(repository.URL)
+	original := strings.TrimSpace(repository.OriginalURL)
+	subdir := normalizeRepositorySubdir(repository.Subdir)
+	if original == "" && subdir == "" {
+		return markdown
+	}
+	var builder strings.Builder
+	if trimmed := strings.TrimRight(markdown, "\n"); trimmed != "" {
+		builder.WriteString(trimmed)
+		builder.WriteString("\n\n")
+	}
+	builder.WriteString("## Worker Repository\n")
+	if root != "" {
+		builder.WriteString("Root: " + root + "\n")
+	}
+	if original != "" && original != root {
+		builder.WriteString("Configured path: " + original + "\n")
+	}
+	if subdir != "" {
+		builder.WriteString("Project subdirectory: " + subdir + "\n")
+	}
+	return builder.String()
 }
 
 func resolveWorkerBaseRef(ctx context.Context, gitPath, repoDir, defaultBranch string) (string, error) {
@@ -2919,6 +3018,15 @@ func withPayloadRuntimeEnv(payload agentSessionPayload) map[string]string {
 	if strings.TrimSpace(payload.ContextMarkdown) != "" {
 		env["MSPACE_SESSION_CONTEXT"] = filepath.Join(payload.ArtifactDir, "context.md")
 	}
+	if strings.TrimSpace(payload.Repository.URL) != "" {
+		env["MSPACE_REPOSITORY_URL"] = payload.Repository.URL
+	}
+	if strings.TrimSpace(payload.Repository.OriginalURL) != "" {
+		env["MSPACE_PROJECT_REPOSITORY_PATH"] = payload.Repository.OriginalURL
+	}
+	if subdir := normalizeRepositorySubdir(payload.Repository.Subdir); subdir != "" {
+		env["MSPACE_PROJECT_SUBDIR"] = subdir
+	}
 	return env
 }
 
@@ -3512,10 +3620,12 @@ func capabilityEnabled(capabilities json.RawMessage, name string) bool {
 
 func defaultAgentSessionDeveloperInstructions() string {
 	return strings.TrimSpace(`
-		You are running as a Codex coding agent inside an mspace team runtime worker.
+You are running as a Codex coding agent inside an mspace team runtime worker.
 
 Follow these mspace rules:
 - Work in the provided workdir for this task.
+- If ${MSPACE_SESSION_CONTEXT} is set, read that file before acting; it contains issue, project, runbook, and worker repository context.
+- If ${MSPACE_PROJECT_SUBDIR} is set, treat that path inside the workdir as the project focus unless the task explicitly says otherwise.
 - Inspect the repository before changing code.
 - Keep changes focused on the task and avoid unrelated refactors.
 - Do not commit, push, create a pull request, or delete workdirs unless the task prompt explicitly asks for it.
@@ -3523,10 +3633,10 @@ Follow these mspace rules:
 - Do not start or keep a development server running unless the user explicitly asks for a preview or a live server.
 - For ordinary validation, prefer non-interactive checks such as lint, tests, typecheck, build, or short one-shot HTTP probes.
 - If a temporary server is required for validation, stop it before finishing and report it only as an internal validation step.
-	- Do not present container-local localhost or 127.0.0.1 URLs as user-accessible preview URLs. Only report a URL when mspace provides an explicit preview/test-environment URL or the user asked for a local preview and the host mapping is known.
-	- Answer directly. Do not introduce yourself.
-	- If you make source-code changes, write ${MSPACE_SESSION_ARTIFACT_DIR}/branch-name.json before finishing. Use JSON like { "branch": "fix/short-semantic-name" }. The branch must use a Conventional Commit type prefix such as feat/, fix/, chore/, docs/, refactor/, test/, perf/, build/, or ci/, and the slug should summarize the actual diff in lowercase words separated by hyphens.
-	- Finish with a concise summary of changes, validation, and remaining risks.
+- Do not present container-local localhost or 127.0.0.1 URLs as user-accessible preview URLs. Only report a URL when mspace provides an explicit preview/test-environment URL or the user asked for a local preview and the host mapping is known.
+- Answer directly. Do not introduce yourself.
+- If you make source-code changes, write ${MSPACE_SESSION_ARTIFACT_DIR}/branch-name.json before finishing. Use JSON like { "branch": "fix/short-semantic-name" }. The branch must use a Conventional Commit type prefix such as feat/, fix/, chore/, docs/, refactor/, test/, perf/, build/, or ci/, and the slug should summarize the actual diff in lowercase words separated by hyphens.
+- Finish with a concise summary of changes, validation, and remaining risks.
 		`)
 }
 
@@ -3548,12 +3658,31 @@ Rules:
 }
 
 func repositoryCacheKey(repository repositorySpec) string {
+	if isLocalRepository(repository) {
+		return safePathPart(repository.URL)
+	}
 	parts := []string{repository.Provider, repository.Owner, repository.Repo}
 	joined := strings.Trim(strings.Join(parts, "-"), "-")
 	if joined == "" {
 		joined = repository.URL
 	}
 	return safePathPart(joined)
+}
+
+func isLocalRepository(repository repositorySpec) bool {
+	return strings.EqualFold(strings.TrimSpace(repository.SourceType), "local") || strings.EqualFold(strings.TrimSpace(repository.Provider), "local")
+}
+
+func normalizeRepositorySubdir(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = filepath.Clean(value)
+	if value == "." {
+		return ""
+	}
+	return strings.Trim(filepath.ToSlash(value), "/")
 }
 
 func safePathPart(value string) string {

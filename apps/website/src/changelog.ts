@@ -8,6 +8,17 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-07-07",
+    title: "Local project subdirectories for automatic analysis",
+    summary:
+      "mspace personal workers now handle projects selected from inside a git repository, so automatic issue analysis does not fail when a project is a monorepo subdirectory.",
+    items: [
+      "Resolved local project paths to their git root before worker clone/cache preparation while preserving the selected project subdirectory.",
+      "Runs Codex from the selected subdirectory inside the session worktree and exposes repository root, original path, and project subdir context to the agent.",
+      "Added worker regression coverage for local git subdirectory projects and kept team projects on cloneable GitHub URLs.",
+    ],
+  },
+  {
+    date: "2026-07-07",
     title: "Server-owned runtime availability checks",
     summary:
       "mspace now asks the server for runtime readiness before agent and Tests actions, instead of letting each desktop view reimplement worker heartbeat rules.",

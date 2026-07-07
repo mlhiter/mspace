@@ -12,8 +12,8 @@ The product and runtime state for signed-in workspaces lives in the server store
 | `<Electron userData>/server-config.json` | Saved Team server URL for this device. `MSPACE_SERVER_URL` overrides it for the launch. |
 | `~/.mspace/codex-worker-home` | Host-side Codex home copy used by the Docker Codex worker. |
 | `/var/lib/mspace-worker/repos/<cache-key>` | Repository cache inside Docker-backed workers. |
-| `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>` | Per-session workdir inside Docker-backed workers. |
-| `<worker-root>/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory. |
+| `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>` | Per-session git worktree root inside Docker-backed workers. When a personal local project points at a git subdirectory, Codex runs from the matching subdirectory inside this worktree. |
+| `<worker-root>/workdirs/<project-id>/<session-id>/<project-subdir>/.mspace/session` | Session artifact directory. `<project-subdir>` is omitted when the project path is the repository root. |
 | `<artifact-dir>/skills/` | Session-scoped server-provided workflow skill bundles. Workers recreate this directory from task payloads and set `MSPACE_SESSION_SKILLS_DIR`. |
 | `<artifact-dir>/skills/manifest.json` | Manifest of materialized skill bundle names, revisions, hashes, and files for the current session. |
 | `<artifact-dir>/test-environment.json` | Optional deploy/test artifact with preview values. |
@@ -281,11 +281,14 @@ Session metadata is also passed into the Codex app-server process environment as
 | `MSPACE_AGENT_TOKEN` | Scoped bearer token for agent writes. |
 | `MSPACE_AGENT_PROFILE` | Selected managed agent profile id. |
 | `MSPACE_SESSION_BRANCH` | Planned session branch. |
-| `MSPACE_SESSION_WORKDIR` | Prepared git worktree path. |
+| `MSPACE_SESSION_WORKDIR` | Prepared agent working directory. For local project subdirectories, this is the subdirectory inside the worker-created git worktree. |
 | `MSPACE_SOURCE_SESSION_ID` | Selected source session for a deploy/test continuation, when present. |
 | `MSPACE_SOURCE_COMMIT_SHA` | Selected source commit for a deploy/test continuation, when present. |
 | `MSPACE_SESSION_CONTEXT` | Markdown context file written by the worker. |
 | `MSPACE_SESSION_ARTIFACT_DIR` | Session artifact directory under the prepared worktree. |
+| `MSPACE_REPOSITORY_URL` | Resolved repository URL or local git root used by the worker cache. |
+| `MSPACE_PROJECT_REPOSITORY_PATH` | Original configured local project path, when it differs from the resolved git root. |
+| `MSPACE_PROJECT_SUBDIR` | Project path relative to the git root, when a local project points inside a repository. |
 
 ## Smoke Checks
 

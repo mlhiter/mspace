@@ -10,6 +10,8 @@ func TestDefaultAgentSessionDeveloperInstructionsAvoidDevServerPreviewURLs(t *te
 	required := []string{
 		"team runtime worker",
 		"Do not start or keep a development server running unless the user explicitly asks",
+		"If ${MSPACE_SESSION_CONTEXT} is set, read that file before acting",
+		"If ${MSPACE_PROJECT_SUBDIR} is set, treat that path inside the workdir as the project focus",
 		"prefer non-interactive checks",
 		"If a temporary server is required for validation, stop it before finishing",
 		"Do not present container-local localhost or 127.0.0.1 URLs as user-accessible preview URLs",
