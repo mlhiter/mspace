@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -16,8 +18,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -153,6 +157,26 @@ type agentSessionPayload struct {
 	ContextMarkdown       string            `json:"contextMarkdown"`
 	ArtifactDir           string            `json:"artifactDir"`
 	Repository            repositorySpec    `json:"repository"`
+	RequiredSkills        []skillBundle     `json:"requiredSkills"`
+	Skills                []skillBundle     `json:"skills"`
+}
+
+type skillBundle struct {
+	Slug        string            `json:"slug,omitempty"`
+	Name        string            `json:"name"`
+	Revision    string            `json:"revision"`
+	Hash        string            `json:"hash,omitempty"`
+	SHA256      string            `json:"sha256,omitempty"`
+	ContentHash string            `json:"contentHash,omitempty"`
+	Files       []skillBundleFile `json:"files"`
+}
+
+type skillBundleFile struct {
+	Path          string  `json:"path"`
+	Content       *string `json:"content,omitempty"`
+	ContentBase64 *string `json:"contentBase64,omitempty"`
+	SHA256        string  `json:"sha256,omitempty"`
+	Executable    bool    `json:"executable,omitempty"`
 }
 
 type issueTypeTriagePayload struct {
@@ -1230,6 +1254,9 @@ func parseAgentSessionPayload(raw json.RawMessage) (agentSessionPayload, error) 
 	if payload.DeveloperInstructions == "" {
 		payload.DeveloperInstructions = defaultAgentSessionDeveloperInstructions()
 	}
+	if _, err := normalizePayloadSkillBundles(payload); err != nil {
+		return agentSessionPayload{}, err
+	}
 	return payload, nil
 }
 
@@ -1938,7 +1965,14 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 		if err := os.MkdirAll(payload.ArtifactDir, 0o755); err != nil {
 			return payload, fmt.Errorf("create artifact dir: %w", err)
 		}
+		var skillRefs []string
+		var err error
+		payload, skillRefs, err = materializePayloadSkillBundles(payload)
+		if err != nil {
+			return payload, err
+		}
 		payload.Env = withPayloadRuntimeEnv(payload)
+		appendMaterializedSkillLog(ctx, runtimeClient, workerID, taskID, skillRefs)
 		return payload, nil
 	}
 
@@ -1971,7 +2005,14 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 			}
 		}
 		if readiness == testArtifactReady {
+			var skillRefs []string
+			var err error
+			payload, skillRefs, err = materializePayloadSkillBundles(payload)
+			if err != nil {
+				return payload, err
+			}
 			payload.Env = withPayloadRuntimeEnv(payload)
+			appendMaterializedSkillLog(ctx, runtimeClient, workerID, taskID, skillRefs)
 			_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Recovered existing worker workspace from completed test artifacts: " + payload.Workdir})
 			return payload, nil
 		}
@@ -1999,6 +2040,11 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 	if err := os.MkdirAll(payload.ArtifactDir, 0o755); err != nil {
 		return payload, fmt.Errorf("create artifact dir: %w", err)
 	}
+	var skillRefs []string
+	payload, skillRefs, err = materializePayloadSkillBundles(payload)
+	if err != nil {
+		return payload, err
+	}
 	contextPath := filepath.Join(payload.ArtifactDir, "context.md")
 	if strings.TrimSpace(payload.ContextMarkdown) != "" {
 		if err := os.WriteFile(contextPath, []byte(payload.ContextMarkdown), 0o600); err != nil {
@@ -2006,6 +2052,7 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 		}
 	}
 	payload.Env = withPayloadRuntimeEnv(payload)
+	appendMaterializedSkillLog(ctx, runtimeClient, workerID, taskID, skillRefs)
 	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Prepared worker workspace: " + payload.Workdir})
 	return payload, nil
 }
@@ -2850,6 +2897,355 @@ func withPayloadRuntimeEnv(payload agentSessionPayload) map[string]string {
 		env["MSPACE_SESSION_CONTEXT"] = filepath.Join(payload.ArtifactDir, "context.md")
 	}
 	return env
+}
+
+type normalizedSkillBundle struct {
+	Name          string
+	Revision      string
+	DirectoryName string
+	Digest        string
+	Files         []normalizedSkillBundleFile
+}
+
+type normalizedSkillBundleFile struct {
+	Path       string
+	Content    []byte
+	SHA256     string
+	Executable bool
+}
+
+type materializedSkillsManifest struct {
+	Root   string                           `json:"root"`
+	Skills []materializedSkillManifestEntry `json:"skills"`
+}
+
+type materializedSkillManifestEntry struct {
+	Name      string                          `json:"name"`
+	Revision  string                          `json:"revision,omitempty"`
+	Directory string                          `json:"directory"`
+	SHA256    string                          `json:"sha256"`
+	Files     []materializedSkillManifestFile `json:"files"`
+}
+
+type materializedSkillManifestFile struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Bytes  int    `json:"bytes"`
+}
+
+func materializePayloadSkillBundles(payload agentSessionPayload) (agentSessionPayload, []string, error) {
+	bundles, err := normalizePayloadSkillBundles(payload)
+	if err != nil {
+		return payload, nil, err
+	}
+	if len(bundles) == 0 {
+		return payload, nil, nil
+	}
+	if strings.TrimSpace(payload.Workdir) == "" {
+		return payload, nil, errors.New("agent_session skill bundles require workdir")
+	}
+	if strings.TrimSpace(payload.ArtifactDir) == "" {
+		return payload, nil, errors.New("agent_session skill bundles require artifactDir")
+	}
+	if err := ensureSessionArtifactPath(payload.Workdir, payload.ArtifactDir); err != nil {
+		return payload, nil, err
+	}
+
+	skillsRoot := filepath.Join(payload.ArtifactDir, "skills")
+	if err := os.RemoveAll(skillsRoot); err != nil {
+		return payload, nil, fmt.Errorf("reset session skills dir: %w", err)
+	}
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		return payload, nil, fmt.Errorf("create session skills dir: %w", err)
+	}
+	if err := ensureSessionArtifactPath(payload.Workdir, skillsRoot); err != nil {
+		return payload, nil, err
+	}
+
+	manifest := materializedSkillsManifest{Root: skillsRoot}
+	refs := make([]string, 0, len(bundles))
+	for _, bundle := range bundles {
+		skillDir := filepath.Join(skillsRoot, bundle.DirectoryName)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			return payload, nil, fmt.Errorf("create skill bundle dir %q: %w", bundle.Name, err)
+		}
+		if err := ensurePathWithin(skillsRoot, skillDir); err != nil {
+			return payload, nil, err
+		}
+
+		manifestSkill := materializedSkillManifestEntry{
+			Name:      bundle.Name,
+			Revision:  bundle.Revision,
+			Directory: skillDir,
+			SHA256:    bundle.Digest,
+			Files:     make([]materializedSkillManifestFile, 0, len(bundle.Files)),
+		}
+		for _, file := range bundle.Files {
+			target := filepath.Join(skillDir, filepath.FromSlash(file.Path))
+			if err := ensurePathWithin(skillDir, target); err != nil {
+				return payload, nil, err
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return payload, nil, fmt.Errorf("create skill file parent %q: %w", file.Path, err)
+			}
+			mode := os.FileMode(0o600)
+			if file.Executable {
+				mode = 0o700
+			}
+			if err := os.WriteFile(target, file.Content, mode); err != nil {
+				return payload, nil, fmt.Errorf("write skill file %q: %w", file.Path, err)
+			}
+			manifestSkill.Files = append(manifestSkill.Files, materializedSkillManifestFile{
+				Path:   file.Path,
+				SHA256: file.SHA256,
+				Bytes:  len(file.Content),
+			})
+		}
+		manifest.Skills = append(manifest.Skills, manifestSkill)
+		refs = append(refs, skillBundleRef(bundle.Name, bundle.Revision))
+	}
+
+	manifestPath := filepath.Join(skillsRoot, "manifest.json")
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return payload, nil, fmt.Errorf("encode session skill manifest: %w", err)
+	}
+	if err := os.WriteFile(manifestPath, append(data, '\n'), 0o600); err != nil {
+		return payload, nil, fmt.Errorf("write session skill manifest: %w", err)
+	}
+
+	env := map[string]string{}
+	for key, value := range payload.Env {
+		env[key] = value
+	}
+	env["MSPACE_SESSION_SKILLS_DIR"] = skillsRoot
+	env["MSPACE_SESSION_SKILL_MANIFEST"] = manifestPath
+	env["MSPACE_REQUIRED_SKILLS"] = strings.Join(refs, ",")
+	payload.Env = env
+	payload.DeveloperInstructions = withSessionSkillDeveloperInstructions(payload.DeveloperInstructions)
+	return payload, refs, nil
+}
+
+func normalizePayloadSkillBundles(payload agentSessionPayload) ([]normalizedSkillBundle, error) {
+	input := append([]skillBundle{}, payload.RequiredSkills...)
+	input = append(input, payload.Skills...)
+	if len(input) == 0 {
+		return nil, nil
+	}
+
+	bundles := make([]normalizedSkillBundle, 0, len(input))
+	directories := map[string]string{}
+	for index, bundle := range input {
+		name := strings.TrimSpace(firstNonEmpty(bundle.Slug, bundle.Name))
+		if name == "" {
+			return nil, fmt.Errorf("skill bundle %d requires name", index)
+		}
+		if len(bundle.Files) == 0 {
+			return nil, fmt.Errorf("skill bundle %q requires files", name)
+		}
+		directoryName := safePathPart(name)
+		if directoryName == "unknown" {
+			return nil, fmt.Errorf("skill bundle %q has no safe directory name", name)
+		}
+		if existing, ok := directories[directoryName]; ok {
+			return nil, fmt.Errorf("skill bundle %q collides with %q after path normalization", name, existing)
+		}
+		directories[directoryName] = name
+
+		normalized := normalizedSkillBundle{
+			Name:          name,
+			Revision:      strings.TrimSpace(bundle.Revision),
+			DirectoryName: directoryName,
+			Files:         make([]normalizedSkillBundleFile, 0, len(bundle.Files)),
+		}
+		paths := map[string]bool{}
+		for _, file := range bundle.Files {
+			normalizedPath, err := normalizeSkillBundlePath(file.Path)
+			if err != nil {
+				return nil, fmt.Errorf("skill bundle %q file path: %w", name, err)
+			}
+			if paths[normalizedPath] {
+				return nil, fmt.Errorf("skill bundle %q contains duplicate file path %q", name, normalizedPath)
+			}
+			paths[normalizedPath] = true
+
+			content, err := skillBundleFileContent(file)
+			if err != nil {
+				return nil, fmt.Errorf("skill bundle %q file %q: %w", name, normalizedPath, err)
+			}
+			digest := sha256Hex(content)
+			expected, err := normalizeOptionalSHA256(file.SHA256)
+			if err != nil {
+				return nil, fmt.Errorf("skill bundle %q file %q: %w", name, normalizedPath, err)
+			}
+			if expected != "" && expected != digest {
+				return nil, fmt.Errorf("skill bundle %q file %q sha256 mismatch", name, normalizedPath)
+			}
+			normalized.Files = append(normalized.Files, normalizedSkillBundleFile{
+				Path:       normalizedPath,
+				Content:    content,
+				SHA256:     digest,
+				Executable: file.Executable,
+			})
+		}
+		sort.Slice(normalized.Files, func(i, j int) bool {
+			return normalized.Files[i].Path < normalized.Files[j].Path
+		})
+		normalized.Digest = skillBundleDigest(normalized.Files)
+		expectedBundleDigest, err := normalizeOptionalSHA256(firstNonEmpty(bundle.SHA256, bundle.Hash, bundle.ContentHash))
+		if err != nil {
+			return nil, fmt.Errorf("skill bundle %q: %w", name, err)
+		}
+		if expectedBundleDigest != "" && expectedBundleDigest != normalized.Digest {
+			return nil, fmt.Errorf("skill bundle %q sha256 mismatch", name)
+		}
+		bundles = append(bundles, normalized)
+	}
+	return bundles, nil
+}
+
+func normalizeSkillBundlePath(value string) (string, error) {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return "", errors.New("path is empty")
+	}
+	if strings.Contains(raw, "\x00") {
+		return "", errors.New("path contains NUL byte")
+	}
+	if strings.Contains(raw, "\\") {
+		return "", fmt.Errorf("path %q must use slash separators", raw)
+	}
+	if strings.HasPrefix(raw, "/") {
+		return "", fmt.Errorf("path %q must be relative", raw)
+	}
+	cleaned := path.Clean(raw)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", fmt.Errorf("path %q escapes skill directory", raw)
+	}
+	for _, part := range strings.Split(cleaned, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("path %q contains unsafe segment", raw)
+		}
+	}
+	return cleaned, nil
+}
+
+func skillBundleFileContent(file skillBundleFile) ([]byte, error) {
+	if file.Content != nil && file.ContentBase64 != nil {
+		return nil, errors.New("specify content or contentBase64, not both")
+	}
+	if file.ContentBase64 != nil {
+		content, err := base64.StdEncoding.DecodeString(*file.ContentBase64)
+		if err != nil {
+			return nil, fmt.Errorf("decode contentBase64: %w", err)
+		}
+		return content, nil
+	}
+	if file.Content == nil {
+		return nil, errors.New("requires content or contentBase64")
+	}
+	return []byte(*file.Content), nil
+}
+
+func normalizeOptionalSHA256(value string) (string, error) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	value = strings.TrimPrefix(value, "sha256:")
+	if value == "" {
+		return "", nil
+	}
+	if len(value) != sha256.Size*2 {
+		return "", fmt.Errorf("sha256 must be %d hex characters", sha256.Size*2)
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return "", fmt.Errorf("sha256 must be hex: %w", err)
+	}
+	return value, nil
+}
+
+func sha256Hex(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+func skillBundleDigest(files []normalizedSkillBundleFile) string {
+	hash := sha256.New()
+	for _, file := range files {
+		_, _ = hash.Write([]byte(file.Path))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(file.SHA256))
+		_, _ = hash.Write([]byte{0})
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func skillBundleRef(name, revision string) string {
+	name = strings.TrimSpace(name)
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		return name
+	}
+	return name + "@" + revision
+}
+
+func withSessionSkillDeveloperInstructions(instructions string) string {
+	instructions = strings.TrimSpace(instructions)
+	sessionSkillInstructions := strings.TrimSpace(`
+Server-provided skills for this task are materialized in ${MSPACE_SESSION_SKILLS_DIR}; the manifest is ${MSPACE_SESSION_SKILL_MANIFEST}.
+When the task names one of these skills, read that session-scoped SKILL.md and use it instead of any globally installed skill copy.
+`)
+	if instructions == "" {
+		return sessionSkillInstructions
+	}
+	if strings.Contains(instructions, "MSPACE_SESSION_SKILLS_DIR") {
+		return instructions
+	}
+	return instructions + "\n\n" + sessionSkillInstructions
+}
+
+func ensureSessionArtifactPath(workdir, target string) error {
+	workdir = strings.TrimSpace(workdir)
+	target = strings.TrimSpace(target)
+	if workdir == "" || target == "" {
+		return errors.New("session path check requires workdir and target")
+	}
+	realWorkdir, err := filepath.EvalSymlinks(workdir)
+	if err != nil {
+		return fmt.Errorf("resolve workdir path: %w", err)
+	}
+	realTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return fmt.Errorf("resolve session path %q: %w", target, err)
+	}
+	if err := ensurePathWithin(realWorkdir, realTarget); err != nil {
+		return fmt.Errorf("session path %q is outside workdir: %w", target, err)
+	}
+	return nil
+}
+
+func ensurePathWithin(root, target string) error {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	relative, err := filepath.Rel(root, target)
+	if err != nil {
+		return fmt.Errorf("compare paths: %w", err)
+	}
+	if relative == "." || relative == "" {
+		return nil
+	}
+	if strings.HasPrefix(relative, ".."+string(filepath.Separator)) || relative == ".." || filepath.IsAbs(relative) {
+		return fmt.Errorf("%s is not within %s", target, root)
+	}
+	return nil
+}
+
+func appendMaterializedSkillLog(ctx context.Context, runtimeClient *runtimeClient, workerID, taskID string, refs []string) {
+	if runtimeClient == nil || len(refs) == 0 {
+		return
+	}
+	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{
+		Stream:  "system",
+		Message: "Materialized server skill bundles: " + strings.Join(refs, ", "),
+	})
 }
 
 func runGitCommand(ctx context.Context, gitPath, dir string, args ...string) error {

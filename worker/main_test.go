@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -131,6 +132,124 @@ func TestArtifactCompletionRequiresMatchingRun(t *testing.T) {
 		if result.attachMatchingTestCompletionArtifact(payload) {
 			t.Fatalf("expected mismatched artifact to be rejected for automation %s", payload.Automation)
 		}
+	}
+}
+
+func TestMaterializePayloadSkillBundlesWritesSessionSkills(t *testing.T) {
+	workdir := t.TempDir()
+	artifactDir := filepath.Join(workdir, ".mspace", "session")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	skillContent := "# Think\n\nUse structured thinking.\n"
+	referenceContent := "reference notes\n"
+	bundle := skillBundle{
+		Slug:     "think",
+		Name:     "Structured Thinking",
+		Revision: "rev-1",
+		Files: []skillBundleFile{
+			{Path: "SKILL.md", Content: stringRef(skillContent), SHA256: sha256Hex([]byte(skillContent))},
+			{Path: "references/notes.md", Content: stringRef(referenceContent), SHA256: "sha256:" + sha256Hex([]byte(referenceContent))},
+		},
+	}
+	normalized, err := normalizePayloadSkillBundles(agentSessionPayload{RequiredSkills: []skillBundle{bundle}})
+	if err != nil {
+		t.Fatalf("normalize bundle: %v", err)
+	}
+	bundle.ContentHash = "sha256:" + normalized[0].Digest
+	payload := agentSessionPayload{
+		Workdir:               workdir,
+		ArtifactDir:           artifactDir,
+		DeveloperInstructions: "base instructions",
+		RequiredSkills: []skillBundle{
+			bundle,
+		},
+	}
+
+	prepared, refs, err := materializePayloadSkillBundles(payload)
+	if err != nil {
+		t.Fatalf("materialize skills: %v", err)
+	}
+	if got := strings.Join(refs, ","); got != "think@rev-1" {
+		t.Fatalf("unexpected refs: %s", got)
+	}
+	skillsDir := filepath.Join(artifactDir, "skills")
+	if prepared.Env["MSPACE_SESSION_SKILLS_DIR"] != skillsDir {
+		t.Fatalf("unexpected skills dir env: %s", prepared.Env["MSPACE_SESSION_SKILLS_DIR"])
+	}
+	if prepared.Env["MSPACE_REQUIRED_SKILLS"] != "think@rev-1" {
+		t.Fatalf("unexpected required skills env: %s", prepared.Env["MSPACE_REQUIRED_SKILLS"])
+	}
+	if !strings.Contains(prepared.DeveloperInstructions, "MSPACE_SESSION_SKILLS_DIR") {
+		t.Fatalf("expected developer instructions to mention session skills")
+	}
+	written, err := os.ReadFile(filepath.Join(skillsDir, "think", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read materialized SKILL.md: %v", err)
+	}
+	if string(written) != skillContent {
+		t.Fatalf("unexpected SKILL.md content: %q", string(written))
+	}
+	manifestData, err := os.ReadFile(prepared.Env["MSPACE_SESSION_SKILL_MANIFEST"])
+	if err != nil {
+		t.Fatalf("read skill manifest: %v", err)
+	}
+	var manifest materializedSkillsManifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatalf("parse skill manifest: %v", err)
+	}
+	if manifest.Root != skillsDir || len(manifest.Skills) != 1 || manifest.Skills[0].Name != "think" || len(manifest.Skills[0].Files) != 2 {
+		t.Fatalf("unexpected manifest: %+v", manifest)
+	}
+}
+
+func TestMaterializePayloadSkillBundlesRejectsUnsafePaths(t *testing.T) {
+	for _, unsafePath := range []string{"../escape.md", "/abs.md", "references\\notes.md", "safe/../../escape.md"} {
+		t.Run(unsafePath, func(t *testing.T) {
+			workdir := t.TempDir()
+			artifactDir := filepath.Join(workdir, ".mspace", "session")
+			if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+				t.Fatalf("create artifact dir: %v", err)
+			}
+			content := "unsafe"
+			payload := agentSessionPayload{
+				Workdir:     workdir,
+				ArtifactDir: artifactDir,
+				RequiredSkills: []skillBundle{
+					{Name: "think", Files: []skillBundleFile{{Path: unsafePath, Content: stringRef(content)}}},
+				},
+			}
+
+			if _, _, err := materializePayloadSkillBundles(payload); err == nil {
+				t.Fatalf("expected unsafe path %q to be rejected", unsafePath)
+			}
+			if _, err := os.Stat(filepath.Join(workdir, "escape.md")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("expected no escaped file, stat err=%v", err)
+			}
+		})
+	}
+}
+
+func TestMaterializePayloadSkillBundlesRejectsSha256Mismatch(t *testing.T) {
+	workdir := t.TempDir()
+	artifactDir := filepath.Join(workdir, ".mspace", "session")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("create artifact dir: %v", err)
+	}
+	content := "actual"
+	payload := agentSessionPayload{
+		Workdir:     workdir,
+		ArtifactDir: artifactDir,
+		Skills: []skillBundle{
+			{Name: "think", Files: []skillBundleFile{{Path: "SKILL.md", Content: stringRef(content), SHA256: strings.Repeat("0", 64)}}},
+		},
+	}
+
+	if _, _, err := materializePayloadSkillBundles(payload); err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("expected sha256 mismatch, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(artifactDir, "skills", "think", "SKILL.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected no materialized file after hash mismatch, stat err=%v", err)
 	}
 }
 
@@ -1123,6 +1242,10 @@ func runGit(t *testing.T, dir string, args ...string) {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func stringRef(value string) *string {
+	return &value
 }
 
 func installFakeCodex(t *testing.T) {
