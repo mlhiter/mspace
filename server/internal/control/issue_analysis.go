@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -13,6 +14,22 @@ const (
 )
 
 var errIssueAnalysisNotNeeded = errors.New("issue analysis does not need to be queued")
+
+func (s *Server) tryEnqueueIssueAnalysis(ctx context.Context, userID, workspaceID, issueID string) {
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	if err := s.enqueueIssueAnalysis(ctx, userID, workspaceID, issueID); err != nil {
+		if !errors.Is(err, errIssueAnalysisNotNeeded) {
+			slog.Warn("failed to enqueue issue analysis", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
+		}
+		return
+	}
+	if persistent, ok := s.store.(interface{ Persist() error }); ok {
+		if err := persistent.Persist(); err != nil {
+			slog.Warn("failed to persist issue analysis state", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
+		}
+	}
+}
 
 func (s *Server) enqueueIssueAnalysis(ctx context.Context, userID, workspaceID, issueID string) error {
 	detail, err := s.loadIssueForTypeTriage(ctx, workspaceID, issueID)

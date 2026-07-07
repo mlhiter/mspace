@@ -92,6 +92,7 @@ Automatic issue analysis is a separate agent-session automation, not part of typ
 Issue create
   -> server writes the issue
   -> if the issue has a project and a matching Codex worker is online, synchronously queue one agent_session automation="issue_analysis"
+  -> if the issue was created without a project, project attachment later retries the same issue_analysis queueing path
 Server
   -> attaches the built-in think skill bundle from the server catalog
   -> uses sandbox="read-only" and sourceCapture=false
@@ -102,7 +103,7 @@ Codex
   -> reads the session-scoped think skill and produces read-only analysis
 ```
 
-The analysis session is conservative: it is skipped when the issue has no project, no active worker, or an existing `issue_analysis` task. It is queued before asynchronous type triage, runs with a read-only sandbox, disables worker source capture, and server reconciliation ignores source/test/deploy/review artifacts from that automation. It should not edit files, create commits, or replace the normal human-triggered implementation turn. The UI presents it as `Issue analysis` so the first next-step analysis does not require a manual `@codex` comment.
+The analysis session is conservative: it is skipped when the issue has no project, no active worker, or an existing `issue_analysis` task. It is queued before asynchronous type triage when the issue is created with a project, and project attachment later retries the same queueing path for projectless top-level issues. It runs with a read-only sandbox, disables worker source capture, and server reconciliation ignores source/test/deploy/review artifacts from that automation. It should not edit files, create commits, or replace the normal human-triggered implementation turn. The UI presents it as `Issue analysis` so the first next-step analysis does not require a manual `@codex` comment.
 
 ## Test Module Flow
 

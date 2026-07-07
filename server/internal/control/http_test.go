@@ -1458,6 +1458,7 @@ func TestCreateWorkspaceIssueWithoutProject(t *testing.T) {
 	workspaceID := workspaces[0].ID
 	server := NewServer(Config{}, store, fakeGitHubClient{})
 	router := server.Routes()
+	registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true}`)
 
 	createRecorder := httptest.NewRecorder()
 	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues", strings.NewReader(`{"body":"Capture a workspace-level issue before the repo is known"}`))
@@ -1502,6 +1503,15 @@ func TestCreateWorkspaceIssueWithoutProject(t *testing.T) {
 	if detail.Issue.ProjectID != "" || detail.Project.ID != "" {
 		t.Fatalf("expected detail without project, got issue=%+v project=%+v", detail.Issue, detail.Project)
 	}
+	tasksBeforeAttach, err := store.ListRuntimeTasks(context.Background(), user.ID, workspaceID)
+	if err != nil {
+		t.Fatalf("list tasks before attach: %v", err)
+	}
+	for _, task := range tasksBeforeAttach {
+		if task.IssueID == createResult.IssueID && runtimeTaskAutomation(task) == issueAnalysisAutomation {
+			t.Fatalf("issue without project should not queue analysis before attach, got %+v", task)
+		}
+	}
 
 	createProjectRecorder := httptest.NewRecorder()
 	createProjectReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/projects", strings.NewReader(`{"name":"mspace","sourceType":"local","repoPath":"/Users/mlhiter/personal-projects/mspace","defaultBranch":"main"}`))
@@ -1528,6 +1538,10 @@ func TestCreateWorkspaceIssueWithoutProject(t *testing.T) {
 	}
 	if updated.ProjectID != project.ID {
 		t.Fatalf("expected issue attached to project %q, got %+v", project.ID, updated)
+	}
+	analysisTask := waitForIssueAnalysisTask(t, store, user.ID, workspaceID, createResult.IssueID)
+	if analysisTask.ProjectID != project.ID || analysisTask.Priority != 10 {
+		t.Fatalf("expected project attach to queue high-priority analysis for %q, got %+v", project.ID, analysisTask)
 	}
 
 	attachedDetailRecorder := httptest.NewRecorder()

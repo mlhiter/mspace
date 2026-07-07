@@ -2009,15 +2009,7 @@ func (s *Server) handleCreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
-	if err := s.enqueueIssueAnalysis(r.Context(), user.ID, workspaceID, issueID); err != nil {
-		if !errors.Is(err, errIssueAnalysisNotNeeded) {
-			slog.Warn("failed to enqueue issue analysis", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
-		}
-	} else if persistent, ok := s.store.(interface{ Persist() error }); ok {
-		if err := persistent.Persist(); err != nil {
-			slog.Warn("failed to persist issue analysis state", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
-		}
-	}
+	s.tryEnqueueIssueAnalysis(r.Context(), user.ID, workspaceID, issueID)
 	s.startIssueTypeTriage(user.ID, workspaceID, issueID)
 	writeJSON(w, http.StatusCreated, map[string]string{"issueId": issueID})
 }
@@ -2245,6 +2237,9 @@ func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStoreError(w, err)
 		return
+	}
+	if input.ProjectID != nil && strings.TrimSpace(*input.ProjectID) != "" && issue.ParentIssueID == "" {
+		s.tryEnqueueIssueAnalysis(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), issue.ID)
 	}
 	writeJSON(w, http.StatusOK, issue)
 }

@@ -12,7 +12,7 @@ The repository now has a runnable local desktop MVP:
 
 - create personal projects from a local folder picker or GitHub repository URL, create team projects from a GitHub repository URL that connected workers can clone, and manage settings later;
 - create and manage issues in the Issues tab;
-- automatically start a read-only first analysis session for new project-backed issues when a Codex worker is ready, using the server-managed `think` workflow skill instead of requiring an immediate manual `@codex` comment;
+- automatically start a read-only first analysis session for project-backed issues when a Codex worker is ready, including issues that receive their project after creation, using the server-managed `think` workflow skill instead of requiring an immediate manual `@codex` comment;
 - jump to issues and projects from the sidebar global search or `Command+K` palette;
 - sign in with a local username/password account, or optional GitHub OAuth when available, through the server control plane, show the current user/workspace state in the sidebar, and edit the user's display profile from Account Settings;
 - store signed-in workspace projects, project runbooks, project test cases, test case suggestions, test plans, test runs, issues, child issue tasks, comments, reactions, labels, and Inbox receipts in the server store: Postgres for team/shared deployments, local SQLite for packaged personal desktop mode;
