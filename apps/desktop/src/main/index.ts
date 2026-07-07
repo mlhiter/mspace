@@ -42,6 +42,7 @@ let personalWorkerWorkspaceId = "";
 let personalWorkerRestartTimer: NodeJS.Timeout | null = null;
 let personalWorkerCredentialTimer: NodeJS.Timeout | null = null;
 let personalWorkerOldCredentialRevokeTimers = new Set<NodeJS.Timeout>();
+let personalWorkerEnsureInFlight: Promise<EnsurePersonalWorkerResult> | null = null;
 let personalWorkerRestartAttempts = 0;
 let personalWorkerStopping = false;
 let personalWorkerCredential: RuntimeRegistrationTokenResult | null = null;
@@ -800,7 +801,7 @@ function startPersonalWorkerProcess(input: EnsurePersonalWorkerInput, tokenFile:
   });
 }
 
-async function ensurePersonalWorker(input: EnsurePersonalWorkerInput): Promise<EnsurePersonalWorkerResult> {
+async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): Promise<EnsurePersonalWorkerResult> {
   if (process.env.MSPACE_AUTO_PERSONAL_WORKER === "0") {
     return { ok: false, status: "disabled", workerName: "" };
   }
@@ -850,6 +851,21 @@ async function ensurePersonalWorker(input: EnsurePersonalWorkerInput): Promise<E
   startPersonalWorkerProcess(credentialInput, tokenPath, workerName, runtime);
   schedulePersonalWorkerCredentialRenewal(credentialInput, token);
   return { ok: true, status: "starting", workerName };
+}
+
+async function ensurePersonalWorker(input: EnsurePersonalWorkerInput): Promise<EnsurePersonalWorkerResult> {
+  while (personalWorkerEnsureInFlight) {
+    await personalWorkerEnsureInFlight.catch(() => undefined);
+  }
+  const run = ensurePersonalWorkerUnlocked(input);
+  personalWorkerEnsureInFlight = run;
+  try {
+    return await run;
+  } finally {
+    if (personalWorkerEnsureInFlight === run) {
+      personalWorkerEnsureInFlight = null;
+    }
+  }
 }
 
 function registerPersonalWorkerHandlers(): void {

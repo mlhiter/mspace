@@ -538,10 +538,10 @@ Kubernetes Environments currently use the existing `clusters` storage and remain
 
 ## Server Agent Sessions
 
-The desktop shell proactively ensures a personal Codex worker after auth and workspace selection. Issue Detail still starts a worker turn only after an action-level worker preflight:
+The desktop shell proactively ensures a personal Codex worker after auth and workspace selection. In personal desktop mode, Electron main is the authority for the bundled worker process; the server worker list is a heartbeat snapshot used to confirm liveness after Electron has been asked to ensure the worker. Issue Detail still starts a worker turn only after an action-level worker preflight:
 
 1. Refresh `GET /api/workspaces/{workspaceID}/runtime-workers` and look for a worker in the selected workspace and runtime mode with `codex:true`, `status:"online"`, and a fresh heartbeat.
-2. In personal desktop mode, ask Electron to ensure the host-local personal worker when no fresh worker is visible yet, then wait briefly for it to heartbeat. Team workspaces do not auto-start a worker; the user must connect a matching team worker.
+2. In personal desktop mode, ask Electron to ensure the host-local personal worker, then wait briefly for it to heartbeat. Do not skip the Electron ensure step only because the server still has a fresh heartbeat snapshot; that snapshot can survive an app restart for a short window. Team workspaces do not auto-start a worker; the user must connect a matching team worker.
 3. Write the human comment through `POST /api/workspaces/{workspaceID}/issues/{issueID}/comments`.
 4. Call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions` with the comment id as `triggerCommentId`.
 

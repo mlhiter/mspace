@@ -5231,6 +5231,23 @@ export function IssueDetailPage() {
       ? t("issueDetail.composer.agentUnavailable", { mention: mentionedAgent })
       : t("issueDetail.composer.commentsStay");
   const ensureAgentWorkerReady = useCallback(async () => {
+    if (runtimeMode === "personal" && window.mspaceDesktop?.ensurePersonalWorker) {
+      await window.mspaceDesktop.ensurePersonalWorker({
+        authToken: auth.token,
+        workspaceId,
+        serverUrl: getControlPlaneBaseUrl(),
+      });
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        await sleep(1_000);
+        const refreshed = await queryClient.fetchQuery({
+          queryKey: runtimeWorkersQueryKey,
+          queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
+          staleTime: 0,
+        });
+        if (activeCodexWorker(refreshed, workspaceId, runtimeMode)) return;
+      }
+      throw new Error(workerStartingText);
+    }
     const workers = await queryClient.fetchQuery({
       queryKey: runtimeWorkersQueryKey,
       queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
@@ -5239,20 +5256,6 @@ export function IssueDetailPage() {
     if (activeCodexWorker(workers, workspaceId, runtimeMode)) return;
     if (runtimeMode !== "personal" || !window.mspaceDesktop?.ensurePersonalWorker) {
       throw new Error(workerUnavailableText);
-    }
-    await window.mspaceDesktop.ensurePersonalWorker({
-      authToken: auth.token,
-      workspaceId,
-      serverUrl: getControlPlaneBaseUrl(),
-    });
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      await sleep(1_000);
-      const refreshed = await queryClient.fetchQuery({
-        queryKey: runtimeWorkersQueryKey,
-        queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
-        staleTime: 0,
-      });
-      if (activeCodexWorker(refreshed, workspaceId, runtimeMode)) return;
     }
     throw new Error(workerStartingText);
   }, [auth.token, queryClient, runtimeMode, runtimeWorkersQueryKey, workerStartingText, workerUnavailableText, workspaceId]);

@@ -8,6 +8,17 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-07-07",
+    title: "Reliable personal worker restart after desktop reload",
+    summary:
+      "mspace now treats Electron main as the source of truth for the desktop-managed personal worker, so fresh server heartbeat snapshots no longer hide a missing local worker after restart.",
+    items: [
+      "Desktop startup now always asks Electron to ensure the host-local personal Codex worker once auth and workspace selection are ready, then uses the server heartbeat only as liveness confirmation.",
+      "Serialized concurrent personal-worker ensure requests in Electron main so renderer reloads and repeated preflights do not start duplicate bundled workers.",
+      "Updated Issue Detail and Tests preflight to ask Electron to ensure the personal worker before waiting for a matching heartbeat, while team workspaces continue to require an explicitly connected team worker.",
+    ],
+  },
+  {
+    date: "2026-07-07",
     title: "Automatic issue analysis with server-managed skills",
     summary:
       "mspace now starts the first project-backed issue analysis automatically when a Codex worker is ready, using built-in workflow skills owned by the server.",

@@ -1384,6 +1384,25 @@ function useTestsWorkerReadiness(
       runtimeMode,
       ensureReady: async (options?: { browser?: boolean }) => {
         const requiredCapabilities = requiredTestWorkerCapabilities(options);
+        if (runtimeMode === "personal" && window.mspaceDesktop?.ensurePersonalWorker) {
+          onStatus?.(t("tests.startingPersonalWorker"));
+          await window.mspaceDesktop.ensurePersonalWorker({
+            authToken: auth.token,
+            workspaceId,
+            serverUrl: getControlPlaneBaseUrl(),
+            requiredCapabilities,
+          });
+          for (let attempt = 0; attempt < 12; attempt += 1) {
+            await sleep(1_000);
+            const refreshed = await queryClient.fetchQuery({
+              queryKey: runtimeWorkersQueryKey,
+              queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
+              staleTime: 0,
+            });
+            if (activeCodexWorker(refreshed, workspaceId, runtimeMode, requiredCapabilities)) return;
+          }
+          throw new Error(workerStartingText);
+        }
         const workers = await queryClient.fetchQuery({
           queryKey: runtimeWorkersQueryKey,
           queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
@@ -1392,22 +1411,6 @@ function useTestsWorkerReadiness(
         if (activeCodexWorker(workers, workspaceId, runtimeMode, requiredCapabilities)) return;
         if (runtimeMode !== "personal" || !window.mspaceDesktop?.ensurePersonalWorker) {
           throw new Error(workerUnavailableText);
-        }
-        onStatus?.(t("tests.startingPersonalWorker"));
-        await window.mspaceDesktop.ensurePersonalWorker({
-          authToken: auth.token,
-          workspaceId,
-          serverUrl: getControlPlaneBaseUrl(),
-          requiredCapabilities,
-        });
-        for (let attempt = 0; attempt < 12; attempt += 1) {
-          await sleep(1_000);
-          const refreshed = await queryClient.fetchQuery({
-            queryKey: runtimeWorkersQueryKey,
-            queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
-            staleTime: 0,
-          });
-          if (activeCodexWorker(refreshed, workspaceId, runtimeMode, requiredCapabilities)) return;
         }
         throw new Error(workerStartingText);
       },
