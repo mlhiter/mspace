@@ -190,6 +190,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration credential metadata without raw token values. Owner/admin only. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration credential. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and their latest heartbeat state. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime/availability` | Return readiness for a runtime mode and required capabilities. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a runtime task for API-level smoke/debug tooling. Current product task kinds include `protocol_smoke`, `noop`, `issue_type_triage`, and `agent_session`. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks?limit=10&offset=0` | List runtime tasks for the workspace with pagination metadata and status counts. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
@@ -230,7 +231,7 @@ Workspace Settings exposes the first UI-testable collaboration loop. Owners and 
 
 ## Runtime Worker Registry
 
-Agent-session creation is guarded by worker liveness. The server checks that the requested `runtimeMode` matches the workspace kind and that a matching online worker with Codex capability and a fresh heartbeat exists before creating the session and runtime task; otherwise it returns HTTP `409` with `no active codex worker`. UI clients should preflight `/runtime-workers` before saving a trigger comment. Desktop personal mode can auto-start the host-local personal worker, while team workspaces require an explicitly connected team worker.
+Agent-session creation is guarded by worker liveness. The server checks that the requested `runtimeMode` matches the workspace kind and that a matching online worker with Codex capability and a fresh heartbeat exists before creating the session and runtime task; otherwise it returns HTTP `409` with `no active codex worker`. UI clients should preflight `/runtime/availability` before saving a trigger comment, using `reasonCode` and `canAutoStart` instead of reimplementing heartbeat TTLs. Desktop personal mode can ask Electron main to auto-start the host-local personal worker, while team workspaces require an explicitly connected team worker.
 
 Normal team worker setup should use the Workspace Settings worker install action, backed by `POST /api/workspaces/{workspaceID}/worker-installations`. The response contains a one-time install command that embeds a short-lived bootstrap credential and starts the Docker-backed worker on the target host. The raw `msw_...` registration credential endpoints remain for Electron's automatic personal worker lifecycle and API-level recovery/debugging, but they are no longer the main product setup path.
 

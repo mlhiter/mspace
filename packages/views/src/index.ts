@@ -6,6 +6,7 @@ export * from "./inbox-page";
 export * from "./issues-page";
 export * from "./issue-detail-page";
 export * from "./projects-page";
+export * from "./runtime-worker-readiness";
 export * from "./session-detail-page";
 export * from "./tests-page";
 export * from "./workspace-settings-page";

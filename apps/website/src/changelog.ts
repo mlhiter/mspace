@@ -8,6 +8,17 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-07-07",
+    title: "Server-owned runtime availability checks",
+    summary:
+      "mspace now asks the server for runtime readiness before agent and Tests actions, instead of letting each desktop view reimplement worker heartbeat rules.",
+    items: [
+      "Added a workspace runtime availability API that returns structured readiness states such as ready, stale heartbeat, missing capability, draining, offline, no worker, and wrong runtime mode.",
+      "Moved Issue Detail, Tests, and desktop personal-worker startup onto a shared readiness helper that polls server availability and auto-starts only the desktop-managed personal worker when allowed.",
+      "Kept Workspace Settings worker rows as an operational list while action preflight uses the server-owned availability contract.",
+    ],
+  },
+  {
+    date: "2026-07-07",
     title: "Reliable personal worker restart after desktop reload",
     summary:
       "mspace now treats Electron main as the source of truth for the desktop-managed personal worker, so fresh server heartbeat snapshots no longer hide a missing local worker after restart.",

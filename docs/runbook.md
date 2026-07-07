@@ -63,7 +63,7 @@ cp .env.example .env.local
 pnpm run server
 ```
 
-For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker as soon as auth and workspace selection are ready, with action-level preflight still available before submitting agent or test work. Electron main owns the bundled worker process and serializes concurrent ensure requests; the server `runtime_workers` row is a heartbeat snapshot, not proof that the current app process still owns a worker after restart. The worker uses the active desktop server URL, a short-lived workspace registration credential, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Electron writes the credential to `<Electron userData>/worker/tokens/<workspace-id>.token`, renews the 12-hour credential before expiry, and revokes the previous credential after a short grace period. The worker rereads the token file for runtime API calls, so credential renewal should be invisible during normal personal use. Workspace Settings labels these rows as automatic desktop credentials and keeps expired/replaced rows under credential history. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
+For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker as soon as auth and workspace selection are ready, with action-level preflight still available before submitting agent or test work. Electron main owns the bundled worker process and serializes concurrent ensure requests; the server `runtime_workers` row is a heartbeat snapshot, not proof that the current app process still owns a worker after restart. Renderer readiness flows call the server runtime availability API with the requested `runtimeMode` and capabilities, ask Electron main to idempotently ensure the personal worker in personal mode, and never auto-start a worker for team workspaces. The worker uses the active desktop server URL, a short-lived workspace registration credential, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Electron writes the credential to `<Electron userData>/worker/tokens/<workspace-id>.token`, renews the 12-hour credential before expiry, and revokes the previous credential after a short grace period. The worker rereads the token file for runtime API calls, so credential renewal should be invisible during normal personal use. Workspace Settings labels these rows as automatic desktop credentials and keeps expired/replaced rows under credential history. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
 
 For UI test batches, the desktop personal worker also prepares a dedicated CDP endpoint and advertises `browser:true` plus `chrome_cdp:true`. Electron first honors `MSPACE_CHROME_CDP_URL` if it is already reachable, otherwise it tries a desktop-managed Chrome profile under `<Electron userData>/worker/browser-profile`, then falls back to an Electron-managed Chromium host under `<Electron userData>/worker/electron-browser-profile` when local Chrome cannot expose CDP. The reachable CDP URL is passed to the worker as `MSPACE_CHROME_CDP_URL`. If no CDP endpoint can be reached, the worker still starts with Codex-only capability instead of claiming UI execution support.
 
@@ -503,17 +503,26 @@ docker exec mspace-postgres-dev psql -U mspace -d mspace -Atc "select count(*) f
 
 ### Worker does not claim tasks
 
-Agent mentions are rejected before queueing when no matching active Codex worker exists. Check the worker is registered, online, fresh, and has matching mode/capabilities:
+Agent mentions are rejected before queueing when no matching active Codex worker exists. First check the server readiness contract for the runtime mode and required capabilities, then inspect worker/task details when the reason code points at liveness or capability drift:
 
 ```bash
+curl -G http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime/availability \
+  -H "Authorization: Bearer <msp-token>" \
+  --data-urlencode 'runtimeMode=personal' \
+  --data-urlencode 'requiredCapabilities={"codex":true}'
+
 curl -H "Authorization: Bearer <msp-token>" \
   http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-workers
+```
 
+`reasonCode` values such as `no_worker`, `missing_capability`, `stale_heartbeat`, `worker_draining`, `worker_offline`, and `wrong_runtime_mode` explain why the product should not queue yet. If a task is already queued or running, inspect runtime tasks too:
+
+```bash
 curl -H "Authorization: Bearer <msp-token>" \
   "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks?limit=10&offset=0"
 ```
 
-The task's `runtimeMode` and `requiredCapabilities` must match the worker heartbeat.
+The task's `runtimeMode` and `requiredCapabilities` must match a ready worker heartbeat.
 
 If a Tests plan includes any `ui` cases, the server requires a fresh worker with `{"codex":true,"browser":true,"chrome_cdp":true}`. In personal desktop mode, restart the desktop app or stop/start the personal worker so Electron can launch a managed CDP endpoint and refresh the worker heartbeat. If Chrome exists but CDP never becomes reachable, Electron should fall back to its bundled Chromium host in local dev. If the worker still shows Codex-only capabilities, provide a reachable `MSPACE_CHROME_CDP_URL`, or set `MSPACE_CHROME_EXECUTABLE` / `MSPACE_ELECTRON_EXECUTABLE` before starting the desktop app.
 

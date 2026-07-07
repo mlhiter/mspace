@@ -89,6 +89,9 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	if payload.Capabilities["runtimeWorkerRegistration"] != true {
 		t.Fatalf("expected runtime worker registration capability, got %+v", payload.Capabilities)
 	}
+	if payload.Capabilities["runtimeAvailability"] != true {
+		t.Fatalf("expected runtime availability capability, got %+v", payload.Capabilities)
+	}
 	if payload.Capabilities["runtimeTaskQueue"] != true {
 		t.Fatalf("expected runtime task queue capability, got %+v", payload.Capabilities)
 	}
@@ -3647,6 +3650,108 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	router.ServeHTTP(rejectedHeartbeatRecorder, rejectedHeartbeatReq)
 	if rejectedHeartbeatRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked token heartbeat should be unauthorized, status=%d body=%s", rejectedHeartbeatRecorder.Code, rejectedHeartbeatRecorder.Body.String())
+	}
+}
+
+func TestRuntimeAvailabilityFlow(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "runtime-availability-owner",
+		Login:          "runtime-availability-owner",
+		Name:           "Runtime Availability Owner",
+		Email:          "runtime-availability-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	teamWorkspace, _, err := store.CreateWorkspace(context.Background(), user.ID, CreateWorkspaceInput{Name: "Availability Team", Kind: "team"})
+	if err != nil {
+		t.Fatalf("create team workspace: %v", err)
+	}
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	getAvailability := func(path string) RuntimeAvailability {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+sessionToken)
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("availability status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		var availability RuntimeAvailability
+		if err := json.Unmarshal(recorder.Body.Bytes(), &availability); err != nil {
+			t.Fatalf("parse availability: %v", err)
+		}
+		return availability
+	}
+
+	availability := getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal")
+	if availability.State != "unavailable" || availability.ReasonCode != "no_worker" || availability.CanQueue || !availability.CanAutoStart {
+		t.Fatalf("unexpected no-worker availability: %+v", availability)
+	}
+	if !strings.Contains(string(availability.RequiredCapabilities), `"codex":true`) {
+		t.Fatalf("default availability should require codex, got %s", availability.RequiredCapabilities)
+	}
+
+	tokenResult, worker := registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true}`)
+	availability = getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal")
+	if availability.State != "ready" || availability.ReasonCode != "ready" || !availability.CanQueue || availability.CanAutoStart {
+		t.Fatalf("unexpected ready availability: %+v", availability)
+	}
+	if availability.MatchedWorker == nil || availability.MatchedWorker.ID != worker.ID || availability.LastSeenAt == "" {
+		t.Fatalf("expected matched worker, got %+v", availability)
+	}
+
+	availability = getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal&capabilities=codex,browser")
+	if availability.State != "unavailable" || availability.ReasonCode != "missing_capability" || availability.CanQueue || !availability.CanAutoStart {
+		t.Fatalf("unexpected missing-capability availability: %+v", availability)
+	}
+	if len(availability.MissingCapabilities) != 1 || availability.MissingCapabilities[0] != "browser" {
+		t.Fatalf("expected missing browser capability, got %+v", availability.MissingCapabilities)
+	}
+
+	drainingRecorder := httptest.NewRecorder()
+	drainingReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/heartbeat", strings.NewReader(`{"status":"draining","currentLoad":1}`))
+	drainingReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(drainingRecorder, drainingReq)
+	if drainingRecorder.Code != http.StatusOK {
+		t.Fatalf("draining heartbeat status=%d body=%s", drainingRecorder.Code, drainingRecorder.Body.String())
+	}
+	availability = getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal")
+	if availability.State != "unavailable" || availability.ReasonCode != "worker_draining" || availability.CanQueue || !availability.CanAutoStart {
+		t.Fatalf("unexpected draining availability: %+v", availability)
+	}
+
+	store.mu.Lock()
+	for key, existing := range store.runtimeWorkers {
+		if existing.ID == worker.ID {
+			existing.Status = "online"
+			existing.LastSeenAt = time.Now().UTC().Add(-activeWorkerMaxAge - time.Minute).Format(time.RFC3339Nano)
+			store.runtimeWorkers[key] = existing
+			break
+		}
+	}
+	store.mu.Unlock()
+	availability = getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal")
+	if availability.State != "unavailable" || availability.ReasonCode != "stale_heartbeat" || availability.CanQueue || !availability.CanAutoStart {
+		t.Fatalf("unexpected stale availability: %+v", availability)
+	}
+
+	availability = getAvailability("/api/workspaces/" + teamWorkspace.ID + "/runtime/availability?runtimeMode=personal")
+	if availability.State != "unavailable" || availability.ReasonCode != "wrong_runtime_mode" || availability.CanAutoStart || availability.CanQueue {
+		t.Fatalf("unexpected wrong-mode availability: %+v", availability)
+	}
+	availability = getAvailability("/api/workspaces/" + teamWorkspace.ID + "/runtime/availability?runtimeMode=team")
+	if availability.State != "unavailable" || availability.ReasonCode != "no_worker" || availability.CanAutoStart || availability.CanQueue {
+		t.Fatalf("unexpected team no-worker availability: %+v", availability)
 	}
 }
 

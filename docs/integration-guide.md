@@ -21,7 +21,7 @@ The desktop chooses its server in this order:
 2. A saved Team server URL from Electron user data.
 3. The local bundled/dev server on `127.0.0.1:8787`.
 
-Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 1`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceInvitationPreview`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, and `runtimeTaskQueue`. `capabilities.githubAuth` is optional behavior metadata. GitHub login is shown only when the desktop is using an explicitly configured team server, from either `MSPACE_SERVER_URL` or a saved Team server URL, and that server reports `capabilities.githubAuth: true`. The default local personal server stays local-account-only and starts on account creation.
+Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 1`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceInvitationPreview`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, `runtimeAvailability`, and `runtimeTaskQueue`. `capabilities.githubAuth` is optional behavior metadata. GitHub login is shown only when the desktop is using an explicitly configured team server, from either `MSPACE_SERVER_URL` or a saved Team server URL, and that server reports `capabilities.githubAuth: true`. The default local personal server stays local-account-only and starts on account creation.
 
 Workspace endpoints require:
 
@@ -538,10 +538,10 @@ Kubernetes Environments currently use the existing `clusters` storage and remain
 
 ## Server Agent Sessions
 
-The desktop shell proactively ensures a personal Codex worker after auth and workspace selection. In personal desktop mode, Electron main is the authority for the bundled worker process; the server worker list is a heartbeat snapshot used to confirm liveness after Electron has been asked to ensure the worker. Issue Detail still starts a worker turn only after an action-level worker preflight:
+The desktop shell proactively ensures a personal Codex worker after auth and workspace selection. In personal desktop mode, Electron main is the authority for the bundled worker process; the server availability API is a heartbeat/capability snapshot used to confirm liveness after Electron has been asked to ensure the worker. Issue Detail still starts a worker turn only after an action-level worker preflight:
 
-1. Refresh `GET /api/workspaces/{workspaceID}/runtime-workers` and look for a worker in the selected workspace and runtime mode with `codex:true`, `status:"online"`, and a fresh heartbeat.
-2. In personal desktop mode, ask Electron to ensure the host-local personal worker, then wait briefly for it to heartbeat. Do not skip the Electron ensure step only because the server still has a fresh heartbeat snapshot; that snapshot can survive an app restart for a short window. Team workspaces do not auto-start a worker; the user must connect a matching team worker.
+1. Call `GET /api/workspaces/{workspaceID}/runtime/availability?runtimeMode=<personal|team>&requiredCapabilities={"codex":true}` and require `state:"ready"` before queueing.
+2. In personal desktop mode, ask Electron to ensure the host-local personal worker, then wait briefly for the availability response to show a ready worker. Do not skip the Electron ensure step only because the server still has a fresh heartbeat snapshot; that snapshot can survive an app restart for a short window. Team workspaces do not auto-start a worker; the user must connect a matching team worker.
 3. Write the human comment through `POST /api/workspaces/{workspaceID}/issues/{issueID}/comments`.
 4. Call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions` with the comment id as `triggerCommentId`.
 
@@ -600,6 +600,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration token metadata without raw token values. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and heartbeat state. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime/availability` | Return structured readiness for a runtime mode and required capability set. Use this for product action preflight instead of reimplementing heartbeat TTLs in clients. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a runtime task manually for API-level smoke/debug tooling. Product UI flows normally create tasks through issue triage, agent session, or test deploy routes. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks?limit=10&offset=0` | List runtime tasks with pagination metadata and status counts. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
@@ -611,6 +612,33 @@ curl -H "Authorization: Bearer <msp-token>" \
 | `GET` | `/api/runtime/workers/{workerID}/tasks/{taskID}` | Let the claiming worker inspect task state while executing. |
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/logs` | Append a log line to a claimed/running task. |
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/status` | Move a claimed task to `running`, `completed`, `failed`, or `cancelled`. |
+
+Check action readiness for a Codex-backed turn:
+
+```bash
+curl -G "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/runtime/availability" \
+  -H "Authorization: Bearer <msp-token>" \
+  --data-urlencode 'runtimeMode=personal' \
+  --data-urlencode 'requiredCapabilities={"codex":true}'
+```
+
+The response is HTTP `200` even for unavailable states so clients can branch on structured diagnostics:
+
+```json
+{
+  "workspaceId": "<workspace-id>",
+  "runtimeMode": "personal",
+  "requiredCapabilities": { "codex": true },
+  "state": "unavailable",
+  "reasonCode": "no_worker",
+  "canQueue": false,
+  "canAutoStart": true,
+  "retryAfterMs": 5000,
+  "activeWorkerMaxAgeMs": 45000
+}
+```
+
+`reasonCode` may be `ready`, `no_worker`, `missing_capability`, `stale_heartbeat`, `worker_draining`, `worker_offline`, or `wrong_runtime_mode`. Personal desktop clients should ask Electron main to idempotently ensure the host-local worker before trusting a ready heartbeat, then poll availability again when the worker is starting. Team clients must treat unavailable states as a Connect Environment problem.
 
 Create a worker install command:
 

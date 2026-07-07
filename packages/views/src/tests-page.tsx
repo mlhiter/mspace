@@ -40,7 +40,6 @@ import {
   type Project,
   type Environment,
   type RuntimeTask,
-  type RuntimeWorker,
   type TestCase,
   type ImportTestCasesInput,
   type TestCaseInput,
@@ -77,6 +76,7 @@ import {
   cn,
 } from "@mspace/ui";
 import { useMspaceAuth } from "./auth-context";
+import { ensureRuntimeReady } from "./runtime-worker-readiness";
 import { RelativeTime } from "./time";
 
 type TabKey = "cases" | "proposals" | "plans" | "runs";
@@ -1269,10 +1269,6 @@ function executabilityIssueLabel(count: number, t: ReturnType<typeof useMspaceTr
   return t("tests.executableIssueCount", { count });
 }
 
-function hasCodexCapability(worker: RuntimeWorker) {
-  return worker.capabilities?.codex === true;
-}
-
 function testCasesRequireBrowser(testCases: TestCase[]) {
   return testCases.some((testCase) => testCase.type === "ui");
 }
@@ -1286,32 +1282,6 @@ function requiredTestWorkerCapabilities(options?: { browser?: boolean }): Record
     codex: true,
     ...(options?.browser ? { browser: true, chrome_cdp: true } : {}),
   };
-}
-
-function hasRuntimeCapabilities(worker: RuntimeWorker, requiredCapabilities: Record<string, boolean>) {
-  return Object.entries(requiredCapabilities).every(([capability, required]) => !required || worker.capabilities?.[capability] === true);
-}
-
-function isFreshWorkerHeartbeat(value: string) {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && Date.now() - timestamp <= 45_000;
-}
-
-function activeCodexWorker(
-  workers: RuntimeWorker[],
-  workspaceId: string,
-  runtimeMode: string,
-  requiredCapabilities = requiredTestWorkerCapabilities(),
-) {
-  return workers.find(
-    (worker) =>
-      worker.workspaceId === workspaceId &&
-      worker.mode === runtimeMode &&
-      worker.status === "online" &&
-      hasCodexCapability(worker) &&
-      hasRuntimeCapabilities(worker, requiredCapabilities) &&
-      isFreshWorkerHeartbeat(worker.lastSeenAt),
-  );
 }
 
 function TestDetailUnavailableState(props: {
@@ -1338,10 +1308,6 @@ function TestDetailUnavailableState(props: {
       </div>
     </PageFrame>
   );
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function useWorkspaceProjects() {
@@ -1372,7 +1338,6 @@ function useTestsWorkerReadiness(
   const { t } = useMspaceTranslation();
   const queryClient = useQueryClient();
   const runtimeMode = auth.workspace?.kind === "team" ? "team" : "personal";
-  const runtimeWorkersQueryKey = queryKeys.runtimeWorkers(workspaceId, auth.token);
   const workerUnavailableText =
     runtimeMode === "personal"
       ? t("tests.personalWorkerUnavailable")
@@ -1384,38 +1349,21 @@ function useTestsWorkerReadiness(
       runtimeMode,
       ensureReady: async (options?: { browser?: boolean }) => {
         const requiredCapabilities = requiredTestWorkerCapabilities(options);
-        if (runtimeMode === "personal" && window.mspaceDesktop?.ensurePersonalWorker) {
-          onStatus?.(t("tests.startingPersonalWorker"));
-          await window.mspaceDesktop.ensurePersonalWorker({
-            authToken: auth.token,
-            workspaceId,
-            serverUrl: getControlPlaneBaseUrl(),
-            requiredCapabilities,
-          });
-          for (let attempt = 0; attempt < 12; attempt += 1) {
-            await sleep(1_000);
-            const refreshed = await queryClient.fetchQuery({
-              queryKey: runtimeWorkersQueryKey,
-              queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
-              staleTime: 0,
-            });
-            if (activeCodexWorker(refreshed, workspaceId, runtimeMode, requiredCapabilities)) return;
-          }
-          throw new Error(workerStartingText);
-        }
-        const workers = await queryClient.fetchQuery({
-          queryKey: runtimeWorkersQueryKey,
-          queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
-          staleTime: 0,
+        await ensureRuntimeReady({
+          token: auth.token,
+          workspaceId,
+          queryClient,
+          runtimeMode,
+          requiredCapabilities,
+          unavailableMessage: workerUnavailableText,
+          startingMessage: workerStartingText,
+          statusMessage: t("tests.startingPersonalWorker"),
+          ensurePersonalWorker: window.mspaceDesktop?.ensurePersonalWorker,
+          onStatus,
         });
-        if (activeCodexWorker(workers, workspaceId, runtimeMode, requiredCapabilities)) return;
-        if (runtimeMode !== "personal" || !window.mspaceDesktop?.ensurePersonalWorker) {
-          throw new Error(workerUnavailableText);
-        }
-        throw new Error(workerStartingText);
       },
     }),
-    [auth.token, onStatus, queryClient, runtimeMode, runtimeWorkersQueryKey, t, workerStartingText, workerUnavailableText, workspaceId],
+    [auth.token, onStatus, queryClient, runtimeMode, t, workerStartingText, workerUnavailableText, workspaceId],
   );
 }
 

@@ -198,6 +198,7 @@ func (s *Server) Routes() http.Handler {
 	r.Delete("/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}", s.handleRevokeRuntimeRegistrationToken)
 	r.Post("/api/workspaces/{workspaceID}/worker-installations", s.handleCreateWorkerInstallation)
 	r.Get("/api/workspaces/{workspaceID}/runtime-workers", s.handleListRuntimeWorkers)
+	r.Get("/api/workspaces/{workspaceID}/runtime/availability", s.handleRuntimeAvailability)
 	r.Post("/api/workspaces/{workspaceID}/runtime-tasks", s.handleCreateRuntimeTask)
 	r.Get("/api/workspaces/{workspaceID}/runtime-tasks", s.handleListRuntimeTasks)
 	r.Get("/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events", s.handleListRuntimeTaskEvents)
@@ -281,6 +282,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"testCaseLibrary":             true,
 			"testCaseWorkflow":            true,
 			"runtimeWorkerRegistration":   true,
+			"runtimeAvailability":         true,
 			"runtimeTaskQueue":            true,
 			"workspaceCollaboration":      true,
 		},
@@ -2522,6 +2524,38 @@ func (s *Server) handleListRuntimeWorkers(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, workers)
 }
 
+func (s *Server) handleRuntimeAvailability(w http.ResponseWriter, r *http.Request) {
+	user, workspaces, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	workspace, found := workspaceByID(workspaces, workspaceID)
+	if !found {
+		writeStoreError(w, ErrNotFound)
+		return
+	}
+	requiredCapabilities, err := runtimeAvailabilityRequiredCapabilities(r.URL.Query())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	workers, err := s.store.ListRuntimeWorkers(r.Context(), user.ID, workspaceID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	availability := evaluateRuntimeAvailability(
+		workspaceID,
+		workspace.Kind,
+		r.URL.Query().Get("runtimeMode"),
+		requiredCapabilities,
+		workers,
+		time.Now().UTC(),
+	)
+	writeJSON(w, http.StatusOK, availability)
+}
+
 func (s *Server) handleCreateRuntimeTask(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.authenticate(w, r)
 	if !ok {
@@ -2838,6 +2872,37 @@ func workspaceByID(workspaces []Workspace, workspaceID string) (Workspace, bool)
 		}
 	}
 	return Workspace{}, false
+}
+
+func runtimeAvailabilityRequiredCapabilities(values url.Values) (json.RawMessage, error) {
+	if raw := strings.TrimSpace(values.Get("requiredCapabilities")); raw != "" {
+		return normalizeJSONObjectPayload(json.RawMessage(raw))
+	}
+	capabilities := map[string]bool{}
+	for _, value := range values["capability"] {
+		for _, capability := range strings.Split(value, ",") {
+			capability = strings.TrimSpace(capability)
+			if capability != "" {
+				capabilities[capability] = true
+			}
+		}
+	}
+	for _, value := range values["capabilities"] {
+		for _, capability := range strings.Split(value, ",") {
+			capability = strings.TrimSpace(capability)
+			if capability != "" {
+				capabilities[capability] = true
+			}
+		}
+	}
+	if len(capabilities) == 0 {
+		capabilities["codex"] = true
+	}
+	payload, err := json.Marshal(capabilities)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(payload), nil
 }
 
 func runtimeModeForWorkspace(workspace Workspace) string {

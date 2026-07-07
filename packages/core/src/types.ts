@@ -595,6 +595,26 @@ export interface RuntimeWorker {
 	updatedAt: string;
 }
 
+export interface RuntimeAvailabilityInput {
+	runtimeMode?: string;
+	requiredCapabilities?: Record<string, boolean>;
+}
+
+export interface RuntimeAvailability {
+	workspaceId: string;
+	runtimeMode: string;
+	requiredCapabilities: Record<string, unknown>;
+	state: string;
+	reasonCode: string;
+	canQueue: boolean;
+	canAutoStart: boolean;
+	retryAfterMs: number;
+	matchedWorker?: RuntimeWorker;
+	lastSeenAt?: string;
+	missingCapabilities?: string[];
+	activeWorkerMaxAgeMs: number;
+}
+
 export interface RuntimeTask {
 	id: string;
 	workspaceId: string;

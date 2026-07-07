@@ -67,7 +67,7 @@ In desktop personal mode, Electron manages the local worker bootstrap credential
 
 In customer Helm deployments, the fixed-worker path can bootstrap the team workspace and runtime token in one install. When `bootstrap.teamWorkspace.enabled=true`, the chart stores one `msw_...` token in the release Secret, passes it to the server as `MSPACE_BOOTSTRAP_RUNTIME_TOKEN`, and passes the same Secret key to the worker as `MSPACE_RUNTIME_TOKEN`. Server startup ensures the bootstrap admin, creates or finds the named team workspace owned by that admin, and registers the token against that workspace. Codex auth/config still stays out of the server: the worker mounts `mspace-codex-home` with `auth.json` and `config.toml`, while the server only sees the mspace runtime registration token.
 
-Agent session creation is guarded rather than left to wait in the queue. Issue Detail refreshes runtime worker liveness before writing the trigger comment; personal desktop mode may reuse the shell-started worker or start it as a fallback and wait for a fresh heartbeat. The server repeats the same active Codex worker check and returns HTTP `409` with `no active codex worker` when no matching online worker exists.
+Agent session creation is guarded rather than left to wait in the queue. Issue Detail uses `GET /api/workspaces/{workspaceID}/runtime/availability` as the product-facing preflight for the selected runtime mode and required capabilities; personal desktop mode still asks Electron main to ensure the host-local worker before trusting a fresh server heartbeat snapshot. The server repeats the same active Codex worker check and returns HTTP `409` with `no active codex worker` when no matching online worker exists.
 
 Issue type triage follows the same boundary:
 

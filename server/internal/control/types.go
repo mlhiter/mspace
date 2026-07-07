@@ -1641,6 +1641,21 @@ type RuntimeWorker struct {
 	UpdatedAt    string          `json:"updatedAt"`
 }
 
+type RuntimeAvailability struct {
+	WorkspaceID          string          `json:"workspaceId"`
+	RuntimeMode          string          `json:"runtimeMode"`
+	RequiredCapabilities json.RawMessage `json:"requiredCapabilities"`
+	State                string          `json:"state"`
+	ReasonCode           string          `json:"reasonCode"`
+	CanQueue             bool            `json:"canQueue"`
+	CanAutoStart         bool            `json:"canAutoStart"`
+	RetryAfterMs         int             `json:"retryAfterMs"`
+	MatchedWorker        *RuntimeWorker  `json:"matchedWorker,omitempty"`
+	LastSeenAt           string          `json:"lastSeenAt,omitempty"`
+	MissingCapabilities  []string        `json:"missingCapabilities,omitempty"`
+	ActiveWorkerMaxAgeMs int64           `json:"activeWorkerMaxAgeMs"`
+}
+
 type RuntimeWorkerInput struct {
 	Name         string          `json:"name"`
 	Mode         string          `json:"mode"`

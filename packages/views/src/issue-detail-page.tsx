@@ -37,7 +37,6 @@ import {
 } from "lucide-react";
 import {
   controlPlaneApi,
-  getControlPlaneBaseUrl,
   getStoredAuthIdentity,
   queryKeys,
   type AgentProfile,
@@ -59,7 +58,6 @@ import {
   type ReviewEvidenceCheck,
   type ReviewEvidenceCommand,
   type ReviewEvidenceResult,
-  type RuntimeWorker,
   type SessionFailure,
   type SessionLog,
   type SessionReviewEvidence,
@@ -93,6 +91,7 @@ import { IssueDocumentEditor } from "./issue-document-editor";
 import { useResolvedIssueImageSrc } from "./attachment-image";
 import { codexAvatarDataUrl } from "./agent-avatar";
 import { useMspaceAuth } from "./auth-context";
+import { ensureRuntimeReady } from "./runtime-worker-readiness";
 import {
   buildIssueLabelSelectionInput,
   issueLabelMatchesDimension,
@@ -406,32 +405,8 @@ function cleanupDecisionLabel(status: string) {
   return status ? status.replace(/[_-]+/g, " ") : translate("issueDetail.environment.notDecided");
 }
 
-function hasCodexCapability(worker: RuntimeWorker) {
-  return worker.capabilities?.codex === true;
-}
-
-function isFreshWorkerHeartbeat(value: string) {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && Date.now() - timestamp <= 45_000;
-}
-
-function activeCodexWorker(workers: RuntimeWorker[], workspaceId: string, runtimeMode: string) {
-  return workers.find(
-    (worker) =>
-      worker.workspaceId === workspaceId &&
-      worker.mode === runtimeMode &&
-      worker.status === "online" &&
-      hasCodexCapability(worker) &&
-      isFreshWorkerHeartbeat(worker.lastSeenAt),
-  );
-}
-
 function isNoActiveCodexWorkerError(error: unknown) {
   return error instanceof Error && /no active codex worker/i.test(error.message);
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function namespaceStatusLabel(status: string) {
@@ -5042,10 +5017,16 @@ export function IssueDetailPage() {
   const auth = useMspaceAuth();
   const workspaceId = auth.workspace?.id || "";
   const serverWorkspaceReady = Boolean(auth.token && workspaceId);
+  const runtimeMode = auth.workspace?.kind === "team" ? "team" : "personal";
+  const agentRequiredCapabilities = useMemo(() => ({ codex: true }), []);
+  const agentRuntimeAvailabilityInput = useMemo(
+    () => ({ runtimeMode, requiredCapabilities: agentRequiredCapabilities }),
+    [agentRequiredCapabilities, runtimeMode],
+  );
   const issueQueryKey = queryKeys.workspaceIssue(workspaceId, issueId, auth.token);
   const issuesQueryKey = queryKeys.workspaceIssues(workspaceId, auth.token);
   const inboxQueryKey = queryKeys.workspaceInbox(workspaceId, auth.token);
-  const runtimeWorkersQueryKey = queryKeys.runtimeWorkers(workspaceId, auth.token);
+  const runtimeAvailabilityQueryKey = queryKeys.runtimeAvailability(workspaceId, auth.token, agentRuntimeAvailabilityInput);
   const labelDefinitionsQueryKey = queryKeys.workspaceIssueLabelDefinitions(workspaceId, auth.token);
   const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
   const agentsQueryKey = queryKeys.agents(workspaceId, auth.token);
@@ -5118,9 +5099,9 @@ export function IssueDetailPage() {
     enabled: serverWorkspaceReady,
     retry: false,
   });
-  const runtimeWorkersQuery = useQuery({
-    queryKey: runtimeWorkersQueryKey,
-    queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
+  const runtimeAvailabilityQuery = useQuery({
+    queryKey: runtimeAvailabilityQueryKey,
+    queryFn: () => controlPlaneApi.getRuntimeAvailability(auth.token, workspaceId, agentRuntimeAvailabilityInput),
     enabled: serverWorkspaceReady,
     refetchInterval: 5_000,
   });
@@ -5145,7 +5126,6 @@ export function IssueDetailPage() {
     enabled: serverWorkspaceReady && runbookOpen && Boolean(detail?.project?.id),
   });
   const agents = listOrEmpty(agentsQuery.data);
-  const runtimeWorkers = listOrEmpty(runtimeWorkersQuery.data);
   const clusters = listOrEmpty(clustersQuery.data);
   const projects = listOrEmpty(projectsQuery.data);
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
@@ -5183,9 +5163,8 @@ export function IssueDetailPage() {
       : enabledAgents.filter((agent) => mentionKey(agent.mention).startsWith(editingMentionQuery) || agent.name.toLowerCase().startsWith(editingMentionQuery));
   const selectedEditingMentionIndex = editingAgentSuggestions.length === 0 ? 0 : Math.min(activeEditingMentionIndex, editingAgentSuggestions.length - 1);
   const editingMentionMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingMentionMenuDismissed && editingAgentSuggestions.length > 0;
-  const runtimeMode = auth.workspace?.kind === "team" ? "team" : "personal";
   const runtimeLabel = runtimeMode === "team" ? t("issueDetail.composer.teamWorker") : t("issueDetail.composer.personalWorker");
-  const hasMatchingCodexWorker = Boolean(activeCodexWorker(runtimeWorkers, workspaceId, runtimeMode));
+  const hasMatchingCodexWorker = runtimeAvailabilityQuery.data?.state === "ready";
   const workerUnavailableText =
     runtimeMode === "personal"
       ? t("issueDetail.composer.personalWorkerUnavailable")
@@ -5231,34 +5210,17 @@ export function IssueDetailPage() {
       ? t("issueDetail.composer.agentUnavailable", { mention: mentionedAgent })
       : t("issueDetail.composer.commentsStay");
   const ensureAgentWorkerReady = useCallback(async () => {
-    if (runtimeMode === "personal" && window.mspaceDesktop?.ensurePersonalWorker) {
-      await window.mspaceDesktop.ensurePersonalWorker({
-        authToken: auth.token,
-        workspaceId,
-        serverUrl: getControlPlaneBaseUrl(),
-      });
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        await sleep(1_000);
-        const refreshed = await queryClient.fetchQuery({
-          queryKey: runtimeWorkersQueryKey,
-          queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
-          staleTime: 0,
-        });
-        if (activeCodexWorker(refreshed, workspaceId, runtimeMode)) return;
-      }
-      throw new Error(workerStartingText);
-    }
-    const workers = await queryClient.fetchQuery({
-      queryKey: runtimeWorkersQueryKey,
-      queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
-      staleTime: 0,
+    await ensureRuntimeReady({
+      token: auth.token,
+      workspaceId,
+      queryClient,
+      runtimeMode,
+      requiredCapabilities: agentRequiredCapabilities,
+      unavailableMessage: workerUnavailableText,
+      startingMessage: workerStartingText,
+      ensurePersonalWorker: window.mspaceDesktop?.ensurePersonalWorker,
     });
-    if (activeCodexWorker(workers, workspaceId, runtimeMode)) return;
-    if (runtimeMode !== "personal" || !window.mspaceDesktop?.ensurePersonalWorker) {
-      throw new Error(workerUnavailableText);
-    }
-    throw new Error(workerStartingText);
-  }, [auth.token, queryClient, runtimeMode, runtimeWorkersQueryKey, workerStartingText, workerUnavailableText, workspaceId]);
+  }, [agentRequiredCapabilities, auth.token, queryClient, runtimeMode, workerStartingText, workerUnavailableText, workspaceId]);
   const syncEditingCommentEditorSnapshot = useCallback((editor: Editor) => {
     const match = mentionMatchInEditor(editor);
     setEditingCommentMentionMatch(match);

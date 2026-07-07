@@ -53,6 +53,8 @@ import type {
   ReviewTestRunInput,
   RuntimeRegistrationToken,
   RuntimeRegistrationTokenResult,
+  RuntimeAvailability,
+  RuntimeAvailabilityInput,
   RuntimeTask,
   RuntimeTaskEvent,
   RuntimeTaskListResult,
@@ -118,6 +120,8 @@ export const queryKeys = {
 	workspaceInvitations: (workspaceId: string, token: string) => ["workspace-invitations", workspaceId, token] as const,
 	runtimeRegistrationTokens: (workspaceId: string, token: string) => ["runtime-registration-tokens", workspaceId, token] as const,
 	runtimeWorkers: (workspaceId: string, token: string) => ["runtime-workers", workspaceId, token] as const,
+	runtimeAvailability: (workspaceId: string, token: string, input: RuntimeAvailabilityInput = {}) =>
+		["runtime-availability", workspaceId, token, input.runtimeMode || "", input.requiredCapabilities || {}] as const,
 	runtimeTasks: (workspaceId: string, token: string, limit = 10, offset = 0) => ["runtime-tasks", workspaceId, token, limit, offset] as const,
   runtimeTaskEvents: (workspaceId: string, taskId: string, token: string) => ["runtime-task-events", workspaceId, taskId, token] as const,
   runtimeTaskLogs: (workspaceId: string, taskId: string, token: string) => ["runtime-task-logs", workspaceId, taskId, token] as const,
@@ -423,6 +427,15 @@ export const controlPlaneApi = {
 		requestControlPlane<RuntimeWorker[]>(`/api/workspaces/${workspaceId}/runtime-workers`, {
 			headers: authHeaders(token),
 		}),
+	getRuntimeAvailability: (token: string, workspaceId: string, input: RuntimeAvailabilityInput = {}) => {
+		const params = new URLSearchParams();
+		if (input.runtimeMode) params.set("runtimeMode", input.runtimeMode);
+		if (input.requiredCapabilities) params.set("requiredCapabilities", JSON.stringify(input.requiredCapabilities));
+		const query = params.toString();
+		return requestControlPlane<RuntimeAvailability>(`/api/workspaces/${workspaceId}/runtime/availability${query ? `?${query}` : ""}`, {
+			headers: authHeaders(token),
+		});
+	},
 	createRuntimeTask: (token: string, workspaceId: string, input: CreateRuntimeTaskInput) =>
 		requestControlPlane<RuntimeTask>(`/api/workspaces/${workspaceId}/runtime-tasks`, {
 			method: "POST",

@@ -31,6 +31,7 @@ import {
   TestsPage,
   WorkspaceSettingsPage,
   WorkspaceInvitePage,
+  ensureRuntimeReady,
 } from "@mspace/views";
 import {
   AUTH_TOKEN_STORAGE_KEY,
@@ -64,13 +65,21 @@ async function ensurePersonalWorkerReadiness(input: { authToken: string; workspa
   if (personalWorkerReadinessInFlightKey === key) return;
   personalWorkerReadinessInFlightKey = key;
   try {
-    // Server worker heartbeats can briefly outlive an Electron restart. The main
-    // process owns the bundled personal worker, so let it decide idempotently.
-    await window.mspaceDesktop.ensurePersonalWorker({
-      authToken: input.authToken,
+    await ensureRuntimeReady({
+      token: input.authToken,
       workspaceId: input.workspaceId,
-      serverUrl,
+      queryClient,
+      runtimeMode: "personal",
       requiredCapabilities: { codex: true },
+      unavailableMessage: "Personal worker is unavailable.",
+      startingMessage: "Personal worker is starting.",
+      ensurePersonalWorker: window.mspaceDesktop.ensurePersonalWorker,
+    });
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.runtimeAvailability(input.workspaceId, input.authToken, {
+        runtimeMode: "personal",
+        requiredCapabilities: { codex: true },
+      }),
     });
     await queryClient.invalidateQueries({ queryKey: queryKeys.runtimeWorkers(input.workspaceId, input.authToken) });
   } catch (error) {
@@ -149,6 +158,7 @@ const expectedServerCapabilities = [
   "workspaceKinds",
   "workspaceCollaboration",
   "runtimeWorkerRegistration",
+  "runtimeAvailability",
   "runtimeTaskQueue",
   "testCaseLibrary",
   "testCaseWorkflow",

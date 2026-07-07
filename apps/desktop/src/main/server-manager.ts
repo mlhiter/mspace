@@ -16,6 +16,7 @@ const EXPECTED_SERVER_CAPABILITIES = [
   "workspaceKinds",
   "workspaceCollaboration",
   "runtimeWorkerRegistration",
+  "runtimeAvailability",
   "runtimeTaskQueue",
 ] as const;
 
