@@ -1298,6 +1298,24 @@ func TestDefaultAgentSessionDeveloperInstructionsAvoidDevServerPreviewURLs(t *te
 	}
 }
 
+func TestSandboxPolicyTypeNormalizesCodexAppServerVariants(t *testing.T) {
+	cases := map[string]string{
+		"danger-full-access": "dangerFullAccess",
+		"dangerFullAccess":   "dangerFullAccess",
+		"read-only":          "readOnly",
+		"readOnly":           "readOnly",
+		"workspace-write":    "workspaceWrite",
+		"workspaceWrite":     "workspaceWrite",
+		"external-sandbox":   "externalSandbox",
+		"externalSandbox":    "externalSandbox",
+	}
+	for input, expected := range cases {
+		if got := sandboxPolicyType(input); got != expected {
+			t.Fatalf("sandboxPolicyType(%q) = %q, want %q", input, got, expected)
+		}
+	}
+}
+
 func testConfig(serverURL string) config {
 	return config{
 		ServerURL:         serverURL,

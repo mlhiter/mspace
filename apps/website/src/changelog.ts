@@ -8,6 +8,16 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-07-07",
+    title: "Read-only analysis sandbox compatibility",
+    summary:
+      "mspace workers now translate read-only analysis sessions to the Codex app-server sandbox policy format expected by current Codex builds.",
+    items: [
+      "Mapped the server's `sandbox:\"read-only\"` issue-analysis payload to Codex app-server's `readOnly` turn policy.",
+      "Added regression coverage for all supported sandbox policy spellings so future Codex protocol changes fail loudly in worker tests.",
+    ],
+  },
+  {
+    date: "2026-07-07",
     title: "Local project subdirectories for automatic analysis",
     summary:
       "mspace personal workers now handle projects selected from inside a git repository, so automatic issue analysis does not fail when a project is a monorepo subdirectory.",

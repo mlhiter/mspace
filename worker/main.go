@@ -3428,6 +3428,12 @@ func sandboxPolicyType(sandbox string) string {
 	switch strings.ToLower(strings.TrimSpace(sandbox)) {
 	case "danger-full-access", "dangerfullaccess":
 		return "dangerFullAccess"
+	case "read-only", "readonly":
+		return "readOnly"
+	case "workspace-write", "workspacewrite":
+		return "workspaceWrite"
+	case "external-sandbox", "externalsandbox":
+		return "externalSandbox"
 	default:
 		return sandbox
 	}
