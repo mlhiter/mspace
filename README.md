@@ -25,7 +25,7 @@ mspace is a review Inbox and Issue workspace for software teams that want coding
 The interaction model is closer to a shared engineering document than a terminal transcript: each issue keeps the problem statement, child tasks, comments, agent sessions, source branch state, runtime logs, deployment evidence, preview URL, and cleanup decision in one place.
 
 > [!NOTE]
-> mspace is a runnable local desktop MVP with a server-owned control plane. Local username/password auth works in restricted or offline environments, and GitHub OAuth remains an optional external identity provider. Team/shared deployments store product data, runtime task state, Environment records, Kubernetes compatibility configs, issue test environment records, agent profiles, PR handoffs, worker logs, and results in server Postgres; packaged personal desktop mode runs the same control plane on a local server-owned SQLite store. Runtime workers claim tasks from the server queue and prepare their own repo cache/workdir.
+> mspace is a runnable local desktop MVP with a server-owned control plane. Local username/password auth works in restricted or offline environments, and GitHub OAuth remains an optional external identity provider. Team/shared deployments store product data, runtime task state, Environment records, Kubernetes compatibility configs, issue test environment records, agent profiles, GitHub App installation state, PR handoffs, worker logs, and results in server Postgres; packaged personal desktop mode runs the same control plane on a local server-owned SQLite store. Runtime workers claim tasks from the server queue and prepare their own repo cache/workdir.
 
 ## Screenshots
 
@@ -56,7 +56,7 @@ Production deployment uses the root `vercel.json`:
 ## Features
 
 - Electron desktop app with Inbox, Issues, Tests, Agents, Environments, Projects, Account Settings, Workspace Settings, Issue Detail, and Session Detail screens.
-- Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, editable display profiles, mspace session tokens, personal/team workspaces, workspace membership, one-time team join links with safe signed-out previews, Inbox receipts, projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, comments, reactions, labels, runtime worker registration, built-in workflow skills, agent profiles, environments, Kubernetes cluster compatibility records, test environments, PR handoffs, runtime tasks, worker logs, and runtime results.
+- Go server control plane with local password auth, optional GitHub OAuth, explicit auth identity provider/login, editable display profiles, mspace session tokens, personal/team workspaces, workspace membership, one-time team join links with safe signed-out previews, Inbox receipts, projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, comments, reactions, labels, runtime worker registration, built-in workflow skills, agent profiles, environments, Kubernetes cluster compatibility records, test environments, GitHub App installation status, PR handoffs, runtime tasks, worker logs, and runtime results.
 - Runtime worker daemon in `worker/` that registers with `msw_...`, heartbeats, claims matching server tasks, materializes server-provided skill bundles per session, prepares its own repo cache/workdir, runs `codex app-server --listen stdio://`, streams logs, captures source metadata, and reports task results.
 - Codex execution belongs to runtime workers. The server image does not install Codex or mount Codex credentials.
 - Workspace Settings for team access, worker host installation, worker liveness, issue-linked runtime tasks, task events, task logs, and workspace automation.
@@ -72,11 +72,11 @@ Production deployment uses the root `vercel.json`:
 - Opt-in workspace automation that queues the same test deployment flow after a successful source session captures a commit, when the issue and runtime are ready.
 - Issue Resources tab for the current test namespace, showing Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events without accepting cross-namespace input.
 - Issue Evidence tab for the current review packet, with full-width pages for previous attempts and Kubernetes snapshot history.
-- Issue-level branch / PR handoff records that keep one current PR with source branch, source commit, head commit, commit list, preview URL, evidence summary, local preflight errors, and refreshable PR state.
+- Issue-level source handoff records that keep one current branch/PR delivery artifact with source branch, source commit, head commit, commit list, preview URL, evidence summary, server-owned executor errors, and refreshable PR state when a future GitHub App executor is configured.
 - Structured failure evidence for failed sessions, deploy reconciliation, preview checks, interruption, and cleanup failures.
 
 > [!IMPORTANT]
-> Generated scoped kubeconfigs, ServiceAccounts, server-owned GitHub App PR execution, VM deploy providers, and Kubernetes-hosted agent runtime are future work. The current MVP uses stored kubeconfig paths for Kubernetes Environments and fixed workers for execution.
+> Generated scoped kubeconfigs, ServiceAccounts, server-owned GitHub App branch publishing/PR execution, VM deploy providers, and Kubernetes-hosted agent runtime are future work. The current MVP records workspace GitHub App installation state but does not mint installation tokens, push branches, or create PRs.
 
 ## Architecture
 
@@ -86,7 +86,7 @@ mspace separates collaboration, execution, and validation:
 
 | Layer | What it owns | Current implementation |
 | --- | --- | --- |
-| Control plane | Users, workspaces, product data, membership, local password credentials, GitHub identity, explicit auth identity display, mspace auth sessions, agents, built-in workflow skills, environments, Kubernetes cluster compatibility records, test environments, PR handoffs, agent sessions, runtime task/log/result state, future GitHub App installations | Go server in `server/`, chi, Postgres for team/shared deployments, local SQLite for packaged personal desktop mode |
+| Control plane | Users, workspaces, product data, membership, local password credentials, GitHub identity, explicit auth identity display, mspace auth sessions, agents, built-in workflow skills, environments, Kubernetes cluster compatibility records, test environments, GitHub App installation state, PR handoffs, agent sessions, runtime task/log/result state | Go server in `server/`, chi, Postgres for team/shared deployments, local SQLite for packaged personal desktop mode |
 | Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review, language preference | Electron, React, TanStack Router, React Query, shared `@mspace/ui` and `@mspace/i18n` |
 | Runtime worker | Personal or team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
 | Agent runtime | One issue-bound turn in an isolated working directory | Worker-managed git workdir under the selected runtime mode; personal local projects may point at a git subdirectory, which the worker resolves to the git root for cache/worktree preparation while running the agent from the selected subdirectory |
@@ -193,6 +193,9 @@ Runtime variables:
 | `MSPACE_GITHUB_CLIENT_ID` | none | Optional GitHub OAuth client ID used by the server. |
 | `MSPACE_GITHUB_CLIENT_SECRET` | none | Optional GitHub OAuth client secret; belongs on the server only. |
 | `MSPACE_GITHUB_REDIRECT_URI` | none | Optional GitHub OAuth callback URL for the server. |
+| `MSPACE_GITHUB_APP_ID` | none | Optional GitHub App ID. Enables `capabilities.githubApp` only with the client ID and private key. |
+| `MSPACE_GITHUB_APP_CLIENT_ID` | none | Optional GitHub App client ID for server-owned repository automation setup. |
+| `MSPACE_GITHUB_APP_PRIVATE_KEY` | none | Optional GitHub App private key; keep it server-side only. The current slice stores installation status but does not mint tokens yet. |
 | `MSPACE_SERVER_ADMIN_LOGINS` | none | Comma-separated local password logins or GitHub logins allowed to create team workspaces. |
 | `MSPACE_BOOTSTRAP_ADMIN_LOGIN` | none | Optional local password login created on server startup and treated as a server admin. |
 | `MSPACE_BOOTSTRAP_ADMIN_PASSWORD` | none | Required with `MSPACE_BOOTSTRAP_ADMIN_LOGIN`; the server does not reset an existing account password. |

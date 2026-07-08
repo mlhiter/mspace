@@ -153,6 +153,7 @@ func (s *Server) Routes() http.Handler {
 	r.Get("/api/workspaces/{workspaceID}/issue-label-definitions", s.handleListIssueLabelDefinitions)
 	r.Get("/api/workspaces/{workspaceID}/workspace/settings", s.handleGetWorkspaceSettings)
 	r.Put("/api/workspaces/{workspaceID}/workspace/settings", s.handleUpdateWorkspaceSettings)
+	r.Get("/api/workspaces/{workspaceID}/github-app", s.handleGetWorkspaceGitHubAppInstallation)
 	r.Get("/api/workspaces/{workspaceID}/skills", s.handleListSkills)
 	r.Get("/api/workspaces/{workspaceID}/agents", s.handleListAgentProfiles)
 	r.Post("/api/workspaces/{workspaceID}/agents", s.handleCreateAgentProfile)
@@ -278,6 +279,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"workspaceInvitationPreview":  true,
 			"workspaceKinds":              true,
 			"githubAuth":                  s.githubAuthConfigured(),
+			"githubApp":                   s.githubAppConfigured(),
 			"passwordAuth":                true,
 			"testCaseLibrary":             true,
 			"testCaseWorkflow":            true,
@@ -1709,6 +1711,19 @@ func (s *Server) handleUpdateWorkspaceSettings(w http.ResponseWriter, r *http.Re
 		return
 	}
 	writeJSON(w, http.StatusOK, settings)
+}
+
+func (s *Server) handleGetWorkspaceGitHubAppInstallation(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	installation, err := s.store.GetWorkspaceGitHubAppInstallation(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, workspaceGitHubAppInstallationForServer(installation, s.githubAppConfigured()))
 }
 
 func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {

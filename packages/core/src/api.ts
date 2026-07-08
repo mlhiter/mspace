@@ -88,6 +88,7 @@ import type {
   UpdateWorkspaceInput,
   UpdateWorkspaceResult,
   UpdateWorkspaceSettingsInput,
+  WorkspaceGitHubAppInstallation,
   WorkspaceSettings,
   WorkspaceInvitation,
   WorkspaceInvitationPreview,
@@ -162,6 +163,7 @@ export const queryKeys = {
   projectTestRun: (workspaceId: string, projectId: string, runId: string, token: string) =>
     ["project-test-run", workspaceId, projectId, runId, token] as const,
   workspaceSettings: (workspaceId: string, token: string) => ["workspace-settings", workspaceId, token] as const,
+  workspaceGitHubApp: (workspaceId: string, token: string) => ["workspace-github-app", workspaceId, token] as const,
   environments: (workspaceId: string, token: string) => ["environments", workspaceId, token] as const,
   clusters: (workspaceId: string, token: string) => ["clusters", workspaceId, token] as const,
   issueResources: (workspaceId: string, issueId: string, token: string) =>
@@ -763,6 +765,10 @@ export const controlPlaneApi = {
       method: "PUT",
       headers: authHeaders(token),
       body: JSON.stringify(input),
+    }),
+  getWorkspaceGitHubAppInstallation: (token: string, workspaceId: string) =>
+    requestControlPlane<WorkspaceGitHubAppInstallation>(`/api/workspaces/${workspaceId}/github-app`, {
+      headers: authHeaders(token),
     }),
   listAgents: (token: string, workspaceId: string) =>
     requestControlPlane<AgentProfile[]>(`/api/workspaces/${workspaceId}/agents`, {

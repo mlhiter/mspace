@@ -508,6 +508,26 @@ export interface UpdateWorkspaceSettingsInput {
   autoDeployTestEnvironment: boolean;
 }
 
+export type WorkspaceGitHubAppStatus = "unavailable" | "not_connected" | "connected" | "needs_attention";
+
+export interface WorkspaceGitHubAppInstallation {
+  available: boolean;
+  status: WorkspaceGitHubAppStatus;
+  installationId: string;
+  accountLogin: string;
+  accountType: string;
+  repositorySelection: string;
+  permissions: Record<string, string>;
+  requiredPermissions: Record<string, string>;
+  missingPermissions: string[];
+  htmlUrl: string;
+  repositoriesUrl: string;
+  error: string;
+  lastSyncedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface InboxItem {
   id: string;
   issueId: string;

@@ -236,6 +236,7 @@ MVP features:
 - reusable Environments route for Kubernetes kubeconfig discovery/import, registry/exposure defaults, and virtual machine SSH metadata;
 - project default Environment selection, currently backed by the Kubernetes compatibility default for issue deploys;
 - opt-in automatic test deploy after captured source commits;
+- read-only workspace GitHub App installation status for team branch/PR automation readiness;
 - terminal/progress stream;
 - session workspace inspection;
 - branch comparison against project default branch;
@@ -248,10 +249,10 @@ Still outside the current implemented MVP:
 - ServiceAccount and RoleBinding lifecycle;
 - namespace per session;
 - full Kubernetes resource browser;
-- server-owned GitHub App PR automation;
+- server-owned GitHub App token minting, branch publishing, and PR automation;
 - automated namespace cleanup policy beyond the current manual cleanup/retain decision.
 
-The product architecture now uses the server control plane as the product and runtime truth for every signed-in workspace. Users, local password credentials, workspaces, membership, optional GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, handoffs, audit, runtime tasks, worker logs, and future GitHub App installation state live in the server.
+The product architecture now uses the server control plane as the product and runtime truth for every signed-in workspace. Users, local password credentials, workspaces, membership, optional GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, handoffs, audit, runtime tasks, worker logs, and GitHub App installation state live in the server.
 
 Display name/avatar fields are snapshots for rendering only. They should not become a second account system; shared issue ownership, comments, and permissions belong behind the control plane.
 

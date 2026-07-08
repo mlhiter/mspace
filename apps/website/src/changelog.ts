@@ -7,6 +7,17 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-08",
+    title: "Team GitHub App handoff foundation",
+    summary:
+      "mspace now separates team repository automation readiness from worker identity by tracking GitHub App installation status on the server.",
+    items: [
+      "Added server-owned workspace GitHub App installation state with Postgres, SQLite, and API coverage.",
+      "Shows GitHub App readiness in Workspace Settings for team workspaces, while keeping workers free of local gh or personal GitHub identities.",
+      "Clarified Issue Detail handoff copy so recording captured source is distinct from future branch publishing and PR creation.",
+    ],
+  },
+  {
     date: "2026-07-07",
     title: "Read-only analysis sandbox compatibility",
     summary:

@@ -42,6 +42,7 @@ import {
 	type UpdateWorkspaceInput,
 	type WorkspaceInvitation,
 	type WorkspaceInvitationResult,
+	type WorkspaceGitHubAppInstallation,
 	type WorkspaceMember,
 	type UpdateWorkspaceSettingsInput,
 	type WorkerInstallationResult,
@@ -118,6 +119,7 @@ export function WorkspaceSettingsPage() {
 	const isTeamWorkspace = auth.workspace?.kind === "team";
 	const runtimeEnabled = isSignedIn && workspaceID !== "";
 	const settingsQueryKey = queryKeys.workspaceSettings(workspaceID, auth.token);
+	const githubAppQueryKey = queryKeys.workspaceGitHubApp(workspaceID, auth.token);
 	const defaultRuntimeMode = isTeamWorkspace ? "team" : "personal";
 	const runtimeModeLabel = isTeamWorkspace ? t("workspaceSettings.summary.team") : t("workspaceSettings.summary.personal");
 	const [runtimeTasksPage, setRuntimeTasksPage] = useState(0);
@@ -133,6 +135,11 @@ export function WorkspaceSettingsPage() {
 		queryKey: settingsQueryKey,
 		queryFn: () => controlPlaneApi.getWorkspaceSettings(auth.token, workspaceID),
 		enabled: runtimeEnabled,
+	});
+	const githubAppQuery = useQuery({
+		queryKey: githubAppQueryKey,
+		queryFn: () => controlPlaneApi.getWorkspaceGitHubAppInstallation(auth.token, workspaceID),
+		enabled: runtimeEnabled && isTeamWorkspace,
 	});
 	const tokensQuery = useQuery({
 		queryKey: queryKeys.runtimeRegistrationTokens(workspaceID, auth.token),
@@ -489,6 +496,14 @@ export function WorkspaceSettingsPage() {
 							/>
 						}
 					/>
+					{isTeamWorkspace ? (
+						<SettingsRow
+							icon={KeyRound}
+							title={t("workspaceSettings.section.githubApp")}
+							description={t("workspaceSettings.section.githubAppDescription")}
+							control={<GitHubAppStatus installation={githubAppQuery.data} loading={githubAppQuery.isFetching} />}
+						/>
+					) : null}
 					<SettingsRow
 						icon={RefreshCw}
 						title={t("workspaceSettings.section.autoTestDeploy")}
@@ -647,18 +662,6 @@ export function WorkspaceSettingsPage() {
 					/>
 				</RuntimePanel>
 				{cancelTask.error ? <Notice tone="danger">{cancelTask.error.message}</Notice> : null}
-
-				<SettingsSection
-					title={t("workspaceSettings.section.githubIdentity")}
-					description={t("workspaceSettings.section.githubIdentityDescription")}
-				>
-					<SettingsRow
-						icon={Settings2}
-						title={t("workspaceSettings.section.localGithubCli")}
-						description={t("workspaceSettings.section.localGithubCliDescription")}
-						control={<StatusPill>{t("workspaceSettings.section.local")}</StatusPill>}
-					/>
-				</SettingsSection>
 			</div>
 
 			{invitationModalOpen ? (
@@ -1695,6 +1698,67 @@ function RuntimeStatusPill(props: { status: string }) {
 			<span className="truncate">{runtimeStatusLabel(normalized)}</span>
 		</span>
 	);
+}
+
+function GitHubAppStatus(props: { installation?: WorkspaceGitHubAppInstallation; loading: boolean }) {
+	const { t } = useMspaceTranslation();
+	if (props.loading && !props.installation) {
+		return <StatusPill>{t("workspaceSettings.section.githubAppChecking")}</StatusPill>;
+	}
+	const installation = props.installation;
+	const status = installation?.status || "unavailable";
+	const detail =
+		status === "connected"
+			? installation?.accountLogin
+				? t("workspaceSettings.section.githubAppConnectedAccount", {
+					account: installation.accountLogin,
+					selection: installation.repositorySelection || t("workspaceSettings.section.githubAppRepositorySelectionAll"),
+				})
+				: t("workspaceSettings.section.githubAppConnected")
+			: status === "needs_attention"
+				? installation?.missingPermissions?.length
+					? t("workspaceSettings.section.githubAppMissingPermissions", { permissions: installation.missingPermissions.join(", ") })
+					: installation?.error || t("workspaceSettings.section.githubAppNeedsAttention")
+				: status === "not_connected"
+					? t("workspaceSettings.section.githubAppNotConnectedDescription")
+					: installation?.error || t("workspaceSettings.section.githubAppUnavailableDescription");
+	return (
+		<div className="grid max-w-[360px] justify-items-end gap-1 text-right">
+			<GitHubAppStatusPill status={status} />
+			<div className="text-[12px] leading-5 text-[color:var(--muted)]">{detail}</div>
+		</div>
+	);
+}
+
+function GitHubAppStatusPill(props: { status: string }) {
+	const normalized = props.status.trim().toLowerCase();
+	const tone =
+		normalized === "connected"
+			? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
+			: normalized === "needs_attention"
+				? "bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
+				: normalized === "not_connected"
+					? "bg-[color:var(--block)] text-[color:var(--muted-strong)]"
+					: "bg-[color:var(--danger-soft)] text-[color:var(--danger)]";
+	return (
+		<span className={cn("inline-flex h-6 w-fit max-w-full items-center gap-1.5 rounded-full px-2 text-[12px] font-medium leading-5", tone)}>
+			<Circle data-icon className="size-3" />
+			<span className="truncate">{githubAppStatusLabel(normalized)}</span>
+		</span>
+	);
+}
+
+function githubAppStatusLabel(status: string) {
+	switch (status) {
+		case "connected":
+			return translate("workspaceSettings.section.githubAppConnected");
+		case "needs_attention":
+			return translate("workspaceSettings.section.githubAppNeedsAttention");
+		case "not_connected":
+			return translate("workspaceSettings.section.githubAppNotConnected");
+		default:
+			return translate("workspaceSettings.section.githubAppUnavailable");
+	}
 }
 
 function StatusPill(props: { children: ReactNode }) {

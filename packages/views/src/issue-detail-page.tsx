@@ -1556,7 +1556,7 @@ function IssueHandoffPanel(props: {
           </span>
           <div className="flex min-w-0 items-center gap-2 text-[13px] font-semibold leading-5 text-[color:var(--text)]">
             <div>
-              <div>{t("issueDetail.handoff.pullRequest")}</div>
+              <div>{t("issueDetail.handoff.sourceHandoff")}</div>
               <div className="mt-0.5 text-[12px] font-normal leading-5 text-[color:var(--muted)]">
                 {props.disabledReason || t("issueDetail.handoff.description")}
               </div>

@@ -56,6 +56,88 @@ func (s *PostgresStore) UpdateWorkspaceSettings(ctx Context, userID, workspaceID
 	return scanWorkspaceSettings(row)
 }
 
+func (s *PostgresStore) GetWorkspaceGitHubAppInstallation(ctx Context, userID, workspaceID string) (WorkspaceGitHubAppInstallation, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
+		return WorkspaceGitHubAppInstallation{}, err
+	}
+	row := s.pool.QueryRow(dbctx, `
+		SELECT
+			status,
+			installation_id,
+			account_login,
+			account_type,
+			repository_selection,
+			permissions_json::text,
+			html_url,
+			repositories_url,
+			error,
+			last_synced_at,
+			created_at,
+			updated_at
+		FROM workspace_github_app_installations
+		WHERE workspace_id = $1
+	`, workspaceID)
+	installation, err := scanWorkspaceGitHubAppInstallation(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return defaultWorkspaceGitHubAppInstallation(), nil
+	}
+	return installation, err
+}
+
+func (s *PostgresStore) UpsertWorkspaceGitHubAppInstallation(ctx Context, workspaceID string, input WorkspaceGitHubAppInstallation) (WorkspaceGitHubAppInstallation, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	installation := normalizeStoredWorkspaceGitHubAppInstallation(input)
+	permissionsJSON, err := json.Marshal(installation.Permissions)
+	if err != nil {
+		return WorkspaceGitHubAppInstallation{}, err
+	}
+	row := s.pool.QueryRow(dbctx, `
+		INSERT INTO workspace_github_app_installations (
+			workspace_id,
+			status,
+			installation_id,
+			account_login,
+			account_type,
+			repository_selection,
+			permissions_json,
+			html_url,
+			repositories_url,
+			error,
+			last_synced_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, NULLIF($11, '')::timestamptz)
+		ON CONFLICT (workspace_id) DO UPDATE
+		SET status = EXCLUDED.status,
+			installation_id = EXCLUDED.installation_id,
+			account_login = EXCLUDED.account_login,
+			account_type = EXCLUDED.account_type,
+			repository_selection = EXCLUDED.repository_selection,
+			permissions_json = EXCLUDED.permissions_json,
+			html_url = EXCLUDED.html_url,
+			repositories_url = EXCLUDED.repositories_url,
+			error = EXCLUDED.error,
+			last_synced_at = EXCLUDED.last_synced_at,
+			updated_at = now()
+		RETURNING
+			status,
+			installation_id,
+			account_login,
+			account_type,
+			repository_selection,
+			permissions_json::text,
+			html_url,
+			repositories_url,
+			error,
+			last_synced_at,
+			created_at,
+			updated_at
+	`, workspaceID, installation.Status, installation.InstallationID, installation.AccountLogin, installation.AccountType, installation.RepositorySelection, string(permissionsJSON), installation.HTMLURL, installation.RepositoriesURL, installation.Error, installation.LastSyncedAt)
+	return scanWorkspaceGitHubAppInstallation(row)
+}
+
 func (s *PostgresStore) ListSkills(ctx Context, userID, workspaceID string) ([]SkillCatalogItem, error) {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
@@ -85,6 +167,38 @@ func scanWorkspaceSettings(row scanner) (WorkspaceSettings, error) {
 	settings.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	settings.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
 	return settings, nil
+}
+
+func scanWorkspaceGitHubAppInstallation(row scanner) (WorkspaceGitHubAppInstallation, error) {
+	var installation WorkspaceGitHubAppInstallation
+	var permissionsJSON string
+	var lastSyncedAt sql.NullTime
+	var createdAt, updatedAt time.Time
+	if err := row.Scan(
+		&installation.Status,
+		&installation.InstallationID,
+		&installation.AccountLogin,
+		&installation.AccountType,
+		&installation.RepositorySelection,
+		&permissionsJSON,
+		&installation.HTMLURL,
+		&installation.RepositoriesURL,
+		&installation.Error,
+		&lastSyncedAt,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return WorkspaceGitHubAppInstallation{}, err
+	}
+	if strings.TrimSpace(permissionsJSON) != "" {
+		_ = json.Unmarshal([]byte(permissionsJSON), &installation.Permissions)
+	}
+	if lastSyncedAt.Valid {
+		installation.LastSyncedAt = lastSyncedAt.Time.UTC().Format(time.RFC3339)
+	}
+	installation.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+	installation.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	return normalizeStoredWorkspaceGitHubAppInstallation(installation), nil
 }
 
 func (s *PostgresStore) ListEnvironments(ctx Context, userID, workspaceID string) ([]Environment, error) {

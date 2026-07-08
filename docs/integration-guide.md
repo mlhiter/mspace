@@ -21,7 +21,7 @@ The desktop chooses its server in this order:
 2. A saved Team server URL from Electron user data.
 3. The local bundled/dev server on `127.0.0.1:8787`.
 
-Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 1`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceInvitationPreview`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, `runtimeAvailability`, and `runtimeTaskQueue`. `capabilities.githubAuth` is optional behavior metadata. GitHub login is shown only when the desktop is using an explicitly configured team server, from either `MSPACE_SERVER_URL` or a saved Team server URL, and that server reports `capabilities.githubAuth: true`. The default local personal server stays local-account-only and starts on account creation.
+Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 1`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceInvitationPreview`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, `runtimeAvailability`, and `runtimeTaskQueue`. `capabilities.githubAuth` and `capabilities.githubApp` are optional behavior metadata. GitHub login is shown only when the desktop is using an explicitly configured team server, from either `MSPACE_SERVER_URL` or a saved Team server URL, and that server reports `capabilities.githubAuth: true`. GitHub App automation status is shown separately for team workspaces and must not be inferred from GitHub OAuth. The default local personal server stays local-account-only and starts on account creation.
 
 Workspace endpoints require:
 
@@ -460,8 +460,9 @@ Use `status:"failed"` plus `failureSummary` when setup cannot safely complete. T
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/retain` | Retain the namespace for debugging. |
 | `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/resources` | List Pods, Services, Deployments, Ingresses, and Events from the fixed issue namespace. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/probe` | Refresh preview reachability state without creating new evidence rows. |
-| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Store or update the issue PR handoff from selected source evidence. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Store or update the issue source handoff from selected source evidence. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the issue handoff record. |
+| `GET` | `/api/workspaces/{workspaceID}/github-app` | Read server-owned GitHub App installation status for this workspace. |
 
 Workspace settings currently include:
 

@@ -16,7 +16,7 @@ The control plane owns:
 - workspace members and roles;
 - mspace auth sessions;
 - GitHub identity links;
-- future GitHub App installation state;
+- workspace GitHub App installation state;
 - workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts;
 - workspace settings, agent profiles, built-in workflow skill catalog and revisions, reusable Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review/failure/source records;
 - audit and collaboration sync;
@@ -62,7 +62,7 @@ Desktop
   -> call mspace APIs with Authorization: Bearer msp_...
 ```
 
-GitHub remains optional when the environment can reach GitHub. The server reports this as `capabilities.githubAuth` from `/health`, which is `true` only when `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` are all configured. The desktop still treats the default local personal server as local-account-only: it starts on account creation and hides GitHub. GitHub sign-in is shown only for an explicitly configured team server, either a saved Team server URL or `MSPACE_SERVER_URL`, when that configured server advertises `capabilities.githubAuth: true`.
+GitHub remains optional when the environment can reach GitHub. The server reports GitHub OAuth sign-in as `capabilities.githubAuth` from `/health`, which is `true` only when `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` are all configured. GitHub App repository automation is separate: `capabilities.githubApp` is `true` only when `MSPACE_GITHUB_APP_ID`, `MSPACE_GITHUB_APP_CLIENT_ID`, and `MSPACE_GITHUB_APP_PRIVATE_KEY` are configured. The desktop still treats the default local personal server as local-account-only: it starts on account creation and hides GitHub. GitHub sign-in is shown only for an explicitly configured team server, either a saved Team server URL or `MSPACE_SERVER_URL`, when that configured server advertises `capabilities.githubAuth: true`.
 
 ```text
 Desktop
@@ -86,7 +86,7 @@ The server may use a GitHub OAuth client secret because it is a trusted backend 
 
 Auth responses expose the selected identity as `identity.provider` plus `identity.login`. Account UI should use this explicit provider to show local password accounts separately from GitHub accounts, not infer GitHub connection from `user.email` or avatar state. Current-user profile editing lives on Account Settings and updates only the canonical display `users.name` and `users.avatar_url` through `PUT /api/auth/me`; it does not rewrite auth login/provider fields or historical issue/comment display snapshots.
 
-Future GitHub repository automation should use GitHub App installation tokens stored and rotated by the control plane. Do not build long-lived repository automation on personal GitHub OAuth tokens stored by desktop or workers.
+Future GitHub repository automation should use GitHub App installation tokens minted and rotated by the control plane from workspace installation state. The current API slice exposes read-only installation status through `GET /api/workspaces/{workspaceID}/github-app`; it does not mint tokens, publish branches, or create PRs. Do not build long-lived repository automation on personal GitHub OAuth tokens stored by desktop or workers.
 
 Open registration creates a personal workspace only. Server admin status is a control-plane flag derived from configured auth logins: `MSPACE_SERVER_ADMIN_LOGINS` plus `MSPACE_BOOTSTRAP_ADMIN_LOGIN`. Matching uses the local password login or GitHub login, not email, because password auth does not verify email ownership. Only server admins can create team workspaces; ordinary registered users can join a team workspace only through an owner/admin invitation. Team invitations are one-time join links, not email-bound invitations.
 
@@ -101,12 +101,12 @@ The server module provides:
 - workspace projects and project runbooks;
 - project test cases, test case revisions, test case suggestions, test plans, test runs, and run items;
 - issue labels, issues, child tasks, comments, comment edits, and comment reactions;
-- workspace settings;
+- workspace settings and workspace GitHub App installation status;
 - built-in workflow skill metadata through `/api/workspaces/{workspaceID}/skills`;
 - workspace agent profiles;
 - Environment APIs plus Kubernetes cluster compatibility APIs and kubeconfig discovery/import;
 - issue test deployment, cleanup, retain, preview probe, and namespace resources;
-- issue PR handoff create/refresh records;
+- issue source handoff create/refresh records;
 - session creation/cancellation/detail derived from server runtime tasks;
 - runtime registration tokens, workers, runtime availability, tasks, events, logs, cancellation, worker register/heartbeat/claim/status/log endpoints;
 - deterministic fallback issue-title suggestion and worker-backed `issue_type_triage` classification;
@@ -170,7 +170,7 @@ Manual deploy/test remains available from Issue Detail. Workspace owners/admins 
 
 The Resources tab reads live namespace state through `GET /api/workspaces/{workspaceID}/issues/{issueID}/test-environment/resources`. The server uses Kubernetes client APIs and fixes the namespace from the issue environment record; the frontend must not pass arbitrary namespace input.
 
-PR handoff records live in server `issue_handoffs`. The current implementation records the selected source branch/commit, preview URL, evidence summary, and handoff state. GitHub App-backed PR creation/refresh is still future work, but the record itself is server-owned.
+PR handoff records live in server `issue_handoffs`. The current implementation records the selected source branch/commit, preview URL, evidence summary, and handoff state. Workspace GitHub App installation metadata lives in `workspace_github_app_installations` and is exposed as read-only status for Workspace Settings. GitHub App-backed token minting, branch publishing, and PR creation/refresh are still future work, but the records themselves are server-owned.
 
 ## Migration Rule
 

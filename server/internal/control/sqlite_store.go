@@ -55,6 +55,7 @@ type memoryStoreSnapshot struct {
 	Attachments          map[string]IssueAttachment                   `json:"attachments"`
 	IssueLabels          map[string][]IssueLabel                      `json:"issueLabels"`
 	WorkspaceSettings    map[string]WorkspaceSettings                 `json:"workspaceSettings"`
+	GitHubAppInstalls    map[string]WorkspaceGitHubAppInstallation    `json:"githubAppInstallations"`
 	AgentProfiles        map[string]AgentProfile                      `json:"agentProfiles"`
 	Clusters             map[string]Cluster                           `json:"clusters"`
 	Environments         map[string]Environment                       `json:"environments"`
@@ -203,6 +204,7 @@ func (s *MemoryStore) snapshotJSON() ([]byte, error) {
 		Attachments:          copyMap(s.attachments),
 		IssueLabels:          copyMap(s.issueLabels),
 		WorkspaceSettings:    copyMap(s.workspaceSettings),
+		GitHubAppInstalls:    copyMap(s.githubAppInstalls),
 		AgentProfiles:        copyMap(s.agentProfiles),
 		Clusters:             copyMap(s.clusters),
 		Environments:         copyMap(s.environments),
@@ -261,6 +263,7 @@ func (s *MemoryStore) restoreSnapshot(snapshot memoryStoreSnapshot) {
 	s.attachments = ensureMap(snapshot.Attachments)
 	s.issueLabels = ensureMap(snapshot.IssueLabels)
 	s.workspaceSettings = ensureMap(snapshot.WorkspaceSettings)
+	s.githubAppInstalls = ensureMap(snapshot.GitHubAppInstalls)
 	s.agentProfiles = ensureMap(snapshot.AgentProfiles)
 	s.clusters = ensureMap(snapshot.Clusters)
 	s.environments = ensureMap(snapshot.Environments)

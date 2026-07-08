@@ -27,7 +27,7 @@ BuildKit StatefulSet
 - Kubernetes cluster with a default StorageClass or explicit storage classes in values.
 - Ingress controller if exposing the server through Ingress.
 - Registry push access for mspace images and project test images.
-- Optional GitHub OAuth App with callback URL `https://<host>/api/auth/github/callback`. Restricted or offline deployments can use local username/password auth without GitHub.
+- Optional GitHub OAuth App with callback URL `https://<host>/api/auth/github/callback`. Restricted or offline deployments can use local username/password auth without GitHub. GitHub App repository automation is configured separately from OAuth.
 - At least one server admin login for creating team workspaces. Ordinary registered users only receive a personal workspace until an admin invites them to a team workspace.
 - Codex auth JSON and config TOML for the worker. The server control plane does not run Codex.
 - A kubeconfig whose permissions are limited to the customer test cluster scope.
@@ -100,6 +100,9 @@ Set:
 - optional `secrets.githubClientId`
 - optional `secrets.githubClientSecret`
 - optional `secrets.githubRedirectUri`
+- optional `secrets.githubAppId`
+- optional `secrets.githubAppClientId`
+- optional `secrets.githubAppPrivateKey`
 - `secrets.serverAdminLogins` as a comma-separated list of local password logins or GitHub logins that may create team workspaces
 - `secrets.bootstrapAdminLogin` and `secrets.bootstrapAdminPassword` for the default local admin account
 - `bootstrap.teamWorkspace.enabled=true` and `bootstrap.teamWorkspace.name` for the default customer team workspace owned by the bootstrap admin
@@ -298,5 +301,5 @@ helm -n mspace-system rollback mspace <revision>
 - The default Helm path bootstraps exactly one admin-owned team workspace and fixed worker token for the release. Additional workspaces still need their own external worker install command or explicit runtime token path.
 - The mounted kubeconfig is the current deployment credential boundary.
 - Codex credentials/config are mounted only into the worker. The server image and server Deployment are Codex-free.
-- Server-owned GitHub App PR execution is not part of this deployment package.
+- Server-owned GitHub App installation status is part of the control plane, but token minting, branch publishing, and PR execution are not part of this deployment package yet.
 - The worker must not report container-local `localhost` URLs as user-facing previews.

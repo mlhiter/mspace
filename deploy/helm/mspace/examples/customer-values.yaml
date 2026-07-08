@@ -7,6 +7,10 @@ secrets:
   githubClientId: "replace-me"
   githubClientSecret: "replace-me"
   githubRedirectUri: "https://mspace.example.com/api/auth/github/callback"
+  # Optional. Separate from GitHub OAuth; enables read-only GitHub App readiness status.
+  githubAppId: ""
+  githubAppClientId: ""
+  githubAppPrivateKey: ""
   # Comma-separated local password logins or GitHub logins allowed to create team workspaces.
   serverAdminLogins: "admin"
   bootstrapAdminLogin: "admin"

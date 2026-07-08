@@ -1,6 +1,6 @@
 # mspace Server
 
-`server/` is the mspace control plane. It owns identity, workspaces, membership, auth sessions, workspace product data, project test data, runtime-facing product surfaces, and future GitHub App installation state.
+`server/` is the mspace control plane. It owns identity, workspaces, membership, auth sessions, workspace product data, project test data, runtime-facing product surfaces, and workspace GitHub App installation state.
 
 The desktop app and runtime workers are clients of this service. They do not own collaboration identity or product truth.
 
@@ -27,6 +27,10 @@ Then edit `.env.local`. Without `DATABASE_URL`, the server defaults to the local
 # MSPACE_GITHUB_CLIENT_ID=...
 # MSPACE_GITHUB_CLIENT_SECRET=...
 # MSPACE_GITHUB_REDIRECT_URI=http://127.0.0.1:8787/api/auth/github/callback
+# Optional. Server-owned GitHub App automation readiness.
+# MSPACE_GITHUB_APP_ID=...
+# MSPACE_GITHUB_APP_CLIENT_ID=...
+# MSPACE_GITHUB_APP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
 MSPACE_SERVER_ADMIN_LOGINS=admin,mlhiter
 MSPACE_BOOTSTRAP_ADMIN_LOGIN=admin
 MSPACE_BOOTSTRAP_ADMIN_PASSWORD=change-me-long-random-password
@@ -60,7 +64,7 @@ Password auth is the default path for restricted or offline environments:
 3. Desktop stores the returned `msp_...` token.
 4. Desktop clients call mspace APIs with `Authorization: Bearer <msp_...>`.
 
-GitHub OAuth is optional. The server advertises OAuth availability through `/health` with `capabilities.githubAuth: true`, which requires `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` to all be configured. The desktop also gates the button by server source: the default local personal server stays local-account-only, while saved Team server URLs and `MSPACE_SERVER_URL` launches can show GitHub when this capability is true.
+GitHub OAuth is optional. The server advertises OAuth availability through `/health` with `capabilities.githubAuth: true`, which requires `MSPACE_GITHUB_CLIENT_ID`, `MSPACE_GITHUB_CLIENT_SECRET`, and `MSPACE_GITHUB_REDIRECT_URI` to all be configured. GitHub App repository automation is separate: `/health` reports `capabilities.githubApp: true` only when `MSPACE_GITHUB_APP_ID`, `MSPACE_GITHUB_APP_CLIENT_ID`, and `MSPACE_GITHUB_APP_PRIVATE_KEY` are configured. The desktop also gates the sign-in button by server source: the default local personal server stays local-account-only, while saved Team server URLs and `MSPACE_SERVER_URL` launches can show GitHub when OAuth capability is true.
 
 1. Desktop starts GitHub login through `GET /api/auth/github/start`.
 2. Desktop opens the returned `authorizeUrl` in the browser.
@@ -70,7 +74,7 @@ GitHub OAuth is optional. The server advertises OAuth availability through `/hea
 6. Desktop polls `GET /api/auth/github/result?state=...` and stores the returned `msp_...` token.
 7. Desktop clients call mspace APIs with `Authorization: Bearer <msp_...>`.
 
-GitHub tokens are not the product session. They are used only to prove GitHub identity. Local password registration does not verify email ownership, so it must not merge identities by email. Repository automation should later use GitHub App installation tokens owned by this service.
+GitHub tokens are not the product session. They are used only to prove GitHub identity. Local password registration does not verify email ownership, so it must not merge identities by email. Repository automation should later use GitHub App installation tokens minted by this service from workspace installation state; workers should not depend on local `gh` identity.
 
 Password and GitHub auth responses, plus `GET /api/auth/me`, include `identity.provider` and `identity.login`. UI clients should display account type from that explicit provider. Do not treat an empty `user.email` as a GitHub connection fallback; password accounts intentionally keep canonical email blank. `PUT /api/auth/me` may update the current user's display `name` and `avatarUrl`, but it must not update the auth provider, auth login, password credential, or GitHub identity link.
 
@@ -147,6 +151,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/block` | Compatibility-block a workspace run that includes the project. |
 | `GET` | `/api/workspaces/{workspaceID}/workspace/settings` | Read workspace automation settings. |
 | `PUT` | `/api/workspaces/{workspaceID}/workspace/settings` | Update workspace automation settings. |
+| `GET` | `/api/workspaces/{workspaceID}/github-app` | Read server-owned GitHub App installation status for the workspace. |
 | `GET` | `/api/workspaces/{workspaceID}/skills` | List server-managed built-in workflow skills available to workspace automation and runtime tasks. |
 | `GET` | `/api/workspaces/{workspaceID}/agents` | List workspace agent profiles. |
 | `POST` | `/api/workspaces/{workspaceID}/agents` | Create a workspace agent profile. |

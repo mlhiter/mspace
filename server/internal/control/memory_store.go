@@ -44,6 +44,7 @@ type MemoryStore struct {
 	attachments          map[string]IssueAttachment
 	issueLabels          map[string][]IssueLabel
 	workspaceSettings    map[string]WorkspaceSettings
+	githubAppInstalls    map[string]WorkspaceGitHubAppInstallation
 	agentProfiles        map[string]AgentProfile
 	clusters             map[string]Cluster
 	environments         map[string]Environment
@@ -130,6 +131,7 @@ func NewMemoryStore() *MemoryStore {
 		attachments:          map[string]IssueAttachment{},
 		issueLabels:          map[string][]IssueLabel{},
 		workspaceSettings:    map[string]WorkspaceSettings{},
+		githubAppInstalls:    map[string]WorkspaceGitHubAppInstallation{},
 		agentProfiles:        map[string]AgentProfile{},
 		clusters:             map[string]Cluster{},
 		environments:         map[string]Environment{},
@@ -1309,6 +1311,39 @@ func (s *MemoryStore) UpdateWorkspaceSettings(_ Context, userID, workspaceID str
 	settings.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	s.workspaceSettings[workspaceID] = settings
 	return settings, nil
+}
+
+func (s *MemoryStore) GetWorkspaceGitHubAppInstallation(_ Context, userID, workspaceID string) (WorkspaceGitHubAppInstallation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.isWorkspaceMember(workspaceID, userID) {
+		return WorkspaceGitHubAppInstallation{}, ErrNotFound
+	}
+	installation, ok := s.githubAppInstalls[workspaceID]
+	if !ok {
+		return defaultWorkspaceGitHubAppInstallation(), nil
+	}
+	return normalizeStoredWorkspaceGitHubAppInstallation(installation), nil
+}
+
+func (s *MemoryStore) UpsertWorkspaceGitHubAppInstallation(_ Context, workspaceID string, input WorkspaceGitHubAppInstallation) (WorkspaceGitHubAppInstallation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if _, ok := s.workspaceLocked(workspaceID); !ok {
+		return WorkspaceGitHubAppInstallation{}, ErrNotFound
+	}
+	installation := normalizeStoredWorkspaceGitHubAppInstallation(input)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if existing, ok := s.githubAppInstalls[workspaceID]; ok && existing.CreatedAt != "" {
+		installation.CreatedAt = existing.CreatedAt
+	} else if installation.CreatedAt == "" {
+		installation.CreatedAt = now
+	}
+	installation.UpdatedAt = now
+	s.githubAppInstalls[workspaceID] = installation
+	return normalizeStoredWorkspaceGitHubAppInstallation(installation), nil
 }
 
 func (s *MemoryStore) ListSkills(_ Context, userID, workspaceID string) ([]SkillCatalogItem, error) {

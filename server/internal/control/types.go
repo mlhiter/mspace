@@ -23,6 +23,9 @@ type Config struct {
 	GitHubClientID             string
 	GitHubClientSecret         string
 	GitHubRedirectURI          string
+	GitHubAppID                string
+	GitHubAppClientID          string
+	GitHubAppPrivateKey        string
 	ServerAdminLogins          []string
 	BootstrapAdminLogin        string
 	BootstrapAdminPassword     string
@@ -1406,6 +1409,31 @@ type WorkspaceSettingsInput struct {
 	AutoDeployTestEnvironment bool `json:"autoDeployTestEnvironment"`
 }
 
+const (
+	WorkspaceGitHubAppStatusUnavailable  = "unavailable"
+	WorkspaceGitHubAppStatusNotConnected = "not_connected"
+	WorkspaceGitHubAppStatusConnected    = "connected"
+	WorkspaceGitHubAppStatusNeedsAction  = "needs_attention"
+)
+
+type WorkspaceGitHubAppInstallation struct {
+	Available           bool              `json:"available"`
+	Status              string            `json:"status"`
+	InstallationID      string            `json:"installationId"`
+	AccountLogin        string            `json:"accountLogin"`
+	AccountType         string            `json:"accountType"`
+	RepositorySelection string            `json:"repositorySelection"`
+	Permissions         map[string]string `json:"permissions"`
+	RequiredPermissions map[string]string `json:"requiredPermissions"`
+	MissingPermissions  []string          `json:"missingPermissions"`
+	HTMLURL             string            `json:"htmlUrl"`
+	RepositoriesURL     string            `json:"repositoriesUrl"`
+	Error               string            `json:"error"`
+	LastSyncedAt        string            `json:"lastSyncedAt"`
+	CreatedAt           string            `json:"createdAt"`
+	UpdatedAt           string            `json:"updatedAt"`
+}
+
 type AgentProfile struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
@@ -1871,6 +1899,8 @@ type Store interface {
 	ListIssueLabelDefinitions(ctx Context, userID, workspaceID string) ([]IssueLabelDefinition, error)
 	GetWorkspaceSettings(ctx Context, userID, workspaceID string) (WorkspaceSettings, error)
 	UpdateWorkspaceSettings(ctx Context, userID, workspaceID string, input WorkspaceSettingsInput) (WorkspaceSettings, error)
+	GetWorkspaceGitHubAppInstallation(ctx Context, userID, workspaceID string) (WorkspaceGitHubAppInstallation, error)
+	UpsertWorkspaceGitHubAppInstallation(ctx Context, workspaceID string, input WorkspaceGitHubAppInstallation) (WorkspaceGitHubAppInstallation, error)
 	ListSkills(ctx Context, userID, workspaceID string) ([]SkillCatalogItem, error)
 	ListAgentProfiles(ctx Context, userID, workspaceID string) ([]AgentProfile, error)
 	CreateAgentProfile(ctx Context, userID, workspaceID string, input AgentProfileInput) (AgentProfile, error)

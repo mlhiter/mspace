@@ -582,7 +582,7 @@ Implemented as of 2026-06-03:
 12. Server-backed mspace sign-in: default local personal mode starts on account creation and hides GitHub, while explicitly configured team servers can offer login plus optional GitHub OAuth when `/health` reports `capabilities.githubAuth: true`.
 13. Sidebar global search and Command+K palette for issues and projects.
 14. Commits/Evidence split on Issue Detail, with structured `session_review_evidence` snapshots and compact evidence-command persistence.
-15. Issue-level branch / PR handoff records, including local PR creation, existing PR auto-detection by source branch, status refresh, source commits, preview URL, and evidence summary.
+15. Issue-level source handoff records, including selected source branch/commit, future GitHub App PR executor status, source commits, preview URL, and evidence summary.
 16. Structured `session_failures` records that surface failed sessions, deploy-time preview verification failures, agent interruption, and cleanup failures as continueable Issue Detail timeline and Evidence entries.
 17. Preview status refreshes that update Test environment state and `Checked` time without adding healthy snapshot cards to the Overview timeline.
 18. Issue Resources tab for the fixed test namespace, using live Kubernetes resource reads without exposing cross-namespace browsing.

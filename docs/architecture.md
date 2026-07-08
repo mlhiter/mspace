@@ -12,7 +12,7 @@ The repository contains a runnable desktop MVP with server-owned product and run
 - Shared desktop localization lives in `packages/i18n` for `en` and `zh-CN`.
 - Go server control plane in `server/`, built with chi. Team/shared deployments use PostgreSQL through `pgx`; packaged personal desktop mode can use a server-owned SQLite snapshot store. Project-level test cases and case suggestions plus workspace-level plans, plan setup steps, and runs live in this same server store.
 - Go runtime worker in `worker/`, registered to workspaces with `msw_...` tokens.
-- Local username/password auth creates a personal workspace by default and works without GitHub access. Default local personal sign-in opens on account creation and hides GitHub. GitHub sign-in remains an optional external identity provider for explicitly configured team servers, from a saved Team server URL or `MSPACE_SERVER_URL`, when `/health` reports `capabilities.githubAuth: true`. Auth responses include `identity.provider` and `identity.login`, so the desktop can show local accounts and GitHub accounts without guessing from `user.email`. Personal and team workspaces both use the server store; team/shared deployments use Postgres, while packaged personal desktop mode can stay local on SQLite.
+- Local username/password auth creates a personal workspace by default and works without GitHub access. Default local personal sign-in opens on account creation and hides GitHub. GitHub sign-in remains an optional external identity provider for explicitly configured team servers, from a saved Team server URL or `MSPACE_SERVER_URL`, when `/health` reports `capabilities.githubAuth: true`. Server-owned GitHub App automation is advertised separately as `capabilities.githubApp` when the app id, client id, and private key are configured. Auth responses include `identity.provider` and `identity.login`, so the desktop can show local accounts and GitHub accounts without guessing from `user.email`. Personal and team workspaces both use the server store; team/shared deployments use Postgres, while packaged personal desktop mode can stay local on SQLite.
 - Team collaboration features require an explicit team workspace created from the workspace menu. Team access is through one-time join links rather than email-targeted invitations, with a safe unauthenticated preview for signed-out recipients and desktop deep links that carry the invited team server context.
 - The desktop uses `MSPACE_SERVER_URL`, then a saved Team server URL, then the local bundled/dev server when needed. It renders server state and does not own product truth or runtime persistence.
 
@@ -22,7 +22,7 @@ The control plane owns:
 - projects, project runbooks, project test cases, test case revisions, test case proposals, workspace test plans, workspace test runs, issues, child issue tasks, comments, reactions, labels, Inbox events, and per-user receipts;
 - workspace settings, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review evidence, failures, and source change records;
 - runtime worker registration, task queue state, task logs, task events, cancellation, and task results;
-- future GitHub App installation state.
+- workspace GitHub App installation state.
 
 Workers own:
 
@@ -176,7 +176,7 @@ Main server-owned state groups:
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
 - Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`, and `test_artifacts`. Cases and suggestions are project-level. Plans and runs are workspace-level orchestration records that keep a primary project for compatibility and preserve per-case/per-item project identity. Plans can store lightweight setup steps; runs freeze setup text plus setup status, setup issue/session, setup result, and run context. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
-- Runtime surfaces: `workspace_settings`, `agent_profiles`, embedded built-in workflow skill catalog, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`.
+- Runtime surfaces: `workspace_settings`, `workspace_github_app_installations`, `agent_profiles`, embedded built-in workflow skill catalog, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`.
 - Runtime queue: `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, `runtime_task_logs`.
 - Issue type triage is represented as `runtime_tasks.kind="issue_type_triage"` and reconciled when the task reaches a final state.
 - Automatic issue analysis is represented as `runtime_tasks.kind="agent_session"` with payload `automation="issue_analysis"`, `sandbox="read-only"`, `sourceCapture=false`, and a required server-owned `think` skill bundle.
@@ -243,7 +243,7 @@ Only the latest human-authored issue comment may be edited, and only before an a
 Source changes, delivery handoff, live namespace resources, review evidence, and failure evidence are deliberately separate:
 
 - Commits tab: source commits, changed files, and diff previews.
-- PR handoff: one current issue-level delivery artifact, keyed by source branch.
+- Source handoff: one current issue-level branch/PR delivery artifact, keyed by source branch.
 - Resources tab: live Kubernetes objects from the issue's fixed namespace.
 - Evidence tab: current review packet, compact command evidence, agent summary, risks, source facts, and links to history pages.
 - Failures: continueable failure records with phase, command, summary, excerpt, namespace/resource hints, and retry/continue affordances.
@@ -310,7 +310,7 @@ The desktop visual language is a quiet Notion-like workspace: narrow left sideba
 ## Future Work
 
 - Server-owned image attachment upload/storage.
-- GitHub App installation state and server-owned PR executor.
+- GitHub App installation token minting, branch publishing, and server-owned PR executor.
 - Stronger remote credential policy for fixed workers.
 - Lower-latency cancellation guarantees.
 - Kubernetes Runtime Provider that starts isolated per-session Pods or Jobs behind the same runtime task protocol.

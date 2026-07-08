@@ -83,6 +83,9 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	if payload.Capabilities["githubAuth"] != false {
 		t.Fatalf("expected disabled github auth capability without OAuth config, got %+v", payload.Capabilities)
 	}
+	if payload.Capabilities["githubApp"] != false {
+		t.Fatalf("expected disabled github app capability without app config, got %+v", payload.Capabilities)
+	}
 	if payload.Capabilities["passwordAuth"] != true {
 		t.Fatalf("expected password auth capability, got %+v", payload.Capabilities)
 	}
@@ -125,6 +128,111 @@ func TestHealthReportsGitHubAuthCapability(t *testing.T) {
 	}
 	if payload.Capabilities["githubAuth"] != true {
 		t.Fatalf("expected enabled github auth capability with OAuth config, got %+v", payload.Capabilities)
+	}
+}
+
+func TestHealthReportsGitHubAppCapability(t *testing.T) {
+	server := NewServer(Config{
+		GitHubAppID:         "12345",
+		GitHubAppClientID:   "Iv1.example",
+		GitHubAppPrivateKey: "-----BEGIN PRIVATE KEY-----\nredacted\n-----END PRIVATE KEY-----",
+	}, NewMemoryStore(), fakeGitHubClient{})
+	router := server.Routes()
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload struct {
+		Capabilities map[string]bool `json:"capabilities"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("parse health response: %v", err)
+	}
+	if payload.Capabilities["githubApp"] != true {
+		t.Fatalf("expected enabled github app capability with app config, got %+v", payload.Capabilities)
+	}
+	if payload.Capabilities["githubAuth"] != false {
+		t.Fatalf("github app config should not imply github auth capability, got %+v", payload.Capabilities)
+	}
+}
+
+func TestWorkspaceGitHubAppInstallationStatus(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "github-app-owner",
+		Login:          "github-app-owner",
+		Name:           "GitHub App Owner",
+		Email:          "github-app-owner@example.com",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+
+	getInstallation := func(t *testing.T, server *Server) WorkspaceGitHubAppInstallation {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/github-app", nil)
+		req.Header.Set("Authorization", "Bearer "+sessionToken)
+		server.Routes().ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("github app status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		if strings.Contains(recorder.Body.String(), "PRIVATE KEY") {
+			t.Fatalf("github app response leaked private key: %s", recorder.Body.String())
+		}
+		var installation WorkspaceGitHubAppInstallation
+		if err := json.Unmarshal(recorder.Body.Bytes(), &installation); err != nil {
+			t.Fatalf("parse github app installation: %v", err)
+		}
+		return installation
+	}
+
+	unavailable := getInstallation(t, NewServer(Config{}, store, fakeGitHubClient{}))
+	if unavailable.Available || unavailable.Status != WorkspaceGitHubAppStatusUnavailable {
+		t.Fatalf("expected unavailable github app status without server config, got %+v", unavailable)
+	}
+	if unavailable.RequiredPermissions["contents"] != "write" || unavailable.Permissions == nil {
+		t.Fatalf("expected required permissions in unavailable status, got %+v", unavailable)
+	}
+
+	configuredServer := NewServer(Config{
+		GitHubAppID:         "12345",
+		GitHubAppClientID:   "Iv1.example",
+		GitHubAppPrivateKey: "-----BEGIN PRIVATE KEY-----\nredacted\n-----END PRIVATE KEY-----",
+	}, store, fakeGitHubClient{})
+	notConnected := getInstallation(t, configuredServer)
+	if !notConnected.Available || notConnected.Status != WorkspaceGitHubAppStatusNotConnected {
+		t.Fatalf("expected configured server to report not connected by default, got %+v", notConnected)
+	}
+
+	if _, err := store.UpsertWorkspaceGitHubAppInstallation(context.Background(), workspaceID, WorkspaceGitHubAppInstallation{
+		Status:              WorkspaceGitHubAppStatusConnected,
+		InstallationID:      "98765",
+		AccountLogin:        "mlhiter",
+		AccountType:         "User",
+		RepositorySelection: "selected",
+		Permissions: map[string]string{
+			"contents":      "write",
+			"metadata":      "read",
+			"pull_requests": "read",
+		},
+		HTMLURL:      "https://github.com/settings/installations/98765",
+		LastSyncedAt: time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed github app installation: %v", err)
+	}
+	needsAttention := getInstallation(t, configuredServer)
+	if needsAttention.Status != WorkspaceGitHubAppStatusNeedsAction || len(needsAttention.MissingPermissions) != 1 || needsAttention.MissingPermissions[0] != "pull_requests:write" {
+		t.Fatalf("expected missing pull request write permission, got %+v", needsAttention)
 	}
 }
 
