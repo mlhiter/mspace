@@ -237,7 +237,7 @@ The header should show:
 
 Primary action should stay in the reply composer, not in a large runtime control panel. To ask an agent, the user writes a normal issue comment and mentions an enabled agent from the Agents module.
 
-When an issue has no attached project, Issue Detail should stay readable and commentable but block agent execution, PR handoff, test environments, and project runbook access until a project is attached from the Project sidebar section.
+When an issue has no attached project, Issue Detail should stay readable and commentable but block agent execution, PR handoff, test environments, and project runbook access until a project is attached. Project attachment remains available from the Project sidebar section, and the reply/edit composer must also open the same attachment flow when a user tries to save or send a supported agent mention. The trigger comment should not be written before the project is attached.
 
 ### Document body
 
@@ -271,7 +271,7 @@ The composer is the main interaction control:
 - Markdown comments stay on the issue through the same TipTap-backed document editor used for issue creation, including image upload, paste, drop, and thumbnail previews;
 - comment reactions stay as lightweight metadata on comments and should not rewrite the Markdown body or agent prompt history;
 - the latest human-authored comment can be edited inline only while it is still unconsumed by an agent session, including adding a supported agent mention and then saving that edit to queue the turn;
-- supported agent mentions first verify a matching active Codex worker, then save the trigger comment and queue a worker-backed Codex app-server turn with the selected managed profile;
+- supported agent mentions first resolve an attached project, then verify a matching active Codex worker, then save the trigger comment and queue a worker-backed Codex app-server turn with the selected managed profile;
 - unsupported agent mentions should be visible but not queued;
 - when an agent is already working, a second agent turn should be disabled until the current turn finishes or is stopped.
 - issue lifecycle actions live in the composer footer with the comment submit controls. Show the primary close or reopen action directly, hide less common close reasons such as `Close as not planned` behind a compact dropdown, and do not repeat the current issue status inside the composer.
@@ -324,7 +324,7 @@ Current implementation:
 - shows issue body first, then a timeline of human comments, Codex turns, and failure/deploy attention events;
 - supports rich Markdown comments and managed agent mentions from the same reply box;
 - reads enabled mention suggestions from the Agents module instead of a frontend constant;
-- checks worker liveness before saving an agent trigger comment; personal desktop mode may auto-start the local worker, while team workspaces require a connected team worker;
+- resolves project attachment and checks worker liveness before saving an agent trigger comment; personal desktop mode may auto-start the local worker, while team workspaces require a connected team worker;
 - saves the trigger comment before queuing the worker-backed Codex session, so accepted turns are visible in the issue history;
 - sends the mention-stripped comment as the current turn request, ahead of the original issue context;
 - shows server-queued `issue_analysis` sessions as read-only Issue analysis using the `think` workflow skill, rather than as a generic runtime task or hidden background job;

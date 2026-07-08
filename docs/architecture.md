@@ -40,7 +40,8 @@ The server does own the built-in workflow skill catalog. The current catalog is 
 
 ```text
 Desktop Issue Detail
-  -> verify attached project and matching active Codex worker
+  -> resolve attached project before agent turns
+  -> verify matching active Codex worker
   -> POST server comment
   -> POST server agent session
 Server

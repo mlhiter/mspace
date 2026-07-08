@@ -148,6 +148,7 @@ type EditorMentionMatch = {
   from: number;
   to: number;
 };
+type ProjectAttachIntent = "sidebar" | "composer" | "edit";
 
 const AUTO_PREVIEW_CHECK_INTERVAL_MS = 60_000;
 const autoPreviewCheckAtByIssue = new Map<string, number>();
@@ -4895,6 +4896,7 @@ function TestDeployModal(props: {
 function ProjectAttachModal(props: {
   projects: Project[];
   currentProjectId: string;
+  intent: ProjectAttachIntent;
   suggestedRepoUrl: string;
   repoUrl: string;
   projectName: string;
@@ -4909,6 +4911,7 @@ function ProjectAttachModal(props: {
 }) {
   const { t } = useMspaceTranslation();
   const canCreate = props.repoUrl.trim().length > 0 && !props.isAttaching;
+  const isAgentIntent = props.intent === "composer" || props.intent === "edit";
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -4933,9 +4936,11 @@ function ProjectAttachModal(props: {
               <Boxes data-icon />
               {t("issueDetail.projectAttach.eyebrow")}
             </div>
-            <h2 id="project-attach-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">{t("issueDetail.projectAttach.title")}</h2>
+            <h2 id="project-attach-title" className="text-[20px] font-semibold leading-7 text-[color:var(--text)]">
+              {t(isAgentIntent ? "issueDetail.projectAttach.agentTitle" : "issueDetail.projectAttach.title")}
+            </h2>
             <p className="mt-1 max-w-[58ch] text-[13px] leading-6 text-[color:var(--muted)] text-pretty">
-              {t("issueDetail.projectAttach.description")}
+              {t(isAgentIntent ? "issueDetail.projectAttach.agentDescription" : "issueDetail.projectAttach.description")}
             </p>
           </div>
           <button
@@ -5073,6 +5078,8 @@ export function IssueDetailPage() {
   const [issueTitleDraft, setIssueTitleDraft] = useState("");
   const [issueBodyDraft, setIssueBodyDraft] = useState("");
   const [projectAttachOpen, setProjectAttachOpen] = useState(false);
+  const [projectAttachIntent, setProjectAttachIntent] = useState<ProjectAttachIntent>("sidebar");
+  const [projectAttachFeedback, setProjectAttachFeedback] = useState<ProjectAttachIntent | null>(null);
   const [newProjectRepoUrl, setNewProjectRepoUrl] = useState("");
   const [newProjectName, setNewProjectName] = useState("");
   const scrolledLinkedSessionTarget = useRef("");
@@ -5124,6 +5131,12 @@ export function IssueDetailPage() {
   useEffect(() => {
     setIssueTab(searchTab);
   }, [searchTab]);
+
+  useEffect(() => {
+    setProjectAttachOpen(false);
+    setProjectAttachIntent("sidebar");
+    setProjectAttachFeedback(null);
+  }, [issueId]);
 
   const detail = issueQuery.data;
   const resourcesQuery = useQuery({
@@ -5180,6 +5193,8 @@ export function IssueDetailPage() {
   const editingMentionMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingMentionMenuDismissed && editingAgentSuggestions.length > 0;
   const runtimeLabel = runtimeMode === "team" ? t("issueDetail.composer.teamWorker") : t("issueDetail.composer.personalWorker");
   const hasMatchingCodexWorker = runtimeAvailabilityQuery.data?.state === "ready";
+  const composerNeedsProjectForAgent = isSupportedAgentMention && !hasProject;
+  const editingNeedsProjectForAgent = isSupportedEditingAgentMention && !hasProject;
   const workerUnavailableText =
     runtimeMode === "personal"
       ? t("issueDetail.composer.personalWorkerUnavailable")
@@ -5189,23 +5204,25 @@ export function IssueDetailPage() {
     Boolean(editingCommentId) &&
     Boolean(editingCommentBody.trim()) &&
     !isUnsupportedEditingAgentMention &&
-    (!isSupportedEditingAgentMention || hasProject) &&
-    !(isSupportedEditingAgentMention && hasActiveSession);
+    !(isSupportedEditingAgentMention && hasActiveSession) &&
+    !(isSupportedEditingAgentMention && hasProject && runtimeMode === "team" && !hasMatchingCodexWorker);
   const editHelperText = isSupportedEditingAgentMention
-    ? hasActiveSession
-      ? t("issueDetail.composer.agentAlreadyWorking", { name: editingMentionedAgentConfig?.name })
-      : !hasProject
-        ? t("issueDetail.composer.attachProjectBeforeAgent")
-        : !hasMatchingCodexWorker
-          ? workerUnavailableText
-        : t("issueDetail.composer.willRunAfterSave", { name: editingMentionedAgentConfig?.name, runtime: runtimeLabel })
+    ? projectAttachFeedback === "edit" && hasProject
+      ? t("issueDetail.composer.projectAttachedEditPreserved")
+      : hasActiveSession
+        ? t("issueDetail.composer.agentAlreadyWorking", { name: editingMentionedAgentConfig?.name })
+        : editingNeedsProjectForAgent
+          ? t("issueDetail.composer.attachProjectBeforeAgentWithAnalysis")
+          : !hasMatchingCodexWorker
+            ? workerUnavailableText
+            : t("issueDetail.composer.willRunAfterSave", { name: editingMentionedAgentConfig?.name, runtime: runtimeLabel })
     : isUnsupportedEditingAgentMention
       ? t("issueDetail.composer.agentUnavailable", { mention: editingMentionedAgent })
       : t("issueDetail.composer.editLatest");
   const editSaveLabel = isSupportedEditingAgentMention
     ? hasActiveSession
       ? t("issueDetail.composer.agentWorking")
-      : !hasProject
+      : editingNeedsProjectForAgent
         ? t("issueDetail.composer.attachProject")
         : !hasMatchingCodexWorker
           ? runtimeMode === "personal"
@@ -5216,8 +5233,8 @@ export function IssueDetailPage() {
   const composerHelperText = isSupportedAgentMention
     ? hasActiveSession
       ? t("issueDetail.composer.agentAlreadyWorking", { name: mentionedAgentConfig?.name })
-      : !hasProject
-        ? t("issueDetail.composer.attachProjectBeforeAgent")
+      : composerNeedsProjectForAgent
+        ? t("issueDetail.composer.attachProjectBeforeAgentWithAnalysis")
         : !hasMatchingCodexWorker
           ? workerUnavailableText
         : t("issueDetail.composer.willRunOnRuntime", { name: mentionedAgentConfig?.name, runtime: runtimeLabel })
@@ -5350,7 +5367,7 @@ export function IssueDetailPage() {
         }
         const project = detail.project;
         if (!project?.id) {
-          throw new Error(t("issueDetail.composer.attachProjectBeforeAgent"));
+          throw new Error(t("issueDetail.composer.attachProjectBeforeAgentWithAnalysis"));
         }
         await ensureAgentWorkerReady();
         const comment = await controlPlaneApi.addComment(auth.token, workspaceId, issueId, commentInput);
@@ -5376,6 +5393,7 @@ export function IssueDetailPage() {
       setComposerBody("");
       composerEditor?.commands.clearContent(false);
       setComposerMentionMatch(null);
+      setProjectAttachFeedback((intent) => intent === "composer" ? null : intent);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
@@ -5386,20 +5404,21 @@ export function IssueDetailPage() {
     Boolean(composerBody.trim()) &&
     !sendComposer.isPending &&
     !isUnsupportedAgentMention &&
-    (!isSupportedAgentMention || hasProject) &&
     !(isSupportedAgentMention && hasActiveSession) &&
-    !(isSupportedAgentMention && runtimeMode === "team" && !hasMatchingCodexWorker);
+    !(isSupportedAgentMention && hasProject && runtimeMode === "team" && !hasMatchingCodexWorker);
   const sendAgentLabel = sendComposer.isPending
     ? t("issueDetail.composer.sending")
-    : isSupportedAgentMention && !hasMatchingCodexWorker
-      ? runtimeMode === "personal"
-        ? t("issueDetail.composer.startPersonalWorker")
-        : t("issueDetail.composer.connectWorker")
-      : isSupportedAgentMention
-        ? hasActiveSession
-          ? t("issueDetail.composer.agentWorking")
-          : t("issueDetail.composer.sendTo", { name: mentionedAgentConfig?.name })
-        : t("issueDetail.composer.comment");
+    : composerNeedsProjectForAgent
+      ? t("issueDetail.composer.attachProject")
+      : isSupportedAgentMention && !hasMatchingCodexWorker
+        ? runtimeMode === "personal"
+          ? t("issueDetail.composer.startPersonalWorker")
+          : t("issueDetail.composer.connectWorker")
+        : isSupportedAgentMention
+          ? hasActiveSession
+            ? t("issueDetail.composer.agentWorking")
+            : t("issueDetail.composer.sendTo", { name: mentionedAgentConfig?.name })
+          : t("issueDetail.composer.comment");
 
   const updateComment = useMutation({
     mutationFn: async (input: { commentId: string; body: string; agentConfig?: AgentProfile }) => {
@@ -5413,7 +5432,7 @@ export function IssueDetailPage() {
         }
         const project = detail.project;
         if (!project?.id) {
-          throw new Error(t("issueDetail.composer.attachProjectBeforeAgent"));
+          throw new Error(t("issueDetail.composer.attachProjectBeforeAgentWithAnalysis"));
         }
         await ensureAgentWorkerReady();
       }
@@ -5438,6 +5457,7 @@ export function IssueDetailPage() {
     },
     onSuccess: async () => {
       resetEditingCommentState();
+      setProjectAttachFeedback((intent) => intent === "edit" ? null : intent);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: inboxQueryKey }),
@@ -5584,6 +5604,10 @@ export function IssueDetailPage() {
     if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
     event.preventDefault();
     if (!editingCommentId || !canSaveEditingComment || updateComment.isPending) return;
+    if (editingNeedsProjectForAgent) {
+      openProjectAttach("edit");
+      return;
+    }
     updateComment.mutate({
       commentId: editingCommentId,
       body: editingCommentBody,
@@ -5666,10 +5690,11 @@ export function IssueDetailPage() {
   });
 
   const attachProject = useMutation({
-    mutationFn: (projectId: string) =>
-      controlPlaneApi.updateIssue(auth.token, workspaceId, issueId, { projectId }),
-    onSuccess: async () => {
+    mutationFn: (input: { projectId: string; intent: ProjectAttachIntent }) =>
+      controlPlaneApi.updateIssue(auth.token, workspaceId, issueId, { projectId: input.projectId }),
+    onSuccess: async (_issue, input) => {
       setProjectAttachOpen(false);
+      setProjectAttachFeedback(input.intent);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
@@ -5680,7 +5705,7 @@ export function IssueDetailPage() {
   });
 
   const createAndAttachProject = useMutation({
-    mutationFn: async (input: { name: string; repoUrl: string }) => {
+    mutationFn: async (input: { name: string; repoUrl: string; intent: ProjectAttachIntent }) => {
       const project = await controlPlaneApi.createProject(auth.token, workspaceId, {
         name: input.name,
         sourceType: "github",
@@ -5699,8 +5724,9 @@ export function IssueDetailPage() {
       await controlPlaneApi.updateIssue(auth.token, workspaceId, issueId, { projectId: project.id });
       return project;
     },
-    onSuccess: async () => {
+    onSuccess: async (_project, input) => {
       setProjectAttachOpen(false);
+      setProjectAttachFeedback(input.intent);
       setNewProjectRepoUrl("");
       setNewProjectName("");
       await Promise.all([
@@ -5948,7 +5974,9 @@ export function IssueDetailPage() {
     });
   }
 
-  function openProjectAttach() {
+  function openProjectAttach(intent: ProjectAttachIntent = "sidebar") {
+    setProjectAttachIntent(intent);
+    setProjectAttachFeedback(null);
     setNewProjectRepoUrl(suggestedRepoUrl);
     setNewProjectName("");
     attachProject.reset();
@@ -5967,7 +5995,7 @@ export function IssueDetailPage() {
           priorityLabel={selectedPriorityLabel}
           triageStatus={detail.issue.triageStatus}
           assignee={assigneeActor}
-          onProjectClick={openProjectAttach}
+          onProjectClick={() => openProjectAttach()}
         />
       }
       actions={
@@ -6139,6 +6167,10 @@ export function IssueDetailPage() {
                           onEditImageUpload={uploadIssueImage}
                           onSaveEdit={() => {
                             if (!canSaveEditingComment) return;
+                            if (editingNeedsProjectForAgent) {
+                              openProjectAttach("edit");
+                              return;
+                            }
                             updateComment.mutate({
                               commentId: item.comment.id,
                               body: editingCommentBody,
@@ -6227,10 +6259,17 @@ export function IssueDetailPage() {
                   onSubmit={(event) => {
                     event.preventDefault();
                     if (!canSendComposer) return;
+                    if (composerNeedsProjectForAgent) {
+                      openProjectAttach("composer");
+                      return;
+                    }
                     sendComposer.mutate(composerBody);
                   }}
                 >
                   {sendComposer.error ? <Notice tone="danger">{sendComposer.error.message}</Notice> : null}
+                  {projectAttachFeedback === "composer" ? (
+                    <Notice>{t("issueDetail.composer.projectAttachedDraftPreserved")}</Notice>
+                  ) : null}
                   <div className="relative" data-comment-composer="true">
                     <IssueDocumentEditor
                       variant="comment"
@@ -6378,19 +6417,20 @@ export function IssueDetailPage() {
                     <button
                       type="button"
                       className="min-w-0 rounded-[6px] px-1 py-1 text-left text-[12px] font-medium leading-5 text-[color:var(--muted-strong)] transition-colors hover:bg-[color:var(--hover)]"
-                      onClick={openProjectAttach}
+                      onClick={() => openProjectAttach()}
                     >
                       <span className="block truncate">{detail.project.name}</span>
                     </button>
                   </div>
                   <MetaLine label={t("issueDetail.sidebar.repo")} value={projectRepository || t("issueDetail.sidebar.notConfigured")} />
                   <MetaLine label={t("issueDetail.sidebar.defaultCluster")} value={projectCluster?.name || t("issueDetail.sidebar.notConfigured")} />
+                  {projectAttachFeedback ? <Notice>{t("issueDetail.sidebar.projectAttachedAnalysisQueued")}</Notice> : null}
                 </div>
               ) : (
                 <div className="grid gap-3 rounded-[8px] bg-[color:var(--block-subtle)] px-3 py-2.5 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
                   <span className="font-medium text-[color:var(--muted-strong)]">{t("issueDetail.sidebar.noProjectAttached")}</span>
                   <span>{t("issueDetail.sidebar.attachProjectDescription")}</span>
-                  <Button type="button" variant="secondary" size="sm" onClick={openProjectAttach}>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => openProjectAttach()}>
                     <Plus data-icon />
                     {t("issueDetail.sidebar.attachProject")}
                   </Button>
@@ -6523,6 +6563,7 @@ export function IssueDetailPage() {
         <ProjectAttachModal
           projects={projects}
           currentProjectId={detail.project?.id || ""}
+          intent={projectAttachIntent}
           suggestedRepoUrl={suggestedRepoUrl}
           repoUrl={projectAttachRepoUrl}
           projectName={newProjectName}
@@ -6531,8 +6572,8 @@ export function IssueDetailPage() {
           isAttaching={attachProject.isPending || createAndAttachProject.isPending}
           onRepoUrlChange={setNewProjectRepoUrl}
           onProjectNameChange={setNewProjectName}
-          onAttachProject={(projectId) => attachProject.mutate(projectId)}
-          onCreateAndAttach={() => createAndAttachProject.mutate({ name: newProjectName, repoUrl: projectAttachRepoUrl })}
+          onAttachProject={(projectId) => attachProject.mutate({ projectId, intent: projectAttachIntent })}
+          onCreateAndAttach={() => createAndAttachProject.mutate({ name: newProjectName, repoUrl: projectAttachRepoUrl, intent: projectAttachIntent })}
           onClose={() => setProjectAttachOpen(false)}
         />
       ) : null}

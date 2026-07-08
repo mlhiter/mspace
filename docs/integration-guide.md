@@ -557,7 +557,7 @@ Personal workspaces use `runtimeMode: "personal"`; team workspaces use `runtimeM
 }
 ```
 
-The server validates that the issue has an attached project, that `runtimeMode` matches the workspace kind, and that a matching active Codex worker exists before it creates `agent_sessions` or `runtime_tasks`. If no worker is online, the server returns HTTP `409` with `{"error":"no active codex worker"}`. Clients should keep the preflight before the trigger comment so unsupported `@codex` turns do not leave a human comment waiting for a worker that cannot claim the task.
+The server validates that the issue has an attached project, that `runtimeMode` matches the workspace kind, and that a matching active Codex worker exists before it creates `agent_sessions` or `runtime_tasks`. If no worker is online, the server returns HTTP `409` with `{"error":"no active codex worker"}`. Clients should keep project attachment and worker preflight before the trigger comment so unsupported `@codex` turns do not leave a human comment waiting for missing repository context or a worker that cannot claim the task.
 
 When accepted, the server snapshots issue/project/runbook/comment/child issue/label context into the runtime task payload and returns the server `AgentSession`. The worker prepares its own repo cache and workdir, appends logs to `runtime_task_logs`, and reports Codex thread/turn ids plus source branch and commit metadata in `runtime_tasks.result`. Server Issue Detail includes matching sessions by mapping `runtime_tasks` with `kind="agent_session"` back into its `sessions` field, and the Commits tab derives change nodes from task results.
 
