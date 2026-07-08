@@ -30,7 +30,7 @@ The updated workflow adds or clarifies these requirements:
 - Some cases need mock data setup.
 - A formal test plan may need plan-level setup steps that run once before cases, such as signing in to a platform, updating a Deployment image, SSHing into a VM, preparing mock data, or verifying a preview URL.
 - Test types include functional tests, UI tests, API tests, and deployment tests.
-- UI tests need browser/CDP support. Deployment tests may need SSH or commands similar to `sealos run`.
+- UI tests and explicit browser-backed platform/session flows need browser/CDP support. Deployment tests may need SSH or commands similar to `sealos run`.
 - Test results need screenshots or other evidence.
 - Human review remains a checkpoint. A Codex-completed run should not automatically mean a release is accepted, but the current product treats accept/block as audit records until a later release or plan gate consumes them.
 
@@ -442,7 +442,7 @@ case library
 
 ### UI Tests: Later Phase
 
-UI tests require workers with `browser` or `chrome_cdp` capability.
+UI tests, and functional cases that explicitly exercise browser/platform/session entry points, require workers with `browser` or `chrome_cdp` capability.
 
 Future model:
 
@@ -828,7 +828,7 @@ Shape:
 
 The server stores the whole setup result on the run and copies the `outputs` object into `runContext`. Later execution Issues include that context in their prompt, so a setup step can hand off concrete facts such as `previewUrl`, `image`, `namespace`, or `sshTarget` without adding a new product object. `status:"failed"`, a failed setup task, cancellation, or a missing setup artifact stops the run before any case session starts.
 
-When a UI test writes screenshot paths inside `evidence`, the worker waits briefly for those referenced files to become readable under the session artifact directory, then embeds small screenshot files as `evidence.screenshotImages[]` data URLs before completing the runtime task from `test-result.json`. The same readiness rule applies when a restarted worker recovers an existing session workdir. The server extracts supported image data into `test_artifacts`, removes embedded image payloads from run item evidence, and writes artifact refs back into `evidence.artifacts` and `evidence.screenshotImages`. Case Detail and Run Detail render those refs as authenticated thumbnails with an in-app preview.
+When a browser-backed test writes screenshot paths inside `evidence`, the worker waits briefly for those referenced files to become readable under the session artifact directory, then embeds small screenshot files as `evidence.screenshotImages[]` data URLs before completing the runtime task from `test-result.json`. The same readiness rule applies when a restarted worker recovers an existing session workdir. The server extracts supported image data into `test_artifacts`, removes embedded image payloads from run item evidence, and writes artifact refs back into `evidence.artifacts` and `evidence.screenshotImages`. Case Detail and Run Detail render those refs as authenticated thumbnails with an in-app preview.
 
 Future UI testing can write:
 
@@ -974,7 +974,7 @@ Goal: add more test types without changing the core model.
 
 Scope:
 
-- UI tests: Chrome CDP, screenshots, browser trace;
+- browser-backed UI/platform tests: Chrome CDP, screenshots, browser trace;
 - API tests: requests, assertions, auth, mock data;
 - deployment tests: SSH, `sealos run`, offline package, component upgrade;
 - multi-machine scheduling;
@@ -983,7 +983,7 @@ Scope:
 Acceptance:
 
 - different test types route to workers by capability;
-- UI tests preserve screenshots;
+- browser-backed tests preserve screenshots;
 - Case Detail shows a run history tab for all runs of that case;
 - deployment tests have audit, rollback, and cleanup paths;
 - multi-machine failures identify the machine, step, and environment involved.

@@ -51,11 +51,60 @@ func testRunExecutionRequiredCapabilities(cases []TestCase) (json.RawMessage, er
 
 func testRunBatchRequiresBrowser(cases []TestCase) bool {
 	for _, testCase := range cases {
-		if strings.EqualFold(strings.TrimSpace(testCase.Type), "ui") {
+		if testCaseRequiresBrowser(testCase) {
 			return true
 		}
 	}
 	return false
+}
+
+func testCaseRequiresBrowser(testCase TestCase) bool {
+	if strings.EqualFold(strings.TrimSpace(testCase.Type), "ui") {
+		return true
+	}
+	text := strings.ToLower(strings.Join(testCaseBrowserSignals(testCase), "\n"))
+	for _, signal := range []string{
+		"browser",
+		"cdp",
+		"frontend_url",
+		"frontend url",
+		"screenshot",
+		" ui ",
+		"sealos platform",
+		"sealos desktop",
+		"object storage icon",
+		"app icon",
+		"access-key",
+		"access key",
+		"s3 service",
+		"浏览器",
+		"截图",
+		"界面",
+		"sealos 平台",
+		"sealos 桌面",
+		"对象存储图标",
+		"应用图标",
+		"访问密钥",
+		"s3 服务参数",
+	} {
+		if strings.Contains(text, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func testCaseBrowserSignals(testCase TestCase) []string {
+	signals := []string{
+		testCase.Title,
+		testCase.Preconditions,
+		testCase.ExpectedResult,
+		testCase.EnvironmentRequirements,
+	}
+	for _, step := range testCase.Steps {
+		signals = append(signals, step.Action, step.Expected)
+	}
+	return signals
 }
 
 func testRunExecutionCapabilitySets(cases []TestCase, batchSize int) ([]json.RawMessage, error) {
@@ -560,7 +609,8 @@ func buildTestRunSetupIssueBody(run TestRun) string {
 	builder.WriteString("```json\n")
 	builder.WriteString(`{"runId":"` + run.ID + `","status":"passed|failed","summary":"what is ready","failureSummary":"","outputs":{},"evidence":{},"steps":[{"title":"...","status":"passed|failed","command":"...","summary":"..."}]}`)
 	builder.WriteString("\n```\n\n")
-	builder.WriteString("Put reusable outputs for later case execution in `outputs`. Keep this generic and environment-driven: examples include `previewUrl`, `frontendUrl`, `apiUrl`, `sealosUrl`, `image`, `namespace`, `sshTarget`, `browserSessionStrategy`, `preconditionStatus`, `sessionNotes`, or `bootstrapNotes`. Use `evidence` for compact proof such as checked URLs, command summaries, readiness signals, or bootstrap/session observations that later UI cases can trust.\n\n")
+	builder.WriteString("Put reusable outputs for later case execution in `outputs`. Keep this generic and environment-driven: examples include `previewUrl`, `frontendUrl`, `apiUrl`, `sealosUrl`, `platformUrl`, `appEntry`, `directFrontendUrl`, `image`, `namespace`, `sshTarget`, `browserSessionStrategy`, `preconditionStatus`, `sessionNotes`, or `bootstrapNotes`. Use `evidence` for compact proof such as checked URLs, command summaries, readiness signals, or bootstrap/session observations that later UI cases can trust.\n\n")
+	builder.WriteString("When an app is normally launched from a platform shell such as Sealos Desktop, distinguish platform entry from direct app reachability. Record the platform URL in `sealosUrl` or `platformUrl`, the app launch affordance in `appEntry`, and direct ingress reachability in `directFrontendUrl` or `frontendUrl`. Treat direct app HTTP 200 as a health signal only unless the test explicitly allows direct access; if later cases need platform-provided session, quota, workspace, or app-token context, verify that bootstrap path or write `status:\"failed\"` with the blocker.\n\n")
 	builder.WriteString("Do not persist plaintext secrets in `outputs`, `evidence`, `steps`, screenshots, notes, or summaries. When secret handling must be proven, record only safe metadata such as presence, changed/unchanged, last-four characters, or a non-reversible hash.\n\n")
 	builder.WriteString("If setup cannot safely complete, write `status:\"failed\"` and include a compact `failureSummary` plus any reusable blocker context, for example missing session bootstrap, unreachable frontend/API, failed namespace readiness, or unresolved preconditions.")
 	return strings.TrimSpace(builder.String())
@@ -584,8 +634,9 @@ func buildTestRunExecutionIssueBody(run TestRun, cases []TestCase) string {
 	}
 	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/test-result.json` with one item per case in this batch. Use only the real case IDs listed below. Never use synthetic IDs such as `batch`, `all`, or `summary`; if a global setup, network, browser, or script failure stops this batch, write one `blocked` or `failed` item per affected case with that case's real `caseId`.\n\n")
 	if testRunBatchRequiresBrowser(cases) {
-		builder.WriteString("This batch includes UI cases. Use the browser-capable runtime (`MSPACE_CHROME_CDP_URL` when provided) to exercise the preview or target page. If the CDP endpoint does not support creating a new target/page, reuse an existing CDP page instead of failing immediately. Before running assertions, check setup context and app/session bootstrap blockers such as missing `frontendUrl`, `apiUrl`, `sealosUrl`, `browserSessionStrategy`, authentication/session state, or unresolved `preconditionStatus`.\n\n")
-		builder.WriteString("Capture at least one screenshot per UI case, save screenshots under `${MSPACE_SESSION_ARTIFACT_DIR}/screenshots/`, and reference them from each result item with `evidence.screenshotPaths`. Also include useful `evidence.assertions` and `evidence.networkStatuses` when observable. If browser/session execution is impossible, write one `blocked` or `failed` item per real case ID affected by the blocker, and put the concrete browser/session/app bootstrap reason in `failureSummary` instead of returning text-only evidence.\n\n")
+		builder.WriteString("This batch includes browser-backed cases, either because their type is `ui` or because their steps explicitly mention browser/CDP/screenshot/frontend URL, Sealos Desktop/platform entry, app icons, access-key/S3 service parameter flows, or similar session-bearing UI entry points. Use the browser-capable runtime (`MSPACE_CHROME_CDP_URL` when provided) to exercise the real user entry path. If the CDP endpoint does not support creating a new target/page, reuse an existing CDP page instead of failing immediately. Before running assertions, check setup context and app/session bootstrap blockers such as missing `frontendUrl`, `directFrontendUrl`, `apiUrl`, `sealosUrl`, `platformUrl`, `appEntry`, `browserSessionStrategy`, authentication/session state, or unresolved `preconditionStatus`.\n\n")
+		builder.WriteString("If `sealosUrl` or `platformUrl` is present and the case steps mention Sealos, Desktop, workspace, app icon, object storage entry, or access-key/session behavior, log in through that platform URL first and open the app from the platform shell. Use `frontendUrl` or `directFrontendUrl` only as a health check or explicitly documented fallback; do not treat direct app HTTP 200 as proof that platform session, Authorization, workspace quota, or app-token context is available.\n\n")
+		builder.WriteString("Capture at least one screenshot per browser-backed case, save screenshots under `${MSPACE_SESSION_ARTIFACT_DIR}/screenshots/`, and reference them from each result item with `evidence.screenshotPaths`. Also include useful `evidence.assertions` and `evidence.networkStatuses` when observable. If browser/session execution is impossible, write one `blocked` or `failed` item per real case ID affected by the blocker, and put the concrete browser/session/app bootstrap reason in `failureSummary` instead of returning text-only evidence.\n\n")
 	}
 	builder.WriteString("Do not persist plaintext secrets in `test-result.json`, screenshots, notes, DOM snippets, network excerpts, or summaries. When a case validates secret behavior, record only safe metadata such as presence, changed/unchanged, last-four characters, or a non-reversible hash.\n\n")
 	builder.WriteString(testResultLanguageInstruction(run.ResultLocale) + "\n\n")
