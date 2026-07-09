@@ -274,11 +274,10 @@ function TestCasePagination(props: {
 }
 
 function WorkflowStepButton(props: {
-  index: number;
   icon: LucideIcon;
   title: string;
-  count: string;
-  statusLabel: string;
+  metric: string;
+  detail: string;
   active: boolean;
   className?: string;
   children?: ReactNode;
@@ -288,7 +287,7 @@ function WorkflowStepButton(props: {
   return (
     <div
       className={cn(
-        "min-h-[60px] bg-[color:var(--paper)] transition-colors",
+        "min-w-0 rounded-[7px] transition-colors",
         props.active ? "bg-[color:var(--selection)]" : "",
         props.className,
       )}
@@ -296,20 +295,64 @@ function WorkflowStepButton(props: {
       <button
         type="button"
         onClick={props.onClick}
-        className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left transition-colors hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--focus)]"
+        className="flex min-h-12 w-full items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-left transition-colors hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--focus)]"
       >
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[color:var(--block)] text-[10px] font-semibold tabular-nums text-[color:var(--muted-strong)]">{props.index}</span>
+        <span className="grid size-7 shrink-0 place-items-center rounded-[7px] bg-[color:var(--block)] text-[color:var(--muted)]">
           <Icon data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
-          <div className="min-w-0">
-            <div className="truncate text-[13px] font-semibold text-[color:var(--text)]">{props.title}</div>
-            <div className="truncate text-[11px] text-[color:var(--muted)]">{props.statusLabel}</div>
-          </div>
-        </div>
-        <span className="shrink-0 text-[12px] font-medium tabular-nums text-[color:var(--muted)]">{props.count}</span>
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <span className="text-[13px] font-semibold leading-4 text-[color:var(--text)]">{props.title}</span>
+            <span className="text-[12px] font-medium leading-4 tabular-nums text-[color:var(--muted-strong)]">{props.metric}</span>
+          </span>
+          <span className="mt-0.5 block text-[11px] leading-4 text-[color:var(--muted)]">{props.detail}</span>
+        </span>
       </button>
-      {props.children ? <div className="border-t border-[color:var(--line)] px-2 pb-1.5 pt-1">{props.children}</div> : null}
+      {props.children ? <div className="px-2 pb-1.5">{props.children}</div> : null}
     </div>
+  );
+}
+
+function ScopeMetric(props: { label: string; value: number }) {
+  return (
+    <span className="inline-flex items-baseline gap-1 text-[12px] leading-5">
+      <span className="font-medium tabular-nums text-[color:var(--text)]">{props.value}</span>
+      <span className="text-[color:var(--muted)]">{props.label}</span>
+    </span>
+  );
+}
+
+function WorkflowPath(props: { children: ReactNode }) {
+  const { t } = useMspaceTranslation();
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <div className="text-[12px] font-semibold leading-4 text-[color:var(--text)]">{t("tests.workflow.title")}</div>
+        <p className="text-[12px] leading-4 text-[color:var(--muted)]">{t("tests.workflow.hint")}</p>
+      </div>
+      <div className="flex flex-col gap-1 md:flex-row md:items-stretch">
+        {props.children}
+      </div>
+    </div>
+  );
+}
+
+function WorkflowConnector() {
+  return (
+    <div className="hidden w-5 shrink-0 items-center justify-center text-[color:var(--faint)] md:flex" aria-hidden="true">
+      <ArrowRight data-icon className="size-3.5" />
+    </div>
+  );
+}
+
+function WorkflowStepSlot(props: { children: ReactNode; showConnector?: boolean }) {
+  return (
+    <>
+      {props.showConnector ? <WorkflowConnector /> : null}
+      <div className="min-w-0 flex-1 rounded-[8px] bg-[color:var(--block)] p-1">
+        {props.children}
+      </div>
+    </>
   );
 }
 
@@ -406,13 +449,12 @@ function TestsProjectContextBar(props: {
               <ContextMetaPill icon={Network}>{defaultEnvironmentLabel}</ContextMetaPill>
               <ContextMetaPill icon={Layers3}>{projectCountLabel}</ContextMetaPill>
             </div>
-            <p className="mt-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
-              {t("tests.projectContext.scopeSummary", {
-                cases: props.caseCount,
-                ready: props.readyCaseCount,
-                pending: props.pendingProposalCount,
-              })}
-            </p>
+            <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="text-[12px] font-medium leading-5 text-[color:var(--muted-strong)]">{t("tests.projectContext.scope")}</span>
+              <ScopeMetric label={t("tests.projectContext.scopeCases")} value={props.caseCount} />
+              <ScopeMetric label={t("tests.projectContext.scopeReady")} value={props.readyCaseCount} />
+              <ScopeMetric label={t("tests.projectContext.scopePending")} value={props.pendingProposalCount} />
+            </div>
           </div>
         </div>
         <div className="min-w-0 md:w-[280px]">
@@ -1983,25 +2025,29 @@ export function TestsPage() {
       {
         key: "cases" as const,
         icon: ClipboardCheck,
-        count: t("tests.workflow.caseCount", { count: allCaseTotal }),
-        statusLabel: allCaseTotal > 0 ? t("tests.workflow.caseReady") : t("tests.workflow.caseStart"),
+        title: t("tests.workflow.caseStepTitle"),
+        metric: t("tests.workflow.caseCount", { count: allCaseTotal }),
+        detail: t("tests.workflow.caseStepDetail", { count: readyCases.length }),
       },
       {
         key: "plans" as const,
         icon: ListChecks,
-        count: t("tests.workflow.planCount", { count: allPlans.length }),
-        statusLabel: readyCases.length > 0 ? t("tests.workflow.planReady") : t("tests.workflow.blocked"),
+        title: t("tests.workflow.planStepTitle"),
+        metric: t("tests.workflow.planCount", { count: allPlans.length }),
+        detail:
+          readyCases.length > 0
+            ? t("tests.workflow.planStepDetailReady", { count: readyCases.length })
+            : t("tests.workflow.planStepDetailBlocked"),
       },
       {
         key: "runs" as const,
         icon: Play,
-        count: latestRun ? t("tests.workflow.runLatest", { status: t(`tests.runStatusValue.${latestRun.status}`, { defaultValue: latestRun.status }) }) : t("tests.workflow.runCountEmpty"),
-        statusLabel:
-          latestRun?.status === "running" || latestRun?.status === "queued"
-            ? t("tests.workflow.runActive")
-            : readyPlans.length > 0
-              ? t("tests.workflow.runReady")
-              : t("tests.workflow.blocked"),
+        title: t("tests.workflow.runStepTitle"),
+        metric: latestRun ? t("tests.workflow.runLatest", { status: t(`tests.runStatusValue.${latestRun.status}`, { defaultValue: latestRun.status }) }) : t("tests.workflow.runCountEmpty"),
+        detail:
+          readyPlans.length > 0
+            ? t("tests.workflow.runStepDetailReady", { count: readyPlans.length })
+            : t("tests.workflow.runStepDetailBlocked"),
       },
     ],
     [allCaseTotal, allPlans.length, latestRun, readyCases.length, readyPlans.length, t],
@@ -2235,35 +2281,34 @@ export function TestsPage() {
             onProjectChange={changeProjectContext}
           >
             {actionMessage ? <p className="text-[12px] text-[color:var(--muted)]">{actionMessage}</p> : null}
-            <div className="grid overflow-hidden rounded-[8px] border border-[color:var(--line)] md:grid-cols-3">
+            <WorkflowPath>
               {workflowSteps.map((stage, index) => (
-                <WorkflowStepButton
-                  key={stage.key}
-                  index={index + 1}
-                  icon={stage.icon}
-                  title={t(`tests.tabs.${stage.key}`)}
-                  count={stage.count}
-                  statusLabel={stage.statusLabel}
-                  active={activeTab === stage.key || (activeTab === "proposals" && stage.key === "cases")}
-                  className={index < workflowSteps.length - 1 ? "border-b border-[color:var(--line)] md:border-b-0 md:border-r" : ""}
-                  onClick={() => void navigate({ to: "/tests", search: testsTabSearch(stage.key, effectiveProjectId) })}
-                >
-                  {stage.key === "cases" && pendingProposals.length > 0 ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 w-full justify-start px-2 text-[12px]"
-                      aria-label={t("tests.workflow.reviewSuggestionsAria", { count: pendingProposals.length })}
-                      onClick={() => void navigate({ to: "/tests", search: testsTabSearch("proposals", effectiveProjectId) })}
-                    >
-                      <Sparkles data-icon />
-                      {t("tests.workflow.reviewSuggestions", { count: pendingProposals.length })}
-                    </Button>
-                  ) : null}
-                </WorkflowStepButton>
+                <WorkflowStepSlot key={stage.key} showConnector={index > 0}>
+                  <WorkflowStepButton
+                    icon={stage.icon}
+                    title={stage.title}
+                    metric={stage.metric}
+                    detail={stage.detail}
+                    active={activeTab === stage.key || (activeTab === "proposals" && stage.key === "cases")}
+                    onClick={() => void navigate({ to: "/tests", search: testsTabSearch(stage.key, effectiveProjectId) })}
+                  >
+                    {stage.key === "cases" && pendingProposals.length > 0 ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-full justify-start px-2 text-[12px]"
+                        aria-label={t("tests.workflow.reviewSuggestionsAria", { count: pendingProposals.length })}
+                        onClick={() => void navigate({ to: "/tests", search: testsTabSearch("proposals", effectiveProjectId) })}
+                      >
+                        <Sparkles data-icon />
+                        {t("tests.workflow.reviewSuggestions", { count: pendingProposals.length })}
+                      </Button>
+                    ) : null}
+                  </WorkflowStepButton>
+                </WorkflowStepSlot>
               ))}
-            </div>
+            </WorkflowPath>
           </TestsProjectContextBar>
 
           {activeTab === "cases" ? (
