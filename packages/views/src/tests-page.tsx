@@ -13,6 +13,8 @@ import {
   CircleStop,
   ClipboardCheck,
   FileUp,
+  GitBranch,
+  Layers3,
   ListChecks,
   Maximize2,
   Network,
@@ -341,6 +343,102 @@ function StageIntro(props: {
       </div>
       {props.children ? <div className="flex flex-wrap items-center gap-2">{props.children}</div> : null}
     </div>
+  );
+}
+
+function projectRepositoryContextLabel(project: Project | undefined, fallback: string) {
+  if (!project) return fallback;
+  if (project.gitOwner && project.gitRepo) return `${project.gitOwner}/${project.gitRepo}`;
+  const repository = project.remoteUrl || project.repoPath;
+  if (!repository) return fallback;
+  return repository.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
+}
+
+function projectDefaultEnvironmentContextLabel(project: Project | undefined, environments: Environment[], labels: {
+  configured: string;
+  empty: string;
+  named: (name: string) => string;
+}) {
+  const environmentId = project?.defaultEnvironmentId || project?.defaultClusterId || "";
+  if (!environmentId) return labels.empty;
+  const environment = environments.find((item) => item.id === environmentId);
+  return environment?.name ? labels.named(environment.name) : labels.configured;
+}
+
+function ContextMetaPill(props: { icon: LucideIcon; children: ReactNode }) {
+  const Icon = props.icon;
+  return (
+    <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-[6px] bg-[color:var(--block)] px-2 py-1 text-[12px] leading-4 text-[color:var(--muted-strong)]">
+      <Icon data-icon className="size-3.5 shrink-0 text-[color:var(--muted)]" />
+      <span className="truncate">{props.children}</span>
+    </span>
+  );
+}
+
+function TestsProjectContextBar(props: {
+  projects: Project[];
+  project?: Project;
+  environments: Environment[];
+  caseCount: number;
+  readyCaseCount: number;
+  pendingProposalCount: number;
+  onProjectChange: (projectId: string) => void;
+}) {
+  const { t } = useMspaceTranslation();
+  const repositoryLabel = projectRepositoryContextLabel(props.project, t("tests.projectContext.noRepository"));
+  const defaultEnvironmentLabel = projectDefaultEnvironmentContextLabel(props.project, props.environments, {
+    configured: t("tests.projectContext.defaultEnvironmentConfigured"),
+    empty: t("tests.projectContext.noDefaultEnvironment"),
+    named: (name) => t("tests.projectContext.defaultEnvironment", { environment: name }),
+  });
+  const projectCountLabel =
+    props.projects.length === 1
+      ? t("tests.projectContext.singleProject")
+      : t("tests.projectContext.projectCount", { count: props.projects.length });
+
+  return (
+    <section className="grid gap-4 rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div className="flex min-w-0 gap-3">
+          <div className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-[color:var(--block)] text-[color:var(--muted)]">
+            <Layers3 data-icon className="size-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[12px] font-medium leading-4 text-[color:var(--muted)]">{t("tests.projectContext.current")}</div>
+            <h2 className="mt-1 truncate text-[20px] font-semibold leading-7 text-[color:var(--text)]">
+              {props.project?.name || t("tests.project")}
+            </h2>
+            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+              <ContextMetaPill icon={GitBranch}>{repositoryLabel}</ContextMetaPill>
+              <ContextMetaPill icon={Network}>{defaultEnvironmentLabel}</ContextMetaPill>
+              <ContextMetaPill icon={Layers3}>{projectCountLabel}</ContextMetaPill>
+            </div>
+            <p className="mt-2 text-[12px] leading-5 text-[color:var(--muted)]">
+              {t("tests.projectContext.scopeSummary", {
+                cases: props.caseCount,
+                ready: props.readyCaseCount,
+                pending: props.pendingProposalCount,
+              })}
+            </p>
+          </div>
+        </div>
+        <div className="min-w-0 md:w-[280px]">
+          <div className="mb-1.5 text-[12px] font-medium leading-4 text-[color:var(--muted)]">{t("tests.projectContext.switchProject")}</div>
+          <Select value={props.project?.id || ""} onValueChange={props.onProjectChange} disabled={props.projects.length <= 1}>
+            <SelectTrigger className="h-9 min-h-9 w-full rounded-[7px] text-[13px]" aria-label={t("tests.projectContext.switchProjectAria")}>
+              <SelectValue placeholder={t("tests.project")} />
+            </SelectTrigger>
+            <SelectContent>
+              {props.projects.map((project: Project) => (
+                <SelectItem key={project.id} value={project.id}>
+                  {project.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -2118,6 +2216,14 @@ export function TestsPage() {
     createCase.mutate(formToInput(caseForm));
   }
 
+  function changeProjectContext(value: string) {
+    setSelectedProjectId(value);
+    setSelectedCaseIds([]);
+    setCasePage(0);
+    setActionMessage("");
+    void navigate({ to: "/tests", search: testsTabSearch(activeTab, value) });
+  }
+
   if (!serverWorkspaceReady) {
     return (
       <PageFrame title={t("tests.title")} subtitle={t("workspace.signInRequired")}>
@@ -2132,35 +2238,20 @@ export function TestsPage() {
         <CollectionEmptyState title={t("tests.noProjectTitle")} body={t("tests.noProjectBody")} />
       ) : (
         <div className="grid gap-4">
+          <TestsProjectContextBar
+            projects={projects}
+            project={selectedProject}
+            environments={environments}
+            caseCount={allCaseTotal}
+            readyCaseCount={readyCases.length}
+            pendingProposalCount={pendingProposals.length}
+            onProjectChange={changeProjectContext}
+          />
           <section className="grid gap-4 rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-[220px] flex-1">
-                <div className="mb-2 text-[12px] font-medium text-[color:var(--muted)]">{t("tests.project")}</div>
-                <Select
-                  value={effectiveProjectId}
-                  onValueChange={(value) => {
-                    setSelectedProjectId(value);
-                    setSelectedCaseIds([]);
-                    setCasePage(0);
-                    setActionMessage("");
-                    void navigate({ to: "/tests", search: testsTabSearch(activeTab, value) });
-                  }}
-                >
-                  <SelectTrigger className={toolbarSelectClass} aria-label={t("tests.project")}>
-                    <SelectValue placeholder={t("tests.project")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projects.map((project: Project) => (
-                      <SelectItem key={project.id} value={project.id}>
-                        {project.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="max-w-[520px] text-left sm:text-right">
                 <div className="text-[13px] font-semibold text-[color:var(--text)]">{t("tests.workflow.title")}</div>
-                <p className="mt-1 text-pretty text-[12px] leading-5 text-[color:var(--muted)]">{workflowNextAction}</p>
+                <p className="mt-1 max-w-[72ch] text-pretty text-[12px] leading-5 text-[color:var(--muted)]">{workflowNextAction}</p>
               </div>
             </div>
             {actionMessage ? <p className="text-[12px] text-[color:var(--muted)]">{actionMessage}</p> : null}
