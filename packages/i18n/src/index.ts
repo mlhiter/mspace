@@ -368,7 +368,6 @@ const resources = {
         subtitle: "Project cases and suggestions, with workspace plans and issue-backed test runs.",
         project: "Project",
         projectContext: {
-          current: "Current test project",
           switchProject: "Switch project",
           switchProjectAria: "Switch test project",
           noRepository: "Repository not configured",
@@ -377,8 +376,6 @@ const resources = {
           noDefaultEnvironment: "No default environment",
           singleProject: "Only project in this workspace",
           projectCount: "{{count}} projects in this workspace",
-          scopeSummary: "Project scope: {{cases}} cases · {{ready}} ready · {{pending}} pending suggestions",
-          scope: "Scope",
           scopeCases: "cases",
           scopeReady: "ready",
           scopePending: "pending suggestions",
@@ -398,8 +395,6 @@ const resources = {
         },
         caseDetailSections: "Test case detail sections",
         workflow: {
-          title: "Test path",
-          hint: "Project cases feed workspace plans, then issue-backed runs collect evidence.",
           caseCount: "{{count}} cases",
           caseStepTitle: "Case library",
           caseStepDetail: "{{count}} ready",
@@ -2231,7 +2226,6 @@ const resources = {
         subtitle: "项目级用例和用例建议，工作区级计划和问题驱动的测试运行。",
         project: "项目",
         projectContext: {
-          current: "当前测试项目",
           switchProject: "切换项目",
           switchProjectAria: "切换测试项目",
           noRepository: "未配置仓库",
@@ -2240,8 +2234,6 @@ const resources = {
           noDefaultEnvironment: "未设置默认环境",
           singleProject: "当前工作区只有 1 个项目",
           projectCount: "当前工作区 {{count}} 个项目",
-          scopeSummary: "项目范围：{{cases}} 条用例 · {{ready}} 条就绪 · {{pending}} 条待确认建议",
-          scope: "测试范围",
           scopeCases: "用例",
           scopeReady: "就绪",
           scopePending: "待确认建议",
@@ -2261,8 +2253,6 @@ const resources = {
         },
         caseDetailSections: "测试用例详情分区",
         workflow: {
-          title: "测试路径",
-          hint: "项目用例进入工作区计划，再由问题驱动运行沉淀证据。",
           caseCount: "{{count}} 条用例",
           caseStepTitle: "用例库",
           caseStepDetail: "{{count}} 条就绪",

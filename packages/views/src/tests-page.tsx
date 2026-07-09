@@ -323,16 +323,9 @@ function ScopeMetric(props: { label: string; value: number }) {
 }
 
 function WorkflowPath(props: { children: ReactNode }) {
-  const { t } = useMspaceTranslation();
   return (
-    <div className="grid gap-2">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <div className="text-[12px] font-semibold leading-4 text-[color:var(--text)]">{t("tests.workflow.title")}</div>
-        <p className="text-[12px] leading-4 text-[color:var(--muted)]">{t("tests.workflow.hint")}</p>
-      </div>
-      <div className="flex flex-col gap-1 md:flex-row md:items-stretch">
-        {props.children}
-      </div>
+    <div className="flex flex-col gap-1 md:flex-row md:items-stretch">
+      {props.children}
     </div>
   );
 }
@@ -440,7 +433,6 @@ function TestsProjectContextBar(props: {
             <Layers3 data-icon className="size-4" />
           </div>
           <div className="min-w-0">
-            <div className="text-[12px] font-medium leading-4 text-[color:var(--muted)]">{t("tests.projectContext.current")}</div>
             <h2 className="truncate text-[18px] font-semibold leading-6 text-[color:var(--text)]">
               {props.project?.name || t("tests.project")}
             </h2>
@@ -450,7 +442,6 @@ function TestsProjectContextBar(props: {
               <ContextMetaPill icon={Layers3}>{projectCountLabel}</ContextMetaPill>
             </div>
             <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="text-[12px] font-medium leading-5 text-[color:var(--muted-strong)]">{t("tests.projectContext.scope")}</span>
               <ScopeMetric label={t("tests.projectContext.scopeCases")} value={props.caseCount} />
               <ScopeMetric label={t("tests.projectContext.scopeReady")} value={props.readyCaseCount} />
               <ScopeMetric label={t("tests.projectContext.scopePending")} value={props.pendingProposalCount} />
