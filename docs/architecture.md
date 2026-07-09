@@ -43,9 +43,10 @@ Desktop Issue Detail
   -> resolve attached project before agent turns
   -> verify matching active Codex worker
   -> POST server comment
-  -> POST server agent session
+  -> POST server agent session with optional skill slugs from /slug or #slug tokens
 Server
   -> validate workspace membership and project attachment
+  -> resolve built-in skill slugs to server-owned bundles
   -> snapshot issue/project/runbook context
   -> create agent_sessions row
   -> enqueue runtime_tasks(kind=agent_session)

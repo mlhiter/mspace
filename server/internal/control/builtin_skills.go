@@ -61,6 +61,63 @@ func builtinSkillReference(slug string) (AgentSessionSkillReference, RuntimeSkil
 	return skillReferenceFromBundle(bundle), bundle, nil
 }
 
+func resolveAgentSessionSkillBundles(input *CreateAgentSessionInput) error {
+	if input == nil {
+		return nil
+	}
+	slugs, err := normalizeAgentSessionSkillSlugs(input.SkillSlugs)
+	if err != nil {
+		return err
+	}
+	input.SkillSlugs = slugs
+	if len(slugs) == 0 {
+		return nil
+	}
+	bundles := append([]RuntimeSkillBundle(nil), input.SkillBundles...)
+	existing := map[string]bool{}
+	for _, bundle := range bundles {
+		if slug := normalizeSkillSlug(bundle.Slug); slug != "" {
+			existing[slug] = true
+		}
+	}
+	for _, slug := range slugs {
+		if existing[slug] {
+			continue
+		}
+		_, bundle, err := builtinSkillReference(slug)
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("skill slug must reference a built-in skill: %s", slug)
+		}
+		if err != nil {
+			return err
+		}
+		bundles = append(bundles, bundle)
+		existing[slug] = true
+	}
+	input.SkillBundles = bundles
+	return nil
+}
+
+func normalizeAgentSessionSkillSlugs(values []string) ([]string, error) {
+	normalized := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		slug := normalizeSkillSlug(value)
+		if slug == "" {
+			return nil, fmt.Errorf("skill slug must use letters, numbers, hyphen, or underscore: %s", value)
+		}
+		if seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		normalized = append(normalized, slug)
+	}
+	return normalized, nil
+}
+
 func loadBuiltinSkills() error {
 	builtinSkillOnce.Do(func() {
 		items, bundles, err := readBuiltinSkillFS()

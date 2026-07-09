@@ -1752,6 +1752,10 @@ const resources = {
           ariaLabel: "Agent mentions",
           mentionAgent: "Mention agent",
         },
+        skills: {
+          ariaLabel: "Workflow skills",
+          useSkill: "Use skill",
+        },
         failures: {
           postProcessingTitle: "Runtime post-processing failed after this agent message",
           afterAgentTitle: "Session failed after this agent message",
@@ -3608,6 +3612,10 @@ const resources = {
         mentions: {
           ariaLabel: "智能体提及",
           mentionAgent: "提及智能体",
+        },
+        skills: {
+          ariaLabel: "工作流技能",
+          useSkill: "使用技能",
         },
         failures: {
           postProcessingTitle: "智能体消息之后 Runtime 后处理失败",

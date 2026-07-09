@@ -7,6 +7,17 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-09",
+    title: "Workflow skills in issue comments",
+    summary:
+      "mspace now lets issue comments invoke server-managed workflow skills with Codex-like slash or hash commands.",
+    items: [
+      "Added `/` and `#` workflow skill discovery in the Issue Detail comment composer and edit composer.",
+      "Sends only selected skill slugs from comments while the server resolves built-in skill bundles for worker execution.",
+      "Rejects client-provided skill bundle content on issue sessions so workflow skills stay server-owned and worker-scoped.",
+    ],
+  },
+  {
     date: "2026-07-08",
     title: "Team GitHub App handoff foundation",
     summary:

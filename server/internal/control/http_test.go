@@ -3368,6 +3368,161 @@ func TestListSkillsReturnsBuiltinThink(t *testing.T) {
 	}
 }
 
+func TestCreateAgentSessionAcceptsBuiltInSkillSlugs(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "session-skill-user",
+		Login:          "session-skill-user",
+		Name:           "Session Skill User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "session-skill-project")
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Body:      "Use a skill from the issue composer.",
+	})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true}`)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
+		"provider":"codex",
+		"agentProfile":"codex",
+		"runtimeMode":"personal",
+		"command":"@codex #think produce a plan",
+		"skillSlugs":["think","think"]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create agent session status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var session AgentSession
+	if err := json.Unmarshal(recorder.Body.Bytes(), &session); err != nil {
+		t.Fatalf("parse session: %v", err)
+	}
+	if len(session.RequiredSkills) != 1 || session.RequiredSkills[0].Slug != issueAnalysisSkillSlug {
+		t.Fatalf("expected compact think skill reference, got %+v", session.RequiredSkills)
+	}
+	if strings.Contains(string(session.Payload), "SKILL.md") || strings.Contains(string(session.Payload), `"files"`) {
+		t.Fatalf("session response should not expose full skill bundle: %s", session.Payload)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var task RuntimeTask
+	for _, candidate := range store.runtimeTasks {
+		if candidate.SessionID == session.ID {
+			task = candidate
+			break
+		}
+	}
+	if task.ID == "" {
+		t.Fatalf("expected runtime task for session %s", session.ID)
+	}
+	var payload struct {
+		RequiredSkills []RuntimeSkillBundle `json:"requiredSkills"`
+	}
+	if err := json.Unmarshal(task.Payload, &payload); err != nil {
+		t.Fatalf("parse runtime payload: %v", err)
+	}
+	if len(payload.RequiredSkills) != 1 || payload.RequiredSkills[0].Slug != issueAnalysisSkillSlug || len(payload.RequiredSkills[0].Files) == 0 {
+		t.Fatalf("expected full think skill bundle in runtime payload, got %+v", payload.RequiredSkills)
+	}
+}
+
+func TestCreateAgentSessionRejectsUnknownSkillSlug(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "unknown-session-skill-user",
+		Login:          "unknown-session-skill-user",
+		Name:           "Unknown Session Skill User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "unknown-session-skill-project")
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Body:      "Try an unknown skill.",
+	})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
+		"provider":"codex",
+		"agentProfile":"codex",
+		"runtimeMode":"personal",
+		"command":"@codex #missing-skill try this",
+		"skillSlugs":["missing-skill"]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unknown skill slug status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "built-in skill") {
+		t.Fatalf("expected built-in skill error, got %s", recorder.Body.String())
+	}
+}
+
+func TestCreateAgentSessionRejectsClientSkillBundles(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "client-session-skill-user",
+		Login:          "client-session-skill-user",
+		Name:           "Client Session Skill User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/issue-0001/sessions", strings.NewReader(`{
+		"provider":"codex",
+		"command":"@codex use unsafe skill",
+		"requiredSkills":[{"slug":"think","files":[{"path":"SKILL.md","content":"unsafe"}]}]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("client skill bundle status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "server-managed") {
+		t.Fatalf("expected server-managed error, got %s", recorder.Body.String())
+	}
+}
+
 func TestCreateIssueQueuesAutomaticThinkAnalysis(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{

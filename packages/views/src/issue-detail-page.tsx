@@ -61,6 +61,7 @@ import {
   type SessionFailure,
   type SessionLog,
   type SessionReviewEvidence,
+  type SkillCatalogItem,
   type StartTestDeployInput,
   type UpdateIssueLabelsInput,
   type WorkspaceChange,
@@ -147,6 +148,10 @@ type EditorMentionMatch = {
   query: string;
   from: number;
   to: number;
+};
+
+type EditorSkillCommandMatch = EditorMentionMatch & {
+  trigger: "/" | "#";
 };
 type ProjectAttachIntent = "sidebar" | "composer" | "edit";
 
@@ -247,6 +252,22 @@ function mentionMatchInEditor(editor: Editor): EditorMentionMatch | null {
   };
 }
 
+function skillCommandMatchInEditor(editor: Editor): EditorSkillCommandMatch | null {
+  const { selection } = editor.state;
+  if (!selection.empty) return null;
+  const beforeCursor = editor.state.doc.textBetween(0, selection.from, "\n", "\n");
+  const match = beforeCursor.match(/(^|[\s([{])([/#])([a-z0-9_-]*)$/i);
+  if (!match || match.index === undefined) return null;
+  const triggerStartInText = match.index + (match[1]?.length || 0);
+  const commandLength = beforeCursor.length - triggerStartInText;
+  return {
+    trigger: match[2] === "/" ? "/" : "#",
+    query: (match[3] || "").toLowerCase(),
+    from: Math.max(1, selection.from - commandLength),
+    to: selection.from,
+  };
+}
+
 function agentMentionText(agent: AgentProfile) {
   return agent.mention.startsWith("@") ? agent.mention : `@${agent.mention}`;
 }
@@ -258,6 +279,48 @@ function insertAgentMention(value: string, agent: AgentProfile) {
   }
   const separator = value === "" || value.endsWith(" ") || value.endsWith("\n") ? "" : " ";
   return `${value}${separator}${mention} `;
+}
+
+function skillCatalogSlug(skill: SkillCatalogItem) {
+  return skill.slug.trim().toLowerCase();
+}
+
+function skillCatalogLabel(skill: SkillCatalogItem) {
+  return skill.name.trim() && skill.name.trim().toLowerCase() !== skillCatalogSlug(skill) ? skill.name.trim() : `#${skillCatalogSlug(skill)}`;
+}
+
+function skillCommandToken(skill: SkillCatalogItem) {
+  return `#${skillCatalogSlug(skill)}`;
+}
+
+function skillCommandOptionId(skill: SkillCatalogItem) {
+  return `issue-skill-command-${skillCatalogSlug(skill).replace(/[^a-z0-9_-]/gi, "-")}`;
+}
+
+function skillMatchesQuery(skill: SkillCatalogItem, query: string) {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return true;
+  return [skill.slug, skill.name, skill.description].some((value) => value.toLowerCase().includes(normalized));
+}
+
+function extractSkillSlugsFromComment(value: string, skills: SkillCatalogItem[]) {
+  const allowed = new Set(skills.map(skillCatalogSlug).filter(Boolean));
+  const slugs: string[] = [];
+  const seen = new Set<string>();
+  for (const match of value.matchAll(/(^|[\s([{])([/#])([a-z0-9_-]+)/gi)) {
+    const slug = (match[3] || "").toLowerCase();
+    if (!allowed.has(slug) || seen.has(slug)) continue;
+    seen.add(slug);
+    slugs.push(slug);
+  }
+  return slugs;
+}
+
+function insertSkillCommand(value: string, skill: SkillCatalogItem, defaultAgent?: AgentProfile) {
+  const token = skillCommandToken(skill);
+  const agentPrefix = !extractAgentMention(value) && defaultAgent ? `${agentMentionText(defaultAgent)} ` : "";
+  const separator = value === "" || value.endsWith(" ") || value.endsWith("\n") ? "" : " ";
+  return `${value}${separator}${agentPrefix}${token} `;
 }
 
 function agentMentionOptionId(agent: AgentProfile) {
@@ -4413,6 +4476,55 @@ function AgentMentionMenu(props: {
   );
 }
 
+function SkillCommandMenu(props: {
+  skills: SkillCatalogItem[];
+  activeIndex: number;
+  position: MentionMenuPosition;
+  onActiveIndexChange: (index: number) => void;
+  onSelect: (skill: SkillCatalogItem) => void;
+}) {
+  const { t } = useMspaceTranslation();
+  return (
+    <div
+      id="issue-skill-command-menu"
+      role="listbox"
+      aria-label={t("issueDetail.skills.ariaLabel")}
+      style={{ top: props.position.top, left: props.position.left, width: props.position.width }}
+      className="absolute z-[90] max-h-72 overflow-y-auto overflow-x-hidden rounded-[9px] bg-[color:var(--paper)] p-1 shadow-[0_18px_56px_rgba(0,0,0,0.16),0_0_0_1px_var(--line)]"
+    >
+      <div className="px-2 py-1 text-[11px] font-medium leading-4 text-[color:var(--faint)]">{t("issueDetail.skills.useSkill")}</div>
+      {props.skills.map((skill, index) => {
+        const active = index === props.activeIndex;
+        const slug = skillCatalogSlug(skill);
+        return (
+          <button
+            id={skillCommandOptionId(skill)}
+            key={slug}
+            type="button"
+            role="option"
+            aria-selected={active}
+            className={cn(
+              "flex min-h-10 w-full items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[13px] outline-none transition-[background-color] duration-150 ease-out",
+              active ? "bg-[color:var(--selection)]" : "hover:bg-[color:var(--hover)]",
+            )}
+            onMouseEnter={() => props.onActiveIndexChange(index)}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => props.onSelect(skill)}
+          >
+            <span className="grid size-7 shrink-0 place-items-center rounded-[7px] bg-[color:var(--block)] text-[color:var(--muted)]">
+              <WandSparkles data-icon />
+            </span>
+            <span className="grid min-w-0 flex-1">
+              <span className="truncate font-medium leading-5 text-[color:var(--text)]">#{slug}</span>
+              <span className="truncate text-[12px] leading-4 text-[color:var(--muted)]">{skill.description || skillCatalogLabel(skill)}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function LabelEditor(props: {
   labels: IssueLabel[];
   options: IssueLabelDefinition[];
@@ -5050,6 +5162,7 @@ export function IssueDetailPage() {
   const labelDefinitionsQueryKey = queryKeys.workspaceIssueLabelDefinitions(workspaceId, auth.token);
   const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
   const agentsQueryKey = queryKeys.agents(workspaceId, auth.token);
+  const skillsQueryKey = queryKeys.skills(workspaceId, auth.token);
   const clustersQueryKey = queryKeys.clusters(workspaceId, auth.token);
   const issueResourcesQueryKey = queryKeys.issueResources(workspaceId, issueId, auth.token);
   const projectRunbookKey = (projectId: string) =>
@@ -5063,12 +5176,20 @@ export function IssueDetailPage() {
   const [editingCommentFocused, setEditingCommentFocused] = useState(false);
   const [composerMentionMatch, setComposerMentionMatch] = useState<EditorMentionMatch | null>(null);
   const [editingCommentMentionMatch, setEditingCommentMentionMatch] = useState<EditorMentionMatch | null>(null);
+  const [composerSkillMatch, setComposerSkillMatch] = useState<EditorSkillCommandMatch | null>(null);
+  const [editingCommentSkillMatch, setEditingCommentSkillMatch] = useState<EditorSkillCommandMatch | null>(null);
   const [mentionMenuDismissed, setMentionMenuDismissed] = useState(false);
   const [editingMentionMenuDismissed, setEditingMentionMenuDismissed] = useState(false);
+  const [skillMenuDismissed, setSkillMenuDismissed] = useState(false);
+  const [editingSkillMenuDismissed, setEditingSkillMenuDismissed] = useState(false);
   const [mentionMenuPosition, setMentionMenuPosition] = useState<MentionMenuPosition>({ top: 38, left: 10, width: 384 });
   const [editingMentionMenuPosition, setEditingMentionMenuPosition] = useState<MentionMenuPosition>({ top: 38, left: 10, width: 384 });
+  const [skillMenuPosition, setSkillMenuPosition] = useState<MentionMenuPosition>({ top: 38, left: 10, width: 384 });
+  const [editingSkillMenuPosition, setEditingSkillMenuPosition] = useState<MentionMenuPosition>({ top: 38, left: 10, width: 384 });
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [activeEditingMentionIndex, setActiveEditingMentionIndex] = useState(0);
+  const [activeSkillIndex, setActiveSkillIndex] = useState(0);
+  const [activeEditingSkillIndex, setActiveEditingSkillIndex] = useState(0);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [sessionSnapshotsById, setSessionSnapshotsById] = useState<Record<string, SessionSnapshot>>({});
   const [issueTab, setIssueTab] = useState<IssueTab>(searchTab);
@@ -5103,6 +5224,11 @@ export function IssueDetailPage() {
   const agentsQuery = useQuery({
     queryKey: agentsQueryKey,
     queryFn: () => controlPlaneApi.listAgents(auth.token, workspaceId),
+    enabled: serverWorkspaceReady,
+  });
+  const skillsQuery = useQuery({
+    queryKey: skillsQueryKey,
+    queryFn: () => controlPlaneApi.listSkills(auth.token, workspaceId),
     enabled: serverWorkspaceReady,
   });
   const clustersQuery = useQuery({
@@ -5154,6 +5280,7 @@ export function IssueDetailPage() {
     enabled: serverWorkspaceReady && runbookOpen && Boolean(detail?.project?.id),
   });
   const agents = listOrEmpty(agentsQuery.data);
+  const skills = listOrEmpty(skillsQuery.data).filter((skill) => skill.builtIn !== false && skillCatalogSlug(skill));
   const clusters = listOrEmpty(clustersQuery.data);
   const projects = listOrEmpty(projectsQuery.data);
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
@@ -5180,6 +5307,13 @@ export function IssueDetailPage() {
       : enabledAgents.filter((agent) => mentionKey(agent.mention).startsWith(mentionQuery) || agent.name.toLowerCase().startsWith(mentionQuery));
   const selectedMentionIndex = agentSuggestions.length === 0 ? 0 : Math.min(activeMentionIndex, agentSuggestions.length - 1);
   const mentionMenuOpen = composerFocused && !mentionMenuDismissed && agentSuggestions.length > 0;
+  const skillQuery = composerSkillMatch?.query ?? null;
+  const skillSuggestions =
+    skillQuery === null
+      ? []
+      : skills.filter((skill) => skillMatchesQuery(skill, skillQuery));
+  const selectedSkillIndex = skillSuggestions.length === 0 ? 0 : Math.min(activeSkillIndex, skillSuggestions.length - 1);
+  const skillMenuOpen = composerFocused && !skillMenuDismissed && skillSuggestions.length > 0;
   const editingMentionedAgent = extractAgentMention(editingCommentBody);
   const editingMentionedAgentConfig = editingMentionedAgent ? findAgent(enabledAgents, editingMentionedAgent) : undefined;
   const isSupportedEditingAgentMention = Boolean(editingMentionedAgentConfig);
@@ -5191,6 +5325,13 @@ export function IssueDetailPage() {
       : enabledAgents.filter((agent) => mentionKey(agent.mention).startsWith(editingMentionQuery) || agent.name.toLowerCase().startsWith(editingMentionQuery));
   const selectedEditingMentionIndex = editingAgentSuggestions.length === 0 ? 0 : Math.min(activeEditingMentionIndex, editingAgentSuggestions.length - 1);
   const editingMentionMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingMentionMenuDismissed && editingAgentSuggestions.length > 0;
+  const editingSkillQuery = editingCommentSkillMatch?.query ?? null;
+  const editingSkillSuggestions =
+    editingSkillQuery === null
+      ? []
+      : skills.filter((skill) => skillMatchesQuery(skill, editingSkillQuery));
+  const selectedEditingSkillIndex = editingSkillSuggestions.length === 0 ? 0 : Math.min(activeEditingSkillIndex, editingSkillSuggestions.length - 1);
+  const editingSkillMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingSkillMenuDismissed && editingSkillSuggestions.length > 0;
   const runtimeLabel = runtimeMode === "team" ? t("issueDetail.composer.teamWorker") : t("issueDetail.composer.personalWorker");
   const hasMatchingCodexWorker = runtimeAvailabilityQuery.data?.state === "ready";
   const composerNeedsProjectForAgent = isSupportedAgentMention && !hasProject;
@@ -5256,9 +5397,14 @@ export function IssueDetailPage() {
   }, [agentRequiredCapabilities, auth.token, queryClient, runtimeMode, t, workerStartingText, workerUnavailableText, workspaceId]);
   const syncEditingCommentEditorSnapshot = useCallback((editor: Editor) => {
     const match = mentionMatchInEditor(editor);
+    const skillMatch = skillCommandMatchInEditor(editor);
     setEditingCommentMentionMatch(match);
+    setEditingCommentSkillMatch(skillMatch);
     if (match) {
       setEditingMentionMenuPosition(mentionMenuPositionForEditor(editor, match));
+    }
+    if (skillMatch) {
+      setEditingSkillMenuPosition(mentionMenuPositionForEditor(editor, skillMatch));
     }
   }, []);
   const handleEditingCommentReady = useCallback(
@@ -5349,12 +5495,23 @@ export function IssueDetailPage() {
     setEditingMentionMenuDismissed(false);
   }, [editingMentionQuery]);
 
+  useEffect(() => {
+    setActiveSkillIndex(0);
+    setSkillMenuDismissed(false);
+  }, [skillQuery]);
+
+  useEffect(() => {
+    setActiveEditingSkillIndex(0);
+    setEditingSkillMenuDismissed(false);
+  }, [editingSkillQuery]);
+
   const sendComposer = useMutation({
     mutationFn: async (body: string) => {
       const trimmedBody = body.trim();
       if (!trimmedBody) return;
       const agent = extractAgentMention(trimmedBody);
       const agentConfig = agent ? findAgent(enabledAgents, agent) : undefined;
+      const skillSlugs = extractSkillSlugsFromComment(trimmedBody, skills);
       if (agent && !agentConfig) {
         throw new Error(t("issueDetail.composer.agentUnavailable", { mention: agent }));
       }
@@ -5378,6 +5535,7 @@ export function IssueDetailPage() {
             runtimeMode,
             command: trimmedBody,
             triggerCommentId: comment.commentId,
+            skillSlugs: skillSlugs.length > 0 ? skillSlugs : undefined,
           });
         } catch (error) {
           if (isNoActiveCodexWorkerError(error)) {
@@ -5393,6 +5551,9 @@ export function IssueDetailPage() {
       setComposerBody("");
       composerEditor?.commands.clearContent(false);
       setComposerMentionMatch(null);
+      setComposerSkillMatch(null);
+      setSkillMenuDismissed(false);
+      setActiveSkillIndex(0);
       setProjectAttachFeedback((intent) => intent === "composer" ? null : intent);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
@@ -5423,6 +5584,7 @@ export function IssueDetailPage() {
   const updateComment = useMutation({
     mutationFn: async (input: { commentId: string; body: string; agentConfig?: AgentProfile }) => {
       const trimmedBody = input.body.trim();
+      const skillSlugs = extractSkillSlugsFromComment(trimmedBody, skills);
       const commentInput = {
         body: trimmedBody,
       };
@@ -5445,6 +5607,7 @@ export function IssueDetailPage() {
             runtimeMode,
             command: trimmedBody,
             triggerCommentId: input.commentId,
+            skillSlugs: skillSlugs.length > 0 ? skillSlugs : undefined,
           });
         } catch (error) {
           if (isNoActiveCodexWorkerError(error)) {
@@ -5483,16 +5646,25 @@ export function IssueDetailPage() {
     setEditingCommentEditor(null);
     setEditingCommentFocused(false);
     setEditingCommentMentionMatch(null);
+    setEditingCommentSkillMatch(null);
     setEditingMentionMenuDismissed(false);
+    setEditingSkillMenuDismissed(false);
     setEditingMentionMenuPosition({ top: 38, left: 10, width: 384 });
+    setEditingSkillMenuPosition({ top: 38, left: 10, width: 384 });
     setActiveEditingMentionIndex(0);
+    setActiveEditingSkillIndex(0);
   }
 
   function syncComposerEditorState(editor: Editor) {
     const match = mentionMatchInEditor(editor);
+    const skillMatch = skillCommandMatchInEditor(editor);
     setComposerMentionMatch(match);
+    setComposerSkillMatch(skillMatch);
     if (match) {
       setMentionMenuPosition(mentionMenuPositionForEditor(editor, match));
+    }
+    if (skillMatch) {
+      setSkillMenuPosition(mentionMenuPositionForEditor(editor, skillMatch));
     }
   }
 
@@ -5512,6 +5684,25 @@ export function IssueDetailPage() {
     }
     setActiveMentionIndex(0);
     setMentionMenuDismissed(false);
+  }
+
+  function selectSkillSuggestion(skill: SkillCatalogItem) {
+    const token = skillCommandToken(skill);
+    const agentPrefix = !extractAgentMention(composerBody) && continueAgent ? `${agentMentionText(continueAgent)} ` : "";
+    const match = composerEditor ? skillCommandMatchInEditor(composerEditor) || composerSkillMatch : null;
+    if (composerEditor) {
+      if (match) {
+        composerEditor.chain().focus().insertContentAt({ from: match.from, to: match.to }, `${agentPrefix}${token} `).run();
+      } else {
+        const separator = composerBody === "" || composerBody.endsWith(" ") || composerBody.endsWith("\n") ? "" : " ";
+        composerEditor.chain().focus().insertContent(`${separator}${agentPrefix}${token} `).run();
+      }
+      window.requestAnimationFrame(() => syncComposerEditorState(composerEditor));
+    } else {
+      setComposerBody(insertSkillCommand(composerBody, skill, continueAgent));
+    }
+    setActiveSkillIndex(0);
+    setSkillMenuDismissed(false);
   }
 
   function syncEditingCommentEditorState(editor: Editor) {
@@ -5534,6 +5725,25 @@ export function IssueDetailPage() {
     }
     setActiveEditingMentionIndex(0);
     setEditingMentionMenuDismissed(false);
+  }
+
+  function selectEditingSkillSuggestion(skill: SkillCatalogItem) {
+    const token = skillCommandToken(skill);
+    const agentPrefix = !extractAgentMention(editingCommentBody) && continueAgent ? `${agentMentionText(continueAgent)} ` : "";
+    const match = editingCommentEditor ? skillCommandMatchInEditor(editingCommentEditor) || editingCommentSkillMatch : null;
+    if (editingCommentEditor) {
+      if (match) {
+        editingCommentEditor.chain().focus().insertContentAt({ from: match.from, to: match.to }, `${agentPrefix}${token} `).run();
+      } else {
+        const separator = editingCommentBody === "" || editingCommentBody.endsWith(" ") || editingCommentBody.endsWith("\n") ? "" : " ";
+        editingCommentEditor.chain().focus().insertContent(`${separator}${agentPrefix}${token} `).run();
+      }
+      window.requestAnimationFrame(() => syncEditingCommentEditorState(editingCommentEditor));
+    } else {
+      setEditingCommentBody(insertSkillCommand(editingCommentBody, skill, continueAgent));
+    }
+    setActiveEditingSkillIndex(0);
+    setEditingSkillMenuDismissed(false);
   }
 
   function handleComposerKeyDown(event: React.KeyboardEvent<HTMLDivElement>, editor: Editor) {
@@ -5561,6 +5771,32 @@ export function IssueDetailPage() {
         if (agent) {
           event.preventDefault();
           selectAgentSuggestion(agent);
+          return;
+        }
+      }
+    }
+
+    if (skillMenuOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setActiveSkillIndex((index) => (index + 1) % skillSuggestions.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveSkillIndex((index) => (index - 1 + skillSuggestions.length) % skillSuggestions.length);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSkillMenuDismissed(true);
+        return;
+      }
+      if ((event.key === "Enter" && !event.shiftKey && !event.altKey) || (event.key === "Tab" && !event.shiftKey)) {
+        const skill = skillSuggestions[selectedSkillIndex];
+        if (skill) {
+          event.preventDefault();
+          selectSkillSuggestion(skill);
           return;
         }
       }
@@ -5596,6 +5832,32 @@ export function IssueDetailPage() {
         if (agent) {
           event.preventDefault();
           selectEditingAgentSuggestion(agent);
+          return;
+        }
+      }
+    }
+
+    if (editingSkillMenuOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setActiveEditingSkillIndex((index) => (index + 1) % editingSkillSuggestions.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveEditingSkillIndex((index) => (index - 1 + editingSkillSuggestions.length) % editingSkillSuggestions.length);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setEditingSkillMenuDismissed(true);
+        return;
+      }
+      if ((event.key === "Enter" && !event.shiftKey && !event.altKey) || (event.key === "Tab" && !event.shiftKey)) {
+        const skill = editingSkillSuggestions[selectedEditingSkillIndex];
+        if (skill) {
+          event.preventDefault();
+          selectEditingSkillSuggestion(skill);
           return;
         }
       }
@@ -6138,6 +6400,14 @@ export function IssueDetailPage() {
                                 onActiveIndexChange={setActiveEditingMentionIndex}
                                 onSelect={selectEditingAgentSuggestion}
                               />
+                            ) : isEditing && editingSkillMenuOpen ? (
+                              <SkillCommandMenu
+                                skills={editingSkillSuggestions}
+                                activeIndex={selectedEditingSkillIndex}
+                                position={editingSkillMenuPosition}
+                                onActiveIndexChange={setActiveEditingSkillIndex}
+                                onSelect={selectEditingSkillSuggestion}
+                              />
                             ) : null
                           }
                           onStartEdit={() => {
@@ -6147,9 +6417,13 @@ export function IssueDetailPage() {
                             setEditingCommentEditor(null);
                             setEditingCommentFocused(false);
                             setEditingCommentMentionMatch(null);
+                            setEditingCommentSkillMatch(null);
                             setEditingMentionMenuDismissed(false);
+                            setEditingSkillMenuDismissed(false);
                             setEditingMentionMenuPosition({ top: 38, left: 10, width: 384 });
+                            setEditingSkillMenuPosition({ top: 38, left: 10, width: 384 });
                             setActiveEditingMentionIndex(0);
+                            setActiveEditingSkillIndex(0);
                           }}
                           onCancelEdit={() => {
                             updateComment.reset();
@@ -6158,6 +6432,7 @@ export function IssueDetailPage() {
                           onEditBodyChange={(value) => {
                             setEditingCommentBody(value);
                             setEditingMentionMenuDismissed(false);
+                            setEditingSkillMenuDismissed(false);
                           }}
                           onEditReady={handleEditingCommentReady}
                           onEditEditorStateChange={syncEditingCommentEditorState}
@@ -6278,6 +6553,7 @@ export function IssueDetailPage() {
                       onChange={(value) => {
                         setComposerBody(value);
                         setMentionMenuDismissed(false);
+                        setSkillMenuDismissed(false);
                       }}
                       onImageUpload={uploadIssueImage}
                       onReady={setComposerEditor}
@@ -6299,6 +6575,15 @@ export function IssueDetailPage() {
                         position={mentionMenuPosition}
                         onActiveIndexChange={setActiveMentionIndex}
                         onSelect={selectAgentSuggestion}
+                      />
+                    ) : null}
+                    {skillMenuOpen ? (
+                      <SkillCommandMenu
+                        skills={skillSuggestions}
+                        activeIndex={selectedSkillIndex}
+                        position={skillMenuPosition}
+                        onActiveIndexChange={setActiveSkillIndex}
+                        onSelect={selectSkillSuggestion}
                       />
                     ) : null}
                   </div>

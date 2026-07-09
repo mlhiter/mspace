@@ -553,10 +553,13 @@ Personal workspaces use `runtimeMode: "personal"`; team workspaces use `runtimeM
   "provider": "codex",
   "agentProfile": "codex",
   "runtimeMode": "team",
-  "command": "@codex implement the fix",
-  "triggerCommentId": "<server-comment-id>"
+  "command": "@codex #think implement the fix",
+  "triggerCommentId": "<server-comment-id>",
+  "skillSlugs": ["think"]
 }
 ```
+
+Issue comments can reference server-managed workflow skills with `/slug` or `#slug`. Desktop clients should derive `skillSlugs` from the final submitted comment body and send only those slugs. The server accepts only built-in skill slugs, de-duplicates them, rejects unknown or malformed slugs with HTTP `400`, and rejects client-provided `requiredSkills`, `skills`, `skillBundles`, or skill file content on issue-session creation. Full skill bundles remain server-owned and are included only in the worker runtime task payload; workspace user APIs return compact skill references.
 
 The server validates that the issue has an attached project, that `runtimeMode` matches the workspace kind, and that a matching active Codex worker exists before it creates `agent_sessions` or `runtime_tasks`. If no worker is online, the server returns HTTP `409` with `{"error":"no active codex worker"}`. Clients should keep project attachment and worker preflight before the trigger comment so unsupported `@codex` turns do not leave a human comment waiting for missing repository context or a worker that cannot claim the task.
 

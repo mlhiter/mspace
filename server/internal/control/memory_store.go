@@ -3448,6 +3448,9 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 	if normalized.Provider != "codex" {
 		return AgentSession{}, errors.New("provider must be codex")
 	}
+	if err := resolveAgentSessionSkillBundles(&normalized); err != nil {
+		return AgentSession{}, err
+	}
 	if normalized.RuntimeMode == "" {
 		normalized.RuntimeMode = workspace.Kind
 	}

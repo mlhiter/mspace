@@ -1315,6 +1315,7 @@ type CreateAgentSessionInput struct {
 	TestRunID            string               `json:"testRunId"`
 	TestRunBatchSize     int                  `json:"testRunBatchSize"`
 	RequiredCapabilities json.RawMessage      `json:"requiredCapabilities,omitempty"`
+	SkillSlugs           []string             `json:"skillSlugs,omitempty"`
 	SkillBundles         []RuntimeSkillBundle `json:"-"`
 }
 

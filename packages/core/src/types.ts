@@ -1272,6 +1272,7 @@ export interface CreateAgentSessionInput {
   sourceSessionId?: string;
   sourceCommitSha?: string;
   triggerCommentId?: string;
+  skillSlugs?: string[];
 }
 
 export interface UpdateIssueLabelsInput {

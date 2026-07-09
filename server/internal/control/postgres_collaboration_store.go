@@ -564,6 +564,9 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 	if normalized.RuntimeMode != workspace.Kind {
 		return AgentSession{}, ErrForbidden
 	}
+	if err := resolveAgentSessionSkillBundles(&normalized); err != nil {
+		return AgentSession{}, err
+	}
 	requiredCapabilities, err := agentSessionRequiredCapabilities(normalized)
 	if err != nil {
 		return AgentSession{}, err

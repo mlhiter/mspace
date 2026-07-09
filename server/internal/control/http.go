@@ -2080,9 +2080,20 @@ func (s *Server) handleCreateAgentSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	input := CreateAgentSessionInput{}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
+	}
+	if err := rejectClientAgentSessionSkillBundles(body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(strings.TrimSpace(string(body))) > 0 {
+		if err := json.Unmarshal(body, &input); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 	}
 	session, err := s.store.CreateAgentSession(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
 	if err != nil {
@@ -3077,6 +3088,22 @@ func rejectClientRuntimeTaskSkillBundles(raw json.RawMessage) error {
 	return nil
 }
 
+func rejectClientAgentSessionSkillBundles(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	for _, key := range []string{"requiredSkills", "skills", "skillBundles"} {
+		if _, ok := payload[key]; ok {
+			return errors.New("agent session skill bundles are server-managed; use skillSlugs")
+		}
+	}
+	return nil
+}
+
 func redactRuntimeTaskSkillPayload(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return raw
@@ -3148,7 +3175,7 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	} else if errors.Is(err, ErrConflict) {
 		status = http.StatusConflict
-	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "requires") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") {
+	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "requires") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "skill slug") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") {
 		status = http.StatusBadRequest
 	}
 	writeError(w, status, err)
