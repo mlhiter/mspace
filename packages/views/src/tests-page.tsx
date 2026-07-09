@@ -288,7 +288,7 @@ function WorkflowStepButton(props: {
   return (
     <div
       className={cn(
-        "min-h-[76px] bg-[color:var(--paper)] transition-colors",
+        "min-h-[60px] bg-[color:var(--paper)] transition-colors",
         props.active ? "bg-[color:var(--selection)]" : "",
         props.className,
       )}
@@ -296,19 +296,19 @@ function WorkflowStepButton(props: {
       <button
         type="button"
         onClick={props.onClick}
-        className="flex w-full items-center justify-between gap-3 p-3 text-left transition-colors hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--focus)]"
+        className="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left transition-colors hover:bg-[color:var(--hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[color:var(--focus)]"
       >
         <div className="flex min-w-0 items-center gap-2">
           <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[color:var(--block)] text-[10px] font-semibold tabular-nums text-[color:var(--muted-strong)]">{props.index}</span>
           <Icon data-icon className="size-4 shrink-0 text-[color:var(--muted)]" />
           <div className="min-w-0">
             <div className="truncate text-[13px] font-semibold text-[color:var(--text)]">{props.title}</div>
-            <div className="mt-0.5 truncate text-[12px] text-[color:var(--muted)]">{props.statusLabel}</div>
+            <div className="truncate text-[11px] text-[color:var(--muted)]">{props.statusLabel}</div>
           </div>
         </div>
         <span className="shrink-0 text-[12px] font-medium tabular-nums text-[color:var(--muted)]">{props.count}</span>
       </button>
-      {props.children ? <div className="border-t border-[color:var(--line)] px-2 pb-2 pt-1">{props.children}</div> : null}
+      {props.children ? <div className="border-t border-[color:var(--line)] px-2 pb-1.5 pt-1">{props.children}</div> : null}
     </div>
   );
 }
@@ -374,6 +374,7 @@ function TestsProjectContextBar(props: {
   caseCount: number;
   readyCaseCount: number;
   pendingProposalCount: number;
+  children?: ReactNode;
   onProjectChange: (projectId: string) => void;
 }) {
   const { t } = useMspaceTranslation();
@@ -389,23 +390,23 @@ function TestsProjectContextBar(props: {
       : t("tests.projectContext.projectCount", { count: props.projects.length });
 
   return (
-    <section className="grid gap-4 rounded-[10px] bg-[color:var(--surface)] p-4 shadow-[inset_0_0_0_1px_var(--line)]">
-      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+    <section className="grid gap-3 rounded-[10px] bg-[color:var(--surface)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="flex min-w-0 gap-3">
-          <div className="grid size-9 shrink-0 place-items-center rounded-[8px] bg-[color:var(--block)] text-[color:var(--muted)]">
+          <div className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[color:var(--block)] text-[color:var(--muted)]">
             <Layers3 data-icon className="size-4" />
           </div>
           <div className="min-w-0">
             <div className="text-[12px] font-medium leading-4 text-[color:var(--muted)]">{t("tests.projectContext.current")}</div>
-            <h2 className="mt-1 truncate text-[20px] font-semibold leading-7 text-[color:var(--text)]">
+            <h2 className="truncate text-[18px] font-semibold leading-6 text-[color:var(--text)]">
               {props.project?.name || t("tests.project")}
             </h2>
-            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+            <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
               <ContextMetaPill icon={GitBranch}>{repositoryLabel}</ContextMetaPill>
               <ContextMetaPill icon={Network}>{defaultEnvironmentLabel}</ContextMetaPill>
               <ContextMetaPill icon={Layers3}>{projectCountLabel}</ContextMetaPill>
             </div>
-            <p className="mt-2 text-[12px] leading-5 text-[color:var(--muted)]">
+            <p className="mt-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
               {t("tests.projectContext.scopeSummary", {
                 cases: props.caseCount,
                 ready: props.readyCaseCount,
@@ -415,7 +416,7 @@ function TestsProjectContextBar(props: {
           </div>
         </div>
         <div className="min-w-0 md:w-[280px]">
-          <div className="mb-1.5 text-[12px] font-medium leading-4 text-[color:var(--muted)]">{t("tests.projectContext.switchProject")}</div>
+          <div className="mb-1 text-[12px] font-medium leading-4 text-[color:var(--muted)]">{t("tests.projectContext.switchProject")}</div>
           <Select value={props.project?.id || ""} onValueChange={props.onProjectChange} disabled={props.projects.length <= 1}>
             <SelectTrigger className="h-9 min-h-9 w-full rounded-[7px] text-[13px]" aria-label={t("tests.projectContext.switchProjectAria")}>
               <SelectValue placeholder={t("tests.project")} />
@@ -430,6 +431,7 @@ function TestsProjectContextBar(props: {
           </Select>
         </div>
       </div>
+      {props.children ? <div className="grid gap-2 border-t border-[color:var(--line)] pt-3">{props.children}</div> : null}
     </section>
   );
 }
@@ -2231,13 +2233,7 @@ export function TestsPage() {
             readyCaseCount={readyCases.length}
             pendingProposalCount={pendingProposals.length}
             onProjectChange={changeProjectContext}
-          />
-          <section className="grid gap-3 rounded-[10px] bg-[color:var(--surface)] p-3 shadow-[inset_0_0_0_1px_var(--line)]">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-[220px] flex-1">
-                <div className="text-[13px] font-semibold text-[color:var(--text)]">{t("tests.workflow.title")}</div>
-              </div>
-            </div>
+          >
             {actionMessage ? <p className="text-[12px] text-[color:var(--muted)]">{actionMessage}</p> : null}
             <div className="grid overflow-hidden rounded-[8px] border border-[color:var(--line)] md:grid-cols-3">
               {workflowSteps.map((stage, index) => (
@@ -2257,7 +2253,7 @@ export function TestsPage() {
                       type="button"
                       variant="ghost"
                       size="sm"
-                      className="h-7 w-full justify-start px-2 text-[12px]"
+                      className="h-6 w-full justify-start px-2 text-[12px]"
                       aria-label={t("tests.workflow.reviewSuggestionsAria", { count: pendingProposals.length })}
                       onClick={() => void navigate({ to: "/tests", search: testsTabSearch("proposals", effectiveProjectId) })}
                     >
@@ -2268,7 +2264,7 @@ export function TestsPage() {
                 </WorkflowStepButton>
               ))}
             </div>
-          </section>
+          </TestsProjectContextBar>
 
           {activeTab === "cases" ? (
             <div className="grid min-h-[620px] gap-5">
