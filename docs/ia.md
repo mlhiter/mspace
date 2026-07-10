@@ -332,8 +332,8 @@ Current implementation:
 - keeps the quiet metadata sidebar on Overview only, while Commits, Sessions, and Evidence use the full page width for review-heavy content;
 - exposes a Stop action for queued or running sessions, cancelling only that session and rendering the stop as a compact, non-editable event while leaving the issue status unchanged;
 - streams session logs and status while a session is running, but keeps debug output collapsed by default;
-- renders a compact failure callout with the last meaningful runtime error when a session fails;
-- renders structured failure records as continueable timeline and Evidence entries, including failed command, error summary, namespace/resource hints, and Continue / Retry deploy / Stop affordances when applicable;
+- renders a compact failure event with only the user-facing error summary when a session fails;
+- keeps structured failure records continueable from the timeline with Continue / Retry deploy / Stop affordances when applicable, while failed commands, runtime excerpts, phase, session ids, and namespace/resource hints stay internal for debugging instead of becoming user-facing evidence entry points;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
 - shows selected Environment, issue test namespace state, cleanup state, exposure mode, and preview URL when available;
 - automatically checks preview status in the background when Issue Detail opens or refreshes an existing test environment, updating only the Test environment sidebar state and `Checked` time instead of exposing a separate Probe button or adding timeline evidence;
@@ -583,7 +583,7 @@ Implemented as of 2026-06-03:
 13. Sidebar global search and Command+K palette for issues and projects.
 14. Commits/Evidence split on Issue Detail, with structured `session_review_evidence` snapshots and compact evidence-command persistence.
 15. Issue-level source handoff records, including selected source branch/commit, future GitHub App PR executor status, source commits, preview URL, and evidence summary.
-16. Structured `session_failures` records that surface failed sessions, deploy-time preview verification failures, agent interruption, and cleanup failures as continueable Issue Detail timeline and Evidence entries.
+16. Structured `session_failures` records that surface failed sessions, deploy-time preview verification failures, agent interruption, and cleanup failures as concise continueable Issue Detail timeline events, while raw failure metadata stays internal.
 17. Preview status refreshes that update Test environment state and `Checked` time without adding healthy snapshot cards to the Overview timeline.
 18. Issue Resources tab for the fixed test namespace, using live Kubernetes resource reads without exposing cross-namespace browsing.
 19. Tests route with project-level Cases and Case suggestions, workspace-level Plans and Runs, dedicated detail pages, modal case create/import flows, preview-before-confirm Excel `.xlsx` and text-like file import, and issue-backed test run execution.

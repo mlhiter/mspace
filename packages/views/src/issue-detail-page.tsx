@@ -579,39 +579,8 @@ function issueAnalysisProgressEntries(logs: LogLine[]) {
 }
 
 const ansiEscapePattern = /\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-const sessionFailureNoisePrefixes = [
-  "Preparing workspace",
-  "Runner starting",
-  "Source repository:",
-  "Session branch:",
-  "Agent profile:",
-  "Session context:",
-  "Agent instructions:",
-  "Starting Codex app-server",
-  "Codex app-server ready:",
-  "Codex thread:",
-  "Codex turn:",
-  "Project runbook updated",
-  "Collecting Kubernetes evidence",
-];
-
 function normalizeSessionLogMessage(message: string) {
   return message.replace(ansiEscapePattern, "").replace(/\s+/g, " ").trim();
-}
-
-function latestSessionFailureMessage(logs: LogLine[]) {
-  for (const log of [...logs].reverse()) {
-    const message = normalizeSessionLogMessage(log.message);
-    if (!message || sessionFailureNoisePrefixes.some((prefix) => message.startsWith(prefix))) continue;
-    const stream = log.stream.toLowerCase();
-    const isErrorish = /record source commit|fatal:|error|failed|unable to|command failed|prepare workspace|write session context|exit status|permission denied|no such file/i.test(
-      message,
-    );
-    if ((stream === "system" || stream.includes("stderr") || stream === "live") && isErrorish) {
-      return message.length > 560 ? `${message.slice(0, 557)}...` : message;
-    }
-  }
-  return "";
 }
 
 function isHttpUrl(value: string) {
@@ -2783,12 +2752,10 @@ function KubernetesEvidenceDigest(props: { issueId: string; evidence: Deployment
 function ReviewHistoryList(props: {
   issueId: string;
   reviews: SessionReviewEvidence[];
-  failures: SessionFailure[];
 }) {
   const { t } = useMspaceTranslation();
   const reviews = listOrEmpty(props.reviews);
-  const failures = listOrEmpty(props.failures);
-  if (reviews.length === 0 && failures.length === 0) return null;
+  if (reviews.length === 0) return null;
   return (
     <EvidenceSection title={t("issueDetail.evidence.previousAttempts")}>
       <div className="rounded-[10px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
@@ -2813,7 +2780,6 @@ function IssueEvidenceTab(props: {
   issueId: string;
   reviewEvidence: SessionReviewEvidence[];
   evidence: DeploymentEvidence[];
-  failures: SessionFailure[];
   testEnvironment: IssueTestEnvironment | null;
   sessions: AgentSession[];
   changeNodes: IssueChangeNode[];
@@ -2821,13 +2787,12 @@ function IssueEvidenceTab(props: {
   const { t } = useMspaceTranslation();
   const reviews = listOrEmpty(props.reviewEvidence);
   const evidence = listOrEmpty(props.evidence);
-  const failures = listOrEmpty(props.failures);
   const currentReview = currentReviewEvidence(reviews, props.testEnvironment);
   const historicalReviews = currentReview ? reviews.filter((review) => review.id !== currentReview.id) : reviews;
   const latestEvidence = evidence[0];
   const sourceNode = reviewSourceNode(currentReview, props.changeNodes);
   const sourceSession = reviewSourceSession(currentReview, props.sessions);
-  if (reviews.length === 0 && evidence.length === 0 && failures.length === 0 && !props.testEnvironment) {
+  if (reviews.length === 0 && evidence.length === 0 && !props.testEnvironment) {
     return <Notice>{t("issueDetail.evidence.noReviewEvidence")}</Notice>;
   }
   return (
@@ -2867,7 +2832,6 @@ function IssueEvidenceTab(props: {
           <ReviewHistoryList
             issueId={props.issueId}
             reviews={historicalReviews}
-            failures={failures}
           />
         </aside>
       </div>
@@ -3389,60 +3353,25 @@ function SessionActionTitle(props: { actorName: string; action: SessionAction; a
   );
 }
 
-function SessionFailureCallout(props: { logs: LogLine[]; hasAgentMessage: boolean }) {
-  const { t } = useMspaceTranslation();
-  const failureMessage = latestSessionFailureMessage(props.logs);
-  const isPostProcessingFailure =
-    props.hasAgentMessage &&
-    /record source commit|constraint failed|review evidence snapshot|kubernetes evidence|collecting kubernetes evidence/i.test(failureMessage);
-  const title = isPostProcessingFailure
-    ? t("issueDetail.failures.postProcessingTitle")
-    : props.hasAgentMessage
-      ? t("issueDetail.failures.afterAgentTitle")
-      : t("issueDetail.failures.sessionFailed");
-  return (
-    <div className="mt-3 rounded-[8px] bg-[color:var(--danger-soft)] px-3 py-2.5 text-[12px] leading-5 text-[color:var(--danger)] shadow-[inset_0_0_0_1px_var(--line)]">
-      <div className="flex min-w-0 items-center gap-2 font-semibold">
-        <CircleAlert data-icon className="shrink-0" />
-        <span>{title}</span>
-      </div>
-      <p className="mt-1 text-[color:var(--danger)]">
-        {isPostProcessingFailure
-          ? t("issueDetail.failures.postProcessingBody")
-          : t("issueDetail.failures.failedBody")}
-      </p>
-      {failureMessage ? (
-        <div className="mt-2 grid gap-1 rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
-          <span className="text-[11px] font-medium text-[color:var(--danger)]">{t("issueDetail.failures.lastRunnerError")}</span>
-          <span className="break-words font-mono text-[11px] leading-5 text-[color:var(--text)]">{failureMessage}</span>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function DeployAttentionCallout(props: {
   environment: IssueTestEnvironment;
   session: AgentSession;
-  logs: LogLine[];
-  hasAgentMessage: boolean;
 }) {
   const { t } = useMspaceTranslation();
-  if (props.session.status === "failed") {
-    return <SessionFailureCallout logs={props.logs} hasAgentMessage={props.hasAgentMessage} />;
-  }
-
   const namespaceStatus = props.environment.namespaceStatus || "";
-  const isFailed = namespaceStatus === "deploy_failed";
-  const failureMessage = latestSessionFailureMessage(props.logs);
+  const isFailed = props.session.status === "failed" || namespaceStatus === "deploy_failed";
   const title =
-    namespaceStatus === "deploy_interrupted"
+    props.session.status === "failed"
+      ? t("issueDetail.failures.sessionFailed")
+      : namespaceStatus === "deploy_interrupted"
       ? t("issueDetail.failures.deploymentInterrupted")
       : namespaceStatus === "preview_unverified"
         ? t("issueDetail.failures.previewNotVerified")
         : t("issueDetail.failures.deploymentFailed");
   const body =
-    namespaceStatus === "deploy_interrupted"
+    props.session.status === "failed"
+      ? t("issueDetail.failures.failedBody")
+      : namespaceStatus === "deploy_interrupted"
       ? t("issueDetail.failures.deploymentInterruptedBody")
       : namespaceStatus === "preview_unverified"
         ? t("issueDetail.failures.previewNotVerifiedBody")
@@ -3464,33 +3393,12 @@ function DeployAttentionCallout(props: {
       <p className={cn("mt-1", isFailed ? "text-[color:var(--danger)]" : "text-[color:var(--warning)]")}>
         {body}
       </p>
-      {failureMessage ? (
-        <div className="mt-2 grid gap-1 rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
-          <span className={cn("text-[11px] font-medium", isFailed ? "text-[color:var(--danger)]" : "text-[color:var(--warning)]")}>
-            {t("issueDetail.failures.lastRunnerSignal")}
-          </span>
-          <span className="break-words font-mono text-[11px] leading-5 text-[color:var(--text)]">{failureMessage}</span>
-        </div>
-      ) : null}
     </div>
   );
 }
 
-function failurePhaseLabel(phase: string) {
-  return translate(`issueDetail.failures.phases.${phase}`, { defaultValue: translate("issueDetail.failures.phases.default") });
-}
-
-function failureStatusLabel(status: string) {
-  return translate(`issueDetail.failures.status.${status}`, { defaultValue: translate("issueDetail.failures.status.open") });
-}
-
-function failureMetaRows(failure: SessionFailure) {
-  return [
-    { label: translate("issueDetail.failures.failedCommand"), value: failure.failedCommand, mono: true },
-    { label: translate("issueDetail.failures.cluster"), value: failure.cluster },
-    { label: translate("issueDetail.failures.namespace"), value: failure.namespace, mono: true },
-    { label: translate("issueDetail.failures.resource"), value: [failure.resourceKind, failure.resourceName].filter(Boolean).join("/") },
-  ];
+function failureDisplayMessage(failure: SessionFailure) {
+  return failure.errorSummary.trim() || translate("issueDetail.failures.sessionFailed");
 }
 
 function failureCanRetryDeploy(failure: SessionFailure, environment: IssueTestEnvironment | null | undefined) {
@@ -3501,14 +3409,11 @@ function failureCanRetryDeploy(failure: SessionFailure, environment: IssueTestEn
 
 function failureContinueDraft(failure: SessionFailure, agent: AgentProfile) {
   const mention = mentionKey(agent.mention);
+  const message = failureDisplayMessage(failure);
   const lines = [
     `@${mention} ${translate("issueDetail.failures.continueDraftTitle")}`,
     "",
-    `${translate("issueDetail.failures.continueDraftPhase")}: ${failurePhaseLabel(failure.phase)}`,
-    failure.failedCommand ? `${translate("issueDetail.failures.failedCommand")}: \`${failure.failedCommand}\`` : "",
-    failure.errorSummary ? `${translate("issueDetail.failures.continueDraftErrorSummary")}: ${failure.errorSummary}` : "",
-    failure.namespace ? `${translate("issueDetail.failures.namespace")}: \`${failure.namespace}\`` : "",
-    failure.resourceName ? `${translate("issueDetail.failures.resource")}: \`${[failure.resourceKind, failure.resourceName].filter(Boolean).join("/")}\`` : "",
+    message,
     "",
     translate("issueDetail.failures.continueDraftInstruction"),
   ].filter(Boolean);
@@ -3518,9 +3423,6 @@ function failureContinueDraft(failure: SessionFailure, agent: AgentProfile) {
 function SessionFailureCard(props: {
   failure: SessionFailure;
   session?: AgentSession;
-  evidence?: DeploymentEvidence;
-  review?: SessionReviewEvidence;
-  compact?: boolean;
   canContinue?: boolean;
   canRetry?: boolean;
   isRetrying?: boolean;
@@ -3531,20 +3433,14 @@ function SessionFailureCard(props: {
   onStop?: () => void;
 }) {
   const { t } = useMspaceTranslation();
-  const active = props.session ? ["queued", "running"].includes(props.session.status) : false;
+  const message = failureDisplayMessage(props.failure);
   return (
-    <div className={cn("grid gap-3 rounded-[10px] bg-[color:var(--danger-soft)] p-3 text-[13px] leading-5 text-[color:var(--danger)] shadow-[inset_0_0_0_1px_var(--line)]", props.compact && "bg-[color:var(--block-subtle)] text-[color:var(--text)]")}>
+    <div className="grid gap-3 rounded-[10px] bg-[color:var(--danger-soft)] p-3 text-[13px] leading-5 text-[color:var(--danger)] shadow-[inset_0_0_0_1px_var(--line)]">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2 font-semibold">
-            <CircleAlert data-icon className="shrink-0" />
-            <span className="min-w-0 truncate">{failurePhaseLabel(props.failure.phase)}</span>
-            {active ? <span className="text-[12px] font-normal text-[color:var(--warning)]">{t("issueDetail.failures.active")}</span> : null}
-          </div>
-          <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] text-[color:var(--muted)]">
-            <span>{t("issueDetail.failures.session")} {props.failure.sessionId.slice(0, 8)}</span>
-            <span>{failureStatusLabel(props.failure.status)}</span>
-            {props.failure.updatedAt ? <span title={formatAbsoluteTime(props.failure.updatedAt)}>{formatRelativeTime(props.failure.updatedAt)}</span> : null}
+        <div className="flex min-w-0 flex-1 items-start gap-2">
+          <CircleAlert data-icon className="mt-0.5 shrink-0" />
+          <div className="min-w-0 break-words font-medium leading-6 text-[color:var(--danger)] [overflow-wrap:anywhere]">
+            {message}
           </div>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
@@ -3568,23 +3464,6 @@ function SessionFailureCard(props: {
           ) : null}
         </div>
       </div>
-      {props.failure.errorSummary ? (
-        <div className="rounded-[8px] bg-[color:var(--paper)] px-3 py-2 text-[12px] leading-5 text-[color:var(--text)] shadow-[inset_0_0_0_1px_var(--line)] [overflow-wrap:anywhere]">
-          {props.failure.errorSummary}
-        </div>
-      ) : null}
-      <ReviewMetaGrid rows={failureMetaRows(props.failure)} />
-      {props.failure.errorExcerpt && !props.compact ? (
-        <ReviewDetailsDisclosure label={t("issueDetail.failures.showErrorExcerpt")}>
-          <div className="max-h-44 overflow-auto whitespace-pre-wrap text-[12px] leading-5 text-[color:var(--muted)] [overflow-wrap:anywhere]">{props.failure.errorExcerpt}</div>
-        </ReviewDetailsDisclosure>
-      ) : null}
-      {(props.evidence || props.review) && !props.compact ? (
-        <div className="flex flex-wrap gap-2">
-          {props.evidence ? <span className="text-[12px] text-[color:var(--muted)]">{t("issueDetail.failures.kubernetesEvidenceCaptured")}</span> : null}
-          {props.review ? <span className="text-[12px] text-[color:var(--muted)]">{t("issueDetail.failures.reviewEvidenceCaptured")}</span> : null}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -3592,8 +3471,6 @@ function SessionFailureCard(props: {
 function SessionFailureTimelineItem(props: {
   failure: SessionFailure;
   session?: AgentSession;
-  evidence?: DeploymentEvidence;
-  review?: SessionReviewEvidence;
   onContinue?: () => void;
   canContinue?: boolean;
   onRetry?: () => void;
@@ -3610,7 +3487,6 @@ function SessionFailureTimelineItem(props: {
       title={
         <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
           <span>{t("issueDetail.failures.needsAttention")}</span>
-          <StatusBadge value={props.failure.phase} valueLabel={failurePhaseLabel(props.failure.phase)} className="h-5 px-2 py-0 text-[11px]" />
         </span>
       }
       time={props.failure.updatedAt || props.failure.createdAt}
@@ -3776,8 +3652,6 @@ function DeployTimelineItem(props: {
           <DeployAttentionCallout
             environment={props.testEnvironment}
             session={props.session}
-            logs={props.logs}
-            hasAgentMessage={Boolean(latestAgentMessage(props.logs))}
           />
         ) : null}
         <SessionFileChanges changes={props.changes} workdir={props.session.workdir} />
@@ -3898,8 +3772,6 @@ function SessionTimelineItem(props: {
               {t("issueDetail.timeline.noFinalSummary")}
             </div>
           )}
-
-          {session.status === "failed" ? <SessionFailureCallout logs={logs} hasAgentMessage={Boolean(agentMessage)} /> : null}
 
           <SessionFileChanges changes={props.changes} workdir={session.workdir} />
         </div>
@@ -4079,11 +3951,7 @@ export function IssueEvidenceHistoryPage() {
 
   const detail = issueQuery.data;
   const reviews = listOrEmpty(detail?.reviewEvidence);
-  const failures = listOrEmpty(detail?.failures);
-  const evidence = listOrEmpty(detail?.evidence);
-  const sessions = listOrEmpty(detail?.sessions);
   const entries = [
-    ...failures.map((failure) => ({ kind: "failure" as const, id: failure.id, time: failure.updatedAt || failure.createdAt, failure })),
     ...reviews.map((review) => ({ kind: "review" as const, id: review.id || review.sessionId, time: review.updatedAt || review.createdAt, review })),
   ].sort((a, b) => new Date(b.time || 0).getTime() - new Date(a.time || 0).getTime());
 
@@ -4121,20 +3989,6 @@ export function IssueEvidenceHistoryPage() {
           <div className="absolute bottom-0 left-4 top-0 w-px bg-[color:var(--line)]" aria-hidden="true" />
           <div className="relative">
             {entries.map((entry) => {
-              if (entry.kind === "failure") {
-                const session = sessions.find((item) => item.id === entry.failure.sessionId);
-                const failureEvidence = evidence.find((item) => item.id === entry.failure.evidenceId || item.sessionId === entry.failure.sessionId);
-                const review = reviews.find((item) => item.id === entry.failure.reviewEvidenceId || item.sessionId === entry.failure.sessionId);
-                return (
-                  <SessionFailureTimelineItem
-                    key={`failure-${entry.id}`}
-                    failure={entry.failure}
-                    session={session}
-                    evidence={failureEvidence}
-                    review={review}
-                  />
-                );
-              }
               return <ReviewEvidenceTimelineItem key={`review-${entry.id}`} review={entry.review} />;
             })}
           </div>
@@ -6709,8 +6563,6 @@ export function IssueDetailPage() {
 	                    }
 	                    if (item.kind === "failure") {
 	                      const session = listOrEmpty(detail.sessions).find((candidate) => candidate.id === item.failure.sessionId);
-	                      const failureEvidence = listOrEmpty(detail.evidence).find((candidate) => candidate.id === item.failure.evidenceId || candidate.sessionId === item.failure.sessionId);
-	                      const review = listOrEmpty(detail.reviewEvidence).find((candidate) => candidate.id === item.failure.reviewEvidenceId || candidate.sessionId === item.failure.sessionId);
 	                      const canRetryFailure = failureCanRetryDeploy(item.failure, detail.testEnvironment) && !hasActiveSession && !startTestDeploy.isPending && changeNodes.length > 0;
 	                      const canStopFailure = Boolean(session && ["queued", "running"].includes(session.status));
 	                      const failureSessionId = session?.id || "";
@@ -6719,8 +6571,6 @@ export function IssueDetailPage() {
 	                          key={`failure-${item.failure.id}`}
 	                          failure={item.failure}
 	                          session={session}
-	                          evidence={failureEvidence}
-	                          review={review}
 	                          canContinue={Boolean(continueAgent) && !hasActiveSession}
 	                          onContinue={() => continueFromFailure(item.failure)}
 	                          canRetry={canRetryFailure}
@@ -6875,7 +6725,6 @@ export function IssueDetailPage() {
               issueId={issueId}
 	              reviewEvidence={listOrEmpty(detail.reviewEvidence)}
 	              evidence={listOrEmpty(detail.evidence)}
-	              failures={listOrEmpty(detail.failures)}
 	              testEnvironment={detail.testEnvironment}
 	              sessions={listOrEmpty(detail.sessions)}
               changeNodes={changeNodes}

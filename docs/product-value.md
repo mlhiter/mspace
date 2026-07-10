@@ -196,7 +196,7 @@ An independent agent GitHub account is optional. The more important product requ
 
 The product should assume that some sessions fail before they succeed.
 
-Failures should not disappear into raw logs. mspace should preserve enough context to continue:
+Failures should not disappear into raw logs. mspace should preserve enough internal context for support and follow-up:
 
 - the failed command;
 - the error summary;
@@ -204,7 +204,7 @@ Failures should not disappear into raw logs. mspace should preserve enough conte
 - relevant pod logs or events;
 - whether the user can retry, continue with a new instruction, stop, retain, or clean up.
 
-This does not mean mspace should interrupt agents at every failure. Codex may fix many failures by itself. It means the issue should still show the path that led to the final result, including failed attempts that affected the review.
+This does not mean the product UI should expose that raw context. Users should see the error itself and the next useful action; commands, runtime excerpts, protocol details, and namespace/resource hints stay in server-owned records for internal debugging.
 
 ## Security Boundary
 

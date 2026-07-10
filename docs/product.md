@@ -43,7 +43,7 @@ The repository now has a runnable local desktop MVP:
 - inspect the current issue namespace from a Resources tab with Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events.
 - review structured session evidence from Issue Detail, with code changes in Commits, live namespace objects in Resources, and the current review packet plus command evidence in Evidence.
 - record issue-level branch / PR handoff state from the selected source change, including commit list, preview URL, evidence summary, PR URL/title/state, and server-owned executor errors.
-- show failed sessions and failed deploy/preview/cleanup checks as structured failure evidence, with continue, retry deploy, stop, retain, or cleanup choices from Issue Detail.
+- show failed sessions and failed deploy/preview/cleanup checks as concise error states, with continue, retry deploy, stop, retain, or cleanup choices from Issue Detail while keeping raw failure metadata internal.
 - use a Notion-like desktop workspace shell with real shadcn/ui primitives, Radix base components, lucide-react icons, Material Icon Theme file icons, and low-contrast document surfaces.
 
 Kubernetes remains the default deployment and issue test environment, but it is not the only Environment type. The current development runtime is a registered fixed worker, and workers are separate from Environments: a worker claims tasks from the server queue, then operates the selected Kubernetes or virtual machine target through the access mechanism carried by that environment. Running the agent runtime inside Kubernetes remains a later option once the Server Worker loop is stable.
@@ -169,7 +169,7 @@ An Issue should hold:
 - comments, lightweight reactions, and progress updates;
 - assignee and subscriber list;
 - linked branch, PR, and environment evidence;
-- structured failure evidence when a session, deployment, preview check, interruption, or cleanup needs attention;
+- concise failure states when a session, deployment, preview check, interruption, or cleanup needs attention;
 - inline task rows backed by child issues, not Markdown checkbox state;
 - one or more attached agent sessions;
 - one issue test environment record with namespace, preview URL, deploy status, and cleanup decision.

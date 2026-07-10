@@ -247,7 +247,7 @@ Source changes, delivery handoff, live namespace resources, review evidence, and
 - Source handoff: one current issue-level branch/PR delivery artifact, keyed by source branch.
 - Resources tab: live Kubernetes objects from the issue's fixed namespace.
 - Evidence tab: current review packet, compact command evidence, agent summary, risks, source facts, and links to history pages.
-- Failures: continueable failure records with phase, command, summary, excerpt, namespace/resource hints, and retry/continue affordances.
+- Failures: continueable failure records that store phase, command, summary, excerpt, and namespace/resource hints internally, while default Issue Detail UI shows only the error summary and retry/continue affordances.
 
 Dry-run worker commits are diagnostic records and should not be offered as PR source branch candidates.
 

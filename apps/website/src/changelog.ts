@@ -8,6 +8,17 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-07-10",
+    title: "Simpler issue failure messages",
+    summary:
+      "mspace now keeps issue failure UI focused on the actual error and the next action instead of exposing runtime debugging details.",
+    items: [
+      "Reduced failed session timeline cards to a single user-facing error message plus necessary Continue, Retry deploy, or Stop actions.",
+      "Stopped showing failed commands, runtime excerpts, session ids, phase labels, namespace/resource metadata, and failure debug history entry points in the normal Issue workflow.",
+      "Kept the structured failure metadata in server-owned records so support and internal debugging can still inspect the underlying failure when needed.",
+    ],
+  },
+  {
+    date: "2026-07-10",
     title: "Issue project attachment and analysis progress",
     summary:
       "mspace now lets personal desktop users attach local projects directly from Issue Detail and makes automatic Codex issue analysis visibly progress in the timeline.",
