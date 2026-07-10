@@ -7,6 +7,17 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-10",
+    title: "Issue project attachment and analysis progress",
+    summary:
+      "mspace now lets personal desktop users attach local projects directly from Issue Detail and makes automatic Codex issue analysis visibly progress in the timeline.",
+    items: [
+      "Added local folder project creation to the Issue Detail attachment modal for personal workspaces, while keeping team workspaces GitHub URL-only.",
+      "Reused the existing server-owned project contract so local paths stay personal and team workers continue cloning from shared GitHub repositories.",
+      "Shows readable analysis progress from Codex session logs in the Issue timeline instead of only a generic running state.",
+    ],
+  },
+  {
     date: "2026-07-09",
     title: "Workflow skills in issue comments",
     summary:

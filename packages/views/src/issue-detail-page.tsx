@@ -5,6 +5,7 @@ import type { Editor } from "@tiptap/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  Activity,
   ArrowLeft,
   BookOpenText,
   Bot,
@@ -18,9 +19,12 @@ import {
   Clock3,
   ExternalLink,
   Files,
+  FolderOpen,
+  GitBranch,
   GitCommit,
   GitPullRequest,
   Globe2,
+  HardDrive,
   History,
   ListChecks,
   Pencil,
@@ -114,6 +118,7 @@ type TimelineItem =
 
 type IssueTab = "overview" | "commits" | "sessions" | "resources" | "evidence";
 type ActorKind = "human" | "codex" | "system" | "evidence";
+type ProjectAttachSource = "local" | "github";
 
 function isIssueTab(value: unknown): value is IssueTab {
   return value === "overview" || value === "commits" || value === "sessions" || value === "resources" || value === "evidence";
@@ -133,7 +138,12 @@ interface ActorIdentity {
   avatarUrl?: string;
 }
 
-type LogLine = Pick<SessionLog, "stream" | "message">;
+type LogLine = Pick<SessionLog, "stream" | "message" | "createdAt">;
+type AnalysisProgressEntry = {
+  labelKey: string;
+  message: string;
+  createdAt: string;
+};
 type SessionSnapshot = {
   logs: LogLine[];
   changes: WorkspaceChange[];
@@ -515,6 +525,57 @@ function isNoisySystemComment(comment: Comment) {
 
 function latestAgentMessage(logs: LogLine[]) {
   return [...logs].reverse().find((log) => log.stream === "agent")?.message || "";
+}
+
+function analysisStatusLabelKey(message: string) {
+  const normalized = message.trim().toLowerCase();
+  if (normalized === "agentmessage") return "issueDetail.timeline.analysisProgressWriting";
+  if (normalized === "reasoning") return "issueDetail.timeline.analysisProgressReasoning";
+  if (normalized === "filechange") return "issueDetail.timeline.analysisProgressFiles";
+  if (normalized.startsWith("turn-")) return "issueDetail.timeline.analysisProgressRunning";
+  if (normalized.startsWith("thread-")) return "issueDetail.timeline.analysisProgressStarting";
+  return "";
+}
+
+function compactAnalysisLogMessage(message: string) {
+  const normalized = normalizeSessionLogMessage(message);
+  return normalized.length > 700 ? `${normalized.slice(0, 697)}...` : normalized;
+}
+
+function issueAnalysisProgressEntries(logs: LogLine[]) {
+  const entries: AnalysisProgressEntry[] = [];
+  const seen = new Set<string>();
+  for (const log of [...logs].reverse()) {
+    const stream = log.stream.toLowerCase();
+    const normalizedMessage = compactAnalysisLogMessage(log.message);
+    if (!normalizedMessage) continue;
+
+    let labelKey = "";
+    let message = "";
+    if (stream === "agent") {
+      labelKey = "issueDetail.timeline.analysisProgressAgent";
+      message = normalizedMessage;
+    } else if (stream === "plan") {
+      labelKey = "issueDetail.timeline.analysisProgressPlan";
+      message = normalizedMessage;
+    } else if (stream === "reasoning") {
+      labelKey = "issueDetail.timeline.analysisProgressReasoning";
+      message = normalizedMessage;
+    } else if (stream === "command") {
+      labelKey = "issueDetail.timeline.analysisProgressCommand";
+      message = normalizedMessage.replace(/^\$\s*/, "");
+    } else if (stream === "codex-status") {
+      labelKey = analysisStatusLabelKey(normalizedMessage);
+    }
+    if (!labelKey) continue;
+
+    const key = `${labelKey}:${message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entries.push({ labelKey, message, createdAt: log.createdAt });
+    if (entries.length >= 5) break;
+  }
+  return entries.reverse();
 }
 
 const ansiEscapePattern = /\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
@@ -2823,6 +2884,39 @@ function SessionSummarySkeleton() {
   );
 }
 
+function AnalysisProgressList(props: { entries: AnalysisProgressEntry[]; compact?: boolean }) {
+  const { t } = useMspaceTranslation();
+  const entries = props.entries;
+  return (
+    <div
+      className={cn(
+        "mt-3 grid gap-2 rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]",
+        props.compact ? "mt-2 px-2.5 py-2" : "",
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-2 font-medium text-[color:var(--muted-strong)]">
+        <Activity data-icon className="size-3.5 shrink-0" />
+        <span>{t("issueDetail.timeline.analysisProgressTitle")}</span>
+      </div>
+      {entries.length === 0 ? (
+        <div className="text-[color:var(--muted)]">{t("issueDetail.timeline.analysisProgressWaiting")}</div>
+      ) : (
+        <div className="grid gap-1.5">
+          {entries.map((entry, index) => (
+            <div key={`${entry.labelKey}-${index}-${entry.createdAt}`} className="grid gap-0.5 rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
+              <div className="flex min-w-0 items-center justify-between gap-2 text-[11px] font-medium leading-4 text-[color:var(--muted)]">
+                <span>{t(entry.labelKey)}</span>
+                {entry.createdAt ? <span title={formatAbsoluteTime(entry.createdAt)}>{formatRelativeTime(entry.createdAt)}</span> : null}
+              </div>
+              {entry.message ? <div className="whitespace-pre-wrap text-[12px] leading-5 text-[color:var(--text)] [overflow-wrap:anywhere]">{entry.message}</div> : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function storedHumanActor(): ActorIdentity {
   const stored = getStoredAuthIdentity();
   return {
@@ -3725,6 +3819,7 @@ function SessionTimelineItem(props: {
   const agentMessage = latestAgentMessage(logs);
   const isActive = ["queued", "running"].includes(session.status);
   const isAnalysisSession = isIssueAnalysisSession(session);
+  const analysisProgress = isAnalysisSession ? issueAnalysisProgressEntries(logs) : [];
   const sessionDisplayName = isAnalysisSession ? t("issueDetail.timeline.issueAnalysis") : agent.name;
   const isEmptyCancelledSession = session.status === "cancelled" && !agentMessage && props.changes.length === 0;
   const title = isAnalysisSession
@@ -3775,6 +3870,7 @@ function SessionTimelineItem(props: {
           </div>
           {props.stopError ? <div className="mt-1 text-[12px] leading-5 text-[color:var(--danger)]">{props.stopError.message}</div> : null}
           {isAnalysisSession ? <AnalysisSessionNote /> : null}
+          {isAnalysisSession ? <AnalysisProgressList entries={analysisProgress} /> : null}
           {agentMessage ? (
             <RichText agents={props.agents} basePath={session.workdir} className="mt-3 rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
               {agentMessage}
@@ -3793,6 +3889,8 @@ function SessionTimelineItem(props: {
             <RichText agents={props.agents} basePath={session.workdir} className={cn("mt-2", isAnalysisSession ? "pt-1" : "")}>
               {agentMessage}
             </RichText>
+          ) : isAnalysisSession && analysisProgress.length > 0 ? (
+            <AnalysisProgressList entries={analysisProgress} compact />
           ) : props.isSnapshotPending ? (
             <SessionSummarySkeleton />
           ) : (
@@ -4698,6 +4796,10 @@ function projectRepositoryLabel(project: Project | null | undefined) {
   return project.sourceType === "github" ? project.remoteUrl || project.repoPath : project.repoPath || project.remoteUrl;
 }
 
+function projectNameFromPath(path: string): string {
+  return path.trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
+}
+
 function detectGitHubRepoUrl(text: string): string {
   const normalized = text.replace(/[()[\]<>`"']/g, " ");
   const candidates = normalized.split(/\s+/);
@@ -5009,12 +5111,18 @@ function ProjectAttachModal(props: {
   projects: Project[];
   currentProjectId: string;
   intent: ProjectAttachIntent;
+  isTeamWorkspace: boolean;
   suggestedRepoUrl: string;
+  source: ProjectAttachSource;
+  repoPath: string;
   repoUrl: string;
   projectName: string;
+  folderPickerError: string;
   attachError?: Error | null;
   createError?: Error | null;
   isAttaching: boolean;
+  onSourceChange: (value: ProjectAttachSource) => void;
+  onPickProjectFolder: () => void;
   onRepoUrlChange: (value: string) => void;
   onProjectNameChange: (value: string) => void;
   onAttachProject: (projectId: string) => void;
@@ -5022,7 +5130,8 @@ function ProjectAttachModal(props: {
   onClose: () => void;
 }) {
   const { t } = useMspaceTranslation();
-  const canCreate = props.repoUrl.trim().length > 0 && !props.isAttaching;
+  const createFromGitHub = props.isTeamWorkspace || props.source === "github";
+  const canCreate = (createFromGitHub ? props.repoUrl.trim().length > 0 : props.repoPath.trim().length > 0) && !props.isAttaching;
   const isAgentIntent = props.intent === "composer" || props.intent === "edit";
 
   useEffect(() => {
@@ -5069,6 +5178,7 @@ function ProjectAttachModal(props: {
           {(props.attachError || props.createError) ? (
             <Notice tone="danger">{props.attachError?.message || props.createError?.message}</Notice>
           ) : null}
+          {props.folderPickerError ? <Notice tone="danger">{props.folderPickerError}</Notice> : null}
 
           <Field label={t("issueDetail.projectAttach.existingProject")} hint={props.projects.length > 0 ? t("issueDetail.projectAttach.existingProjectHint") : t("issueDetail.projectAttach.noProjectsHint")}>
             <Select
@@ -5094,7 +5204,7 @@ function ProjectAttachModal(props: {
 
           <div className="flex items-center gap-3 text-[12px] text-[color:var(--faint)]">
             <span className="h-px flex-1 bg-[color:var(--line)]" />
-            {t("issueDetail.projectAttach.orCreateFromGitHub")}
+            {t(props.isTeamWorkspace ? "issueDetail.projectAttach.orCreateFromGitHub" : "issueDetail.projectAttach.orCreateProject")}
             <span className="h-px flex-1 bg-[color:var(--line)]" />
           </div>
 
@@ -5106,13 +5216,70 @@ function ProjectAttachModal(props: {
           ) : null}
 
           <div className="grid gap-3">
-            <Field label={t("issueDetail.projectAttach.githubRepositoryUrl")}>
-              <Input
-                value={props.repoUrl}
-                onChange={(event) => props.onRepoUrlChange(event.target.value)}
-                placeholder="https://github.com/org/repo"
-              />
-            </Field>
+            {!props.isTeamWorkspace ? (
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  className={cn(
+                    "flex min-w-0 items-start gap-2 rounded-[8px] px-3 py-3 text-left text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)] transition-[background-color,box-shadow,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-[0.99]",
+                    props.source === "local" ? "bg-[color:var(--block)] shadow-[inset_0_0_0_1px_var(--accent-blue)]" : "bg-[color:var(--paper)]",
+                  )}
+                  onClick={props.onPickProjectFolder}
+                  disabled={props.isAttaching}
+                >
+                  <FolderOpen data-icon className="mt-0.5 shrink-0 text-[color:var(--muted-strong)]" />
+                  <span className="min-w-0">
+                    <span className="block font-medium text-[color:var(--text)]">{t("issueDetail.projectAttach.localFolder")}</span>
+                    <span className="block text-[color:var(--muted)]">{t("issueDetail.projectAttach.localFolderDescription")}</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex min-w-0 items-start gap-2 rounded-[8px] px-3 py-3 text-left text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)] transition-[background-color,box-shadow,transform] duration-150 ease-out hover:bg-[color:var(--hover)] active:scale-[0.99]",
+                    props.source === "github" ? "bg-[color:var(--block)] shadow-[inset_0_0_0_1px_var(--accent-blue)]" : "bg-[color:var(--paper)]",
+                  )}
+                  onClick={() => props.onSourceChange("github")}
+                  disabled={props.isAttaching}
+                >
+                  <GitBranch data-icon className="mt-0.5 shrink-0 text-[color:var(--muted-strong)]" />
+                  <span className="min-w-0">
+                    <span className="block font-medium text-[color:var(--text)]">{t("issueDetail.projectAttach.githubRepository")}</span>
+                    <span className="block text-[color:var(--muted)]">{t("issueDetail.projectAttach.githubRepositoryDescription")}</span>
+                  </span>
+                </button>
+              </div>
+            ) : null}
+
+            {!props.isTeamWorkspace && props.source === "local" ? (
+              props.repoPath ? (
+                <div className="flex min-w-0 items-center gap-2 rounded-[8px] bg-[color:var(--block)] px-3 py-2 text-[12px] leading-5 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+                  <HardDrive data-icon className="shrink-0 text-[color:var(--muted)]" />
+                  <span className="min-w-0 truncate">{props.repoPath}</span>
+                </div>
+              ) : (
+                <Button type="button" variant="secondary" onClick={props.onPickProjectFolder} disabled={props.isAttaching}>
+                  <FolderOpen data-icon />
+                  {t("issueDetail.projectAttach.chooseFolder")}
+                </Button>
+              )
+            ) : (
+              <Field label={t("issueDetail.projectAttach.githubRepositoryUrl")} hint={props.isTeamWorkspace ? t("issueDetail.projectAttach.githubRepositoryTeamHint") : undefined}>
+                <div className="relative">
+                  <GitBranch data-icon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--muted)]" />
+                  <Input
+                    className="pl-9"
+                    value={props.repoUrl}
+                    onChange={(event) => {
+                      props.onSourceChange("github");
+                      props.onRepoUrlChange(event.target.value);
+                    }}
+                    placeholder="https://github.com/org/repo"
+                  />
+                </div>
+              </Field>
+            )}
+
             <Field label={t("issueDetail.projectAttach.projectName")} hint={t("issueDetail.projectAttach.projectNameHint")}>
               <Input
                 value={props.projectName}
@@ -5201,8 +5368,11 @@ export function IssueDetailPage() {
   const [projectAttachOpen, setProjectAttachOpen] = useState(false);
   const [projectAttachIntent, setProjectAttachIntent] = useState<ProjectAttachIntent>("sidebar");
   const [projectAttachFeedback, setProjectAttachFeedback] = useState<ProjectAttachIntent | null>(null);
+  const [newProjectSource, setNewProjectSource] = useState<ProjectAttachSource>("local");
+  const [newProjectRepoPath, setNewProjectRepoPath] = useState("");
   const [newProjectRepoUrl, setNewProjectRepoUrl] = useState("");
   const [newProjectName, setNewProjectName] = useState("");
+  const [projectFolderPickerError, setProjectFolderPickerError] = useState("");
   const scrolledLinkedSessionTarget = useRef("");
   const [testDeployForm, setTestDeployForm] = useState<StartTestDeployInput>({
     agentProfile: "codex",
@@ -5434,25 +5604,40 @@ export function IssueDetailPage() {
       return;
     }
     let cancelled = false;
-    void Promise.all(
-      sessions.map(async (session) => {
-        const sessionDetail = await controlPlaneApi.getSession(auth.token, workspaceId, session.id);
-        return [
-          session.id,
-          {
-            logs: listOrEmpty(sessionDetail.logs).map((log) => ({ stream: log.stream, message: log.message })),
-            changes: listOrEmpty(sessionDetail.workspace?.changes).length > 0
-              ? listOrEmpty(sessionDetail.workspace?.changes)
-              : listOrEmpty(sessionDetail.workspace?.comparison?.changes),
-          },
-        ] as const;
-      }),
-    ).then((entries) => {
+    async function loadSessionSnapshots(targetSessions: AgentSession[], replace: boolean) {
+      const entries = await Promise.all(
+        targetSessions.map(async (session) => {
+          const sessionDetail = await controlPlaneApi.getSession(auth.token, workspaceId, session.id);
+          return [
+            session.id,
+            {
+              logs: listOrEmpty(sessionDetail.logs).map((log) => ({
+                stream: log.stream,
+                message: log.message,
+                createdAt: log.createdAt,
+              })),
+              changes: listOrEmpty(sessionDetail.workspace?.changes).length > 0
+                ? listOrEmpty(sessionDetail.workspace?.changes)
+                : listOrEmpty(sessionDetail.workspace?.comparison?.changes),
+            },
+          ] as const;
+        }),
+      );
       if (cancelled) return;
-      setSessionSnapshotsById(Object.fromEntries(entries));
-    });
+      const nextEntries = Object.fromEntries(entries);
+      setSessionSnapshotsById((current) => replace ? nextEntries : { ...current, ...nextEntries });
+    }
+
+    const activeSessions = sessions.filter((session) => ["queued", "running"].includes(session.status));
+    void loadSessionSnapshots(sessions, true);
+    const interval = activeSessions.length > 0
+      ? window.setInterval(() => {
+          void loadSessionSnapshots(activeSessions, false);
+        }, 2_500)
+      : undefined;
     return () => {
       cancelled = true;
+      if (interval) window.clearInterval(interval);
     };
   }, [auth.token, detail?.sessions, workspaceId]);
 
@@ -5967,12 +6152,13 @@ export function IssueDetailPage() {
   });
 
   const createAndAttachProject = useMutation({
-    mutationFn: async (input: { name: string; repoUrl: string; intent: ProjectAttachIntent }) => {
+    mutationFn: async (input: { name: string; source: ProjectAttachSource; repoPath: string; repoUrl: string; intent: ProjectAttachIntent }) => {
+      const sourceType = runtimeMode === "team" ? "github" : input.source;
       const project = await controlPlaneApi.createProject(auth.token, workspaceId, {
         name: input.name,
-        sourceType: "github",
-        repoPath: "",
-        repoUrl: input.repoUrl,
+        sourceType,
+        repoPath: sourceType === "local" ? input.repoPath : "",
+        repoUrl: sourceType === "github" ? input.repoUrl : "",
         defaultBranch: "",
         kubeContext: "",
         kubeconfigPath: "",
@@ -5989,8 +6175,11 @@ export function IssueDetailPage() {
     onSuccess: async (_project, input) => {
       setProjectAttachOpen(false);
       setProjectAttachFeedback(input.intent);
+      setNewProjectSource(runtimeMode === "team" ? "github" : "local");
+      setNewProjectRepoPath("");
       setNewProjectRepoUrl("");
       setNewProjectName("");
+      setProjectFolderPickerError("");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: issuesQueryKey }),
@@ -6214,6 +6403,27 @@ export function IssueDetailPage() {
   const projectAttachRepoUrl = newProjectRepoUrl;
   const canSaveIssueContent = issueTitleDraft.trim().length > 0 && !updateIssueContent.isPending;
 
+  function changeProjectAttachSource(source: ProjectAttachSource) {
+    setNewProjectSource(source);
+    setProjectFolderPickerError("");
+  }
+
+  async function pickProjectAttachFolder() {
+    setProjectFolderPickerError("");
+    if (!window.mspaceDesktop?.selectProjectFolder) {
+      setProjectFolderPickerError(t("projects.folderPickerDesktopOnly"));
+      return;
+    }
+
+    const selectedPath = await window.mspaceDesktop.selectProjectFolder();
+    if (!selectedPath) return;
+
+    setNewProjectSource("local");
+    setNewProjectRepoPath(selectedPath);
+    setNewProjectRepoUrl("");
+    setNewProjectName((currentName) => currentName.trim() ? currentName : projectNameFromPath(selectedPath));
+  }
+
   function startIssueEditing() {
     setIssueTitleDraft(loadedDetail.issue.title);
     setIssueBodyDraft(loadedDetail.issue.body);
@@ -6239,8 +6449,11 @@ export function IssueDetailPage() {
   function openProjectAttach(intent: ProjectAttachIntent = "sidebar") {
     setProjectAttachIntent(intent);
     setProjectAttachFeedback(null);
+    setNewProjectSource(runtimeMode === "team" || suggestedRepoUrl ? "github" : "local");
+    setNewProjectRepoPath("");
     setNewProjectRepoUrl(suggestedRepoUrl);
     setNewProjectName("");
+    setProjectFolderPickerError("");
     attachProject.reset();
     createAndAttachProject.reset();
     setProjectAttachOpen(true);
@@ -6849,16 +7062,22 @@ export function IssueDetailPage() {
           projects={projects}
           currentProjectId={detail.project?.id || ""}
           intent={projectAttachIntent}
+          isTeamWorkspace={runtimeMode === "team"}
           suggestedRepoUrl={suggestedRepoUrl}
+          source={newProjectSource}
+          repoPath={newProjectRepoPath}
           repoUrl={projectAttachRepoUrl}
           projectName={newProjectName}
+          folderPickerError={projectFolderPickerError}
           attachError={attachProject.error}
           createError={createAndAttachProject.error}
           isAttaching={attachProject.isPending || createAndAttachProject.isPending}
+          onSourceChange={changeProjectAttachSource}
+          onPickProjectFolder={pickProjectAttachFolder}
           onRepoUrlChange={setNewProjectRepoUrl}
           onProjectNameChange={setNewProjectName}
           onAttachProject={(projectId) => attachProject.mutate({ projectId, intent: projectAttachIntent })}
-          onCreateAndAttach={() => createAndAttachProject.mutate({ name: newProjectName, repoUrl: projectAttachRepoUrl, intent: projectAttachIntent })}
+          onCreateAndAttach={() => createAndAttachProject.mutate({ name: newProjectName, source: newProjectSource, repoPath: newProjectRepoPath, repoUrl: projectAttachRepoUrl, intent: projectAttachIntent })}
           onClose={() => setProjectAttachOpen(false)}
         />
       ) : null}
