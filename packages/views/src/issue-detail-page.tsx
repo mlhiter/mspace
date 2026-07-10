@@ -3420,7 +3420,7 @@ function failureContinueDraft(failure: SessionFailure, agent: AgentProfile) {
   return lines.join("\n");
 }
 
-function SessionFailureCard(props: {
+function SessionFailureNotice(props: {
   failure: SessionFailure;
   session?: AgentSession;
   canContinue?: boolean;
@@ -3435,34 +3435,53 @@ function SessionFailureCard(props: {
   const { t } = useMspaceTranslation();
   const message = failureDisplayMessage(props.failure);
   return (
-    <div className="grid gap-3 rounded-[10px] bg-[color:var(--danger-soft)] p-3 text-[13px] leading-5 text-[color:var(--danger)] shadow-[inset_0_0_0_1px_var(--line)]">
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-1 items-start gap-2">
-          <CircleAlert data-icon className="mt-0.5 shrink-0" />
-          <div className="min-w-0 break-words font-medium leading-6 text-[color:var(--danger)] [overflow-wrap:anywhere]">
-            {message}
-          </div>
+    <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-y border-[color:var(--line)] py-2 text-[13px] leading-5 text-[color:var(--danger)]">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <CircleAlert data-icon className="shrink-0" />
+        <div className="min-w-0 break-words font-medium leading-5 text-[color:var(--danger)] [overflow-wrap:anywhere]">
+          {message}
         </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          {props.onContinue ? (
-            <Button type="button" variant="secondary" size="sm" disabled={!props.canContinue} onClick={props.onContinue}>
-              <Send data-icon />
-              {t("issueDetail.failures.continue")}
-            </Button>
-          ) : null}
-          {props.onRetry ? (
-            <Button type="button" variant="secondary" size="sm" disabled={!props.canRetry || props.isRetrying} onClick={props.onRetry}>
-              <Rocket data-icon />
-              {props.isRetrying ? t("issueDetail.failures.queueing") : t("issueDetail.failures.retryDeploy")}
-            </Button>
-          ) : null}
-          {props.onStop ? (
-            <Button type="button" variant="ghost" size="sm" disabled={!props.canStop || props.isStopping} onClick={props.onStop}>
-              <CircleStop data-icon />
-              {props.isStopping ? t("issueDetail.failures.stopping") : t("issueDetail.failures.stop")}
-            </Button>
-          ) : null}
-        </div>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+        {props.onContinue ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 [min-height:32px] px-2 text-[13px] text-[color:var(--text)] shadow-none hover:bg-[color:var(--danger-soft)]"
+            disabled={!props.canContinue}
+            onClick={props.onContinue}
+          >
+            <Send data-icon />
+            {t("issueDetail.failures.continue")}
+          </Button>
+        ) : null}
+        {props.onRetry ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 [min-height:32px] px-2 text-[13px] text-[color:var(--text)] shadow-none hover:bg-[color:var(--danger-soft)]"
+            disabled={!props.canRetry || props.isRetrying}
+            onClick={props.onRetry}
+          >
+            <Rocket data-icon />
+            {props.isRetrying ? t("issueDetail.failures.queueing") : t("issueDetail.failures.retryDeploy")}
+          </Button>
+        ) : null}
+        {props.onStop ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 [min-height:32px] px-2 text-[13px] text-[color:var(--text)] shadow-none hover:bg-[color:var(--danger-soft)]"
+            disabled={!props.canStop || props.isStopping}
+            onClick={props.onStop}
+          >
+            <CircleStop data-icon />
+            {props.isStopping ? t("issueDetail.failures.stopping") : t("issueDetail.failures.stop")}
+          </Button>
+        ) : null}
       </div>
     </div>
   );
@@ -3491,7 +3510,7 @@ function SessionFailureTimelineItem(props: {
       }
       time={props.failure.updatedAt || props.failure.createdAt}
     >
-      <SessionFailureCard {...props} />
+      <SessionFailureNotice {...props} />
     </TimelineShell>
   );
 }
