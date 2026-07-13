@@ -816,14 +816,49 @@ export interface AgentProfile {
 }
 
 export interface SkillCatalogItem {
+  id: string;
   slug: string;
   name: string;
   description: string;
   source: string;
+  sourceType: string;
   revision: string;
   contentHash: string;
+  enabled: boolean;
+  invocable: boolean;
   builtIn: boolean;
+  editable: boolean;
+  deletable: boolean;
   fileCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RuntimeSkillFile {
+  path: string;
+  content: string;
+  sha256?: string;
+}
+
+export interface SkillDetail extends SkillCatalogItem {
+  files?: RuntimeSkillFile[];
+}
+
+export interface SkillInput {
+  slug?: string;
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  invocable?: boolean;
+  files?: RuntimeSkillFile[];
+}
+
+export interface DuplicateSkillInput {
+  slug?: string;
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  invocable?: boolean;
 }
 
 export type AgentSessionSkillReference =

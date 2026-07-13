@@ -1320,14 +1320,80 @@ type CreateAgentSessionInput struct {
 }
 
 type SkillCatalogItem struct {
+	ID          string `json:"id"`
 	Slug        string `json:"slug"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Source      string `json:"source"`
+	SourceType  string `json:"sourceType"`
 	Revision    string `json:"revision"`
 	ContentHash string `json:"contentHash"`
+	Enabled     bool   `json:"enabled"`
+	Invocable   bool   `json:"invocable"`
 	BuiltIn     bool   `json:"builtIn"`
+	Editable    bool   `json:"editable"`
+	Deletable   bool   `json:"deletable"`
 	FileCount   int    `json:"fileCount"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+type SkillDetail struct {
+	SkillCatalogItem
+	Files []RuntimeSkillFile `json:"files,omitempty"`
+}
+
+type SkillInput struct {
+	Slug        string             `json:"slug"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Enabled     *bool              `json:"enabled,omitempty"`
+	Invocable   *bool              `json:"invocable,omitempty"`
+	Files       []RuntimeSkillFile `json:"files,omitempty"`
+}
+
+type DuplicateSkillInput struct {
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Enabled     *bool  `json:"enabled,omitempty"`
+	Invocable   *bool  `json:"invocable,omitempty"`
+}
+
+type WorkspaceSkill struct {
+	ID                string `json:"id"`
+	WorkspaceID       string `json:"workspaceId"`
+	Slug              string `json:"slug"`
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	SourceType        string `json:"sourceType"`
+	Enabled           bool   `json:"enabled"`
+	Invocable         bool   `json:"invocable"`
+	CurrentRevisionID string `json:"currentRevisionId"`
+	CreatedBy         string `json:"createdBy"`
+	DeletedAt         string `json:"deletedAt"`
+	CreatedAt         string `json:"createdAt"`
+	UpdatedAt         string `json:"updatedAt"`
+}
+
+type WorkspaceSkillRevision struct {
+	ID          string             `json:"id"`
+	WorkspaceID string             `json:"workspaceId"`
+	SkillID     string             `json:"skillId"`
+	Revision    string             `json:"revision"`
+	ContentHash string             `json:"contentHash"`
+	Files       []RuntimeSkillFile `json:"files"`
+	CreatedBy   string             `json:"createdBy"`
+	CreatedAt   string             `json:"createdAt"`
+}
+
+type WorkspaceBuiltinSkillSetting struct {
+	WorkspaceID string `json:"workspaceId"`
+	Slug        string `json:"slug"`
+	Enabled     bool   `json:"enabled"`
+	Invocable   bool   `json:"invocable"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 type RuntimeSkillBundle struct {
@@ -1903,6 +1969,11 @@ type Store interface {
 	GetWorkspaceGitHubAppInstallation(ctx Context, userID, workspaceID string) (WorkspaceGitHubAppInstallation, error)
 	UpsertWorkspaceGitHubAppInstallation(ctx Context, workspaceID string, input WorkspaceGitHubAppInstallation) (WorkspaceGitHubAppInstallation, error)
 	ListSkills(ctx Context, userID, workspaceID string) ([]SkillCatalogItem, error)
+	GetSkill(ctx Context, userID, workspaceID, skillID string) (SkillDetail, error)
+	CreateSkill(ctx Context, userID, workspaceID string, input SkillInput) (SkillDetail, error)
+	UpdateSkill(ctx Context, userID, workspaceID, skillID string, input SkillInput) (SkillDetail, error)
+	DeleteSkill(ctx Context, userID, workspaceID, skillID string) error
+	DuplicateSkill(ctx Context, userID, workspaceID, skillID string, input DuplicateSkillInput) (SkillDetail, error)
 	ListAgentProfiles(ctx Context, userID, workspaceID string) ([]AgentProfile, error)
 	CreateAgentProfile(ctx Context, userID, workspaceID string, input AgentProfileInput) (AgentProfile, error)
 	UpdateAgentProfile(ctx Context, userID, workspaceID, agentID string, input AgentProfileInput) (AgentProfile, error)

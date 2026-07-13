@@ -61,7 +61,9 @@ func builtinSkillReference(slug string) (AgentSessionSkillReference, RuntimeSkil
 	return skillReferenceFromBundle(bundle), bundle, nil
 }
 
-func resolveAgentSessionSkillBundles(input *CreateAgentSessionInput) error {
+type agentSessionSkillResolver func(slug string) (AgentSessionSkillReference, RuntimeSkillBundle, error)
+
+func resolveAgentSessionSkillBundles(input *CreateAgentSessionInput, resolve agentSessionSkillResolver) error {
 	if input == nil {
 		return nil
 	}
@@ -84,9 +86,12 @@ func resolveAgentSessionSkillBundles(input *CreateAgentSessionInput) error {
 		if existing[slug] {
 			continue
 		}
-		_, bundle, err := builtinSkillReference(slug)
+		if resolve == nil {
+			return fmt.Errorf("skill slug must reference an enabled workspace skill: %s", slug)
+		}
+		_, bundle, err := resolve(slug)
 		if errors.Is(err, ErrNotFound) {
-			return fmt.Errorf("skill slug must reference a built-in skill: %s", slug)
+			return fmt.Errorf("skill slug must reference an enabled workspace skill: %s", slug)
 		}
 		if err != nil {
 			return err
@@ -300,7 +305,7 @@ func normalizeSkillSlug(value string) string {
 
 func isSafeSkillFilePath(value string) bool {
 	value = strings.TrimSpace(value)
-	if value == "" || strings.HasPrefix(value, "/") || strings.Contains(value, "\\") {
+	if value == "" || strings.HasPrefix(value, "/") || strings.Contains(value, "\\") || strings.ContainsRune(value, '\x00') {
 		return false
 	}
 	cleaned := path.Clean(value)

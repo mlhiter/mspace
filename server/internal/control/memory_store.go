@@ -45,6 +45,9 @@ type MemoryStore struct {
 	issueLabels          map[string][]IssueLabel
 	workspaceSettings    map[string]WorkspaceSettings
 	githubAppInstalls    map[string]WorkspaceGitHubAppInstallation
+	workspaceSkills      map[string]WorkspaceSkill
+	skillRevisions       map[string]WorkspaceSkillRevision
+	builtinSkillSettings map[string]WorkspaceBuiltinSkillSetting
 	agentProfiles        map[string]AgentProfile
 	clusters             map[string]Cluster
 	environments         map[string]Environment
@@ -132,6 +135,9 @@ func NewMemoryStore() *MemoryStore {
 		issueLabels:          map[string][]IssueLabel{},
 		workspaceSettings:    map[string]WorkspaceSettings{},
 		githubAppInstalls:    map[string]WorkspaceGitHubAppInstallation{},
+		workspaceSkills:      map[string]WorkspaceSkill{},
+		skillRevisions:       map[string]WorkspaceSkillRevision{},
+		builtinSkillSettings: map[string]WorkspaceBuiltinSkillSetting{},
 		agentProfiles:        map[string]AgentProfile{},
 		clusters:             map[string]Cluster{},
 		environments:         map[string]Environment{},
@@ -1353,7 +1359,393 @@ func (s *MemoryStore) ListSkills(_ Context, userID, workspaceID string) ([]Skill
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return nil, ErrNotFound
 	}
-	return listBuiltinSkills()
+	return s.listSkillsLocked(workspaceID)
+}
+
+func (s *MemoryStore) GetSkill(_ Context, userID, workspaceID, skillID string) (SkillDetail, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		if !s.isWorkspaceMember(workspaceID, userID) {
+			return SkillDetail{}, ErrNotFound
+		}
+		return SkillDetail{}, ErrForbidden
+	}
+	return s.skillDetailLocked(workspaceID, skillID)
+}
+
+func (s *MemoryStore) CreateSkill(_ Context, userID, workspaceID string, input SkillInput) (SkillDetail, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return SkillDetail{}, ErrForbidden
+	}
+	normalized, files, err := normalizeWorkspaceSkillCreateInput(input)
+	if err != nil {
+		return SkillDetail{}, err
+	}
+	if _, err := builtinSkillBundle(normalized.Slug, "latest"); err == nil {
+		return SkillDetail{}, fmt.Errorf("skill slug conflicts with built-in skill: %s", normalized.Slug)
+	} else if !errors.Is(err, ErrNotFound) {
+		return SkillDetail{}, err
+	}
+	if s.workspaceSkillIdentifierExistsLocked(workspaceID, normalized.Slug) {
+		return SkillDetail{}, ErrConflict
+	}
+	return s.createWorkspaceSkillLocked(workspaceID, userID, normalized, files)
+}
+
+func (s *MemoryStore) UpdateSkill(_ Context, userID, workspaceID, skillID string, input SkillInput) (SkillDetail, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return SkillDetail{}, ErrForbidden
+	}
+	if slug, ok := slugFromBuiltinSkillID(skillID); ok || s.isBuiltinSkillSlug(strings.TrimSpace(skillID)) {
+		if !ok {
+			slug = normalizeSkillSlug(skillID)
+		}
+		return s.updateBuiltinSkillSettingLocked(workspaceID, slug, input)
+	}
+	existing, err := s.skillDetailLocked(workspaceID, skillID)
+	if err != nil {
+		return SkillDetail{}, err
+	}
+	if existing.BuiltIn {
+		return s.updateBuiltinSkillSettingLocked(workspaceID, existing.Slug, input)
+	}
+	normalized, files, hasFiles, err := normalizeWorkspaceSkillUpdateInput(existing, input)
+	if err != nil {
+		return SkillDetail{}, err
+	}
+	skill, ok := s.workspaceSkills[existing.ID]
+	if !ok || skill.DeletedAt != "" || skill.WorkspaceID != workspaceID {
+		return SkillDetail{}, ErrNotFound
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	skill.Name = normalized.Name
+	skill.Description = normalized.Description
+	skill.Enabled = skillBoolValue(normalized.Enabled, skill.Enabled)
+	skill.Invocable = skillBoolValue(normalized.Invocable, skill.Invocable)
+	skill.UpdatedAt = now
+	if hasFiles {
+		revision := s.createWorkspaceSkillRevisionLocked(workspaceID, skill.ID, userID, files, now)
+		skill.CurrentRevisionID = revision.ID
+	}
+	s.workspaceSkills[skill.ID] = skill
+	return s.skillDetailLocked(workspaceID, skill.ID)
+}
+
+func (s *MemoryStore) DeleteSkill(_ Context, userID, workspaceID, skillID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return ErrForbidden
+	}
+	if _, ok := slugFromBuiltinSkillID(skillID); ok || s.isBuiltinSkillSlug(strings.TrimSpace(skillID)) {
+		return ErrForbidden
+	}
+	skill, _, ok := s.workspaceSkillByIdentifierLocked(workspaceID, skillID)
+	if !ok {
+		return ErrNotFound
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	skill.DeletedAt = now
+	skill.Enabled = false
+	skill.Invocable = false
+	skill.UpdatedAt = now
+	s.workspaceSkills[skill.ID] = skill
+	return nil
+}
+
+func (s *MemoryStore) DuplicateSkill(_ Context, userID, workspaceID, skillID string, input DuplicateSkillInput) (SkillDetail, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	workspaceID = strings.TrimSpace(workspaceID)
+	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return SkillDetail{}, ErrForbidden
+	}
+	source, err := s.skillDetailLocked(workspaceID, skillID)
+	if err != nil {
+		return SkillDetail{}, err
+	}
+	slug := normalizeSkillSlug(input.Slug)
+	if slug == "" {
+		slug = s.nextWorkspaceSkillCopySlugLocked(workspaceID, source.Slug)
+	}
+	if _, err := builtinSkillBundle(slug, "latest"); err == nil {
+		return SkillDetail{}, fmt.Errorf("skill slug conflicts with built-in skill: %s", slug)
+	} else if !errors.Is(err, ErrNotFound) {
+		return SkillDetail{}, err
+	}
+	if s.workspaceSkillIdentifierExistsLocked(workspaceID, slug) {
+		return SkillDetail{}, ErrConflict
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = strings.TrimSpace(source.Name)
+		if name == "" {
+			name = source.Slug
+		}
+		name += " copy"
+	}
+	description := strings.TrimSpace(input.Description)
+	if description == "" {
+		description = source.Description
+	}
+	createInput := SkillInput{
+		Slug:        slug,
+		Name:        name,
+		Description: description,
+		Enabled:     boolPointer(skillBoolValue(input.Enabled, true)),
+		Invocable:   boolPointer(skillBoolValue(input.Invocable, true)),
+		Files:       source.Files,
+	}
+	normalized, files, err := normalizeWorkspaceSkillCreateInput(createInput)
+	if err != nil {
+		return SkillDetail{}, err
+	}
+	return s.createWorkspaceSkillLocked(workspaceID, userID, normalized, files)
+}
+
+func (s *MemoryStore) listSkillsLocked(workspaceID string) ([]SkillCatalogItem, error) {
+	builtins, err := listBuiltinSkills()
+	if err != nil {
+		return nil, err
+	}
+	items := make([]SkillCatalogItem, 0, len(builtins)+len(s.workspaceSkills))
+	for _, builtin := range builtins {
+		bundle, err := builtinSkillBundle(builtin.Slug, builtin.Revision)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, skillCatalogItemFromBundle(bundle, s.builtinSkillSettingLocked(workspaceID, builtin.Slug)))
+	}
+	for _, skill := range s.workspaceSkills {
+		if skill.WorkspaceID != workspaceID || skill.DeletedAt != "" {
+			continue
+		}
+		revision, ok := s.skillRevisions[skill.CurrentRevisionID]
+		if !ok {
+			continue
+		}
+		items = append(items, skillCatalogItemFromWorkspaceSkill(skill, revision))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].BuiltIn != items[j].BuiltIn {
+			return items[i].BuiltIn
+		}
+		return items[i].Slug < items[j].Slug
+	})
+	return items, nil
+}
+
+func (s *MemoryStore) skillDetailLocked(workspaceID, identifier string) (SkillDetail, error) {
+	identifier = strings.TrimSpace(identifier)
+	if slug, ok := slugFromBuiltinSkillID(identifier); ok || s.isBuiltinSkillSlug(identifier) {
+		if !ok {
+			slug = normalizeSkillSlug(identifier)
+		}
+		bundle, err := builtinSkillBundle(slug, "latest")
+		if err != nil {
+			return SkillDetail{}, err
+		}
+		return skillDetailFromBundle(bundle, s.builtinSkillSettingLocked(workspaceID, slug)), nil
+	}
+	skill, revision, ok := s.workspaceSkillByIdentifierLocked(workspaceID, identifier)
+	if !ok {
+		return SkillDetail{}, ErrNotFound
+	}
+	return skillDetailFromWorkspaceSkill(skill, revision), nil
+}
+
+func (s *MemoryStore) resolveAgentSessionSkillBundleLocked(workspaceID, slug string) (AgentSessionSkillReference, RuntimeSkillBundle, error) {
+	slug = normalizeSkillSlug(slug)
+	if slug == "" {
+		return AgentSessionSkillReference{}, RuntimeSkillBundle{}, errors.New("skill slug is required")
+	}
+	if skill, revision, ok := s.workspaceSkillByIdentifierLocked(workspaceID, slug); ok {
+		if !skill.Enabled || !skill.Invocable {
+			return AgentSessionSkillReference{}, RuntimeSkillBundle{}, fmt.Errorf("skill slug is disabled: %s", slug)
+		}
+		bundle := runtimeSkillBundleFromWorkspaceSkill(skill, revision)
+		return skillReferenceFromBundle(bundle), bundle, nil
+	}
+	bundle, err := builtinSkillBundle(slug, "latest")
+	if err != nil {
+		return AgentSessionSkillReference{}, RuntimeSkillBundle{}, err
+	}
+	setting := s.builtinSkillSettingLocked(workspaceID, slug)
+	if !setting.Enabled || !setting.Invocable {
+		return AgentSessionSkillReference{}, RuntimeSkillBundle{}, fmt.Errorf("skill slug is disabled: %s", slug)
+	}
+	return skillReferenceFromBundle(bundle), bundle, nil
+}
+
+func (s *MemoryStore) createWorkspaceSkillLocked(workspaceID, userID string, input SkillInput, files []RuntimeSkillFile) (SkillDetail, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	skill := WorkspaceSkill{
+		ID:          fmt.Sprintf("skill-%04d", s.nextMemoryIDLocked()),
+		WorkspaceID: workspaceID,
+		Slug:        input.Slug,
+		Name:        input.Name,
+		Description: input.Description,
+		SourceType:  skillSourceTypeCustom,
+		Enabled:     skillBoolValue(input.Enabled, true),
+		Invocable:   skillBoolValue(input.Invocable, true),
+		CreatedBy:   strings.TrimSpace(userID),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	revision := s.createWorkspaceSkillRevisionLocked(workspaceID, skill.ID, userID, files, now)
+	skill.CurrentRevisionID = revision.ID
+	s.workspaceSkills[skill.ID] = skill
+	return skillDetailFromWorkspaceSkill(skill, revision), nil
+}
+
+func (s *MemoryStore) createWorkspaceSkillRevisionLocked(workspaceID, skillID, userID string, files []RuntimeSkillFile, now string) WorkspaceSkillRevision {
+	revisionValue, contentHash := workspaceSkillRevisionFromFiles(files)
+	revision := WorkspaceSkillRevision{
+		ID:          fmt.Sprintf("skill-revision-%04d", s.nextMemoryIDLocked()),
+		WorkspaceID: workspaceID,
+		SkillID:     skillID,
+		Revision:    revisionValue,
+		ContentHash: contentHash,
+		Files:       append([]RuntimeSkillFile(nil), files...),
+		CreatedBy:   strings.TrimSpace(userID),
+		CreatedAt:   now,
+	}
+	s.skillRevisions[revision.ID] = revision
+	return revision
+}
+
+func (s *MemoryStore) updateBuiltinSkillSettingLocked(workspaceID, slug string, input SkillInput) (SkillDetail, error) {
+	bundle, err := builtinSkillBundle(slug, "latest")
+	if err != nil {
+		return SkillDetail{}, err
+	}
+	if input.Files != nil || strings.TrimSpace(input.Name) != "" || strings.TrimSpace(input.Description) != "" {
+		return SkillDetail{}, errors.New("built-in skill content cannot be edited")
+	}
+	existing := s.builtinSkillSettingLocked(workspaceID, slug)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if existing.CreatedAt == "" {
+		existing.CreatedAt = now
+	}
+	existing.WorkspaceID = workspaceID
+	existing.Slug = slug
+	existing.Enabled = skillBoolValue(input.Enabled, existing.Enabled)
+	existing.Invocable = skillBoolValue(input.Invocable, existing.Invocable)
+	existing.UpdatedAt = now
+	s.builtinSkillSettings[builtinSkillSettingKey(workspaceID, slug)] = existing
+	return skillDetailFromBundle(bundle, existing), nil
+}
+
+func (s *MemoryStore) workspaceSkillByIdentifierLocked(workspaceID, identifier string) (WorkspaceSkill, WorkspaceSkillRevision, bool) {
+	identifier = strings.TrimSpace(identifier)
+	for _, skill := range s.workspaceSkills {
+		if skill.WorkspaceID != workspaceID || skill.DeletedAt != "" {
+			continue
+		}
+		if skill.ID != identifier {
+			continue
+		}
+		revision, ok := s.skillRevisions[skill.CurrentRevisionID]
+		if !ok {
+			return WorkspaceSkill{}, WorkspaceSkillRevision{}, false
+		}
+		return skill, revision, true
+	}
+	slug := normalizeSkillSlug(identifier)
+	for _, skill := range s.workspaceSkills {
+		if skill.WorkspaceID != workspaceID || skill.DeletedAt != "" {
+			continue
+		}
+		if skill.Slug != slug {
+			continue
+		}
+		revision, ok := s.skillRevisions[skill.CurrentRevisionID]
+		if !ok {
+			return WorkspaceSkill{}, WorkspaceSkillRevision{}, false
+		}
+		return skill, revision, true
+	}
+	return WorkspaceSkill{}, WorkspaceSkillRevision{}, false
+}
+
+func (s *MemoryStore) workspaceSkillSlugExistsLocked(workspaceID, slug string) bool {
+	slug = normalizeSkillSlug(slug)
+	for _, skill := range s.workspaceSkills {
+		if skill.WorkspaceID == workspaceID && skill.DeletedAt == "" && skill.Slug == slug {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *MemoryStore) workspaceSkillIdentifierExistsLocked(workspaceID, identifier string) bool {
+	identifier = normalizeSkillSlug(identifier)
+	for _, skill := range s.workspaceSkills {
+		if skill.WorkspaceID != workspaceID || skill.DeletedAt != "" {
+			continue
+		}
+		if skill.Slug == identifier || skill.ID == identifier {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *MemoryStore) builtinSkillSettingLocked(workspaceID, slug string) WorkspaceBuiltinSkillSetting {
+	slug = normalizeSkillSlug(slug)
+	if setting, ok := s.builtinSkillSettings[builtinSkillSettingKey(workspaceID, slug)]; ok {
+		return setting
+	}
+	return WorkspaceBuiltinSkillSetting{
+		WorkspaceID: workspaceID,
+		Slug:        slug,
+		Enabled:     true,
+		Invocable:   true,
+	}
+}
+
+func builtinSkillSettingKey(workspaceID, slug string) string {
+	return strings.TrimSpace(workspaceID) + ":" + normalizeSkillSlug(slug)
+}
+
+func (s *MemoryStore) isBuiltinSkillSlug(value string) bool {
+	slug := normalizeSkillSlug(value)
+	if slug == "" {
+		return false
+	}
+	_, err := builtinSkillBundle(slug, "latest")
+	return err == nil
+}
+
+func (s *MemoryStore) nextWorkspaceSkillCopySlugLocked(workspaceID, base string) string {
+	base = normalizeSkillSlug(base)
+	if base == "" {
+		base = "skill"
+	}
+	candidate := base + "-copy"
+	if !s.workspaceSkillSlugExistsLocked(workspaceID, candidate) {
+		if _, err := builtinSkillBundle(candidate, "latest"); errors.Is(err, ErrNotFound) {
+			return candidate
+		}
+	}
+	for index := 2; ; index++ {
+		candidate = fmt.Sprintf("%s-copy-%d", base, index)
+		if s.workspaceSkillSlugExistsLocked(workspaceID, candidate) {
+			continue
+		}
+		if _, err := builtinSkillBundle(candidate, "latest"); errors.Is(err, ErrNotFound) {
+			return candidate
+		}
+	}
 }
 
 func (s *MemoryStore) ListAgentProfiles(_ Context, userID, workspaceID string) ([]AgentProfile, error) {
@@ -3448,7 +3840,9 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 	if normalized.Provider != "codex" {
 		return AgentSession{}, errors.New("provider must be codex")
 	}
-	if err := resolveAgentSessionSkillBundles(&normalized); err != nil {
+	if err := resolveAgentSessionSkillBundles(&normalized, func(slug string) (AgentSessionSkillReference, RuntimeSkillBundle, error) {
+		return s.resolveAgentSessionSkillBundleLocked(workspaceID, slug)
+	}); err != nil {
 		return AgentSession{}, err
 	}
 	if normalized.RuntimeMode == "" {

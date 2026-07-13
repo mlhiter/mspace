@@ -62,6 +62,9 @@ import type {
   RuntimeWorker,
   SessionDetail,
   SkillCatalogItem,
+  SkillDetail,
+  SkillInput,
+  DuplicateSkillInput,
   StartTestDeployInput,
   SuggestIssueTitleInput,
   SuggestIssueTitleResult,
@@ -777,6 +780,33 @@ export const controlPlaneApi = {
   listSkills: (token: string, workspaceId: string) =>
     requestControlPlane<SkillCatalogItem[]>(`/api/workspaces/${workspaceId}/skills`, {
       headers: authHeaders(token),
+    }),
+  getSkill: (token: string, workspaceId: string, skillId: string) =>
+    requestControlPlane<SkillDetail>(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(skillId)}`, {
+      headers: authHeaders(token),
+    }),
+  createSkill: (token: string, workspaceId: string, input: SkillInput) =>
+    requestControlPlane<SkillDetail>(`/api/workspaces/${workspaceId}/skills`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  updateSkill: (token: string, workspaceId: string, skillId: string, input: SkillInput) =>
+    requestControlPlane<SkillDetail>(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(skillId)}`, {
+      method: "PUT",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
+    }),
+  deleteSkill: (token: string, workspaceId: string, skillId: string) =>
+    requestControlPlane<{ ok: boolean }>(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(skillId)}`, {
+      method: "DELETE",
+      headers: authHeaders(token),
+    }),
+  duplicateSkill: (token: string, workspaceId: string, skillId: string, input: DuplicateSkillInput = {}) =>
+    requestControlPlane<SkillDetail>(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(skillId)}/duplicate`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify(input),
     }),
   createAgent: (token: string, workspaceId: string, input: AgentProfileInput) =>
     requestControlPlane<AgentProfile>(`/api/workspaces/${workspaceId}/agents`, {

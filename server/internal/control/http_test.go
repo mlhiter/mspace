@@ -3362,9 +3362,229 @@ func TestListSkillsReturnsExpectedBuiltinCatalog(t *testing.T) {
 	}
 	for _, slug := range []string{issueAnalysisSkillSlug, "codex-dynamic-workflows"} {
 		skill, ok := bySlug[slug]
-		if !ok || !skill.BuiltIn || skill.Source != builtinSkillSource || skill.FileCount == 0 || !strings.HasPrefix(skill.ContentHash, "sha256:") || skill.Revision == "" {
+		if !ok || !skill.BuiltIn || skill.Source != builtinSkillSource || skill.SourceType != skillSourceTypeBuiltin || !skill.Enabled || !skill.Invocable || skill.FileCount == 0 || !strings.HasPrefix(skill.ContentHash, "sha256:") || skill.Revision == "" {
 			t.Fatalf("expected built-in %s skill, got %+v from %+v", slug, skill, skills)
 		}
+	}
+}
+
+func TestSkillManagementCRUDAndBuiltinControls(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "skill-manager",
+		Login:          "skill-manager",
+		Name:           "Skill Manager",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	createBody := `{
+		"slug":"review-plan",
+		"name":"Review Plan",
+		"description":"Review implementation plans.",
+		"enabled":true,
+		"invocable":true,
+		"files":[{"path":"SKILL.md","content":"---\nname: Review Plan\ndescription: Review implementation plans.\n---\n# Review Plan\n"}]
+	}`
+	createRecorder := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/skills", strings.NewReader(createBody))
+	createReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(createRecorder, createReq)
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create skill status=%d body=%s", createRecorder.Code, createRecorder.Body.String())
+	}
+	var created SkillDetail
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("parse created skill: %v", err)
+	}
+	if created.ID == "" || created.Slug != "review-plan" || created.BuiltIn || !created.Editable || !created.Deletable || len(created.Files) != 1 || created.Revision == "" {
+		t.Fatalf("unexpected created skill: %+v", created)
+	}
+	firstRevision := created.Revision
+
+	conflictRecorder := httptest.NewRecorder()
+	conflictReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/skills", strings.NewReader(`{
+		"slug":"`+created.ID+`",
+		"name":"Conflicting Skill",
+		"files":[{"path":"SKILL.md","content":"# conflict"}]
+	}`))
+	conflictReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(conflictRecorder, conflictReq)
+	if conflictRecorder.Code != http.StatusConflict {
+		t.Fatalf("id-like slug conflict status=%d body=%s existing=%+v", conflictRecorder.Code, conflictRecorder.Body.String(), created)
+	}
+
+	updateBody := `{
+		"name":"Review Plan v2",
+		"description":"Updated plan review skill.",
+		"enabled":false,
+		"invocable":false,
+		"files":[{"path":"SKILL.md","content":"---\nname: Review Plan v2\ndescription: Updated plan review skill.\n---\n# Review Plan v2\n"}]
+	}`
+	updateRecorder := httptest.NewRecorder()
+	updateReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/skills/"+created.ID, strings.NewReader(updateBody))
+	updateReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(updateRecorder, updateReq)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("update skill status=%d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	var updated SkillDetail
+	if err := json.Unmarshal(updateRecorder.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("parse updated skill: %v", err)
+	}
+	if updated.Name != "Review Plan v2" || updated.Enabled || updated.Invocable || updated.Revision == firstRevision {
+		t.Fatalf("unexpected updated skill: %+v firstRevision=%s", updated, firstRevision)
+	}
+
+	builtinRecorder := httptest.NewRecorder()
+	builtinReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/skills/"+issueAnalysisSkillSlug, strings.NewReader(`{"enabled":true,"invocable":false}`))
+	builtinReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(builtinRecorder, builtinReq)
+	if builtinRecorder.Code != http.StatusOK {
+		t.Fatalf("update built-in skill status=%d body=%s", builtinRecorder.Code, builtinRecorder.Body.String())
+	}
+	var builtin SkillDetail
+	if err := json.Unmarshal(builtinRecorder.Body.Bytes(), &builtin); err != nil {
+		t.Fatalf("parse built-in skill: %v", err)
+	}
+	if !builtin.BuiltIn || !builtin.Enabled || builtin.Invocable || builtin.Editable || builtin.Deletable || len(builtin.Files) == 0 {
+		t.Fatalf("unexpected built-in skill setting: %+v", builtin)
+	}
+
+	builtinEnabledRecorder := httptest.NewRecorder()
+	builtinEnabledReq := httptest.NewRequest(http.MethodPut, "/api/workspaces/"+workspaceID+"/skills/"+issueAnalysisSkillSlug, strings.NewReader(`{"enabled":false}`))
+	builtinEnabledReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(builtinEnabledRecorder, builtinEnabledReq)
+	if builtinEnabledRecorder.Code != http.StatusOK {
+		t.Fatalf("partial built-in skill update status=%d body=%s", builtinEnabledRecorder.Code, builtinEnabledRecorder.Body.String())
+	}
+	var builtinEnabled SkillDetail
+	if err := json.Unmarshal(builtinEnabledRecorder.Body.Bytes(), &builtinEnabled); err != nil {
+		t.Fatalf("parse partial built-in skill: %v", err)
+	}
+	if builtinEnabled.Enabled || builtinEnabled.Invocable {
+		t.Fatalf("expected partial update to preserve invocable=false, got %+v", builtinEnabled)
+	}
+
+	duplicateRecorder := httptest.NewRecorder()
+	duplicateReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/skills/"+issueAnalysisSkillSlug+"/duplicate", strings.NewReader(`{"slug":"think-copy","name":"Think Copy"}`))
+	duplicateReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(duplicateRecorder, duplicateReq)
+	if duplicateRecorder.Code != http.StatusCreated {
+		t.Fatalf("duplicate skill status=%d body=%s", duplicateRecorder.Code, duplicateRecorder.Body.String())
+	}
+	var duplicated SkillDetail
+	if err := json.Unmarshal(duplicateRecorder.Body.Bytes(), &duplicated); err != nil {
+		t.Fatalf("parse duplicated skill: %v", err)
+	}
+	if duplicated.Slug != "think-copy" || duplicated.BuiltIn || len(duplicated.Files) == 0 {
+		t.Fatalf("unexpected duplicated skill: %+v", duplicated)
+	}
+
+	deleteRecorder := httptest.NewRecorder()
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/workspaces/"+workspaceID+"/skills/"+created.ID, nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(deleteRecorder, deleteReq)
+	if deleteRecorder.Code != http.StatusOK {
+		t.Fatalf("delete skill status=%d body=%s", deleteRecorder.Code, deleteRecorder.Body.String())
+	}
+
+	listRecorder := httptest.NewRecorder()
+	listReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/skills", nil)
+	listReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(listRecorder, listReq)
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list skills status=%d body=%s", listRecorder.Code, listRecorder.Body.String())
+	}
+	var skills []SkillCatalogItem
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &skills); err != nil {
+		t.Fatalf("parse skills: %v", err)
+	}
+	bySlug := map[string]SkillCatalogItem{}
+	for _, skill := range skills {
+		bySlug[skill.Slug] = skill
+	}
+	if _, ok := bySlug["review-plan"]; ok {
+		t.Fatalf("deleted custom skill should not be listed: %+v", bySlug["review-plan"])
+	}
+	if bySlug[issueAnalysisSkillSlug].Invocable {
+		t.Fatalf("built-in think should be hidden from invocation: %+v", bySlug[issueAnalysisSkillSlug])
+	}
+	if !bySlug["think-copy"].Editable || bySlug["think-copy"].BuiltIn {
+		t.Fatalf("duplicated skill should be editable custom skill: %+v", bySlug["think-copy"])
+	}
+
+	member, _, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "skill-member",
+		Login:          "skill-member",
+		Name:           "Skill Member",
+	})
+	if err != nil {
+		t.Fatalf("upsert member identity: %v", err)
+	}
+	memberToken, _, err := store.CreateAuthSession(context.Background(), member.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create member auth session: %v", err)
+	}
+	store.mu.Lock()
+	if store.workspaceMembers[workspaceID] == nil {
+		store.workspaceMembers[workspaceID] = map[string]string{}
+	}
+	store.workspaceMembers[workspaceID][member.ID] = "member"
+	store.addWorkspaceForUser(member.ID, workspaceID, "member")
+	store.mu.Unlock()
+
+	memberListRecorder := httptest.NewRecorder()
+	memberListReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/skills", nil)
+	memberListReq.Header.Set("Authorization", "Bearer "+memberToken)
+	router.ServeHTTP(memberListRecorder, memberListReq)
+	if memberListRecorder.Code != http.StatusOK {
+		t.Fatalf("member list skills status=%d body=%s", memberListRecorder.Code, memberListRecorder.Body.String())
+	}
+	memberGetRecorder := httptest.NewRecorder()
+	memberGetReq := httptest.NewRequest(http.MethodGet, "/api/workspaces/"+workspaceID+"/skills/think-copy", nil)
+	memberGetReq.Header.Set("Authorization", "Bearer "+memberToken)
+	router.ServeHTTP(memberGetRecorder, memberGetReq)
+	if memberGetRecorder.Code != http.StatusForbidden {
+		t.Fatalf("member get skill detail status=%d body=%s", memberGetRecorder.Code, memberGetRecorder.Body.String())
+	}
+}
+
+func TestCreateSkillRejectsUnsafeFilePath(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "unsafe-skill-path-manager",
+		Login:          "unsafe-skill-path-manager",
+		Name:           "Unsafe Skill Path Manager",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/skills", strings.NewReader("{\"slug\":\"bad-path\",\"files\":[{\"path\":\"SKILL.md\",\"content\":\"# ok\"},{\"path\":\"bad\\u0000name.md\",\"content\":\"bad\"}]}"))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unsafe path status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -3460,6 +3680,92 @@ func TestCreateAgentSessionAcceptsBuiltInSkillSlugs(t *testing.T) {
 	}
 }
 
+func TestCreateAgentSessionAcceptsWorkspaceCustomSkillSlugs(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "custom-session-skill-user",
+		Login:          "custom-session-skill-user",
+		Name:           "Custom Session Skill User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	custom, err := store.CreateSkill(context.Background(), user.ID, workspaceID, SkillInput{
+		Slug:        "repo-map",
+		Name:        "Repo Map",
+		Description: "Map repository structure before implementation.",
+		Enabled:     boolPointer(true),
+		Invocable:   boolPointer(true),
+		Files: []RuntimeSkillFile{{
+			Path:    "SKILL.md",
+			Content: "---\nname: Repo Map\ndescription: Map repository structure before implementation.\n---\n# Repo Map\n",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create custom skill: %v", err)
+	}
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "custom-session-skill-project")
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Body:      "Use a workspace custom skill.",
+	})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+	registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true}`)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
+		"provider":"codex",
+		"agentProfile":"codex",
+		"runtimeMode":"personal",
+		"command":"@codex #repo-map inspect first",
+		"skillSlugs":["repo-map"]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("create agent session status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var session AgentSession
+	if err := json.Unmarshal(recorder.Body.Bytes(), &session); err != nil {
+		t.Fatalf("parse session: %v", err)
+	}
+	if len(session.RequiredSkills) != 1 || session.RequiredSkills[0].Slug != custom.Slug || session.RequiredSkills[0].BuiltIn {
+		t.Fatalf("expected compact custom skill reference, got %+v", session.RequiredSkills)
+	}
+
+	store.mu.Lock()
+	var task RuntimeTask
+	for _, candidate := range store.runtimeTasks {
+		if candidate.SessionID == session.ID {
+			task = candidate
+			break
+		}
+	}
+	store.mu.Unlock()
+	if task.ID == "" {
+		t.Fatalf("expected runtime task for session %s", session.ID)
+	}
+	var payload struct {
+		RequiredSkills []RuntimeSkillBundle `json:"requiredSkills"`
+	}
+	if err := json.Unmarshal(task.Payload, &payload); err != nil {
+		t.Fatalf("parse runtime payload: %v", err)
+	}
+	if len(payload.RequiredSkills) != 1 || payload.RequiredSkills[0].Slug != "repo-map" || payload.RequiredSkills[0].BuiltIn || len(payload.RequiredSkills[0].Files) != 1 {
+		t.Fatalf("expected full custom skill bundle in runtime payload, got %+v", payload.RequiredSkills)
+	}
+}
+
 func TestCreateAgentSessionRejectsUnknownSkillSlug(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
@@ -3500,8 +3806,66 @@ func TestCreateAgentSessionRejectsUnknownSkillSlug(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("unknown skill slug status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(recorder.Body.String(), "built-in skill") {
-		t.Fatalf("expected built-in skill error, got %s", recorder.Body.String())
+	if !strings.Contains(recorder.Body.String(), "enabled workspace skill") {
+		t.Fatalf("expected enabled workspace skill error, got %s", recorder.Body.String())
+	}
+}
+
+func TestCreateAgentSessionRejectsDisabledWorkspaceSkillSlug(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "disabled-session-skill-user",
+		Login:          "disabled-session-skill-user",
+		Name:           "Disabled Session Skill User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	router := server.Routes()
+	custom, err := store.CreateSkill(context.Background(), user.ID, workspaceID, SkillInput{
+		Slug:      "disabled-skill",
+		Name:      "Disabled Skill",
+		Enabled:   boolPointer(true),
+		Invocable: boolPointer(false),
+		Files: []RuntimeSkillFile{{
+			Path:    "SKILL.md",
+			Content: "---\nname: Disabled Skill\n---\n# Disabled Skill\n",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create custom skill: %v", err)
+	}
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "disabled-session-skill-project")
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID,
+		Body:      "Try a disabled skill.",
+	})
+	if err != nil {
+		t.Fatalf("create issue: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
+		"provider":"codex",
+		"agentProfile":"codex",
+		"runtimeMode":"personal",
+		"command":"@codex #disabled-skill try this",
+		"skillSlugs":["disabled-skill"]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("disabled skill status=%d body=%s custom=%+v", recorder.Code, recorder.Body.String(), custom)
+	}
+	if !strings.Contains(recorder.Body.String(), "disabled") {
+		t.Fatalf("expected disabled skill error, got %s", recorder.Body.String())
 	}
 }
 

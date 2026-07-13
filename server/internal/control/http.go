@@ -155,6 +155,11 @@ func (s *Server) Routes() http.Handler {
 	r.Put("/api/workspaces/{workspaceID}/workspace/settings", s.handleUpdateWorkspaceSettings)
 	r.Get("/api/workspaces/{workspaceID}/github-app", s.handleGetWorkspaceGitHubAppInstallation)
 	r.Get("/api/workspaces/{workspaceID}/skills", s.handleListSkills)
+	r.Post("/api/workspaces/{workspaceID}/skills", s.handleCreateSkill)
+	r.Get("/api/workspaces/{workspaceID}/skills/{skillID}", s.handleGetSkill)
+	r.Put("/api/workspaces/{workspaceID}/skills/{skillID}", s.handleUpdateSkill)
+	r.Delete("/api/workspaces/{workspaceID}/skills/{skillID}", s.handleDeleteSkill)
+	r.Post("/api/workspaces/{workspaceID}/skills/{skillID}/duplicate", s.handleDuplicateSkill)
 	r.Get("/api/workspaces/{workspaceID}/agents", s.handleListAgentProfiles)
 	r.Post("/api/workspaces/{workspaceID}/agents", s.handleCreateAgentProfile)
 	r.Put("/api/workspaces/{workspaceID}/agents/{agentID}", s.handleUpdateAgentProfile)
@@ -1739,6 +1744,85 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, skills)
 }
 
+func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	skill, err := s.store.GetSkill(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "skillID")))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, skill)
+}
+
+func (s *Server) handleCreateSkill(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := SkillInput{}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxWorkspaceSkillRequestBytes)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	skill, err := s.store.CreateSkill(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, skill)
+}
+
+func (s *Server) handleUpdateSkill(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := SkillInput{}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxWorkspaceSkillRequestBytes)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	skill, err := s.store.UpdateSkill(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "skillID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, skill)
+}
+
+func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	if err := s.store.DeleteSkill(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "skillID"))); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleDuplicateSkill(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.authenticate(w, r)
+	if !ok {
+		return
+	}
+	input := DuplicateSkillInput{}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	skill, err := s.store.DuplicateSkill(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "skillID")), input)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, skill)
+}
+
 func (s *Server) handleListAgentProfiles(w http.ResponseWriter, r *http.Request) {
 	user, _, ok := s.authenticate(w, r)
 	if !ok {
@@ -3175,7 +3259,7 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	} else if errors.Is(err, ErrConflict) {
 		status = http.StatusConflict
-	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "requires") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "skill slug") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") {
+	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "requires") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "skill slug") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") || strings.Contains(err.Error(), "not safe") {
 		status = http.StatusBadRequest
 	}
 	writeError(w, status, err)

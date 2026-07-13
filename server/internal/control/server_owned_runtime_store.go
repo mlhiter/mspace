@@ -144,7 +144,7 @@ func (s *PostgresStore) ListSkills(ctx Context, userID, workspaceID string) ([]S
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
 		return nil, err
 	}
-	return listBuiltinSkills()
+	return s.listSkills(dbctx, workspaceID)
 }
 
 func ensureWorkspaceSettings(ctx context.Context, q queryer, workspaceID string) (WorkspaceSettings, error) {

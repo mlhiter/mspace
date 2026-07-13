@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, CheckCircle2, Circle, Clock3, Plus, Save, Settings2, SquareTerminal, X } from "lucide-react";
-import { controlPlaneApi, queryKeys, type AgentProfile, type AgentProfileInput, type SkillCatalogItem } from "@mspace/core";
+import { Bot, CheckCircle2, Circle, Clock3, Copy, Eye, EyeOff, FileText, Pencil, Plus, Power, Save, Settings2, SquareTerminal, Trash2, X } from "lucide-react";
+import {
+  controlPlaneApi,
+  queryKeys,
+  type AgentProfile,
+  type AgentProfileInput,
+  type RuntimeSkillFile,
+  type SkillCatalogItem,
+  type SkillDetail,
+  type SkillInput,
+} from "@mspace/core";
 import { useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
@@ -32,6 +41,28 @@ const emptyAgentForm: AgentProfileInput = {
   enabled: true,
 };
 
+type AgentsTab = "agents" | "skills";
+
+type SkillForm = {
+  slug: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  invocable: boolean;
+  skillMd: string;
+  files: RuntimeSkillFile[];
+};
+
+const emptySkillForm: SkillForm = {
+  slug: "",
+  name: "",
+  description: "",
+  enabled: true,
+  invocable: true,
+  skillMd: "---\nname: \ndescription: \n---\n# Skill\n",
+  files: [],
+};
+
 function agentToForm(agent: AgentProfile): AgentProfileInput {
   return {
     name: agent.name,
@@ -55,12 +86,46 @@ function normalizeAgentForm(form: AgentProfileInput): AgentProfileInput {
   };
 }
 
+function skillIdentifier(skill: SkillCatalogItem) {
+  return skill.builtIn ? skill.slug : skill.id || skill.slug;
+}
+
+function skillToForm(skill: SkillDetail): SkillForm {
+  const files = skill.files || [];
+  const skillMd = files.find((file) => file.path === "SKILL.md")?.content || emptySkillForm.skillMd;
+  return {
+    slug: skill.slug,
+    name: skill.name,
+    description: skill.description,
+    enabled: skill.enabled,
+    invocable: skill.invocable,
+    skillMd,
+    files,
+  };
+}
+
+function skillFormToInput(form: SkillForm, includeSlug: boolean): SkillInput {
+  const files = form.files.length > 0 ? form.files : [{ path: "SKILL.md", content: form.skillMd }];
+  const nextFiles = files.some((file) => file.path === "SKILL.md")
+    ? files.map((file) => (file.path === "SKILL.md" ? { ...file, content: form.skillMd } : file))
+    : [{ path: "SKILL.md", content: form.skillMd }, ...files];
+  return {
+    slug: includeSlug ? form.slug.trim() : undefined,
+    name: form.name.trim(),
+    description: form.description.trim(),
+    enabled: form.enabled,
+    invocable: form.invocable,
+    files: nextFiles.map((file) => ({ path: file.path, content: file.content })),
+  };
+}
+
 export function AgentsPage() {
   const { t } = useMspaceTranslation();
   const queryClient = useQueryClient();
   const auth = useMspaceAuth();
   const workspaceId = auth.workspace?.id || "";
   const workspaceReady = auth.status === "signed-in" && Boolean(auth.token && workspaceId);
+  const canManageWorkspace = auth.workspace?.role === "owner" || auth.workspace?.role === "admin";
   const agentsQueryKey = queryKeys.agents(workspaceId, auth.token);
   const skillsQueryKey = queryKeys.skills(workspaceId, auth.token);
   const agentsQuery = useQuery({
@@ -74,11 +139,17 @@ export function AgentsPage() {
     enabled: workspaceReady,
   });
   const agents = useMemo(() => agentsQuery.data || [], [agentsQuery.data]);
+  const skills = useMemo(() => skillsQuery.data || [], [skillsQuery.data]);
   const enabledCount = agents.filter((agent) => agent.enabled).length;
+  const invocableSkillCount = skills.filter((skill) => skill.enabled && skill.invocable).length;
+  const [activeTab, setActiveTab] = useState<AgentsTab>("agents");
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<AgentProfileInput>(emptyAgentForm);
   const [settingsAgent, setSettingsAgent] = useState<AgentProfile | null>(null);
   const [settingsForm, setSettingsForm] = useState<AgentProfileInput>(emptyAgentForm);
+  const [skillModalMode, setSkillModalMode] = useState<"create" | "edit" | null>(null);
+  const [editingSkill, setEditingSkill] = useState<SkillCatalogItem | null>(null);
+  const [skillForm, setSkillForm] = useState<SkillForm>(emptySkillForm);
 
   const createAgent = useMutation({
     mutationFn: (input: AgentProfileInput) => controlPlaneApi.createAgent(auth.token, workspaceId, input),
@@ -98,6 +169,59 @@ export function AgentsPage() {
       setSettingsAgent(null);
       setSettingsForm(emptyAgentForm);
       await queryClient.invalidateQueries({ queryKey: agentsQueryKey });
+    },
+  });
+
+  const loadSkill = useMutation({
+    mutationFn: (skill: SkillCatalogItem) => controlPlaneApi.getSkill(auth.token, workspaceId, skillIdentifier(skill)),
+    onSuccess: (skill) => {
+      setEditingSkill(skill);
+      setSkillForm(skillToForm(skill));
+      setSkillModalMode("edit");
+    },
+  });
+
+  const createSkill = useMutation({
+    mutationFn: (input: SkillInput) => controlPlaneApi.createSkill(auth.token, workspaceId, input),
+    onSuccess: async () => {
+      setSkillModalMode(null);
+      setSkillForm(emptySkillForm);
+      await queryClient.invalidateQueries({ queryKey: skillsQueryKey });
+    },
+  });
+
+  const updateSkill = useMutation({
+    mutationFn: (input: SkillInput) => {
+      if (!editingSkill) throw new Error("No skill selected.");
+      return controlPlaneApi.updateSkill(auth.token, workspaceId, skillIdentifier(editingSkill), input);
+    },
+    onSuccess: async () => {
+      setEditingSkill(null);
+      setSkillModalMode(null);
+      setSkillForm(emptySkillForm);
+      await queryClient.invalidateQueries({ queryKey: skillsQueryKey });
+    },
+  });
+
+  const toggleSkill = useMutation({
+    mutationFn: (input: { skill: SkillCatalogItem; values: SkillInput }) =>
+      controlPlaneApi.updateSkill(auth.token, workspaceId, skillIdentifier(input.skill), input.values),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: skillsQueryKey });
+    },
+  });
+
+  const deleteSkill = useMutation({
+    mutationFn: (skill: SkillCatalogItem) => controlPlaneApi.deleteSkill(auth.token, workspaceId, skillIdentifier(skill)),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: skillsQueryKey });
+    },
+  });
+
+  const duplicateSkill = useMutation({
+    mutationFn: (skill: SkillCatalogItem) => controlPlaneApi.duplicateSkill(auth.token, workspaceId, skillIdentifier(skill)),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: skillsQueryKey });
     },
   });
 
@@ -123,53 +247,95 @@ export function AgentsPage() {
     updateAgent.mutate(normalizeAgentForm(settingsForm));
   }
 
+  function openCreateSkillModal() {
+    if (!canManageWorkspace) return;
+    setEditingSkill(null);
+    setSkillForm(emptySkillForm);
+    createSkill.reset();
+    setSkillModalMode("create");
+  }
+
+  function openSkillSettings(skill: SkillCatalogItem) {
+    if (!canManageWorkspace) return;
+    loadSkill.reset();
+    loadSkill.mutate(skill);
+  }
+
+  function submitSkill(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canManageWorkspace) return;
+    if (skillModalMode === "create") {
+      createSkill.mutate(skillFormToInput(skillForm, true));
+      return;
+    }
+    updateSkill.mutate(skillFormToInput(skillForm, false));
+  }
+
+  function closeSkillModal() {
+    setSkillModalMode(null);
+    setEditingSkill(null);
+    setSkillForm(emptySkillForm);
+    createSkill.reset();
+    updateSkill.reset();
+  }
+
+  const pageAction =
+    activeTab === "skills" ? (
+      canManageWorkspace ? (
+        <Button variant="secondary" onClick={openCreateSkillModal}>
+          <Plus data-icon />
+          {t("agents.skills.newSkill")}
+        </Button>
+      ) : null
+    ) : (
+      <Button variant="secondary" onClick={openCreateModal}>
+        <Plus data-icon />
+        {t("agents.newAgent")}
+      </Button>
+    );
+
   return (
     <PageFrame
       title={t("agents.title")}
       subtitle={t("agents.subtitle")}
-      actions={
-        <Button variant="secondary" onClick={openCreateModal}>
-          <Plus data-icon />
-          {t("agents.newAgent")}
-        </Button>
-      }
+      actions={pageAction}
     >
       {!workspaceReady ? <Notice>{t("workspace.signInRequired")}</Notice> : null}
-      {workspaceReady ? <WorkflowSkillsPanel skills={skillsQuery.data || []} /> : null}
-      {agentsQuery.isPending ? (
-        <div className="rounded-[10px] bg-[color:var(--surface)] px-4 py-6 text-[13px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-          {t("agents.loading")}
-        </div>
-      ) : agents.length === 0 ? (
-        <CollectionEmptyState
-          icon={Bot}
-          title={t("agents.emptyTitle")}
-          body={t("agents.emptyBody")}
-          action={
-            <Button variant="secondary" onClick={openCreateModal}>
-              <Plus data-icon />
-              {t("agents.newAgent")}
-            </Button>
-          }
+      <AgentsTabs activeTab={activeTab} onChange={setActiveTab} />
+
+      {activeTab === "agents" ? (
+        <AgentsPanel
+          agents={agents}
+          enabledCount={enabledCount}
+          isPending={agentsQuery.isPending}
+          onCreate={openCreateModal}
+          onSettings={openSettings}
         />
       ) : (
-        <div className="rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
-          <div className="grid grid-cols-[minmax(190px,1.05fr)_minmax(260px,1.5fr)_150px_116px_116px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
-            <span>{t("agents.agent")}</span>
-            <span>{t("agents.role")}</span>
-            <span>{t("agents.provider")}</span>
-            <span>{t("agents.status")}</span>
-            <span className="text-right">{t("agents.actions")}</span>
-          </div>
-          <div className="divide-y divide-[color:var(--line)]">
-            {agents.map((agent) => (
-              <AgentRow key={agent.id} agent={agent} onSettings={() => openSettings(agent)} />
-            ))}
-          </div>
-          <div className="border-t border-[color:var(--line)] px-4 py-2.5 text-[12px] leading-5 text-[color:var(--muted)]">
-            {t("agents.enabledSummary", { enabled: enabledCount, total: agents.length })}
-          </div>
-        </div>
+        <SkillsPanel
+          skills={skills}
+          invocableCount={invocableSkillCount}
+          isPending={skillsQuery.isPending}
+          canManage={canManageWorkspace}
+          error={skillsQuery.error || loadSkill.error || createSkill.error || updateSkill.error || toggleSkill.error || deleteSkill.error || duplicateSkill.error}
+          isMutating={loadSkill.isPending || createSkill.isPending || updateSkill.isPending || toggleSkill.isPending || deleteSkill.isPending || duplicateSkill.isPending}
+          onCreate={openCreateSkillModal}
+          onEdit={openSkillSettings}
+          onDuplicate={(skill) => {
+            if (canManageWorkspace) duplicateSkill.mutate(skill);
+          }}
+          onDelete={(skill) => {
+            if (canManageWorkspace && window.confirm(t("agents.skills.deleteConfirm", { name: skill.name || skill.slug }))) {
+              deleteSkill.mutate(skill);
+            }
+          }}
+          onToggleEnabled={(skill) => {
+            if (canManageWorkspace) toggleSkill.mutate({ skill, values: { enabled: !skill.enabled } });
+          }}
+          onToggleInvocable={(skill) => {
+            if (canManageWorkspace) toggleSkill.mutate({ skill, values: { invocable: !skill.invocable } });
+          }}
+        />
       )}
 
       {createOpen ? (
@@ -203,68 +369,286 @@ export function AgentsPage() {
           onChange={setSettingsForm}
         />
       ) : null}
+
+      {skillModalMode ? (
+        <SkillModal
+          mode={skillModalMode}
+          form={skillForm}
+          isPending={createSkill.isPending || updateSkill.isPending}
+          error={skillModalMode === "create" ? createSkill.error : updateSkill.error}
+          onClose={closeSkillModal}
+          onSubmit={submitSkill}
+          onChange={setSkillForm}
+        />
+      ) : null}
     </PageFrame>
   );
 }
 
-function WorkflowSkillsPanel(props: { skills: SkillCatalogItem[] }) {
+function AgentsTabs(props: { activeTab: AgentsTab; onChange: (tab: AgentsTab) => void }) {
   const { t } = useMspaceTranslation();
-  const thinkSkill = props.skills.find((skill) => skill.slug === "think");
-  const scope = props.skills.length > 0 ? `${t("agents.workflowSkills.scope")} · ${props.skills.length}` : t("agents.workflowSkills.scope");
-  const items = [
-    {
-      icon: SquareTerminal,
-      label: t("agents.workflowSkills.thinkLabel"),
-      value: thinkSkill?.revision ? `${t("agents.workflowSkills.thinkValue")} @${thinkSkill.revision}` : t("agents.workflowSkills.thinkValue"),
-      body: t("agents.workflowSkills.thinkBody"),
-    },
-    {
-      icon: CheckCircle2,
-      label: t("agents.workflowSkills.managedLabel"),
-      value: t("agents.workflowSkills.managedValue"),
-      body: t("agents.workflowSkills.managedBody"),
-    },
-    {
-      icon: Clock3,
-      label: t("agents.workflowSkills.analysisLabel"),
-      value: t("agents.workflowSkills.analysisValue"),
-      body: t("agents.workflowSkills.analysisBody"),
-    },
-  ];
-
   return (
-    <section className="rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[color:var(--line)] px-4 py-3">
+    <div className="inline-flex w-fit rounded-[8px] bg-[color:var(--block)] p-1 shadow-[inset_0_0_0_1px_var(--line)]" role="tablist">
+      {(["agents", "skills"] as const).map((tab) => (
+        <button
+          key={tab}
+          type="button"
+          role="tab"
+          aria-selected={props.activeTab === tab}
+          onClick={() => props.onChange(tab)}
+          className={cn(
+            "inline-flex h-8 items-center gap-2 rounded-[6px] px-3 text-[13px] font-medium transition-colors",
+            props.activeTab === tab
+              ? "bg-[color:var(--surface)] text-[color:var(--text)] shadow-[0_1px_2px_rgba(31,31,31,0.08)]"
+              : "text-[color:var(--muted)] hover:text-[color:var(--text)]",
+          )}
+        >
+          {tab === "agents" ? <Bot data-icon /> : <FileText data-icon />}
+          {tab === "agents" ? t("agents.tabs.agents") : t("agents.tabs.skills")}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AgentsPanel(props: {
+  agents: AgentProfile[];
+  enabledCount: number;
+  isPending: boolean;
+  onCreate: () => void;
+  onSettings: (agent: AgentProfile) => void;
+}) {
+  const { t } = useMspaceTranslation();
+  if (props.isPending) {
+    return (
+      <div className="rounded-[10px] bg-[color:var(--surface)] px-4 py-6 text-[13px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+        {t("agents.loading")}
+      </div>
+    );
+  }
+  if (props.agents.length === 0) {
+    return (
+      <CollectionEmptyState
+        icon={Bot}
+        title={t("agents.emptyTitle")}
+        body={t("agents.emptyBody")}
+        action={
+          <Button variant="secondary" onClick={props.onCreate}>
+            <Plus data-icon />
+            {t("agents.newAgent")}
+          </Button>
+        }
+      />
+    );
+  }
+  return (
+    <div className="rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="grid grid-cols-[minmax(190px,1.05fr)_minmax(260px,1.5fr)_150px_116px_116px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
+        <span>{t("agents.agent")}</span>
+        <span>{t("agents.role")}</span>
+        <span>{t("agents.provider")}</span>
+        <span>{t("agents.status")}</span>
+        <span className="text-right">{t("agents.actions")}</span>
+      </div>
+      <div className="divide-y divide-[color:var(--line)]">
+        {props.agents.map((agent) => (
+          <AgentRow key={agent.id} agent={agent} onSettings={() => props.onSettings(agent)} />
+        ))}
+      </div>
+      <div className="border-t border-[color:var(--line)] px-4 py-2.5 text-[12px] leading-5 text-[color:var(--muted)]">
+        {t("agents.enabledSummary", { enabled: props.enabledCount, total: props.agents.length })}
+      </div>
+    </div>
+  );
+}
+
+function SkillsPanel(props: {
+  skills: SkillCatalogItem[];
+  invocableCount: number;
+  isPending: boolean;
+  isMutating: boolean;
+  canManage: boolean;
+  error?: Error | null;
+  onCreate: () => void;
+  onEdit: (skill: SkillCatalogItem) => void;
+  onDuplicate: (skill: SkillCatalogItem) => void;
+  onDelete: (skill: SkillCatalogItem) => void;
+  onToggleEnabled: (skill: SkillCatalogItem) => void;
+  onToggleInvocable: (skill: SkillCatalogItem) => void;
+}) {
+  const { t } = useMspaceTranslation();
+  if (props.isPending) {
+    return (
+      <div className="rounded-[10px] bg-[color:var(--surface)] px-4 py-6 text-[13px] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+        {t("agents.skills.loading")}
+      </div>
+    );
+  }
+  if (props.skills.length === 0) {
+    return (
+      <CollectionEmptyState
+        icon={FileText}
+        title={t("agents.skills.emptyTitle")}
+        body={t("agents.skills.emptyBody")}
+        action={props.canManage ? (
+          <Button variant="secondary" onClick={props.onCreate}>
+            <Plus data-icon />
+            {t("agents.skills.newSkill")}
+          </Button>
+        ) : undefined}
+      />
+    );
+  }
+  return (
+    <div className="overflow-hidden rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[color:var(--line)] px-4 py-3">
         <div className="min-w-0">
-          <h2 className="text-[13px] font-semibold leading-5 text-[color:var(--text)]">{t("agents.workflowSkills.title")}</h2>
-          <p className="mt-1 max-w-[72ch] text-pretty text-[12px] leading-5 text-[color:var(--muted)]">
-            {t("agents.workflowSkills.description")}
+          <h2 className="text-[14px] font-semibold leading-5 text-[color:var(--text)]">{t("agents.skills.title")}</h2>
+          <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">
+            {t("agents.skills.summary", { invocable: props.invocableCount, total: props.skills.length })}
           </p>
         </div>
-        <span className="shrink-0 rounded-full bg-[color:var(--block)] px-2 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted-strong)]">
-          {scope}
-        </span>
+        {props.canManage ? (
+          <Button variant="secondary" size="sm" onClick={props.onCreate} disabled={props.isMutating}>
+            <Plus data-icon />
+            {t("agents.skills.newSkill")}
+          </Button>
+        ) : null}
       </div>
-      <div className="grid divide-y divide-[color:var(--line)] md:grid-cols-3 md:divide-x md:divide-y-0">
-        {items.map((item) => {
-          const Icon = item.icon;
-          return (
-            <div key={item.label} className="min-w-0 px-4 py-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="grid size-7 shrink-0 place-items-center rounded-[7px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-                  <Icon data-icon />
+      {!props.canManage ? (
+        <div className="border-b border-[color:var(--line)] px-4 py-3">
+          <Notice>{t("agents.skills.manageRestricted")}</Notice>
+        </div>
+      ) : null}
+      {props.error ? (
+        <div className="border-b border-[color:var(--line)] px-4 py-3">
+          <Notice tone="danger">{props.error.message}</Notice>
+        </div>
+      ) : null}
+      <div className="overflow-x-auto">
+        <div className="min-w-[950px]">
+          <div className="grid grid-cols-[minmax(220px,1.35fr)_150px_150px_170px_260px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
+            <span>{t("agents.skills.skill")}</span>
+            <span>{t("agents.skills.source")}</span>
+            <span>{t("agents.skills.revision")}</span>
+            <span>{t("agents.status")}</span>
+            <span className="text-right">{t("agents.actions")}</span>
+          </div>
+          <div className="divide-y divide-[color:var(--line)]">
+            {props.skills.map((skill) => (
+              <SkillRow
+                key={`${skill.sourceType}:${skill.id || skill.slug}`}
+                skill={skill}
+                isMutating={props.isMutating}
+                canManage={props.canManage}
+                onEdit={props.onEdit}
+                onDuplicate={props.onDuplicate}
+                onDelete={props.onDelete}
+                onToggleEnabled={props.onToggleEnabled}
+                onToggleInvocable={props.onToggleInvocable}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SkillRow(props: {
+  skill: SkillCatalogItem;
+  isMutating: boolean;
+  canManage: boolean;
+  onEdit: (skill: SkillCatalogItem) => void;
+  onDuplicate: (skill: SkillCatalogItem) => void;
+  onDelete: (skill: SkillCatalogItem) => void;
+  onToggleEnabled: (skill: SkillCatalogItem) => void;
+  onToggleInvocable: (skill: SkillCatalogItem) => void;
+}) {
+  const { t } = useMspaceTranslation();
+  const { skill } = props;
+  return (
+    <article className="grid grid-cols-[minmax(220px,1.35fr)_150px_150px_170px_260px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+            <FileText data-icon />
+          </span>
+          <div className="min-w-0">
+            <div className="flex min-w-0 items-center gap-2">
+              <h3 className="truncate text-[14px] font-semibold leading-5 text-[color:var(--text)]">{skill.name || skill.slug}</h3>
+              {skill.builtIn ? (
+                <span className="shrink-0 rounded-full bg-[color:var(--block)] px-2 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted-strong)]">
+                  {t("agents.builtIn")}
                 </span>
-                <div className="min-w-0">
-                  <div className="text-[11px] font-medium uppercase leading-4 text-[color:var(--faint)]">{item.label}</div>
-                  <div className="truncate text-[13px] font-semibold leading-5 text-[color:var(--text)]">{item.value}</div>
-                </div>
-              </div>
-              <p className="mt-2 text-pretty text-[12px] leading-5 text-[color:var(--muted)]">{item.body}</p>
+              ) : null}
             </div>
-          );
-        })}
+            <div className="mt-0.5 truncate font-mono text-[12px] leading-5 text-[color:var(--muted)]">/{skill.slug}</div>
+          </div>
+        </div>
+        <p className="mt-2 line-clamp-2 text-[12px] leading-5 text-[color:var(--muted)]">{skill.description || t("agents.noDescription")}</p>
       </div>
-    </section>
+      <div className="min-w-0 text-[12px] leading-5 text-[color:var(--muted)]">
+        <div className="truncate text-[color:var(--text)]">{skill.builtIn ? t("agents.skills.sourceBuiltin") : t("agents.skills.sourceWorkspace")}</div>
+        <div className="truncate">{skill.fileCount} {t("agents.skills.files")}</div>
+      </div>
+      <div className="min-w-0">
+        <div className="truncate font-mono text-[12px] leading-5 text-[color:var(--text)]">{skill.revision || "-"}</div>
+        <div className="truncate text-[11px] leading-4 text-[color:var(--faint)]">{skill.contentHash}</div>
+      </div>
+      <div className="flex flex-col items-start gap-1.5">
+        <SkillStatus enabled={skill.enabled} label={skill.enabled ? t("agents.enabled") : t("agents.disabled")} />
+        <SkillStatus enabled={skill.invocable} label={skill.invocable ? t("agents.skills.invocable") : t("agents.skills.hidden")} />
+      </div>
+      <div className="flex flex-wrap justify-end gap-1.5">
+        {!props.canManage ? (
+          <span className="self-center text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.skills.viewOnly")}</span>
+        ) : (
+          <>
+            {skill.editable ? (
+              <Button variant="secondary" size="sm" onClick={() => props.onEdit(skill)} disabled={props.isMutating}>
+                <Pencil data-icon />
+                {t("agents.skills.edit")}
+              </Button>
+            ) : null}
+            <Button variant="secondary" size="sm" onClick={() => props.onToggleEnabled(skill)} disabled={props.isMutating}>
+              <Power data-icon />
+              {skill.enabled ? t("agents.skills.disable") : t("agents.skills.enable")}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => props.onToggleInvocable(skill)} disabled={props.isMutating || !skill.enabled}>
+              {skill.invocable ? <EyeOff data-icon /> : <Eye data-icon />}
+              {skill.invocable ? t("agents.skills.hide") : t("agents.skills.show")}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => props.onDuplicate(skill)} disabled={props.isMutating}>
+              <Copy data-icon />
+              {t("agents.skills.duplicate")}
+            </Button>
+            {skill.deletable ? (
+              <Button variant="secondary" size="sm" onClick={() => props.onDelete(skill)} disabled={props.isMutating}>
+                <Trash2 data-icon />
+                {t("agents.skills.delete")}
+              </Button>
+            ) : null}
+          </>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function SkillStatus(props: { enabled: boolean; label: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium",
+        props.enabled
+          ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
+          : "bg-[color:var(--block)] text-[color:var(--muted-strong)]",
+      )}
+    >
+      {props.enabled ? <CheckCircle2 data-icon /> : <Circle data-icon />}
+      {props.label}
+    </span>
   );
 }
 
@@ -435,6 +819,106 @@ function AgentModal(props: {
           <Button type="submit" disabled={props.isPending}>
             <Save data-icon />
             {props.isPending ? props.pendingLabel : props.submitLabel}
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function SkillModal(props: {
+  mode: "create" | "edit";
+  form: SkillForm;
+  isPending: boolean;
+  error?: Error | null;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onChange: (form: SkillForm) => void;
+}) {
+  const { t } = useMspaceTranslation();
+  const isCreate = props.mode === "create";
+  const extraFileCount = props.form.files.filter((file) => file.path !== "SKILL.md").length;
+  return (
+    <Modal
+      title={isCreate ? t("agents.skills.newSkill") : t("agents.skills.editSkill")}
+      description={isCreate ? t("agents.skills.newDescription") : t("agents.skills.editDescription")}
+      onClose={props.onClose}
+    >
+      <form className="flex flex-col gap-4" onSubmit={props.onSubmit}>
+        {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label={t("agents.skills.slug")}>
+            <Input
+              value={props.form.slug}
+              disabled={!isCreate}
+              onChange={(event) => props.onChange({ ...props.form, slug: event.target.value })}
+              placeholder="repo-map"
+            />
+          </Field>
+          <Field label={t("agents.name")}>
+            <Input
+              value={props.form.name}
+              onChange={(event) => props.onChange({ ...props.form, name: event.target.value })}
+              placeholder={t("agents.skills.namePlaceholder")}
+            />
+          </Field>
+        </div>
+
+        <Field label={t("agents.description")}>
+          <Input
+            value={props.form.description}
+            onChange={(event) => props.onChange({ ...props.form, description: event.target.value })}
+            placeholder={t("agents.skills.descriptionPlaceholder")}
+          />
+        </Field>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="flex items-center gap-3 rounded-[8px] bg-[color:var(--block)] px-3 py-3 text-[13px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+            <input
+              type="checkbox"
+              checked={props.form.enabled}
+              onChange={(event) => props.onChange({ ...props.form, enabled: event.target.checked })}
+              className="size-4 rounded border-[color:var(--line)] accent-[color:var(--ink)]"
+            />
+            <span className="min-w-0">
+              <span className="block font-medium text-[color:var(--text)]">{t("agents.skills.enabledLabel")}</span>
+              <span className="mt-1 block text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.skills.enabledHint")}</span>
+            </span>
+          </label>
+          <label className="flex items-center gap-3 rounded-[8px] bg-[color:var(--block)] px-3 py-3 text-[13px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+            <input
+              type="checkbox"
+              checked={props.form.invocable}
+              onChange={(event) => props.onChange({ ...props.form, invocable: event.target.checked })}
+              disabled={!props.form.enabled}
+              className="size-4 rounded border-[color:var(--line)] accent-[color:var(--ink)] disabled:opacity-50"
+            />
+            <span className="min-w-0">
+              <span className="block font-medium text-[color:var(--text)]">{t("agents.skills.invocableLabel")}</span>
+              <span className="mt-1 block text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.skills.invocableHint")}</span>
+            </span>
+          </label>
+        </div>
+
+        <Field
+          label="SKILL.md"
+          hint={extraFileCount > 0 ? t("agents.skills.extraFilesHint", { count: extraFileCount }) : t("agents.skills.skillMdHint")}
+        >
+          <Textarea
+            value={props.form.skillMd}
+            onChange={(event) => props.onChange({ ...props.form, skillMd: event.target.value })}
+            className="h-[280px] !min-h-[280px] font-mono text-[12px] leading-5"
+            placeholder={t("agents.skills.skillMdPlaceholder")}
+          />
+        </Field>
+
+        <div className="mt-1 flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isPending}>
+            {t("common.cancel")}
+          </Button>
+          <Button type="submit" disabled={props.isPending}>
+            <Save data-icon />
+            {props.isPending ? t("agents.saving") : isCreate ? t("agents.skills.createSkill") : t("agents.saveSettings")}
           </Button>
         </div>
       </form>

@@ -18,7 +18,7 @@ The control plane owns:
 - GitHub identity links;
 - workspace GitHub App installation state;
 - workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts;
-- workspace settings, agent profiles, built-in workflow skill catalog and revisions, reusable Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review/failure/source records;
+- workspace settings, agent profiles, built-in and workspace custom workflow skill catalog/revisions/settings, reusable Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review/failure/source records;
 - audit and collaboration sync;
 - runtime registration tokens;
 - runtime worker identity, liveness, and capability snapshots;
@@ -102,7 +102,7 @@ The server module provides:
 - project test cases, test case revisions, test case suggestions, test plans, test runs, and run items;
 - issue labels, issues, child tasks, comments, comment edits, and comment reactions;
 - workspace settings and workspace GitHub App installation status;
-- built-in workflow skill metadata through `/api/workspaces/{workspaceID}/skills`;
+- workflow skill metadata and basic management through `/api/workspaces/{workspaceID}/skills`;
 - workspace agent profiles;
 - Environment APIs plus Kubernetes cluster compatibility APIs and kubeconfig discovery/import;
 - issue test deployment, cleanup, retain, preview probe, and namespace resources;

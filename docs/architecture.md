@@ -34,7 +34,7 @@ Workers own:
 
 The server does not own any Codex process or credential lifecycle. It queues tasks that require `{"codex":true}`, records task events/logs/results, and reconciles final output back into product state. The Codex CLI, `CODEX_HOME`, `auth.json`, and `config.toml` belong to worker runtimes only.
 
-The server does own the built-in workflow skill catalog. The current catalog is embedded from `mlhiter/skills` under `server/internal/control/builtin_skills/` and exposed as lightweight metadata through `/api/workspaces/{workspaceID}/skills`. When a product flow requires a skill, the server pins the skill bundle and includes the files in the runtime task payload. Workers materialize those files into the session artifact directory and point Codex at that session-scoped skill root; workers do not choose local installed skills as the source of truth.
+The server owns the workflow skill catalog. Built-in skills are embedded from `mlhiter/skills` under `server/internal/control/builtin_skills/`; workspace custom skills, revisions, and built-in visibility/invocation settings live in the server store. `/api/workspaces/{workspaceID}/skills` exposes catalog metadata and basic management endpoints, while issue-session creation still accepts only `skillSlugs`. When a product or user flow requires a skill, the server pins the selected skill bundle and includes the files in the runtime task payload. Workers materialize those files into the session artifact directory and point Codex at that session-scoped skill root; workers do not choose local installed skills as the source of truth.
 
 ## Runtime Flow
 
@@ -46,7 +46,7 @@ Desktop Issue Detail
   -> POST server agent session with optional skill slugs from /slug or #slug tokens
 Server
   -> validate workspace membership and project attachment
-  -> resolve built-in skill slugs to server-owned bundles
+  -> resolve enabled built-in or workspace skill slugs to server-owned bundles
   -> snapshot issue/project/runbook context
   -> create agent_sessions row
   -> enqueue runtime_tasks(kind=agent_session)
@@ -177,7 +177,7 @@ Main server-owned state groups:
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
 - Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`, and `test_artifacts`. Cases and suggestions are project-level. Plans and runs are workspace-level orchestration records that keep a primary project for compatibility and preserve per-case/per-item project identity. Plans can store lightweight setup steps; runs freeze setup text plus setup status, setup issue/session, setup result, and run context. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
-- Runtime surfaces: `workspace_settings`, `workspace_github_app_installations`, `agent_profiles`, embedded built-in workflow skill catalog, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`.
+- Runtime surfaces: `workspace_settings`, `workspace_github_app_installations`, `agent_profiles`, embedded built-in workflow skill catalog, `workspace_skills`, `workspace_skill_revisions`, `workspace_builtin_skill_settings`, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`.
 - Runtime queue: `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, `runtime_task_logs`.
 - Issue type triage is represented as `runtime_tasks.kind="issue_type_triage"` and reconciled when the task reaches a final state.
 - Automatic issue analysis is represented as `runtime_tasks.kind="agent_session"` with payload `automation="issue_analysis"`, `sandbox="read-only"`, `sourceCapture=false`, and a required server-owned `think` skill bundle.
@@ -304,7 +304,7 @@ Team invitation setup follows the same user-centered rule. Workspace Settings cr
 
 Open account registration creates a personal workspace and a personal runtime boundary. Only server-admin logins configured by `MSPACE_SERVER_ADMIN_LOGINS` or `MSPACE_BOOTSTRAP_ADMIN_LOGIN` can create team workspaces. Team server runners are reachable only through membership in a team workspace, and runtime worker/task mode must match the workspace kind.
 
-Tests stays focused on project-level cases/suggestions plus workspace-level plans, runs, retry, and run review records. Agents stays focused on mentionable Codex-backed role behavior plus visibility into server-managed workflow skills. Environments stays focused on reusable Kubernetes and VM validation targets. Projects stays focused on repository metadata and project runbooks. Built-in workflow skills are an execution contract for mspace product flows, not a generic user skill marketplace.
+Tests stays focused on project-level cases/suggestions plus workspace-level plans, runs, retry, and run review records. Agents stays focused on mentionable Codex-backed role behavior plus basic workspace skill management. Environments stays focused on reusable Kubernetes and VM validation targets. Projects stays focused on repository metadata and project runbooks. Workflow skills are an execution contract for mspace product flows and issue comments, not a generic marketplace or remote installer.
 
 The desktop visual language is a quiet Notion-like workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, restrained icon actions, and no decorative dashboard language.
 

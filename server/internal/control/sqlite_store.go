@@ -56,6 +56,9 @@ type memoryStoreSnapshot struct {
 	IssueLabels          map[string][]IssueLabel                      `json:"issueLabels"`
 	WorkspaceSettings    map[string]WorkspaceSettings                 `json:"workspaceSettings"`
 	GitHubAppInstalls    map[string]WorkspaceGitHubAppInstallation    `json:"githubAppInstallations"`
+	WorkspaceSkills      map[string]WorkspaceSkill                    `json:"workspaceSkills"`
+	SkillRevisions       map[string]WorkspaceSkillRevision            `json:"skillRevisions"`
+	BuiltinSkillSettings map[string]WorkspaceBuiltinSkillSetting      `json:"builtinSkillSettings"`
 	AgentProfiles        map[string]AgentProfile                      `json:"agentProfiles"`
 	Clusters             map[string]Cluster                           `json:"clusters"`
 	Environments         map[string]Environment                       `json:"environments"`
@@ -205,6 +208,9 @@ func (s *MemoryStore) snapshotJSON() ([]byte, error) {
 		IssueLabels:          copyMap(s.issueLabels),
 		WorkspaceSettings:    copyMap(s.workspaceSettings),
 		GitHubAppInstalls:    copyMap(s.githubAppInstalls),
+		WorkspaceSkills:      copyMap(s.workspaceSkills),
+		SkillRevisions:       copyMap(s.skillRevisions),
+		BuiltinSkillSettings: copyMap(s.builtinSkillSettings),
 		AgentProfiles:        copyMap(s.agentProfiles),
 		Clusters:             copyMap(s.clusters),
 		Environments:         copyMap(s.environments),
@@ -264,6 +270,9 @@ func (s *MemoryStore) restoreSnapshot(snapshot memoryStoreSnapshot) {
 	s.issueLabels = ensureMap(snapshot.IssueLabels)
 	s.workspaceSettings = ensureMap(snapshot.WorkspaceSettings)
 	s.githubAppInstalls = ensureMap(snapshot.GitHubAppInstalls)
+	s.workspaceSkills = ensureMap(snapshot.WorkspaceSkills)
+	s.skillRevisions = ensureMap(snapshot.SkillRevisions)
+	s.builtinSkillSettings = ensureMap(snapshot.BuiltinSkillSettings)
 	s.agentProfiles = ensureMap(snapshot.AgentProfiles)
 	s.clusters = ensureMap(snapshot.Clusters)
 	s.environments = ensureMap(snapshot.Environments)

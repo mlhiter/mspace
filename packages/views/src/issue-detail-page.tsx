@@ -5321,7 +5321,7 @@ export function IssueDetailPage() {
     enabled: serverWorkspaceReady && runbookOpen && Boolean(detail?.project?.id),
   });
   const agents = listOrEmpty(agentsQuery.data);
-  const skills = listOrEmpty(skillsQuery.data).filter((skill) => skill.builtIn !== false && skillCatalogSlug(skill));
+  const skills = listOrEmpty(skillsQuery.data).filter((skill) => skillCatalogSlug(skill) && skill.enabled !== false && skill.invocable !== false);
   const clusters = listOrEmpty(clustersQuery.data);
   const projects = listOrEmpty(projectsQuery.data);
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);

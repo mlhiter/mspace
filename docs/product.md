@@ -32,7 +32,7 @@ The repository now has a runnable local desktop MVP:
 - manage project-level test cases and case suggestions plus workspace-level test plans and issue-backed test runs that start from plans in the Tests route, including modal create/import flows, preview-before-confirm Markdown/text/CSV/Excel `.xlsx` import, field-level case revision summaries, readiness scoring, retry for failed run items, and lightweight human review records for run outcomes;
 - keep signed-in workspace product and runtime state in the server store, including sessions, logs, evidence, environments, Kubernetes cluster compatibility records, issue test environments, handoffs, and execution metadata;
 - keep the server control plane free of Codex runtime dependencies: no Codex CLI in the server image, no Codex home mount in the server Deployment, and no in-process Codex app-server client;
-- keep built-in workflow skills server-owned and worker-materialized per task, so workers can use the same pinned skill revision without depending on local global skill installs;
+- keep workflow skills server-owned and worker-materialized per task, including built-in skills and workspace custom skill revisions, so workers can use the same pinned revision without depending on local global skill installs;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage workspace automation policy, keeping source commit capture always on while recording branch / PR handoff state from captured source commits;
 - optionally queue an automatic issue test-environment deployment after a successful source session captures a commit, using the same source commit and deploy/test path as manual deployment;

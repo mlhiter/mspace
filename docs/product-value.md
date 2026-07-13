@@ -253,4 +253,4 @@ The next work should favor dogfooding and hardening the first complete loop over
 5. Dogfood failure recovery until Continue / Retry deploy / Stop / retain / cleanup choices are obvious from Issue Detail.
 6. Add scoped Kubernetes credentials after the loop works.
 
-The product should defer multi-agent scheduling, generic skill management, automatic merge pipelines, Kubernetes-hosted agent runtime, and broad DevOps resource browsing until the issue-to-preview-to-evidence loop works for a real internal project.
+The product should defer multi-agent scheduling, generic skill marketplaces, automatic merge pipelines, Kubernetes-hosted agent runtime, and broad DevOps resource browsing until the issue-to-preview-to-evidence loop works for a real internal project.

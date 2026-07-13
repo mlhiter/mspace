@@ -42,7 +42,7 @@ The server control plane owns:
 - local password auth, optional GitHub auth, and mspace `msp_...` sessions;
 - users, workspaces, members, invitations, and identity;
 - projects, project runbooks, project test cases, test case revisions, test case suggestions, test plans, test runs, issues, child tasks, comments, reactions, labels, Inbox events, and per-user receipts;
-- workspace settings, agent profiles, built-in workflow skill catalog, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
+- workspace settings, agent profiles, built-in and workspace custom workflow skill catalog/revisions/settings, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
 - runtime worker registration, worker heartbeat/capability state, runtime task queue state, task events, task logs, cancellation, and task results.
 
 The desktop owns native shell behavior, local UI state, file pickers, and opening browser auth flows. Workers own execution: repository cache, per-session workdir, Codex app-server lifecycle, command execution, source capture, artifacts, and logs while running. The server never starts Codex and never requires Codex credentials; it only queues Codex-capable runtime tasks, attaches any required server-owned skill bundles, and reconciles worker results.
@@ -437,7 +437,12 @@ Use `status:"failed"` plus `failureSummary` when setup cannot safely complete. T
 | `GET` | `/api/workspaces/{workspaceID}/workspace/settings` | Read workspace automation settings. |
 | `PUT` | `/api/workspaces/{workspaceID}/workspace/settings` | Update workspace automation settings. |
 | `GET` | `/api/workspaces/{workspaceID}/agents` | List mentionable agent profiles. |
-| `GET` | `/api/workspaces/{workspaceID}/skills` | List server-managed built-in workflow skill metadata. |
+| `GET` | `/api/workspaces/{workspaceID}/skills` | List built-in and workspace custom workflow skill metadata. |
+| `POST` | `/api/workspaces/{workspaceID}/skills` | Create a workspace custom workflow skill. |
+| `GET` | `/api/workspaces/{workspaceID}/skills/{skillID}` | Read owner/admin skill detail and files for management. |
+| `PUT` | `/api/workspaces/{workspaceID}/skills/{skillID}` | Update a custom skill revision or built-in workspace invocation settings. |
+| `DELETE` | `/api/workspaces/{workspaceID}/skills/{skillID}` | Delete a workspace custom skill. |
+| `POST` | `/api/workspaces/{workspaceID}/skills/{skillID}/duplicate` | Copy a built-in or custom skill into a workspace custom skill. |
 | `POST` | `/api/workspaces/{workspaceID}/agents` | Create an agent profile. |
 | `PUT` | `/api/workspaces/{workspaceID}/agents/{agentID}` | Update an agent profile. |
 | `GET` | `/api/workspaces/{workspaceID}/environments` | List Kubernetes and virtual machine Environments. Kubernetes rows are projected from cluster compatibility records. |
@@ -559,7 +564,7 @@ Personal workspaces use `runtimeMode: "personal"`; team workspaces use `runtimeM
 }
 ```
 
-Issue comments can reference server-managed workflow skills with `/slug` or `#slug`. Desktop clients should derive `skillSlugs` from the final submitted comment body and send only those slugs. The server accepts only built-in skill slugs, de-duplicates them, rejects unknown or malformed slugs with HTTP `400`, and rejects client-provided `requiredSkills`, `skills`, `skillBundles`, or skill file content on issue-session creation. Full skill bundles remain server-owned and are included only in the worker runtime task payload; workspace user APIs return compact skill references.
+Issue comments can reference enabled, invocable server-managed workflow skills with `/slug` or `#slug`. Desktop clients should derive `skillSlugs` from the final submitted comment body and send only those slugs. The server accepts built-in or workspace custom skill slugs, de-duplicates them, rejects unknown, disabled, hidden, or malformed slugs with HTTP `400`, and rejects client-provided `requiredSkills`, `skills`, `skillBundles`, or skill file content on issue-session creation. Full skill bundles remain server-owned and are included in the worker runtime task payload; workspace user APIs return compact skill references except for owner/admin skill management detail endpoints.
 
 The server validates that the issue has an attached project, that `runtimeMode` matches the workspace kind, and that a matching active Codex worker exists before it creates `agent_sessions` or `runtime_tasks`. If no worker is online, the server returns HTTP `409` with `{"error":"no active codex worker"}`. Clients should keep project attachment and worker preflight before the trigger comment so unsupported `@codex` turns do not leave a human comment waiting for missing repository context or a worker that cannot claim the task.
 

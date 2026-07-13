@@ -115,6 +115,76 @@ func TestSQLiteStorePersistsProfileUpdate(t *testing.T) {
 	}
 }
 
+func TestSQLiteStorePersistsWorkspaceSkills(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/mspace.db"
+
+	store, err := NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("open sqlite store: %v", err)
+	}
+	user, workspaces, err := store.CreatePasswordIdentity(ctx, PasswordAuthInput{
+		Login:    "skill-user",
+		Password: "password-123456",
+		Name:     "Skill User",
+	})
+	if err != nil {
+		t.Fatalf("create local identity: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	custom, err := store.CreateSkill(ctx, user.ID, workspaceID, SkillInput{
+		Slug:        "persisted-skill",
+		Name:        "Persisted Skill",
+		Description: "Stored in the personal SQLite snapshot.",
+		Enabled:     boolPointer(true),
+		Invocable:   boolPointer(true),
+		Files: []RuntimeSkillFile{{
+			Path:    "SKILL.md",
+			Content: "---\nname: Persisted Skill\ndescription: Stored in the personal SQLite snapshot.\n---\n# Persisted Skill\n",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("create skill: %v", err)
+	}
+	if _, err := store.UpdateSkill(ctx, user.ID, workspaceID, issueAnalysisSkillSlug, SkillInput{Enabled: boolPointer(true), Invocable: boolPointer(false)}); err != nil {
+		t.Fatalf("update built-in skill setting: %v", err)
+	}
+	if err := store.Persist(); err != nil {
+		t.Fatalf("persist sqlite store: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close sqlite store: %v", err)
+	}
+
+	reopened, err := NewSQLiteStore(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen sqlite store: %v", err)
+	}
+	defer reopened.Close()
+
+	skills, err := reopened.ListSkills(ctx, user.ID, workspaceID)
+	if err != nil {
+		t.Fatalf("list persisted skills: %v", err)
+	}
+	bySlug := map[string]SkillCatalogItem{}
+	for _, skill := range skills {
+		bySlug[skill.Slug] = skill
+	}
+	if bySlug[custom.Slug].ID != custom.ID || bySlug[custom.Slug].Revision != custom.Revision || !bySlug[custom.Slug].Invocable {
+		t.Fatalf("expected persisted custom skill %+v, got %+v", custom, bySlug[custom.Slug])
+	}
+	if bySlug[issueAnalysisSkillSlug].Invocable {
+		t.Fatalf("expected persisted built-in invocable=false, got %+v", bySlug[issueAnalysisSkillSlug])
+	}
+	detail, err := reopened.GetSkill(ctx, user.ID, workspaceID, custom.ID)
+	if err != nil {
+		t.Fatalf("get persisted skill: %v", err)
+	}
+	if len(detail.Files) != 1 || detail.Files[0].Path != "SKILL.md" || !strings.Contains(detail.Files[0].Content, "Persisted Skill") {
+		t.Fatalf("expected persisted skill files, got %+v", detail.Files)
+	}
+}
+
 func TestSQLiteStorePersistsVirtualMachineSSHAuth(t *testing.T) {
 	ctx := context.Background()
 	path := t.TempDir() + "/mspace.db"

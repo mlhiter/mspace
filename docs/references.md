@@ -21,7 +21,7 @@ What not to copy directly:
 
 - local daemon as the main runtime model;
 - broad managed-agent platform positioning;
-- generic skill compounding as the main product wedge.
+- generic skill marketplace compounding as the main product wedge.
 
 mspace interpretation:
 

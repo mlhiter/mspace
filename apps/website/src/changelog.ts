@@ -7,6 +7,17 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-13",
+    title: "Workspace skill management",
+    summary:
+      "mspace now gives workflow skills a real management surface instead of showing them as a read-only implementation detail.",
+    items: [
+      "Added a Skills tab under Agents for creating, editing, deleting, duplicating, enabling, and hiding workspace workflow skills.",
+      "Keeps built-in skills server-owned while allowing workspace-level invocation controls and duplicate-to-custom workflows.",
+      "Issue comment / and # suggestions now use only enabled, invocable skills, while sessions still send slugs and let the server pin the runtime bundle.",
+    ],
+  },
+  {
     date: "2026-07-10",
     title: "Simpler issue failure messages",
     summary:
