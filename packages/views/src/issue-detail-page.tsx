@@ -1113,7 +1113,7 @@ function SessionStatusMark(props: { status: string }) {
   return <StatusBadge value={props.status} />;
 }
 
-function WorkingSessionLine(props: { status: string; agentName: string; runtimeMode?: string; agentStatus?: string; runtimeTaskId?: string }) {
+function WorkingSessionLine(props: { status: string; agentName: string; runtimeMode?: string; agentStatus?: string }) {
   const team = props.runtimeMode === "team";
   const status = (props.agentStatus || props.status).trim().toLowerCase();
   const label = team
@@ -1135,7 +1135,6 @@ function WorkingSessionLine(props: { status: string; agentName: string; runtimeM
       </span>
       <span className="truncate">
         <span className="font-medium text-[color:var(--muted-strong)]">{props.agentName}</span> {label}
-        {props.runtimeTaskId ? <span className="ml-2 font-mono text-[12px] text-[color:var(--faint)]">{props.runtimeTaskId.slice(0, 8)}</span> : null}
       </span>
     </div>
   );
@@ -3757,7 +3756,6 @@ function SessionTimelineItem(props: {
               agentName={sessionDisplayName}
               runtimeMode={session.runtimeMode}
               agentStatus={session.agentStatus}
-              runtimeTaskId={isAnalysisSession ? undefined : session.runtimeTaskId}
             />
             {props.onStop ? <StopSessionButton isStopping={props.isStopping} onStop={props.onStop} /> : null}
           </div>
