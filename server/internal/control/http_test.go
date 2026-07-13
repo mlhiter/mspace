@@ -3326,7 +3326,7 @@ func TestIssueTypeTriageRuntimeTaskResultAppliesLabel(t *testing.T) {
 	}
 }
 
-func TestListSkillsReturnsBuiltinThink(t *testing.T) {
+func TestListSkillsReturnsExpectedBuiltinCatalog(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
 		Provider:       "github",
@@ -3356,15 +3356,32 @@ func TestListSkillsReturnsBuiltinThink(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &skills); err != nil {
 		t.Fatalf("parse skills: %v", err)
 	}
-	var think SkillCatalogItem
+	bySlug := make(map[string]SkillCatalogItem, len(skills))
 	for _, skill := range skills {
-		if skill.Slug == issueAnalysisSkillSlug {
-			think = skill
-			break
+		bySlug[skill.Slug] = skill
+	}
+	for _, slug := range []string{issueAnalysisSkillSlug, "codex-dynamic-workflows"} {
+		skill, ok := bySlug[slug]
+		if !ok || !skill.BuiltIn || skill.Source != builtinSkillSource || skill.FileCount == 0 || !strings.HasPrefix(skill.ContentHash, "sha256:") || skill.Revision == "" {
+			t.Fatalf("expected built-in %s skill, got %+v from %+v", slug, skill, skills)
 		}
 	}
-	if think.Slug != issueAnalysisSkillSlug || !think.BuiltIn || think.Source != builtinSkillSource || think.FileCount == 0 || !strings.HasPrefix(think.ContentHash, "sha256:") || think.Revision == "" {
-		t.Fatalf("expected built-in think skill, got %+v from %+v", think, skills)
+}
+
+func TestBuiltinDynamicWorkflowSkillPreservesUpstreamAttribution(t *testing.T) {
+	bundle, err := builtinSkillBundle("codex-dynamic-workflows", "latest")
+	if err != nil {
+		t.Fatalf("load codex dynamic workflows skill: %v", err)
+	}
+	files := make(map[string]string, len(bundle.Files))
+	for _, file := range bundle.Files {
+		files[file.Path] = file.Content
+	}
+	if !strings.Contains(files["SKILL.md"], "github.com/DannyMac180/skills") || !strings.Contains(files["SKILL.md"], "not original work by `mlhiter`") {
+		t.Fatalf("expected external upstream attribution in SKILL.md")
+	}
+	if !strings.Contains(files["LICENSE"], "Copyright (c) 2026 Dan McAteer") {
+		t.Fatalf("expected upstream copyright in bundled LICENSE")
 	}
 }
 
