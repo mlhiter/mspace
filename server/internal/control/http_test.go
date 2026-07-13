@@ -3377,7 +3377,7 @@ func TestBuiltinDynamicWorkflowSkillPreservesUpstreamAttribution(t *testing.T) {
 	for _, file := range bundle.Files {
 		files[file.Path] = file.Content
 	}
-	if !strings.Contains(files["SKILL.md"], "github.com/DannyMac180/skills") || !strings.Contains(files["SKILL.md"], "not original work by `mlhiter`") {
+	if !strings.Contains(files["SKILL.md"], "External skill from") || !strings.Contains(files["SKILL.md"], "github.com/DannyMac180/skills") {
 		t.Fatalf("expected external upstream attribution in SKILL.md")
 	}
 	if !strings.Contains(files["LICENSE"], "Copyright (c) 2026 Dan McAteer") {
