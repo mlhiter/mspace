@@ -294,6 +294,7 @@ export interface TestPlanDetail {
   plan: TestPlan;
   cases: TestPlanCase[];
   runs: TestRun[];
+  requiredCapabilities?: Record<string, boolean>;
 }
 
 export interface TestPlanCaseInput {
@@ -378,6 +379,7 @@ export interface TestRunDetail {
   run: TestRun;
   plan?: TestPlan;
   items: TestRunItem[];
+  requiredCapabilities?: Record<string, boolean>;
 }
 
 export interface CreateTestRunInput {

@@ -1394,19 +1394,19 @@ function executabilityIssueLabel(count: number, t: ReturnType<typeof useMspaceTr
   return t("tests.executableIssueCount", { count });
 }
 
-function testCasesRequireBrowser(testCases: TestCase[]) {
-  return testCases.some((testCase) => testCase.type === "ui");
+function requiredTestWorkerCapabilities(serverRequired?: Record<string, boolean>): Record<string, boolean> {
+  const required: Record<string, boolean> = { codex: true };
+  for (const [capability, value] of Object.entries(serverRequired || {})) {
+    if (value === true) required[capability] = true;
+  }
+  return required;
 }
 
-function testPlanDetailRequiresBrowser(detail?: TestPlanDetail | null) {
-  return testCasesRequireBrowser((detail?.cases || []).map((planCase) => planCase.testCase));
-}
-
-function requiredTestWorkerCapabilities(options?: { browser?: boolean }): Record<string, boolean> {
-  return {
-    codex: true,
-    ...(options?.browser ? { browser: true, chrome_cdp: true } : {}),
-  };
+function testDetailRequiredCapabilities(serverRequired: Record<string, boolean> | undefined, testCases: TestCase[]) {
+  if (serverRequired) return serverRequired;
+  return testCases.some((testCase) => testCase.type === "ui")
+    ? { codex: true, browser: true, chrome_cdp: true }
+    : { codex: true };
 }
 
 function formatRuntimeAvailabilityReason(
@@ -1487,8 +1487,8 @@ function useTestsWorkerReadiness(
   return useMemo(
     () => ({
       runtimeMode,
-      ensureReady: async (options?: { browser?: boolean }) => {
-        const requiredCapabilities = requiredTestWorkerCapabilities(options);
+      ensureReady: async (serverRequired?: Record<string, boolean>) => {
+        const requiredCapabilities = requiredTestWorkerCapabilities(serverRequired);
         await ensureRuntimeReady({
           token: auth.token,
           workspaceId,
@@ -1917,7 +1917,10 @@ export function TestsPage() {
               queryFn: () => controlPlaneApi.getWorkspaceTestPlan(auth.token, workspaceId, plan.id),
               staleTime: 0,
             });
-      await workerReadiness.ensureReady({ browser: testPlanDetailRequiresBrowser(detailForRun) });
+      await workerReadiness.ensureReady(testDetailRequiredCapabilities(
+        detailForRun.requiredCapabilities,
+        detailForRun.cases.map((planCase) => planCase.testCase),
+      ));
       return controlPlaneApi.startWorkspaceTestRun(auth.token, workspaceId, plan.id, {
         targetType: plan.targetType,
         targetValue: plan.targetValue,
@@ -3246,7 +3249,10 @@ export function TestPlanDetailPage() {
   const detail = planQuery.data;
   const startRun = useMutation({
     mutationFn: async (plan: TestPlan) => {
-      await workerReadiness.ensureReady({ browser: testPlanDetailRequiresBrowser(detail) });
+      await workerReadiness.ensureReady(testDetailRequiredCapabilities(
+        detail?.requiredCapabilities,
+        detail?.cases.map((planCase) => planCase.testCase) || [],
+      ));
       return controlPlaneApi.startWorkspaceTestRun(auth.token, workspaceId, plan.id, {
         targetType: plan.targetType,
         targetValue: plan.targetValue,
@@ -3662,7 +3668,10 @@ export function TestRunDetailPage() {
 
   const retryRun = useMutation({
     mutationFn: async () => {
-      await workerReadiness.ensureReady({ browser: testCasesRequireBrowser(runQuery.data?.items.map((item) => item.testCase) || []) });
+      await workerReadiness.ensureReady(testDetailRequiredCapabilities(
+        runQuery.data?.requiredCapabilities,
+        runQuery.data?.items.map((item) => item.testCase) || [],
+      ));
       return controlPlaneApi.retryWorkspaceTestRun(auth.token, workspaceId, runId, {
         runtimeMode: workerReadiness.runtimeMode,
         resultLocale: language,

@@ -49,6 +49,24 @@ func testRunExecutionRequiredCapabilities(cases []TestCase) (json.RawMessage, er
 	return json.Marshal(required)
 }
 
+func testPlanDetailForResponse(detail TestPlanDetail) TestPlanDetail {
+	testCases := make([]TestCase, 0, len(detail.Cases))
+	for _, planCase := range detail.Cases {
+		testCases = append(testCases, planCase.TestCase)
+	}
+	detail.RequiredCapabilities, _ = testRunExecutionRequiredCapabilities(testCases)
+	return detail
+}
+
+func testRunDetailForResponse(detail TestRunDetail) TestRunDetail {
+	testCases := make([]TestCase, 0, len(detail.Items))
+	for _, item := range detail.Items {
+		testCases = append(testCases, item.TestCase)
+	}
+	detail.RequiredCapabilities, _ = testRunExecutionRequiredCapabilities(testCases)
+	return detail
+}
+
 func testRunBatchRequiresBrowser(cases []TestCase) bool {
 	for _, testCase := range cases {
 		if testCaseRequiresBrowser(testCase) {

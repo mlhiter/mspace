@@ -22,7 +22,7 @@
     "typecheck:renderer": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "pnpm run typecheck:main && pnpm run typecheck:renderer",
     "lint": "echo 'lint not configured yet'",
-    "test": "echo 'test not configured yet'"
+    "test": "node --test test/*.test.ts"
   },
   "dependencies": {
     "@mspace/core": "workspace:*",

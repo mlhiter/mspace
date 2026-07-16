@@ -22,6 +22,7 @@ import {
   setConfiguredServerBaseUrl,
   stopServer,
 } from "./server-manager";
+import { personalWorkerName, personalWorkerRequiresBrowser, personalWorkerWorkRoot } from "./personal-worker-runtime";
 
 let mainWindow: BrowserWindow | null = null;
 let projectFolderPickerRegistered = false;
@@ -34,6 +35,7 @@ let personalWorkerHandlersRegistered = false;
 let dockerWorkerProcess: ChildProcessWithoutNullStreams | null = null;
 let dockerWorkerContainer = "";
 let personalWorkerProcess: ChildProcessWithoutNullStreams | null = null;
+const personalWorkerCompanionProcesses = new Set<ChildProcessWithoutNullStreams>();
 let personalWorkerRuntime: PersonalWorkerRuntime | null = null;
 let personalWorkerBrowserProcess: ChildProcess | null = null;
 let personalWorkerBrowserCdpUrl = "";
@@ -450,14 +452,22 @@ function setPersonalWorkerBrowserCapability(
 
 function attachPersonalWorkerBrowserProcessHandlers(browserProcess: ChildProcess, source: string): void {
   browserProcess.once("exit", () => {
+    const workerUsesBrowser = Boolean(
+      personalWorkerRuntime?.capabilities.chrome_cdp &&
+      personalWorkerRuntime.env.MSPACE_CHROME_CDP_URL === personalWorkerBrowserCdpUrl
+    );
     if (clearPersonalWorkerBrowserRuntime(browserProcess)) {
-      refreshPersonalWorkerAfterBrowserLoss(`${source} exited`);
+      if (workerUsesBrowser) refreshPersonalWorkerAfterBrowserLoss(`${source} exited`);
     }
   });
   browserProcess.once("error", (error) => {
     console.warn(`[personal-worker] Chrome CDP ${source} process failed: ${error instanceof Error ? error.message : String(error)}`);
+    const workerUsesBrowser = Boolean(
+      personalWorkerRuntime?.capabilities.chrome_cdp &&
+      personalWorkerRuntime.env.MSPACE_CHROME_CDP_URL === personalWorkerBrowserCdpUrl
+    );
     if (clearPersonalWorkerBrowserRuntime(browserProcess)) {
-      refreshPersonalWorkerAfterBrowserLoss(`${source} failed`);
+      if (workerUsesBrowser) refreshPersonalWorkerAfterBrowserLoss(`${source} failed`);
     }
   });
 }
@@ -524,7 +534,7 @@ async function startElectronPersonalWorkerBrowserRuntime(
   return false;
 }
 
-async function ensurePersonalWorkerBrowserRuntime(): Promise<PersonalWorkerRuntime> {
+async function preparePersonalWorkerRuntime(requiredCapabilities?: Record<string, unknown>): Promise<PersonalWorkerRuntime> {
   const capabilities: Record<string, boolean> = {
     protocolSmoke: true,
     codex: true,
@@ -535,6 +545,10 @@ async function ensurePersonalWorkerBrowserRuntime(): Promise<PersonalWorkerRunti
     environment: "host",
   };
   const env: Record<string, string> = {};
+
+  if (!personalWorkerRequiresBrowser(requiredCapabilities)) {
+    return { capabilities, labels, env };
+  }
 
   const configuredCdpUrl = String(process.env.MSPACE_CHROME_CDP_URL || "").trim().replace(/\/+$/, "");
   if (configuredCdpUrl) {
@@ -729,9 +743,12 @@ async function stopPersonalWorker(): Promise<void> {
   clearPersonalWorkerRestartTimer();
   clearPersonalWorkerCredentialTimer();
   clearPersonalWorkerOldCredentialRevokeTimers();
-  if (personalWorkerProcess) {
-    personalWorkerProcess.kill("SIGTERM");
-    personalWorkerProcess = null;
+  const workerProcesses = new Set(personalWorkerCompanionProcesses);
+  if (personalWorkerProcess) workerProcesses.add(personalWorkerProcess);
+  personalWorkerProcess = null;
+  personalWorkerCompanionProcesses.clear();
+  for (const workerProcess of workerProcesses) {
+    if (!workerProcess.killed) workerProcess.kill("SIGTERM");
   }
   personalWorkerRuntime = null;
   stopPersonalWorkerBrowserRuntime();
@@ -772,7 +789,7 @@ function startPersonalWorkerProcess(input: EnsurePersonalWorkerInput, tokenFile:
       MSPACE_WORKER_NAME: workerName,
       MSPACE_WORKER_CAPABILITIES: JSON.stringify(runtime.capabilities),
       MSPACE_WORKER_LABELS: JSON.stringify(runtime.labels),
-      MSPACE_WORKER_WORK_ROOT: join(app.getPath("userData"), "worker"),
+      MSPACE_WORKER_WORK_ROOT: personalWorkerWorkRoot(join(app.getPath("userData"), "worker"), runtime.capabilities),
     },
     stdio: "pipe",
   });
@@ -786,9 +803,12 @@ function startPersonalWorkerProcess(input: EnsurePersonalWorkerInput, tokenFile:
     process.stderr.write(`[personal-worker] ${chunk}`);
   });
   workerProcess.on("exit", () => {
+    personalWorkerCompanionProcesses.delete(workerProcess);
     if (personalWorkerProcess === workerProcess) {
       personalWorkerProcess = null;
       personalWorkerRuntime = null;
+    } else {
+      return;
     }
     if (personalWorkerStopping || personalWorkerWorkspaceId !== String(input.workspaceId || "").trim()) return;
     const delay = Math.min(30_000, 1_000 * 2 ** personalWorkerRestartAttempts);
@@ -826,29 +846,74 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
     if (personalWorkerCredential) {
       schedulePersonalWorkerCredentialRenewal(credentialInput, personalWorkerCredential);
     }
-    return { ok: true, status: "running", workerName: `desktop-personal-${workspaceId.slice(0, 8)}` };
+    return { ok: true, status: "running", workerName: personalWorkerName(workspaceId, credentialInput.requiredCapabilities) };
   }
-  if (personalWorkerProcess || personalWorkerWorkspaceId) {
-    await stopPersonalWorker();
+  if (
+    !personalWorkerProcess &&
+    personalWorkerWorkspaceId === workspaceId &&
+    personalWorkerCompanionProcesses.size > 0 &&
+    !personalWorkerRequiresBrowser(credentialInput.requiredCapabilities)
+  ) {
+    return { ok: true, status: "running", workerName: personalWorkerName(workspaceId) };
   }
-  const runtime = await ensurePersonalWorkerBrowserRuntime();
+  const workerName = personalWorkerName(workspaceId, credentialInput.requiredCapabilities);
+  const upgradingCurrentWorker = Boolean(personalWorkerProcess && personalWorkerWorkspaceId === workspaceId);
+  const previousWorkerProcess = upgradingCurrentWorker ? personalWorkerProcess : null;
+  const previousWorkerRuntime = upgradingCurrentWorker ? personalWorkerRuntime : null;
+  let runtime: PersonalWorkerRuntime;
+  let token: RuntimeRegistrationTokenResult | null = null;
+  let tokenPath = "";
+  if (upgradingCurrentWorker) {
+    runtime = await preparePersonalWorkerRuntime(credentialInput.requiredCapabilities);
+    if (!runtimeHasRequiredCapabilities(runtime, credentialInput.requiredCapabilities)) {
+      throw new Error("The local personal worker could not prepare the required browser/CDP capability.");
+    }
+    const browserCdpUrl = String(runtime.env.MSPACE_CHROME_CDP_URL || "").trim();
+    if (personalWorkerRequiresBrowser(credentialInput.requiredCapabilities) && !(await isChromeCdpReachable(browserCdpUrl))) {
+      stopPersonalWorkerBrowserRuntime();
+      throw new Error("The local personal worker could not keep the required browser/CDP capability ready.");
+    }
+    token = personalWorkerCredential;
+    tokenPath = resolvePersonalWorkerTokenPath(workspaceId);
+  } else {
+    if (personalWorkerProcess || (personalWorkerWorkspaceId && personalWorkerWorkspaceId !== workspaceId)) {
+      await stopPersonalWorker();
+    }
+    runtime = await preparePersonalWorkerRuntime(credentialInput.requiredCapabilities);
+    if (personalWorkerWorkspaceId === workspaceId && personalWorkerCredential && existsSync(resolvePersonalWorkerTokenPath(workspaceId))) {
+      token = personalWorkerCredential;
+      tokenPath = resolvePersonalWorkerTokenPath(workspaceId);
+    }
+  }
   if (!runtimeHasRequiredCapabilities(runtime, credentialInput.requiredCapabilities)) {
     throw new Error("The local personal worker could not prepare the required browser/CDP capability.");
   }
   personalWorkerStopping = false;
   personalWorkerWorkspaceId = workspaceId;
   personalWorkerCredentialInput = credentialInput;
-  const token = await createWorkerBootstrapCredential({
-    authToken: credentialInput.authToken,
-    workspaceId,
-    name: "Desktop personal worker credential",
-    expiresInHours: PERSONAL_WORKER_TOKEN_HOURS,
-    credentialServerUrl: credentialInput.credentialServerUrl,
-  });
-  const tokenPath = await writePersonalWorkerTokenFile(workspaceId, String(token.token || ""));
+  if (!token) {
+    token = await createWorkerBootstrapCredential({
+      authToken: credentialInput.authToken,
+      workspaceId,
+      name: "Desktop personal worker credential",
+      expiresInHours: PERSONAL_WORKER_TOKEN_HOURS,
+      credentialServerUrl: credentialInput.credentialServerUrl,
+    });
+    tokenPath = await writePersonalWorkerTokenFile(workspaceId, String(token.token || ""));
+  }
   personalWorkerCredential = token;
-  const workerName = `desktop-personal-${workspaceId.slice(0, 8)}`;
-  startPersonalWorkerProcess(credentialInput, tokenPath, workerName, runtime);
+  if (previousWorkerProcess) personalWorkerCompanionProcesses.add(previousWorkerProcess);
+  try {
+    startPersonalWorkerProcess(credentialInput, tokenPath, workerName, runtime);
+  } catch (error) {
+    if (previousWorkerProcess) {
+      personalWorkerCompanionProcesses.delete(previousWorkerProcess);
+      personalWorkerProcess = previousWorkerProcess;
+      personalWorkerRuntime = previousWorkerRuntime;
+    }
+    stopPersonalWorkerBrowserRuntime();
+    throw error;
+  }
   schedulePersonalWorkerCredentialRenewal(credentialInput, token);
   return { ok: true, status: "starting", workerName };
 }

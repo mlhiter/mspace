@@ -8,6 +8,17 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-07-16",
+    title: "Browser workers start only when needed",
+    summary:
+      "mspace no longer opens a managed Chrome window just because a personal desktop workspace became ready.",
+    items: [
+      "Keeps the automatic personal Codex worker ready without preparing browser/CDP capability during ordinary desktop startup.",
+      "Uses server-computed Test Plan and Run capabilities so UI and browser-backed functional cases request the same runtime that execution requires.",
+      "Starts a separate browser-capable Worker without interrupting the existing Codex Worker, while preserving the managed Chrome and Electron Chromium fallback path.",
+    ],
+  },
+  {
+    date: "2026-07-16",
     title: "Plain issue titles without blocking creation",
     summary:
       "mspace now keeps Issue titles readable when the first line of a rich Markdown note is formatted, while final title refinement continues in the background.",

@@ -127,6 +127,15 @@ func TestFunctionalPlatformCaseRequiresBrowserHarness(t *testing.T) {
 		"Use Simplified Chinese",
 		"case-functional-platform",
 	)
+
+	planDetail := testPlanDetailForResponse(TestPlanDetail{
+		Cases: []TestPlanCase{{TestCase: testCase}},
+	})
+	runDetail := testRunDetailForResponse(TestRunDetail{
+		Items: []TestRunItem{{TestCase: testCase}},
+	})
+	assertContainsAll(t, string(planDetail.RequiredCapabilities), `"codex":true`, `"browser":true`, `"chrome_cdp":true`)
+	assertContainsAll(t, string(runDetail.RequiredCapabilities), `"codex":true`, `"browser":true`, `"chrome_cdp":true`)
 }
 
 func assertContainsAll(t *testing.T, value string, needles ...string) {

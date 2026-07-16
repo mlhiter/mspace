@@ -577,9 +577,10 @@ type TestPlanCase struct {
 }
 
 type TestPlanDetail struct {
-	Plan  TestPlan       `json:"plan"`
-	Cases []TestPlanCase `json:"cases"`
-	Runs  []TestRun      `json:"runs"`
+	Plan                 TestPlan        `json:"plan"`
+	Cases                []TestPlanCase  `json:"cases"`
+	Runs                 []TestRun       `json:"runs"`
+	RequiredCapabilities json.RawMessage `json:"requiredCapabilities"`
 }
 
 type TestPlanCaseInput struct {
@@ -725,9 +726,10 @@ type CreateTestArtifactInput struct {
 }
 
 type TestRunDetail struct {
-	Run   TestRun       `json:"run"`
-	Plan  *TestPlan     `json:"plan,omitempty"`
-	Items []TestRunItem `json:"items"`
+	Run                  TestRun         `json:"run"`
+	Plan                 *TestPlan       `json:"plan,omitempty"`
+	Items                []TestRunItem   `json:"items"`
+	RequiredCapabilities json.RawMessage `json:"requiredCapabilities"`
 }
 
 type CreateTestRunInput struct {

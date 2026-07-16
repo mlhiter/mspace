@@ -1191,7 +1191,7 @@ func (s *Server) handleCreateWorkspaceTestPlan(w http.ResponseWriter, r *http.Re
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, detail)
+	writeJSON(w, http.StatusCreated, testPlanDetailForResponse(detail))
 }
 
 func (s *Server) handleGetWorkspaceTestPlan(w http.ResponseWriter, r *http.Request) {
@@ -1204,7 +1204,7 @@ func (s *Server) handleGetWorkspaceTestPlan(w http.ResponseWriter, r *http.Reque
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, testPlanDetailForResponse(detail))
 }
 
 func (s *Server) handleUpdateWorkspaceTestPlan(w http.ResponseWriter, r *http.Request) {
@@ -1222,7 +1222,7 @@ func (s *Server) handleUpdateWorkspaceTestPlan(w http.ResponseWriter, r *http.Re
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, testPlanDetailForResponse(detail))
 }
 
 func (s *Server) handleStartWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
@@ -1240,7 +1240,7 @@ func (s *Server) handleStartWorkspaceTestRun(w http.ResponseWriter, r *http.Requ
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, detail)
+	writeJSON(w, http.StatusCreated, testRunDetailForResponse(detail))
 }
 
 func (s *Server) handleListWorkspaceTestRuns(w http.ResponseWriter, r *http.Request) {
@@ -1275,7 +1275,7 @@ func (s *Server) handleStartAdHocWorkspaceTestRun(w http.ResponseWriter, r *http
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, detail)
+	writeJSON(w, http.StatusCreated, testRunDetailForResponse(detail))
 }
 
 func (s *Server) handleGetWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
@@ -1288,7 +1288,7 @@ func (s *Server) handleGetWorkspaceTestRun(w http.ResponseWriter, r *http.Reques
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, testRunDetailForResponse(detail))
 }
 
 func (s *Server) handleListWorkspaceTestRunArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -1319,7 +1319,7 @@ func (s *Server) handleRetryWorkspaceTestRun(w http.ResponseWriter, r *http.Requ
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, testRunDetailForResponse(detail))
 }
 
 func (s *Server) handleCancelWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
@@ -1337,7 +1337,7 @@ func (s *Server) handleCancelWorkspaceTestRun(w http.ResponseWriter, r *http.Req
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, testRunDetailForResponse(detail))
 }
 
 func (s *Server) handleAcceptWorkspaceTestRun(w http.ResponseWriter, r *http.Request) {
@@ -1406,7 +1406,7 @@ func (s *Server) handleCreateProjectTestPlan(w http.ResponseWriter, r *http.Requ
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, detail)
+	writeJSON(w, http.StatusCreated, testPlanDetailForResponse(detail))
 }
 
 func (s *Server) handleGetProjectTestPlan(w http.ResponseWriter, r *http.Request) {
@@ -1419,7 +1419,7 @@ func (s *Server) handleGetProjectTestPlan(w http.ResponseWriter, r *http.Request
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, testPlanDetailForResponse(detail))
 }
 
 func (s *Server) handleUpdateProjectTestPlan(w http.ResponseWriter, r *http.Request) {
@@ -1437,7 +1437,7 @@ func (s *Server) handleUpdateProjectTestPlan(w http.ResponseWriter, r *http.Requ
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, testPlanDetailForResponse(detail))
 }
 
 func (s *Server) handleStartProjectTestRun(w http.ResponseWriter, r *http.Request) {
@@ -1455,7 +1455,7 @@ func (s *Server) handleStartProjectTestRun(w http.ResponseWriter, r *http.Reques
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, detail)
+	writeJSON(w, http.StatusCreated, testRunDetailForResponse(detail))
 }
 
 func (s *Server) handleListProjectTestRuns(w http.ResponseWriter, r *http.Request) {
@@ -1490,7 +1490,7 @@ func (s *Server) handleStartAdHocProjectTestRun(w http.ResponseWriter, r *http.R
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, detail)
+	writeJSON(w, http.StatusCreated, testRunDetailForResponse(detail))
 }
 
 func (s *Server) handleGetProjectTestRun(w http.ResponseWriter, r *http.Request) {
@@ -1503,7 +1503,7 @@ func (s *Server) handleGetProjectTestRun(w http.ResponseWriter, r *http.Request)
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, testRunDetailForResponse(detail))
 }
 
 func (s *Server) handleListProjectTestRunArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -1564,7 +1564,7 @@ func (s *Server) handleRetryProjectTestRun(w http.ResponseWriter, r *http.Reques
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, testRunDetailForResponse(detail))
 }
 
 func (s *Server) handleCancelProjectTestRun(w http.ResponseWriter, r *http.Request) {
@@ -1582,7 +1582,7 @@ func (s *Server) handleCancelProjectTestRun(w http.ResponseWriter, r *http.Reque
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, testRunDetailForResponse(detail))
 }
 
 func (s *Server) handleAcceptProjectTestRun(w http.ResponseWriter, r *http.Request) {
