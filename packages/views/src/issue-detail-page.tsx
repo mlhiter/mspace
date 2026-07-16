@@ -1098,21 +1098,6 @@ function EvidenceEvents(props: { events: EvidenceEvent[] }) {
   );
 }
 
-function SessionStatusMark(props: { status: string }) {
-  if (props.status === "completed") {
-    return (
-      <span
-        aria-label={translate("issueDetail.timeline.completed")}
-        title={translate("issueDetail.timeline.completed")}
-        className="grid size-7 shrink-0 place-items-center rounded-full bg-[color:var(--success-soft)] text-[color:var(--success)]"
-      >
-        <CheckCircle2 data-icon />
-      </span>
-    );
-  }
-  return <StatusBadge value={props.status} />;
-}
-
 function WorkingSessionLine(props: { status: string; agentName: string; runtimeMode?: string; agentStatus?: string }) {
   const team = props.runtimeMode === "team";
   const status = (props.agentStatus || props.status).trim().toLowerCase();
@@ -3710,6 +3695,7 @@ function SessionTimelineItem(props: {
   const agent = sessionAgent(session, props.agents);
   const agentMessage = latestAgentMessage(logs);
   const isActive = ["queued", "running"].includes(session.status);
+  const isCompleted = session.status === "completed";
   const isAnalysisSession = isIssueAnalysisSession(session);
   const analysisProgress = isAnalysisSession ? issueAnalysisProgressEntries(logs) : [];
   const sessionDisplayName = isAnalysisSession ? t("issueDetail.timeline.issueAnalysis") : agent.name;
@@ -3770,14 +3756,20 @@ function SessionTimelineItem(props: {
           <SessionFileChanges changes={props.changes} workdir={session.workdir} />
         </div>
       ) : (
-        <div className="rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
-          <div className="flex items-start justify-end gap-2">
-            <SessionStatusMark status={session.status} />
-          </div>
+        <div className={cn(!isCompleted && "rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]")}>
+          {!isCompleted ? (
+            <div className="flex items-start justify-end gap-2">
+              <StatusBadge value={session.status} />
+            </div>
+          ) : null}
 
           {isAnalysisSession ? <AnalysisSessionNote compact /> : null}
           {agentMessage ? (
-            <RichText agents={props.agents} basePath={session.workdir} className={cn("mt-2", isAnalysisSession ? "pt-1" : "")}>
+            <RichText
+              agents={props.agents}
+              basePath={session.workdir}
+              className={cn(isAnalysisSession && "mt-2 pt-1", !isCompleted && !isAnalysisSession && "mt-2")}
+            >
               {agentMessage}
             </RichText>
           ) : isAnalysisSession && analysisProgress.length > 0 ? (

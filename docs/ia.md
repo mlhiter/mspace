@@ -327,6 +327,7 @@ Current implementation:
 - resolves project attachment and checks worker liveness before saving an agent trigger comment; personal desktop mode may auto-start the local worker, while team workspaces require a connected team worker;
 - saves the trigger comment before queuing the worker-backed Codex session, so accepted turns are visible in the issue history;
 - sends the mention-stripped comment as the current turn request, ahead of the original issue context;
+- renders completed Codex replies as plain timeline content without an outer result card or redundant completion mark, while keeping active and abnormal session states explicit;
 - shows server-queued `issue_analysis` sessions as read-only Issue analysis using the `think` workflow skill, rather than as a generic runtime task or hidden background job;
 - shows Type and Priority controls in the quiet metadata sidebar, with a `Classifying...` state while a worker-backed `issue_type_triage` task assigns type;
 - keeps the quiet metadata sidebar on Overview only, while Commits, Sessions, and Evidence use the full page width for review-heavy content;
