@@ -14,10 +14,7 @@ import { IssueDocumentEditor } from "./issue-document-editor";
 export function CreateIssueModal(props: {
   onClose: () => void;
   createIssue: (input: CreateIssueInput) => Promise<{ issueId: string }>;
-  updateIssue: (issueId: string, input: { title: string; expectedTitle: string }) => Promise<unknown>;
-  suggestTitle: (input: Pick<CreateIssueInput, "title" | "body" | "prompt">) => Promise<{ title: string; source: string }>;
   issueQueryKey: readonly unknown[];
-  issueDetailQueryKey: (issueId: string) => readonly unknown[];
   inboxQueryKey: readonly unknown[];
   projectsQueryKey: readonly unknown[];
 }) {
@@ -36,10 +33,9 @@ export function CreateIssueModal(props: {
       }
       return props.createIssue({ title, titleSource: "plain_text", body });
     },
-    onSuccess: ({ issueId }, { body, title }) => {
+    onSuccess: ({ issueId }) => {
       setPrompt("");
       setPromptPlainText("");
-      void updateIssueTitleInBackground(issueId, body, title);
       void Promise.allSettled([
         queryClient.invalidateQueries({ queryKey: props.issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: props.inboxQueryKey }),
@@ -49,23 +45,6 @@ export function CreateIssueModal(props: {
       void navigate({ to: "/issues/$issueId", params: { issueId } });
     },
   });
-
-  async function updateIssueTitleInBackground(issueId: string, body: string, temporaryTitle: string) {
-    try {
-      const suggestion = await props.suggestTitle({ body });
-      const suggestedTitle = suggestion.title.trim();
-      if (suggestedTitle === "" || suggestedTitle === temporaryTitle) return;
-
-      await props.updateIssue(issueId, { title: suggestedTitle, expectedTitle: temporaryTitle });
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: props.issueQueryKey }),
-        queryClient.invalidateQueries({ queryKey: props.issueDetailQueryKey(issueId) }),
-        queryClient.invalidateQueries({ queryKey: props.inboxQueryKey }),
-      ]);
-    } catch {
-      // Keep the draft title. Issue creation must not depend on AI title generation.
-    }
-  }
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {

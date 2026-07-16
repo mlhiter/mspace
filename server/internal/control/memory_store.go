@@ -1228,7 +1228,10 @@ func (s *MemoryStore) ListRuntimeWorkers(_ Context, userID, workspaceID string) 
 func (s *MemoryStore) CreateRuntimeTask(_ Context, userID, workspaceID string, input CreateRuntimeTaskInput) (RuntimeTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createRuntimeTaskLocked(userID, workspaceID, input)
+}
 
+func (s *MemoryStore) createRuntimeTaskLocked(userID, workspaceID string, input CreateRuntimeTaskInput) (RuntimeTask, error) {
 	workspaceID = strings.TrimSpace(workspaceID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return RuntimeTask{}, ErrNotFound
@@ -4817,20 +4820,37 @@ func (s *MemoryStore) MarkIssueTriageFailed(_ Context, workspaceID, issueID stri
 
 func (s *MemoryStore) reconcileIssueTypeTriageRuntimeResultLocked(task RuntimeTask) {
 	issue, ok := s.issues[strings.TrimSpace(task.IssueID)]
-	if !ok || issue.WorkspaceID != strings.TrimSpace(task.WorkspaceID) || issue.TriageStatus != "pending" {
+	if !ok || issue.WorkspaceID != strings.TrimSpace(task.WorkspaceID) {
 		return
 	}
 	if task.Status != "completed" {
-		issue.TriageStatus = "failed"
-		issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		s.issues[issue.ID] = issue
+		if issue.TriageStatus == "pending" {
+			issue.TriageStatus = "failed"
+			issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			s.issues[issue.ID] = issue
+		}
 		return
 	}
 	result, err := parseIssueTypeTriageResult(string(task.Result))
 	if err != nil {
-		issue.TriageStatus = "failed"
-		issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		s.issues[issue.ID] = issue
+		if issue.TriageStatus == "pending" {
+			issue.TriageStatus = "failed"
+			issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			s.issues[issue.ID] = issue
+		}
+		return
+	}
+	expectedTitle := issueTypeTriageExpectedTitle(task)
+	titleChanged := false
+	if expectedTitle != "" && result.Title != "" && expectedTitle != result.Title && issue.Title == expectedTitle {
+		issue.Title = result.Title
+		titleChanged = true
+	}
+	if issue.TriageStatus != "pending" {
+		if titleChanged {
+			issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			s.issues[issue.ID] = issue
+		}
 		return
 	}
 	labels, err := normalizeIssueLabelKeys([]string{"type:" + result.Type})

@@ -3232,7 +3232,7 @@ func TestWorkspaceTestPlanCanSpanProjects(t *testing.T) {
 	}
 }
 
-func TestIssueTypeTriageRuntimeTaskResultAppliesLabel(t *testing.T) {
+func TestIssueTypeTriageRuntimeTaskResultAppliesGeneratedTitleAndLabel(t *testing.T) {
 	store := NewMemoryStore()
 	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
 		Provider:       "github",
@@ -3279,7 +3279,7 @@ func TestIssueTypeTriageRuntimeTaskResultAppliesLabel(t *testing.T) {
 		t.Fatalf("parse worker: %v", err)
 	}
 
-	if err := server.enqueueIssueTypeTriage(context.Background(), user.ID, workspaceID, issueID); err != nil {
+	if err := server.enqueueIssueTypeTriage(context.Background(), user.ID, workspaceID, issueID, "Fix worker-backed issue type triage"); err != nil {
 		t.Fatalf("enqueue issue type triage: %v", err)
 	}
 
@@ -3297,6 +3297,9 @@ func TestIssueTypeTriageRuntimeTaskResultAppliesLabel(t *testing.T) {
 	if task.Kind != "issue_type_triage" || task.IssueID != issueID || task.RuntimeMode != "personal" || !strings.Contains(string(task.RequiredCapabilities), `"codex":true`) {
 		t.Fatalf("unexpected triage task: %+v", task)
 	}
+	if !strings.Contains(string(task.Payload), `"expectedTitle":"Fix worker-backed issue type triage"`) {
+		t.Fatalf("expected triage task to capture the draft title, got %s", task.Payload)
+	}
 
 	runningRecorder := httptest.NewRecorder()
 	runningReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"running"}`))
@@ -3307,7 +3310,7 @@ func TestIssueTypeTriageRuntimeTaskResultAppliesLabel(t *testing.T) {
 	}
 
 	completedRecorder := httptest.NewRecorder()
-	completedReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"completed","result":{"type":"fix","confidence":0.91,"reason":"bug fix"}}`))
+	completedReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+task.ID+"/status", strings.NewReader(`{"status":"completed","result":{"title":"**Classify issue types through runtime workers**","type":"fix","confidence":0.91,"reason":"bug fix"}}`))
 	completedReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
 	router.ServeHTTP(completedRecorder, completedReq)
 	if completedRecorder.Code != http.StatusOK {
@@ -3323,6 +3326,9 @@ func TestIssueTypeTriageRuntimeTaskResultAppliesLabel(t *testing.T) {
 	}
 	if len(detail.Labels) != 1 || detail.Labels[0].Key != "type:fix" {
 		t.Fatalf("expected type:fix label, got %+v", detail.Labels)
+	}
+	if detail.Issue.Title != "Classify issue types through runtime workers" {
+		t.Fatalf("expected generated plain title to replace the unchanged draft, got %q", detail.Issue.Title)
 	}
 }
 
@@ -4045,7 +4051,10 @@ func TestCreateIssueQueuesAutomaticThinkAnalysis(t *testing.T) {
 	if err := server.enqueueIssueAnalysis(context.Background(), user.ID, workspaceID, created.IssueID); !errors.Is(err, errIssueAnalysisNotNeeded) {
 		t.Fatalf("duplicate issue analysis should be skipped, got %v", err)
 	}
-	waitForIssueTypeTriageTask(t, store, user.ID, workspaceID, created.IssueID)
+	titleTriageTask := waitForIssueTypeTriageTask(t, store, user.ID, workspaceID, created.IssueID)
+	if !strings.Contains(string(titleTriageTask.Payload), `"expectedTitle":"After creating an issue, analyze what Codex should do next."`) {
+		t.Fatalf("expected create path to capture the draft title before responding, got %s", titleTriageTask.Payload)
+	}
 	claimRecorder := httptest.NewRecorder()
 	claimReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/claim", nil)
 	claimReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)

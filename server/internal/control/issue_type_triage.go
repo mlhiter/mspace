@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type issueTypeTriageDetail struct {
@@ -18,6 +20,7 @@ type issueTypeTriageDetail struct {
 }
 
 type issueTypeTriageResult struct {
+	Title      string  `json:"title"`
 	Type       string  `json:"type"`
 	Confidence float64 `json:"confidence"`
 	Reason     string  `json:"reason"`
@@ -25,43 +28,21 @@ type issueTypeTriageResult struct {
 
 var errIssueTypeTriageNotNeeded = errors.New("issue does not need type triage")
 
-func (s *Server) startIssueTypeTriage(userID, workspaceID, issueID string) {
-	userID = strings.TrimSpace(userID)
-	workspaceID = strings.TrimSpace(workspaceID)
-	issueID = strings.TrimSpace(issueID)
-	if userID == "" || workspaceID == "" || issueID == "" {
-		return
-	}
-	key := workspaceID + "/" + issueID
-	s.triageMu.Lock()
-	if _, ok := s.triageInFlight[key]; ok {
-		s.triageMu.Unlock()
-		return
-	}
-	s.triageInFlight[key] = struct{}{}
-	s.triageMu.Unlock()
-	go func() {
-		defer func() {
-			s.triageMu.Lock()
-			delete(s.triageInFlight, key)
-			s.triageMu.Unlock()
-		}()
-		if err := s.enqueueIssueTypeTriage(context.Background(), userID, workspaceID, issueID); err != nil {
-			if errors.Is(err, errIssueTypeTriageNotNeeded) {
-				return
-			}
+func (s *Server) enqueueIssueTypeTriageNow(ctx context.Context, userID, workspaceID, issueID, expectedTitle string) {
+	if err := s.enqueueIssueTypeTriage(ctx, userID, workspaceID, issueID, expectedTitle); err != nil {
+		if !errors.Is(err, errIssueTypeTriageNotNeeded) {
 			slog.Warn("failed to enqueue issue type triage", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
-			return
 		}
-		if persistent, ok := s.store.(interface{ Persist() error }); ok {
-			if err := persistent.Persist(); err != nil {
-				slog.Warn("failed to persist issue type triage state", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
-			}
+		return
+	}
+	if persistent, ok := s.store.(interface{ Persist() error }); ok {
+		if err := persistent.Persist(); err != nil {
+			slog.Warn("failed to persist issue type triage state", slog.String("workspace_id", workspaceID), slog.String("issue_id", issueID), slog.String("error", err.Error()))
 		}
-	}()
+	}
 }
 
-func (s *Server) enqueueIssueTypeTriage(ctx context.Context, userID, workspaceID, issueID string) error {
+func (s *Server) enqueueIssueTypeTriage(ctx context.Context, userID, workspaceID, issueID, expectedTitle string) error {
 	detail, err := s.loadIssueForTypeTriage(ctx, workspaceID, issueID)
 	if err != nil {
 		return err
@@ -69,23 +50,16 @@ func (s *Server) enqueueIssueTypeTriage(ctx context.Context, userID, workspaceID
 	if detail.Issue.TriageStatus != "pending" || hasIssueLabelDimension(detail.Labels, issueLabelDimensionType) {
 		return errIssueTypeTriageNotNeeded
 	}
-	active, err := s.hasActiveIssueTypeTriageTask(ctx, workspaceID, issueID)
-	if err != nil {
-		return err
-	}
-	if active {
-		return errIssueTypeTriageNotNeeded
-	}
 	capabilities, err := json.Marshal(map[string]bool{"codex": true})
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(buildIssueTypeTriagePayload(detail))
+	payload, err := json.Marshal(buildIssueTypeTriagePayload(detail, plainIssueTitleFromText(expectedTitle)))
 	if err != nil {
 		return err
 	}
 	workspace := workspaceForTriage(detail, workspaceID)
-	_, err = s.store.CreateRuntimeTask(ctx, userID, workspaceID, CreateRuntimeTaskInput{
+	return s.ensureIssueTypeTriageTask(ctx, userID, workspaceID, issueID, plainIssueTitleFromText(expectedTitle), CreateRuntimeTaskInput{
 		IssueID:              detail.Issue.ID,
 		ProjectID:            detail.Issue.ProjectID,
 		Kind:                 "issue_type_triage",
@@ -94,10 +68,139 @@ func (s *Server) enqueueIssueTypeTriage(ctx context.Context, userID, workspaceID
 		RequiredCapabilities: capabilities,
 		Payload:              payload,
 	})
+}
+
+func (s *Server) ensureIssueTypeTriageTask(ctx context.Context, userID, workspaceID, issueID, expectedTitle string, input CreateRuntimeTaskInput) error {
+	switch store := s.store.(type) {
+	case *PostgresStore:
+		return ensurePostgresIssueTypeTriageTask(ctx, store, userID, workspaceID, issueID, expectedTitle, input)
+	case *SQLiteStore:
+		store.MemoryStore.mu.Lock()
+		defer store.MemoryStore.mu.Unlock()
+		return ensureMemoryIssueTypeTriageTask(store.MemoryStore, userID, workspaceID, issueID, expectedTitle, input)
+	case *MemoryStore:
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return ensureMemoryIssueTypeTriageTask(store, userID, workspaceID, issueID, expectedTitle, input)
+	default:
+		active, err := s.hasActiveIssueTypeTriageTask(ctx, workspaceID, issueID)
+		if err != nil {
+			return err
+		}
+		if active {
+			return errIssueTypeTriageNotNeeded
+		}
+		_, err = s.store.CreateRuntimeTask(ctx, userID, workspaceID, input)
+		return err
+	}
+}
+
+func ensurePostgresIssueTypeTriageTask(ctx context.Context, store *PostgresStore, userID, workspaceID, issueID, expectedTitle string, input CreateRuntimeTaskInput) error {
+	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	return nil
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, workspaceID, issueID); err != nil {
+		return err
+	}
+	var taskID string
+	var payload json.RawMessage
+	err = tx.QueryRow(ctx, `
+		SELECT id::text, payload
+		FROM runtime_tasks
+		WHERE workspace_id = $1
+			AND issue_id = $2
+			AND kind = 'issue_type_triage'
+			AND status IN ('queued', 'claimed', 'running')
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1
+		FOR UPDATE
+	`, workspaceID, issueID).Scan(&taskID, &payload)
+	switch {
+	case err == nil:
+		nextPayload, changed, err := issueTypeTriagePayloadWithExpectedTitle(payload, expectedTitle)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return errIssueTypeTriageNotNeeded
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runtime_tasks SET payload = $2, updated_at = now() WHERE id = $1`, taskID, nextPayload); err != nil {
+			return err
+		}
+	case errors.Is(err, pgx.ErrNoRows):
+		var triageStatus string
+		if err := tx.QueryRow(ctx, `
+			SELECT triage_status
+			FROM issues
+			WHERE workspace_id = $1 AND id = $2
+			FOR UPDATE
+		`, workspaceID, issueID).Scan(&triageStatus); errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		labels, err := listIssueLabels(ctx, tx, workspaceID, issueID)
+		if err != nil {
+			return err
+		}
+		if triageStatus != "pending" || hasIssueLabelDimension(labels, issueLabelDimensionType) {
+			return errIssueTypeTriageNotNeeded
+		}
+		if _, err := insertRuntimeTaskRecord(ctx, tx, workspaceID, userID, input); err != nil {
+			return err
+		}
+	case err != nil:
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func ensureMemoryIssueTypeTriageTask(store *MemoryStore, userID, workspaceID, issueID, expectedTitle string, input CreateRuntimeTaskInput) error {
+	for id, task := range store.runtimeTasks {
+		if task.WorkspaceID != workspaceID || task.IssueID != issueID || task.Kind != "issue_type_triage" ||
+			(task.Status != "queued" && task.Status != "claimed" && task.Status != "running") {
+			continue
+		}
+		nextPayload, changed, err := issueTypeTriagePayloadWithExpectedTitle(task.Payload, expectedTitle)
+		if err != nil {
+			return err
+		}
+		if !changed {
+			return errIssueTypeTriageNotNeeded
+		}
+		task.Payload = nextPayload
+		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		store.runtimeTasks[id] = task
+		return nil
+	}
+	issue, ok := store.issues[issueID]
+	if !ok || issue.WorkspaceID != workspaceID {
+		return ErrNotFound
+	}
+	if issue.TriageStatus != "pending" || hasIssueLabelDimension(store.issueLabels[issueID], issueLabelDimensionType) {
+		return errIssueTypeTriageNotNeeded
+	}
+	_, err := store.createRuntimeTaskLocked(userID, workspaceID, input)
+	return err
+}
+
+func issueTypeTriagePayloadWithExpectedTitle(payload json.RawMessage, expectedTitle string) (json.RawMessage, bool, error) {
+	expectedTitle = plainIssueTitleFromText(expectedTitle)
+	if expectedTitle == "" {
+		return payload, false, nil
+	}
+	value := map[string]any{}
+	if err := json.Unmarshal(payload, &value); err != nil {
+		return nil, false, err
+	}
+	if current, _ := value["expectedTitle"].(string); plainIssueTitleFromText(current) != "" {
+		return payload, false, nil
+	}
+	value["expectedTitle"] = expectedTitle
+	nextPayload, err := json.Marshal(value)
+	return nextPayload, err == nil, err
 }
 
 func (s *Server) hasActiveIssueTypeTriageTask(ctx context.Context, workspaceID, issueID string) (bool, error) {
@@ -148,11 +251,12 @@ func (s *Server) hasActiveIssueTypeTriageTask(ctx context.Context, workspaceID, 
 	}
 }
 
-func buildIssueTypeTriagePayload(detail issueTypeTriageDetail) map[string]any {
+func buildIssueTypeTriagePayload(detail issueTypeTriageDetail, expectedTitle string) map[string]any {
 	return map[string]any{
 		"issueId":               detail.Issue.ID,
 		"workspaceId":           detail.Issue.WorkspaceID,
 		"projectId":             detail.Issue.ProjectID,
+		"expectedTitle":         expectedTitle,
 		"developerInstructions": buildIssueTypeTriageDeveloperInstructions(),
 		"prompt":                buildIssueTypeTriagePrompt(detail),
 		"issue": map[string]any{
@@ -271,12 +375,18 @@ func (s *PostgresStore) reconcileIssueTypeTriageRuntimeResult(ctx context.Contex
 	if err != nil {
 		return markIssueTriageFailed(ctx, q, task.WorkspaceID, task.IssueID)
 	}
-	return applyIssueTypeClassification(ctx, q, task.WorkspaceID, task.IssueID, "type:"+result.Type)
+	return applyIssueTypeTriageResult(ctx, q, task.WorkspaceID, task.IssueID, "type:"+result.Type, issueTypeTriageExpectedTitle(task), result.Title)
 }
 
 func applyIssueTypeClassification(ctx context.Context, q queryer, workspaceID, issueID string, labelKey string) error {
+	return applyIssueTypeTriageResult(ctx, q, workspaceID, issueID, labelKey, "", "")
+}
+
+func applyIssueTypeTriageResult(ctx context.Context, q queryer, workspaceID, issueID, labelKey, expectedTitle, suggestedTitle string) error {
 	workspaceID = strings.TrimSpace(workspaceID)
 	issueID = strings.TrimSpace(issueID)
+	expectedTitle = plainIssueTitleFromText(expectedTitle)
+	suggestedTitle = normalizeSuggestedIssueTitle(suggestedTitle)
 	labels, err := normalizeIssueLabelKeys([]string{labelKey})
 	if err != nil {
 		return err
@@ -284,11 +394,27 @@ func applyIssueTypeClassification(ctx context.Context, q queryer, workspaceID, i
 	if !hasIssueLabelDimension(labels, issueLabelDimensionType) {
 		return errors.New("issue type label is required")
 	}
-	issue, err := loadIssue(ctx, q, workspaceID, issueID)
-	if err != nil {
+	var triageStatus string
+	if err := q.QueryRow(ctx, `
+		SELECT triage_status
+		FROM issues
+		WHERE workspace_id = $1 AND id = $2
+		FOR UPDATE
+	`, workspaceID, issueID).Scan(&triageStatus); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
 		return err
 	}
-	if issue.TriageStatus != "pending" {
+	if expectedTitle != "" && suggestedTitle != "" && expectedTitle != suggestedTitle {
+		if _, err := q.Exec(ctx, `
+			UPDATE issues
+			SET title = $4, updated_at = now()
+			WHERE workspace_id = $1 AND id = $2 AND title = $3
+		`, workspaceID, issueID, expectedTitle, suggestedTitle); err != nil {
+			return err
+		}
+	}
+	if triageStatus != "pending" {
 		return nil
 	}
 	existingLabels, err := listIssueLabels(ctx, q, workspaceID, issueID)
@@ -305,6 +431,16 @@ func applyIssueTypeClassification(ctx context.Context, q queryer, workspaceID, i
 		WHERE workspace_id = $1 AND id = $2 AND triage_status = 'pending'
 	`, workspaceID, issueID)
 	return err
+}
+
+func issueTypeTriageExpectedTitle(task RuntimeTask) string {
+	var payload struct {
+		ExpectedTitle string `json:"expectedTitle"`
+	}
+	if err := json.Unmarshal(task.Payload, &payload); err != nil {
+		return ""
+	}
+	return plainIssueTitleFromText(payload.ExpectedTitle)
 }
 
 func markIssueTriageFailed(ctx context.Context, q queryer, workspaceID, issueID string) error {
@@ -328,14 +464,18 @@ func markIssueTriageFailed(ctx context.Context, q queryer, workspaceID, issueID 
 
 func buildIssueTypeTriageDeveloperInstructions() string {
 	return strings.TrimSpace(`
-You are an mspace issue triage classifier.
+You are an mspace issue triage assistant.
 
-Classify the issue into exactly one Conventional Commit type.
+Write a concise issue title and classify the issue into exactly one Conventional Commit type.
 Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert.
 
 Rules:
 - Return only one compact JSON object.
 - Do not wrap the JSON in Markdown.
+- Write the title in the same language as the issue note when clear.
+- Keep the title specific, plain text, and under 72 characters.
+- Treat the existing title as a temporary draft. Always rewrite it from the full body instead of copying it verbatim.
+- Do not include Markdown, URLs, labels, quotes, or trailing punctuation in the title.
 - Do not assign priority.
 - Do not change issue status.
 - Do not edit files or run commands.
@@ -347,7 +487,7 @@ func buildIssueTypeTriagePrompt(detail issueTypeTriageDetail) string {
 	var builder strings.Builder
 	builder.WriteString("# Issue Type Triage\n\n")
 	builder.WriteString("Return exactly this JSON shape:\n")
-	builder.WriteString(`{"type":"fix","confidence":0.86,"reason":"short reason"}`)
+	builder.WriteString(`{"title":"Fix stale image pull secret after visibility change","type":"fix","confidence":0.86,"reason":"short reason"}`)
 	builder.WriteString("\n\n")
 	builder.WriteString("Allowed type values: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert.\n\n")
 	builder.WriteString("## Issue\n\n")
@@ -377,6 +517,7 @@ func parseIssueTypeTriageResult(value string) (issueTypeTriageResult, error) {
 		return issueTypeTriageResult{}, fmt.Errorf("parse triage JSON: %w", err)
 	}
 	result.Type = strings.TrimSpace(strings.ToLower(result.Type))
+	result.Title = normalizeSuggestedIssueTitle(result.Title)
 	result.Reason = strings.Join(strings.Fields(result.Reason), " ")
 	if !isAllowedIssueTypeLabel(result.Type) {
 		return issueTypeTriageResult{}, fmt.Errorf("triage returned unsupported issue type %q", result.Type)

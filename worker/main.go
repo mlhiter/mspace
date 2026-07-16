@@ -194,6 +194,7 @@ type issueTypeTriagePayload struct {
 }
 
 type issueTypeTriageResult struct {
+	Title      string  `json:"title,omitempty"`
 	Type       string  `json:"type"`
 	Confidence float64 `json:"confidence"`
 	Reason     string  `json:"reason"`
@@ -3452,6 +3453,7 @@ func parseIssueTypeTriageResult(value string) (issueTypeTriageResult, error) {
 		return issueTypeTriageResult{}, fmt.Errorf("parse triage JSON: %w", err)
 	}
 	result.Type = strings.TrimSpace(strings.ToLower(result.Type))
+	result.Title = strings.Join(strings.Fields(result.Title), " ")
 	result.Reason = strings.Join(strings.Fields(result.Reason), " ")
 	if !isAllowedIssueTypeLabel(result.Type) {
 		return issueTypeTriageResult{}, fmt.Errorf("triage returned unsupported issue type %q", result.Type)
@@ -3648,14 +3650,18 @@ Follow these mspace rules:
 
 func defaultIssueTypeTriageDeveloperInstructions() string {
 	return strings.TrimSpace(`
-You are an mspace issue triage classifier.
+You are an mspace issue triage assistant.
 
-Classify the issue into exactly one Conventional Commit type.
+Write a concise issue title and classify the issue into exactly one Conventional Commit type.
 Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert.
 
 Rules:
 - Return only one compact JSON object.
 - Do not wrap the JSON in Markdown.
+- Write the title in the same language as the issue note when clear.
+- Keep the title specific, plain text, and under 72 characters.
+- Treat the existing title as a temporary draft. Always rewrite it from the full body instead of copying it verbatim.
+- Do not include Markdown, URLs, labels, quotes, or trailing punctuation in the title.
 - Do not assign priority.
 - Do not change issue status.
 - Do not edit files or run commands.

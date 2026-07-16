@@ -18,6 +18,7 @@ The repository now has a runnable local desktop MVP:
 - store signed-in workspace projects, project runbooks, project test cases, test case suggestions, test plans, test runs, issues, child issue tasks, comments, reactions, labels, and Inbox receipts in the server store: Postgres for team/shared deployments, local SQLite for packaged personal desktop mode;
 - write checklist-style task lists during issue creation and have those rows converted into inline child issues on the parent Issue page, where they can be toggled or deleted;
 - classify new issues asynchronously by queueing `issue_type_triage` runtime tasks that are claimed by Codex-capable workers and reconciled into one Conventional Commit type label by the server;
+- let updated triage workers return a rewritten title in the same background turn, while the server applies it only when the user has not changed the immediate plain-text draft;
 - label priority manually from Issue Detail, and scan/filter labels from the Issues list;
 - manage Codex-backed agents from the Agents route, including mention, description, enabled state, and role instructions;
 - use Inbox as a review feed for unread issue and session updates;

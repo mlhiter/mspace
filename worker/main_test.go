@@ -357,6 +357,26 @@ func TestParseImportMappingResultNormalizesSuggestions(t *testing.T) {
 	}
 }
 
+func TestParseIssueTypeTriageResultKeepsGeneratedTitle(t *testing.T) {
+	result, err := parseIssueTypeTriageResult(`{"title":"  Fix stale image pull secret  ","type":"FIX","confidence":0.91,"reason":"  bug fix  "}`)
+	if err != nil {
+		t.Fatalf("parse issue triage result: %v", err)
+	}
+	if result.Title != "Fix stale image pull secret" || result.Type != "fix" || result.Reason != "bug fix" {
+		t.Fatalf("unexpected normalized triage result: %+v", result)
+	}
+}
+
+func TestParseIssueTypeTriageResultAcceptsLegacyTitlelessResult(t *testing.T) {
+	result, err := parseIssueTypeTriageResult(`{"type":"FIX","confidence":0.91,"reason":"bug fix"}`)
+	if err != nil {
+		t.Fatalf("parse legacy issue triage result: %v", err)
+	}
+	if result.Title != "" || result.Type != "fix" {
+		t.Fatalf("unexpected legacy triage result: %+v", result)
+	}
+}
+
 func TestReadTestSetupResultArtifact(t *testing.T) {
 	artifactDir := t.TempDir()
 	data := `{

@@ -245,7 +245,9 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues" \
 
 When `projectId` is omitted, the server leaves the issue unassigned if the workspace has zero projects or more than one possible project. If the workspace has exactly one project, the server auto-attaches that project. The issue can be reviewed and commented on without a project, but agent execution, PR handoff, project runbook access, and issue test environments require attaching a project first.
 
-Issue and child issue title fields are plain text even when the source note uses Markdown. New clients should send `titleSource: "plain_text"` with an explicit draft title; omitting the field is reserved for older clients whose draft was copied from the Markdown body. A client that refines a draft title in the background should use a title-only conditional update:
+Issue and child issue title fields are plain text even when the source note uses Markdown. New clients should send `titleSource: "plain_text"` with an explicit draft title; omitting the field is reserved for older clients whose draft was copied from the Markdown body. Normal clients do not wait for or write the final title. The create path passes the captured draft as `expectedTitle` to the existing `issue_type_triage` task; list/get endpoints do not enqueue tasks. If a compatibility task is already active without the draft, the server atomically upgrades that task rather than dropping title refinement or starting a duplicate turn. Updated workers return a rewritten title alongside type classification, and the server conditionally applies the sanitized plain result. Older type-only worker results remain valid.
+
+External integrations that implement their own title refinement may still use the title-only conditional update API:
 
 ```bash
 curl -X PUT "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues/<issue-id>" \
@@ -254,9 +256,9 @@ curl -X PUT "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues/<issue-id>
   -d '{"title":"Final plain title","expectedTitle":"Original draft title"}'
 ```
 
-`expectedTitle` is accepted only with `title`. The server updates only the title when the stored title still equals `expectedTitle`; otherwise it returns the current Issue unchanged. This prevents a late background suggestion from overwriting a human title or body edit.
+`expectedTitle` is accepted only with `title`. The server updates only the title when the stored title still equals `expectedTitle`; otherwise it returns the current Issue unchanged. Worker-backed triage enforces the same compare-and-set directly in Memory/Postgres, independently from type-label reconciliation.
 
-When a new issue has no explicit type label, the server marks type triage as pending and queues a worker-backed `issue_type_triage` runtime task. That task requires a worker with `{"codex":true}` capabilities in the workspace runtime mode. The worker returns a JSON result such as `{"type":"fix","confidence":0.86,"reason":"..."}`; the server validates the type against the fixed Conventional Commit set before applying the `type:*` label. Priority remains manual and is not classified by the worker.
+When a new issue has no explicit type label, the server marks type triage as pending and queues a worker-backed `issue_type_triage` runtime task. That task requires a worker with `{"codex":true}` capabilities in the workspace runtime mode. Updated workers return `{"title":"Concise plain title","type":"fix","confidence":0.86,"reason":"..."}`; older workers may omit `title`. The server validates the type against the fixed Conventional Commit set before applying the `type:*` label and independently applies the title only while it still matches the captured draft. Priority remains manual and is not classified by the worker.
 
 Attach an existing project later:
 
@@ -698,7 +700,7 @@ Runtime task kinds used by the current product path:
 | --- | --- | --- | --- |
 | `protocol_smoke` | User/API smoke | Any worker with `protocolSmoke:true` | Task result only |
 | `noop` | User/API smoke | Any matching worker | Task result only |
-| `issue_type_triage` | Server issue creation/update path | Worker with `codex:true` | Server reconciles issue type label |
+| `issue_type_triage` | Server issue creation/update path | Worker with `codex:true` | Server conditionally reconciles the generated title and independently applies the issue type label |
 | `agent_session` | Issue agent mention or test-deploy path | Worker with required runtime capabilities | Server derives session detail, source changes, evidence, and environment state |
 
 ## Artifact Contract

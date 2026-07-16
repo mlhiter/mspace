@@ -946,6 +946,17 @@ func (s *PostgresStore) UpdateIssueLabels(ctx Context, userID, workspaceID, issu
 		return nil, err
 	}
 	defer tx.Rollback(dbctx)
+	var lockedIssueID string
+	if err := tx.QueryRow(dbctx, `
+		SELECT id::text
+		FROM issues
+		WHERE workspace_id = $1 AND id = $2
+		FOR UPDATE
+	`, workspaceID, issueID).Scan(&lockedIssueID); errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	} else if err != nil {
+		return nil, err
+	}
 	if err := replaceIssueLabels(dbctx, tx, workspaceID, issueID, labels); err != nil {
 		return nil, err
 	}

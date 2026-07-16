@@ -74,22 +74,28 @@ In customer Helm deployments, the fixed-worker path can bootstrap the team works
 
 Agent session creation is guarded rather than left to wait in the queue. Issue Detail uses `GET /api/workspaces/{workspaceID}/runtime/availability` as the product-facing preflight for the selected runtime mode and required capabilities; personal desktop mode still asks Electron main to ensure the host-local Worker before trusting a fresh server heartbeat snapshot. Test Plan and Run detail responses carry the server-computed `requiredCapabilities` union, and renderer preflight forwards that map instead of maintaining a second browser-classification rule. The server repeats the same active Codex worker check and returns HTTP `409` with `no active codex worker` when no matching online worker exists.
 
-Issue type triage follows the same boundary:
+Final title refinement reuses the existing issue type triage boundary, so Issue creation does not add a second automatic Codex turn:
 
 ```text
-Issue create/update
+Issue create
+  -> server stores the plain-text draft immediately
+  -> project issue_analysis is queued first when applicable
   -> server sets triage_status=pending when no type label exists
-  -> server enqueues runtime_tasks(kind=issue_type_triage, requiredCapabilities={"codex":true})
+  -> server atomically creates or upgrades runtime_tasks(kind=issue_type_triage, priority=0,
+     requiredCapabilities={"codex":true}, payload.expectedTitle=<draft>)
+  -> server returns without waiting for worker execution
 Worker
   -> claims the task in the workspace runtime mode
   -> runs Codex app-server from a temporary worker directory
-  -> returns {"type":"fix","confidence":...,"reason":...}
+  -> updated worker returns {"title":"...","type":"fix","confidence":...,"reason":...}
+  -> older worker may return the type-only shape
 Server
+  -> projects title through CommonMark/GFM and conditionally updates only when title=expectedTitle
   -> validates the type against the fixed Conventional Commit set
   -> replaces the issue's type label and marks triage_status=classified
 ```
 
-Failed, cancelled, or invalid triage task results mark the issue triage as failed rather than falling back to keyword classification.
+Issue list/detail reads do not enqueue triage. The create path is the task producer, while an already-active compatibility task with an empty `expectedTitle` is upgraded under the Memory/SQLite mutex or an issue-scoped Postgres advisory transaction. If no active task exists, the same atomic section locks and rechecks that the Issue is still pending and has no type label before inserting. This prevents current-version concurrent producers from stealing the title-eligible task slot, and prevents a stale producer from creating a second automatic turn after completion. Failed, cancelled, or invalid triage task results mark the issue triage as failed rather than falling back to keyword classification.
 
 Automatic issue analysis is a separate agent-session automation, not part of type triage:
 
@@ -179,7 +185,7 @@ Main server-owned state groups:
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
 - Runtime surfaces: `workspace_settings`, `workspace_github_app_installations`, `agent_profiles`, embedded built-in workflow skill catalog, `workspace_skills`, `workspace_skill_revisions`, `workspace_builtin_skill_settings`, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`.
 - Runtime queue: `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, `runtime_task_logs`.
-- Issue type triage is represented as `runtime_tasks.kind="issue_type_triage"` and reconciled when the task reaches a final state.
+- Issue title refinement and type classification share `runtime_tasks.kind="issue_type_triage"`; title compare-and-set and type-label reconciliation remain field-independent when the task reaches a final state.
 - Automatic issue analysis is represented as `runtime_tasks.kind="agent_session"` with payload `automation="issue_analysis"`, `sandbox="read-only"`, `sourceCapture=false`, and a required server-owned `think` skill bundle.
 
 Issue Detail should treat this server state as authoritative. Do not create a second local issue/session/environment store.
@@ -237,7 +243,7 @@ Transient execution state belongs to `agent_sessions`, `runtime_tasks`, and `iss
 
 Issue task lists are child issues stored on `issues.parent_issue_id`. Checklist lines submitted during issue creation are extracted into child rows, and Issue Detail renders those children inline with checkbox-style status controls.
 
-Issue and child Issue title fields are plain text; Markdown remains authoritative only for the Issue body and checklist source. The desktop sends its TipTap text projection with `titleSource="plain_text"`, while an omitted source lets the server normalize Markdown drafts from older clients. After creation, deterministic title refinement runs without blocking navigation and uses a title-only `expectedTitle` compare-and-set. MemoryStore holds its mutex for that comparison, Postgres performs it in one conditional `UPDATE`, and ordinary Postgres Issue updates patch only fields present in the request so concurrent body, status, project, or human title changes cannot restore stale values.
+Issue and child Issue title fields are plain text; Markdown remains authoritative only for the Issue body and checklist source. The desktop sends its TipTap text projection with `titleSource="plain_text"`, while an omitted source lets the server normalize Markdown drafts from older clients. After creation, the existing worker-backed type triage turn also returns a title candidate. MemoryStore holds its mutex for the final comparison, Postgres performs one conditional `UPDATE`, and both apply only the server-sanitized result while the current title still equals the captured `expectedTitle`. Postgres manual label updates lock the Issue row before replacing `issue_labels`, matching worker reconciliation's lock order so a concurrent human type choice serializes cleanly and remains authoritative. Ordinary Postgres Issue updates patch only fields present in the request, so concurrent body, status, project, or human title changes cannot restore stale values.
 
 Only the latest human-authored issue comment may be edited, and only before an agent session has consumed it. Agent-triggering sessions store `agent_sessions.trigger_comment_id`.
 
