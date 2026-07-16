@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, CheckCircle2, Circle, Clock3, Copy, Eye, EyeOff, FileText, Pencil, Plus, Power, Save, Settings2, SquareTerminal, Trash2, X } from "lucide-react";
+import { Bot, CheckCircle2, Circle, Clock3, Copy, Eye, EyeOff, FileText, MoreHorizontal, Pencil, Plus, Power, Save, Settings2, SquareTerminal, Trash2, X } from "lucide-react";
 import {
   controlPlaneApi,
   queryKeys,
@@ -16,6 +16,12 @@ import { useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
   CollectionEmptyState,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Field,
   InlineMeta,
   Input,
@@ -147,7 +153,7 @@ export function AgentsPage() {
   const [createForm, setCreateForm] = useState<AgentProfileInput>(emptyAgentForm);
   const [settingsAgent, setSettingsAgent] = useState<AgentProfile | null>(null);
   const [settingsForm, setSettingsForm] = useState<AgentProfileInput>(emptyAgentForm);
-  const [skillModalMode, setSkillModalMode] = useState<"create" | "edit" | null>(null);
+  const [skillModalMode, setSkillModalMode] = useState<"create" | "edit" | "view" | null>(null);
   const [editingSkill, setEditingSkill] = useState<SkillCatalogItem | null>(null);
   const [skillForm, setSkillForm] = useState<SkillForm>(emptySkillForm);
 
@@ -177,7 +183,7 @@ export function AgentsPage() {
     onSuccess: (skill) => {
       setEditingSkill(skill);
       setSkillForm(skillToForm(skill));
-      setSkillModalMode("edit");
+      setSkillModalMode(skill.editable ? "edit" : "view");
     },
   });
 
@@ -301,42 +307,44 @@ export function AgentsPage() {
       actions={pageAction}
     >
       {!workspaceReady ? <Notice>{t("workspace.signInRequired")}</Notice> : null}
-      <AgentsTabs activeTab={activeTab} onChange={setActiveTab} />
+      <div className="space-y-5">
+        <AgentsTabs activeTab={activeTab} onChange={setActiveTab} />
 
-      {activeTab === "agents" ? (
-        <AgentsPanel
-          agents={agents}
-          enabledCount={enabledCount}
-          isPending={agentsQuery.isPending}
-          onCreate={openCreateModal}
-          onSettings={openSettings}
-        />
-      ) : (
-        <SkillsPanel
-          skills={skills}
-          invocableCount={invocableSkillCount}
-          isPending={skillsQuery.isPending}
-          canManage={canManageWorkspace}
-          error={skillsQuery.error || loadSkill.error || createSkill.error || updateSkill.error || toggleSkill.error || deleteSkill.error || duplicateSkill.error}
-          isMutating={loadSkill.isPending || createSkill.isPending || updateSkill.isPending || toggleSkill.isPending || deleteSkill.isPending || duplicateSkill.isPending}
-          onCreate={openCreateSkillModal}
-          onEdit={openSkillSettings}
-          onDuplicate={(skill) => {
-            if (canManageWorkspace) duplicateSkill.mutate(skill);
-          }}
-          onDelete={(skill) => {
-            if (canManageWorkspace && window.confirm(t("agents.skills.deleteConfirm", { name: skill.name || skill.slug }))) {
-              deleteSkill.mutate(skill);
-            }
-          }}
-          onToggleEnabled={(skill) => {
-            if (canManageWorkspace) toggleSkill.mutate({ skill, values: { enabled: !skill.enabled } });
-          }}
-          onToggleInvocable={(skill) => {
-            if (canManageWorkspace) toggleSkill.mutate({ skill, values: { invocable: !skill.invocable } });
-          }}
-        />
-      )}
+        {activeTab === "agents" ? (
+          <AgentsPanel
+            agents={agents}
+            enabledCount={enabledCount}
+            isPending={agentsQuery.isPending}
+            onCreate={openCreateModal}
+            onSettings={openSettings}
+          />
+        ) : (
+          <SkillsPanel
+            skills={skills}
+            invocableCount={invocableSkillCount}
+            isPending={skillsQuery.isPending}
+            canManage={canManageWorkspace}
+            error={skillsQuery.error || loadSkill.error || createSkill.error || updateSkill.error || toggleSkill.error || deleteSkill.error || duplicateSkill.error}
+            isMutating={loadSkill.isPending || createSkill.isPending || updateSkill.isPending || toggleSkill.isPending || deleteSkill.isPending || duplicateSkill.isPending}
+            onCreate={openCreateSkillModal}
+            onEdit={openSkillSettings}
+            onDuplicate={(skill) => {
+              if (canManageWorkspace) duplicateSkill.mutate(skill);
+            }}
+            onDelete={(skill) => {
+              if (canManageWorkspace && window.confirm(t("agents.skills.deleteConfirm", { name: skill.name || skill.slug }))) {
+                deleteSkill.mutate(skill);
+              }
+            }}
+            onToggleEnabled={(skill) => {
+              if (canManageWorkspace) toggleSkill.mutate({ skill, values: { enabled: !skill.enabled } });
+            }}
+            onToggleInvocable={(skill) => {
+              if (canManageWorkspace) toggleSkill.mutate({ skill, values: { invocable: !skill.invocable } });
+            }}
+          />
+        )}
+      </div>
 
       {createOpen ? (
         <AgentModal
@@ -526,8 +534,8 @@ function SkillsPanel(props: {
         </div>
       ) : null}
       <div className="overflow-x-auto">
-        <div className="min-w-[950px]">
-          <div className="grid grid-cols-[minmax(220px,1.35fr)_150px_150px_170px_260px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
+        <div className="min-w-[910px]">
+          <div className="grid grid-cols-[minmax(240px,1.45fr)_130px_150px_145px_190px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
             <span>{t("agents.skills.skill")}</span>
             <span>{t("agents.skills.source")}</span>
             <span>{t("agents.skills.revision")}</span>
@@ -568,7 +576,7 @@ function SkillRow(props: {
   const { t } = useMspaceTranslation();
   const { skill } = props;
   return (
-    <article className="grid grid-cols-[minmax(220px,1.35fr)_150px_150px_170px_260px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
+    <article className="grid grid-cols-[minmax(240px,1.45fr)_130px_150px_145px_190px] items-center gap-4 px-4 py-2.5 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           <span className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
@@ -600,36 +608,65 @@ function SkillRow(props: {
         <SkillStatus enabled={skill.enabled} label={skill.enabled ? t("agents.enabled") : t("agents.disabled")} />
         <SkillStatus enabled={skill.invocable} label={skill.invocable ? t("agents.skills.invocable") : t("agents.skills.hidden")} />
       </div>
-      <div className="flex flex-wrap justify-end gap-1.5">
+      <div className="flex justify-end">
         {!props.canManage ? (
           <span className="self-center text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.skills.viewOnly")}</span>
         ) : (
-          <>
-            {skill.editable ? (
-              <Button variant="secondary" size="sm" onClick={() => props.onEdit(skill)} disabled={props.isMutating}>
-                <Pencil data-icon />
-                {t("agents.skills.edit")}
-              </Button>
-            ) : null}
-            <Button variant="secondary" size="sm" onClick={() => props.onToggleEnabled(skill)} disabled={props.isMutating}>
+          <div className="inline-flex items-center justify-end gap-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 min-h-7 rounded-[7px] px-2 text-[12px] text-[color:var(--muted-strong)] hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] [&_[data-icon]]:size-3.5"
+              onClick={() => props.onEdit(skill)}
+              disabled={props.isMutating}
+            >
+              {skill.editable ? <Pencil data-icon /> : <Eye data-icon />}
+              {skill.editable ? t("agents.skills.edit") : t("agents.skills.view")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-7 min-h-7 rounded-[7px] px-2 text-[12px] shadow-[0_0_0_1px_var(--line)] [&_[data-icon]]:size-3.5"
+              onClick={() => props.onToggleEnabled(skill)}
+              disabled={props.isMutating}
+            >
               <Power data-icon />
               {skill.enabled ? t("agents.skills.disable") : t("agents.skills.enable")}
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => props.onToggleInvocable(skill)} disabled={props.isMutating || !skill.enabled}>
-              {skill.invocable ? <EyeOff data-icon /> : <Eye data-icon />}
-              {skill.invocable ? t("agents.skills.hide") : t("agents.skills.show")}
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => props.onDuplicate(skill)} disabled={props.isMutating}>
-              <Copy data-icon />
-              {t("agents.skills.duplicate")}
-            </Button>
-            {skill.deletable ? (
-              <Button variant="secondary" size="sm" onClick={() => props.onDelete(skill)} disabled={props.isMutating}>
-                <Trash2 data-icon />
-                {t("agents.skills.delete")}
-              </Button>
-            ) : null}
-          </>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 min-h-7 rounded-[7px] text-[color:var(--muted)] hover:bg-[color:var(--hover)] hover:text-[color:var(--text)] [&_[data-icon]]:size-3.5"
+                  aria-label={t("agents.skills.moreActions")}
+                  disabled={props.isMutating}
+                >
+                  <MoreHorizontal data-icon />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuLabel>{t("agents.skills.actionMenu")}</DropdownMenuLabel>
+                <DropdownMenuItem onSelect={() => props.onToggleInvocable(skill)} disabled={props.isMutating || !skill.enabled}>
+                  {skill.invocable ? <EyeOff data-icon /> : <Eye data-icon />}
+                  {skill.invocable ? t("agents.skills.hide") : t("agents.skills.show")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => props.onDuplicate(skill)} disabled={props.isMutating}>
+                  <Copy data-icon />
+                  {t("agents.skills.duplicate")}
+                </DropdownMenuItem>
+                {skill.deletable ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onSelect={() => props.onDelete(skill)} disabled={props.isMutating}>
+                      <Trash2 data-icon />
+                      {t("agents.skills.delete")}
+                    </DropdownMenuItem>
+                  </>
+                ) : null}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         )}
       </div>
     </article>
@@ -827,7 +864,7 @@ function AgentModal(props: {
 }
 
 function SkillModal(props: {
-  mode: "create" | "edit";
+  mode: "create" | "edit" | "view";
   form: SkillForm;
   isPending: boolean;
   error?: Error | null;
@@ -837,11 +874,12 @@ function SkillModal(props: {
 }) {
   const { t } = useMspaceTranslation();
   const isCreate = props.mode === "create";
+  const isView = props.mode === "view";
   const extraFileCount = props.form.files.filter((file) => file.path !== "SKILL.md").length;
   return (
     <Modal
-      title={isCreate ? t("agents.skills.newSkill") : t("agents.skills.editSkill")}
-      description={isCreate ? t("agents.skills.newDescription") : t("agents.skills.editDescription")}
+      title={isCreate ? t("agents.skills.newSkill") : isView ? t("agents.skills.viewSkill") : t("agents.skills.editSkill")}
+      description={isCreate ? t("agents.skills.newDescription") : isView ? t("agents.skills.viewDescription") : t("agents.skills.editDescription")}
       onClose={props.onClose}
     >
       <form className="flex flex-col gap-4" onSubmit={props.onSubmit}>
@@ -850,7 +888,7 @@ function SkillModal(props: {
           <Field label={t("agents.skills.slug")}>
             <Input
               value={props.form.slug}
-              disabled={!isCreate}
+              disabled={!isCreate || isView}
               onChange={(event) => props.onChange({ ...props.form, slug: event.target.value })}
               placeholder="repo-map"
             />
@@ -858,6 +896,7 @@ function SkillModal(props: {
           <Field label={t("agents.name")}>
             <Input
               value={props.form.name}
+              disabled={isView}
               onChange={(event) => props.onChange({ ...props.form, name: event.target.value })}
               placeholder={t("agents.skills.namePlaceholder")}
             />
@@ -867,6 +906,7 @@ function SkillModal(props: {
         <Field label={t("agents.description")}>
           <Input
             value={props.form.description}
+            disabled={isView}
             onChange={(event) => props.onChange({ ...props.form, description: event.target.value })}
             placeholder={t("agents.skills.descriptionPlaceholder")}
           />
@@ -877,6 +917,7 @@ function SkillModal(props: {
             <input
               type="checkbox"
               checked={props.form.enabled}
+              disabled={isView}
               onChange={(event) => props.onChange({ ...props.form, enabled: event.target.checked })}
               className="size-4 rounded border-[color:var(--line)] accent-[color:var(--ink)]"
             />
@@ -890,7 +931,7 @@ function SkillModal(props: {
               type="checkbox"
               checked={props.form.invocable}
               onChange={(event) => props.onChange({ ...props.form, invocable: event.target.checked })}
-              disabled={!props.form.enabled}
+              disabled={isView || !props.form.enabled}
               className="size-4 rounded border-[color:var(--line)] accent-[color:var(--ink)] disabled:opacity-50"
             />
             <span className="min-w-0">
@@ -906,6 +947,7 @@ function SkillModal(props: {
         >
           <Textarea
             value={props.form.skillMd}
+            disabled={isView}
             onChange={(event) => props.onChange({ ...props.form, skillMd: event.target.value })}
             className="h-[280px] !min-h-[280px] font-mono text-[12px] leading-5"
             placeholder={t("agents.skills.skillMdPlaceholder")}
@@ -914,12 +956,14 @@ function SkillModal(props: {
 
         <div className="mt-1 flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isPending}>
-            {t("common.cancel")}
+            {isView ? t("common.close") : t("common.cancel")}
           </Button>
-          <Button type="submit" disabled={props.isPending}>
-            <Save data-icon />
-            {props.isPending ? t("agents.saving") : isCreate ? t("agents.skills.createSkill") : t("agents.saveSettings")}
-          </Button>
+          {!isView ? (
+            <Button type="submit" disabled={props.isPending}>
+              <Save data-icon />
+              {props.isPending ? t("agents.saving") : isCreate ? t("agents.skills.createSkill") : t("agents.saveSettings")}
+            </Button>
+          ) : null}
         </div>
       </form>
     </Modal>

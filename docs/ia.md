@@ -36,7 +36,7 @@ Navigation rules:
 - Inbox is the unread review surface for issue and session updates.
 - Issues is the durable knowledge surface and issue creation home.
 - Tests is the workspace quality surface for project-level cases/suggestions and workspace-level plans/runs. It sits after Issues because test execution still routes through issue-backed worker sessions.
-- Agents is the managed profile surface for Codex-backed collaborators and mentions, plus the basic workspace skill management surface for issue-comment `/` and `#` calls.
+- Agents is the managed profile surface for Codex-backed collaborators and mentions, plus the basic workspace skill management surface for inspecting server-managed skill revisions and governing issue-comment `/` and `#` calls.
 - Environments is reusable target access: Kubernetes kubeconfig import, reachability status, registry/exposure defaults, and virtual machine SSH target metadata with password/private-key login validation.
 - Projects is configuration and project-level history.
 - Workspace Settings is accessed from the workspace identity menu instead of the main rail, because it controls automation, membership, and runtime worker policy for the current workspace rather than daily issue work.
