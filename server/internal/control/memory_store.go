@@ -1572,7 +1572,7 @@ func (s *MemoryStore) resolveAgentSessionSkillBundleLocked(workspaceID, slug str
 		return AgentSessionSkillReference{}, RuntimeSkillBundle{}, errors.New("skill slug is required")
 	}
 	if skill, revision, ok := s.workspaceSkillByIdentifierLocked(workspaceID, slug); ok {
-		if !skill.Enabled || !skill.Invocable {
+		if !skill.Enabled {
 			return AgentSessionSkillReference{}, RuntimeSkillBundle{}, fmt.Errorf("skill slug is disabled: %s", slug)
 		}
 		bundle := runtimeSkillBundleFromWorkspaceSkill(skill, revision)
@@ -1583,7 +1583,7 @@ func (s *MemoryStore) resolveAgentSessionSkillBundleLocked(workspaceID, slug str
 		return AgentSessionSkillReference{}, RuntimeSkillBundle{}, err
 	}
 	setting := s.builtinSkillSettingLocked(workspaceID, slug)
-	if !setting.Enabled || !setting.Invocable {
+	if !setting.Enabled {
 		return AgentSessionSkillReference{}, RuntimeSkillBundle{}, fmt.Errorf("skill slug is disabled: %s", slug)
 	}
 	return skillReferenceFromBundle(bundle), bundle, nil

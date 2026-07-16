@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, CheckCircle2, Circle, Clock3, Copy, Eye, EyeOff, FileText, MoreHorizontal, Pencil, Plus, Power, Save, Settings2, SquareTerminal, Trash2, X } from "lucide-react";
+import { Bot, CheckCircle2, Circle, Clock3, Copy, Eye, FileText, MoreHorizontal, Pencil, Plus, Power, Save, Settings2, SquareTerminal, Trash2, X } from "lucide-react";
 import {
   controlPlaneApi,
   queryKeys,
@@ -54,7 +54,6 @@ type SkillForm = {
   name: string;
   description: string;
   enabled: boolean;
-  invocable: boolean;
   skillMd: string;
   files: RuntimeSkillFile[];
 };
@@ -64,7 +63,6 @@ const emptySkillForm: SkillForm = {
   name: "",
   description: "",
   enabled: true,
-  invocable: true,
   skillMd: "---\nname: \ndescription: \n---\n# Skill\n",
   files: [],
 };
@@ -104,7 +102,6 @@ function skillToForm(skill: SkillDetail): SkillForm {
     name: skill.name,
     description: skill.description,
     enabled: skill.enabled,
-    invocable: skill.invocable,
     skillMd,
     files,
   };
@@ -120,7 +117,6 @@ function skillFormToInput(form: SkillForm, includeSlug: boolean): SkillInput {
     name: form.name.trim(),
     description: form.description.trim(),
     enabled: form.enabled,
-    invocable: form.invocable,
     files: nextFiles.map((file) => ({ path: file.path, content: file.content })),
   };
 }
@@ -147,7 +143,7 @@ export function AgentsPage() {
   const agents = useMemo(() => agentsQuery.data || [], [agentsQuery.data]);
   const skills = useMemo(() => skillsQuery.data || [], [skillsQuery.data]);
   const enabledCount = agents.filter((agent) => agent.enabled).length;
-  const invocableSkillCount = skills.filter((skill) => skill.enabled && skill.invocable).length;
+  const enabledSkillCount = skills.filter((skill) => skill.enabled).length;
   const [activeTab, setActiveTab] = useState<AgentsTab>("agents");
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<AgentProfileInput>(emptyAgentForm);
@@ -321,7 +317,7 @@ export function AgentsPage() {
         ) : (
           <SkillsPanel
             skills={skills}
-            invocableCount={invocableSkillCount}
+            enabledCount={enabledSkillCount}
             isPending={skillsQuery.isPending}
             canManage={canManageWorkspace}
             error={skillsQuery.error || loadSkill.error || createSkill.error || updateSkill.error || toggleSkill.error || deleteSkill.error || duplicateSkill.error}
@@ -338,9 +334,6 @@ export function AgentsPage() {
             }}
             onToggleEnabled={(skill) => {
               if (canManageWorkspace) toggleSkill.mutate({ skill, values: { enabled: !skill.enabled } });
-            }}
-            onToggleInvocable={(skill) => {
-              if (canManageWorkspace) toggleSkill.mutate({ skill, values: { invocable: !skill.invocable } });
             }}
           />
         )}
@@ -472,7 +465,7 @@ function AgentsPanel(props: {
 
 function SkillsPanel(props: {
   skills: SkillCatalogItem[];
-  invocableCount: number;
+  enabledCount: number;
   isPending: boolean;
   isMutating: boolean;
   canManage: boolean;
@@ -482,7 +475,6 @@ function SkillsPanel(props: {
   onDuplicate: (skill: SkillCatalogItem) => void;
   onDelete: (skill: SkillCatalogItem) => void;
   onToggleEnabled: (skill: SkillCatalogItem) => void;
-  onToggleInvocable: (skill: SkillCatalogItem) => void;
 }) {
   const { t } = useMspaceTranslation();
   if (props.isPending) {
@@ -513,7 +505,7 @@ function SkillsPanel(props: {
         <div className="min-w-0">
           <h2 className="text-[14px] font-semibold leading-5 text-[color:var(--text)]">{t("agents.skills.title")}</h2>
           <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">
-            {t("agents.skills.summary", { invocable: props.invocableCount, total: props.skills.length })}
+            {t("agents.skills.summary", { enabled: props.enabledCount, total: props.skills.length })}
           </p>
         </div>
         {props.canManage ? (
@@ -553,7 +545,6 @@ function SkillsPanel(props: {
                 onDuplicate={props.onDuplicate}
                 onDelete={props.onDelete}
                 onToggleEnabled={props.onToggleEnabled}
-                onToggleInvocable={props.onToggleInvocable}
               />
             ))}
           </div>
@@ -571,7 +562,6 @@ function SkillRow(props: {
   onDuplicate: (skill: SkillCatalogItem) => void;
   onDelete: (skill: SkillCatalogItem) => void;
   onToggleEnabled: (skill: SkillCatalogItem) => void;
-  onToggleInvocable: (skill: SkillCatalogItem) => void;
 }) {
   const { t } = useMspaceTranslation();
   const { skill } = props;
@@ -606,7 +596,6 @@ function SkillRow(props: {
       </div>
       <div className="flex flex-col items-start gap-1.5">
         <SkillStatus enabled={skill.enabled} label={skill.enabled ? t("agents.enabled") : t("agents.disabled")} />
-        <SkillStatus enabled={skill.invocable} label={skill.invocable ? t("agents.skills.invocable") : t("agents.skills.hidden")} />
       </div>
       <div className="flex justify-end">
         {!props.canManage ? (
@@ -647,10 +636,6 @@ function SkillRow(props: {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-44">
                 <DropdownMenuLabel>{t("agents.skills.actionMenu")}</DropdownMenuLabel>
-                <DropdownMenuItem onSelect={() => props.onToggleInvocable(skill)} disabled={props.isMutating || !skill.enabled}>
-                  {skill.invocable ? <EyeOff data-icon /> : <Eye data-icon />}
-                  {skill.invocable ? t("agents.skills.hide") : t("agents.skills.show")}
-                </DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => props.onDuplicate(skill)} disabled={props.isMutating}>
                   <Copy data-icon />
                   {t("agents.skills.duplicate")}
@@ -912,34 +897,19 @@ function SkillModal(props: {
           />
         </Field>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="flex items-center gap-3 rounded-[8px] bg-[color:var(--block)] px-3 py-3 text-[13px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
-            <input
-              type="checkbox"
-              checked={props.form.enabled}
-              disabled={isView}
-              onChange={(event) => props.onChange({ ...props.form, enabled: event.target.checked })}
-              className="size-4 rounded border-[color:var(--line)] accent-[color:var(--ink)]"
-            />
-            <span className="min-w-0">
-              <span className="block font-medium text-[color:var(--text)]">{t("agents.skills.enabledLabel")}</span>
-              <span className="mt-1 block text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.skills.enabledHint")}</span>
-            </span>
-          </label>
-          <label className="flex items-center gap-3 rounded-[8px] bg-[color:var(--block)] px-3 py-3 text-[13px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
-            <input
-              type="checkbox"
-              checked={props.form.invocable}
-              onChange={(event) => props.onChange({ ...props.form, invocable: event.target.checked })}
-              disabled={isView || !props.form.enabled}
-              className="size-4 rounded border-[color:var(--line)] accent-[color:var(--ink)] disabled:opacity-50"
-            />
-            <span className="min-w-0">
-              <span className="block font-medium text-[color:var(--text)]">{t("agents.skills.invocableLabel")}</span>
-              <span className="mt-1 block text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.skills.invocableHint")}</span>
-            </span>
-          </label>
-        </div>
+        <label className="flex items-center gap-3 rounded-[8px] bg-[color:var(--block)] px-3 py-3 text-[13px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+          <input
+            type="checkbox"
+            checked={props.form.enabled}
+            disabled={isView}
+            onChange={(event) => props.onChange({ ...props.form, enabled: event.target.checked })}
+            className="size-4 rounded border-[color:var(--line)] accent-[color:var(--ink)]"
+          />
+          <span className="min-w-0">
+            <span className="block font-medium text-[color:var(--text)]">{t("agents.skills.enabledLabel")}</span>
+            <span className="mt-1 block text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.skills.enabledHint")}</span>
+          </span>
+        </label>
 
         <Field
           label="SKILL.md"

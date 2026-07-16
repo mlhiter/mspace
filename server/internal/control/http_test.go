@@ -3836,10 +3836,9 @@ func TestCreateAgentSessionRejectsDisabledWorkspaceSkillSlug(t *testing.T) {
 	server := NewServer(Config{}, store, fakeGitHubClient{})
 	router := server.Routes()
 	custom, err := store.CreateSkill(context.Background(), user.ID, workspaceID, SkillInput{
-		Slug:      "disabled-skill",
-		Name:      "Disabled Skill",
-		Enabled:   boolPointer(true),
-		Invocable: boolPointer(false),
+		Slug:    "disabled-skill",
+		Name:    "Disabled Skill",
+		Enabled: boolPointer(false),
 		Files: []RuntimeSkillFile{{
 			Path:    "SKILL.md",
 			Content: "---\nname: Disabled Skill\n---\n# Disabled Skill\n",

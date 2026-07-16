@@ -315,7 +315,7 @@ func (s *PostgresStore) resolveWorkspaceSkillBundle(ctx context.Context, workspa
 	}
 	skill, revision, err := s.workspaceSkillByIdentifier(ctx, workspaceID, slug)
 	if err == nil {
-		if !skill.Enabled || !skill.Invocable {
+		if !skill.Enabled {
 			return AgentSessionSkillReference{}, RuntimeSkillBundle{}, fmt.Errorf("skill slug is disabled: %s", slug)
 		}
 		bundle := runtimeSkillBundleFromWorkspaceSkill(skill, revision)
@@ -332,7 +332,7 @@ func (s *PostgresStore) resolveWorkspaceSkillBundle(ctx context.Context, workspa
 	if err != nil {
 		return AgentSessionSkillReference{}, RuntimeSkillBundle{}, err
 	}
-	if !setting.Enabled || !setting.Invocable {
+	if !setting.Enabled {
 		return AgentSessionSkillReference{}, RuntimeSkillBundle{}, fmt.Errorf("skill slug is disabled: %s", slug)
 	}
 	return skillReferenceFromBundle(bundle), bundle, nil
