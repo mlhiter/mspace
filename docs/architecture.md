@@ -237,6 +237,8 @@ Transient execution state belongs to `agent_sessions`, `runtime_tasks`, and `iss
 
 Issue task lists are child issues stored on `issues.parent_issue_id`. Checklist lines submitted during issue creation are extracted into child rows, and Issue Detail renders those children inline with checkbox-style status controls.
 
+Issue and child Issue title fields are plain text; Markdown remains authoritative only for the Issue body and checklist source. The desktop sends its TipTap text projection with `titleSource="plain_text"`, while an omitted source lets the server normalize Markdown drafts from older clients. After creation, deterministic title refinement runs without blocking navigation and uses a title-only `expectedTitle` compare-and-set. MemoryStore holds its mutex for that comparison, Postgres performs it in one conditional `UPDATE`, and ordinary Postgres Issue updates patch only fields present in the request so concurrent body, status, project, or human title changes cannot restore stale values.
+
 Only the latest human-authored issue comment may be edited, and only before an agent session has consumed it. Agent-triggering sessions store `agent_sessions.trigger_comment_id`.
 
 ## Source And Evidence

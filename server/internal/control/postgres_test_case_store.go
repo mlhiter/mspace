@@ -888,10 +888,11 @@ func (s *PostgresStore) startPostgresProjectTestRun(ctx Context, user User, work
 		}
 	}
 	parentIssueID, err := s.CreateIssue(ctx, user, workspace.ID, CreateIssueInput{
-		ProjectID: run.ProjectID,
-		Title:     testRunTitle(plan, run, planCases),
-		Body:      buildTestRunParentIssueBody(plan, run, planCases),
-		LabelKeys: []string{"type:test"},
+		ProjectID:   run.ProjectID,
+		Title:       testRunTitle(plan, run, planCases),
+		TitleSource: issueTitleSourcePlainText,
+		Body:        buildTestRunParentIssueBody(plan, run, planCases),
+		LabelKeys:   []string{"type:test"},
 	})
 	if err != nil {
 		return TestRunDetail{}, err

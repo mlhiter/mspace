@@ -205,6 +205,7 @@ Current implementation:
 - lists issues across the workspace;
 - opens create issue in a modal from the page header or the sidebar quick action;
 - uses a TipTap-backed Markdown document editor for the issue note, including task-list input and pasted or dropped image attachments rendered as thumbnails;
+- derives a plain-text draft title from the editor document, creates and opens the Issue immediately, and lets deterministic title refinement finish in the background without replacing a later human edit;
 - does not show a project selector during issue creation; the issue may start as a workspace-level document without a project, and a single existing project can be auto-attached when unambiguous;
 - keeps the creation modal minimal: issue note only, with project attachment handled from Issue Detail when the repository becomes necessary;
 - supports search, status/type/priority filters, and sorting by updated time, created time, priority, or type;

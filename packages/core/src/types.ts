@@ -1248,6 +1248,7 @@ export interface UpdateProjectRunbookInput {
 export interface CreateIssueInput {
   projectId?: string;
   title?: string;
+  titleSource?: "plain_text";
   body?: string;
   prompt?: string;
   tasks?: string[];
@@ -1275,6 +1276,7 @@ export interface SuggestIssueTitleResult {
 export interface UpdateIssueInput {
   projectId?: string;
   title?: string;
+  expectedTitle?: string;
   body?: string;
   status?: string;
 }

@@ -5,10 +5,18 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
+var issueTitleMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
+
 func suggestIssueTitle(_ context.Context, input SuggestIssueTitleInput) SuggestIssueTitleResult {
-	explicitTitle := normalizeSuggestedIssueTitle(input.Title)
+	explicitTitle := normalizePlainSuggestedIssueTitle(input.Title)
 	if explicitTitle != "" {
 		return SuggestIssueTitleResult{Title: explicitTitle, Source: "user"}
 	}
@@ -85,7 +93,14 @@ func fallbackFirstLineTitle(text string) string {
 }
 
 func normalizeSuggestedIssueTitle(title string) string {
-	title = strings.TrimSpace(title)
+	return normalizeSuggestedIssueTitleText(plainIssueTitleFromMarkdown(title))
+}
+
+func normalizePlainSuggestedIssueTitle(title string) string {
+	return normalizeSuggestedIssueTitleText(plainIssueTitleFromText(title))
+}
+
+func normalizeSuggestedIssueTitleText(title string) string {
 	if title == "" {
 		return ""
 	}
@@ -103,4 +118,62 @@ func normalizeSuggestedIssueTitle(title string) string {
 		return string(runes[:72])
 	}
 	return title
+}
+
+func plainIssueTitleFromMarkdown(value string) string {
+	title := firstNonEmptyIssueTitleLine(value)
+	if title == "" {
+		return ""
+	}
+	source := []byte(title)
+	document := issueTitleMarkdown.Parser().Parse(text.NewReader(source))
+	var plain strings.Builder
+	_ = ast.Walk(document, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch node := node.(type) {
+		case *ast.Text:
+			value := node.Value(source)
+			if _, inCodeSpan := node.Parent().(*ast.CodeSpan); !inCodeSpan {
+				value = visibleIssueTitleText(value)
+			}
+			plain.Write(value)
+		case *ast.String:
+			plain.Write(visibleIssueTitleText(node.Value))
+		case *ast.AutoLink:
+			plain.Write(node.Label(source))
+			return ast.WalkSkipChildren, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	return plainIssueTitleFromText(plain.String())
+}
+
+func plainIssueTitleFromText(value string) string {
+	return strings.Join(strings.Fields(firstNonEmptyIssueTitleLine(value)), " ")
+}
+
+func visibleIssueTitleText(value []byte) []byte {
+	value = util.UnescapePunctuations(value)
+	value = util.ResolveNumericReferences(value)
+	return util.ResolveEntityNames(value)
+}
+
+func firstNonEmptyIssueTitleLine(value string) string {
+	for start := 0; start <= len(value); {
+		endOffset := strings.IndexAny(value[start:], "\r\n")
+		if endOffset < 0 {
+			return strings.TrimSpace(value[start:])
+		}
+		end := start + endOffset
+		if line := strings.TrimSpace(value[start:end]); line != "" {
+			return line
+		}
+		start = end + 1
+		if value[end] == '\r' && start < len(value) && value[start] == '\n' {
+			start++
+		}
+	}
+	return ""
 }

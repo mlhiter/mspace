@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const issueTitleSourcePlainText = "plain_text"
+
 type issueTaskDraft struct {
 	Title  string
 	Body   string
@@ -141,7 +143,15 @@ func normalizeRunbookStatus(status, content string) string {
 
 func normalizeCreateIssueInput(input CreateIssueInput, user User) (CreateIssueInput, []issueTaskDraft, []IssueLabel, error) {
 	input.ProjectID = strings.TrimSpace(input.ProjectID)
-	input.Title = strings.TrimSpace(input.Title)
+	input.TitleSource = strings.TrimSpace(strings.ToLower(input.TitleSource))
+	switch input.TitleSource {
+	case "":
+		input.Title = plainIssueTitleFromMarkdown(input.Title)
+	case issueTitleSourcePlainText:
+		input.Title = plainIssueTitleFromText(input.Title)
+	default:
+		return CreateIssueInput{}, nil, nil, fmt.Errorf("titleSource must be %s", issueTitleSourcePlainText)
+	}
 	input.Body = strings.TrimSpace(input.Body)
 	input.Prompt = strings.TrimSpace(input.Prompt)
 	input.Assignee = strings.TrimSpace(input.Assignee)
@@ -190,19 +200,33 @@ func normalizeCreateIssueInput(input CreateIssueInput, user User) (CreateIssueIn
 }
 
 func deriveIssueTitle(body string) string {
-	title := strings.TrimSpace(body)
+	title := plainIssueTitleFromMarkdown(body)
 	if title == "" {
 		return ""
 	}
-	if idx := strings.IndexByte(title, '\n'); idx >= 0 {
-		title = strings.TrimSpace(title[:idx])
-	}
-	title = strings.Join(strings.Fields(title), " ")
 	runes := []rune(title)
 	if len(runes) > 64 {
 		return string(runes[:64]) + "..."
 	}
 	return title
+}
+
+func conditionalIssueTitleUpdate(input UpdateIssueInput) (expectedTitle, title string, conditional bool, err error) {
+	if input.ExpectedTitle == nil {
+		return "", "", false, nil
+	}
+	if input.Title == nil || input.ProjectID != nil || input.Body != nil || input.Status != nil {
+		return "", "", false, errors.New("expectedTitle can only be used for title updates")
+	}
+	expectedTitle = plainIssueTitleFromText(*input.ExpectedTitle)
+	title = plainIssueTitleFromText(*input.Title)
+	if expectedTitle == "" {
+		return "", "", false, errors.New("expectedTitle is required")
+	}
+	if title == "" {
+		return "", "", false, errors.New("issue title is required")
+	}
+	return expectedTitle, title, true, nil
 }
 
 func extractIssueTaskDrafts(body string) (string, []issueTaskDraft) {
@@ -218,13 +242,13 @@ func extractIssueTaskDrafts(body string) (string, []issueTaskDraft) {
 		switch {
 		case strings.HasPrefix(trimmed, "- [ ] "):
 			status = "open"
-			title = strings.TrimSpace(trimmed[len("- [ ] "):])
+			title = plainIssueTitleFromMarkdown(trimmed[len("- [ ] "):])
 		case strings.HasPrefix(trimmed, "- [x] "):
 			status = "closed"
-			title = strings.TrimSpace(trimmed[len("- [x] "):])
+			title = plainIssueTitleFromMarkdown(trimmed[len("- [x] "):])
 		case strings.HasPrefix(trimmed, "- [X] "):
 			status = "closed"
-			title = strings.TrimSpace(trimmed[len("- [X] "):])
+			title = plainIssueTitleFromMarkdown(trimmed[len("- [X] "):])
 		default:
 			parentLines = append(parentLines, line)
 			continue
@@ -241,7 +265,7 @@ func extractIssueTaskDrafts(body string) (string, []issueTaskDraft) {
 func normalizeIssueTaskStrings(values []string) []issueTaskDraft {
 	tasks := make([]issueTaskDraft, 0, len(values))
 	for _, value := range values {
-		title := strings.TrimSpace(value)
+		title := plainIssueTitleFromText(value)
 		if title != "" {
 			tasks = append(tasks, issueTaskDraft{Title: title, Status: "open"})
 		}
@@ -252,7 +276,7 @@ func normalizeIssueTaskStrings(values []string) []issueTaskDraft {
 func normalizeIssueTaskInputs(values []IssueTaskInput) []issueTaskDraft {
 	tasks := make([]issueTaskDraft, 0, len(values))
 	for _, value := range values {
-		title := strings.TrimSpace(value.Title)
+		title := plainIssueTitleFromText(value.Title)
 		body := strings.TrimSpace(value.Body)
 		if title == "" {
 			title = deriveIssueTitle(body)

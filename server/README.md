@@ -175,9 +175,9 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `POST` | `/api/workspaces/{workspaceID}/clusters/import` | Import selected kubeconfig files into workspace clusters. |
 | `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List issue type and priority label definitions. |
 | `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level workspace issues. |
-| `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. `projectId` is optional; issues can remain projectless until execution is needed. Project-backed issues queue automatic read-only `issue_analysis` when a matching Codex worker is online. |
+| `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. New clients sending a plain-text draft `title` also send `titleSource: "plain_text"`; omission supports older Markdown-derived drafts. `projectId` is optional; issues can remain projectless until execution is needed. Project-backed issues queue automatic read-only `issue_analysis` when a matching Codex worker is online. |
 | `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Load issue detail with optional project, child tasks, labels, comments, and sessions. |
-| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update issue project attachment, title, body, or workflow status. Attaching a project to a projectless top-level issue also tries the automatic read-only `issue_analysis` path when a matching Codex worker is online. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update issue project attachment, plain-text title, body, or workflow status. A title-only request may include `expectedTitle`; the stores update only the title when it still matches, otherwise they return the current Issue unchanged. Attaching a project to a projectless top-level issue also tries the automatic read-only `issue_analysis` path when a matching Codex worker is online. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks` | Create a child issue task. |
 | `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks/{taskID}` | Delete a child issue task under the parent. |
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/labels` | Replace selected issue label keys. |

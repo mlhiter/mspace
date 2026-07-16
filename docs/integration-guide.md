@@ -222,10 +222,10 @@ Successful acceptance returns the joined workspace. Desktop clients should selec
 | `POST` | `/api/workspaces/{workspaceID}/projects/{projectID}/test-runs/{runID}/cancel` | Compatibility-stop a workspace run that includes the project. |
 | `GET` | `/api/workspaces/{workspaceID}/issue-label-definitions` | List Type and Priority label options. |
 | `GET` | `/api/workspaces/{workspaceID}/issues` | List top-level issues. |
-| `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. |
+| `POST` | `/api/workspaces/{workspaceID}/issues` | Create a workspace issue. New clients that send a plain-text draft `title` must also send `titleSource: "plain_text"`. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/suggest-title` | Suggest a title from issue body text using deterministic server fallback only. |
 | `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Load issue detail. |
-| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update issue project attachment, title, body, or workflow status. |
+| `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}` | Update issue project attachment, title, body, or workflow status. A title-only request may include `expectedTitle` for an atomic compare-and-set. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks` | Create a child issue task. |
 | `DELETE` | `/api/workspaces/{workspaceID}/issues/{issueID}/tasks/{taskID}` | Delete a child issue task under the parent. |
 | `PUT` | `/api/workspaces/{workspaceID}/issues/{issueID}/labels` | Replace selected label keys. |
@@ -244,6 +244,17 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues" \
 ```
 
 When `projectId` is omitted, the server leaves the issue unassigned if the workspace has zero projects or more than one possible project. If the workspace has exactly one project, the server auto-attaches that project. The issue can be reviewed and commented on without a project, but agent execution, PR handoff, project runbook access, and issue test environments require attaching a project first.
+
+Issue and child issue title fields are plain text even when the source note uses Markdown. New clients should send `titleSource: "plain_text"` with an explicit draft title; omitting the field is reserved for older clients whose draft was copied from the Markdown body. A client that refines a draft title in the background should use a title-only conditional update:
+
+```bash
+curl -X PUT "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/issues/<issue-id>" \
+  -H "Authorization: Bearer <msp-token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Final plain title","expectedTitle":"Original draft title"}'
+```
+
+`expectedTitle` is accepted only with `title`. The server updates only the title when the stored title still equals `expectedTitle`; otherwise it returns the current Issue unchanged. This prevents a late background suggestion from overwriting a human title or body edit.
 
 When a new issue has no explicit type label, the server marks type triage as pending and queues a worker-backed `issue_type_triage` runtime task. That task requires a worker with `{"codex":true}` capabilities in the workspace runtime mode. The worker returns a JSON result such as `{"type":"fix","confidence":0.86,"reason":"..."}`; the server validates the type against the fixed Conventional Commit set before applying the `type:*` label. Priority remains manual and is not classified by the worker.
 

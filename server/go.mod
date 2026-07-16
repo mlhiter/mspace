@@ -6,6 +6,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/xuri/excelize/v2 v2.10.1
+	github.com/yuin/goldmark v1.8.4
 	golang.org/x/crypto v0.48.0
 	k8s.io/api v0.34.2
 	k8s.io/apimachinery v0.34.2

@@ -7,6 +7,17 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-16",
+    title: "Plain issue titles without blocking creation",
+    summary:
+      "mspace now keeps Issue titles readable when the first line of a rich Markdown note is formatted, while final title refinement continues in the background.",
+    items: [
+      "Derives the immediate draft title from TipTap plain text and keeps the original Markdown formatting in the Issue body.",
+      "Starts deterministic final title suggestion alongside navigation and cache refresh instead of delaying the rest of Issue creation.",
+      "Uses an atomic expected-title check so a late background result cannot overwrite a title or body that a teammate already edited.",
+    ],
+  },
+  {
     date: "2026-07-13",
     title: "Workspace skill management",
     summary:

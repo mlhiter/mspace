@@ -116,6 +116,7 @@ export function IssueDocumentEditor(props: {
   ariaLabel?: string;
   onReady?: (editor: Editor | null) => void;
   onChange: (value: string) => void;
+  onPlainTextChange?: (value: string) => void;
   onEditorStateChange?: (editor: Editor) => void;
   onFocus?: (editor: Editor) => void;
   onBlur?: (editor: Editor) => void;
@@ -163,6 +164,12 @@ export function IssueDocumentEditor(props: {
       const markdown = activeEditor.getMarkdown();
       lastMarkdownRef.current = markdown;
       props.onChange(markdown);
+      props.onPlainTextChange?.(activeEditor.getText({
+        blockSeparator: "\n",
+        textSerializers: {
+          image: ({ node }) => issueImageLabel(String(node.attrs.alt || node.attrs.title || node.attrs.src || "")),
+        },
+      }));
       props.onEditorStateChange?.(activeEditor);
     },
     onSelectionUpdate: ({ editor: activeEditor }) => {

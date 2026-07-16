@@ -1416,6 +1416,7 @@ type RuntimeSkillFile struct {
 type CreateIssueInput struct {
 	ProjectID     string           `json:"projectId"`
 	Title         string           `json:"title"`
+	TitleSource   string           `json:"titleSource"`
 	Body          string           `json:"body"`
 	Prompt        string           `json:"prompt"`
 	Tasks         []string         `json:"tasks"`
@@ -1441,10 +1442,11 @@ type IssueTaskInput struct {
 }
 
 type UpdateIssueInput struct {
-	ProjectID *string `json:"projectId"`
-	Title     *string `json:"title"`
-	Body      *string `json:"body"`
-	Status    *string `json:"status"`
+	ProjectID     *string `json:"projectId"`
+	Title         *string `json:"title"`
+	ExpectedTitle *string `json:"expectedTitle"`
+	Body          *string `json:"body"`
+	Status        *string `json:"status"`
 }
 
 type UpdateIssueLabelsInput struct {

@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { MessageSquarePlus, X } from "lucide-react";
-import { type CreateIssueInput, type IssueDetail } from "@mspace/core";
+import { type CreateIssueInput } from "@mspace/core";
 import { useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
@@ -14,8 +14,7 @@ import { IssueDocumentEditor } from "./issue-document-editor";
 export function CreateIssueModal(props: {
   onClose: () => void;
   createIssue: (input: CreateIssueInput) => Promise<{ issueId: string }>;
-  getIssue: (issueId: string) => Promise<IssueDetail>;
-  updateIssue: (issueId: string, input: { title: string }) => Promise<unknown>;
+  updateIssue: (issueId: string, input: { title: string; expectedTitle: string }) => Promise<unknown>;
   suggestTitle: (input: Pick<CreateIssueInput, "title" | "body" | "prompt">) => Promise<{ title: string; source: string }>;
   issueQueryKey: readonly unknown[];
   issueDetailQueryKey: (issueId: string) => readonly unknown[];
@@ -26,40 +25,38 @@ export function CreateIssueModal(props: {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [prompt, setPrompt] = useState("");
+  const [promptPlainText, setPromptPlainText] = useState("");
   const canCreate = prompt.trim().length > 0;
 
   const submitIssue = useMutation({
-    mutationFn: async (body: string) => {
-      const title = draftIssueTitleFromBody(body);
+    mutationFn: async (input: { body: string; title: string }) => {
+      const { body, title } = input;
       if (title === "") {
         throw new Error(t("createIssue.emptyError"));
       }
-      return props.createIssue({ title, body });
+      return props.createIssue({ title, titleSource: "plain_text", body });
     },
-    onSuccess: async ({ issueId }, body) => {
+    onSuccess: ({ issueId }, { body, title }) => {
       setPrompt("");
-      await Promise.all([
+      setPromptPlainText("");
+      void updateIssueTitleInBackground(issueId, body, title);
+      void Promise.allSettled([
         queryClient.invalidateQueries({ queryKey: props.issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: props.inboxQueryKey }),
         queryClient.invalidateQueries({ queryKey: props.projectsQueryKey }),
       ]);
       props.onClose();
       void navigate({ to: "/issues/$issueId", params: { issueId } });
-      void updateIssueTitleInBackground(issueId, body);
     },
   });
 
-  async function updateIssueTitleInBackground(issueId: string, body: string) {
-    const temporaryTitle = draftIssueTitleFromBody(body);
+  async function updateIssueTitleInBackground(issueId: string, body: string, temporaryTitle: string) {
     try {
       const suggestion = await props.suggestTitle({ body });
       const suggestedTitle = suggestion.title.trim();
       if (suggestedTitle === "" || suggestedTitle === temporaryTitle) return;
 
-      const latest = await props.getIssue(issueId);
-      if (latest.issue.title.trim() !== temporaryTitle) return;
-
-      await props.updateIssue(issueId, { title: suggestedTitle });
+      await props.updateIssue(issueId, { title: suggestedTitle, expectedTitle: temporaryTitle });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: props.issueQueryKey }),
         queryClient.invalidateQueries({ queryKey: props.issueDetailQueryKey(issueId) }),
@@ -83,7 +80,7 @@ export function CreateIssueModal(props: {
     event.preventDefault();
     const body = prompt.trim();
     if (body === "" || submitIssue.isPending) return;
-    submitIssue.mutate(body);
+    submitIssue.mutate({ body, title: draftIssueTitleFromText(promptPlainText) });
   }
 
   return (
@@ -130,6 +127,7 @@ export function CreateIssueModal(props: {
               autoFocus
               value={prompt}
               onChange={setPrompt}
+              onPlainTextChange={setPromptPlainText}
               placeholder={t("createIssue.placeholder")}
             />
           </section>
@@ -148,14 +146,14 @@ export function CreateIssueModal(props: {
   );
 }
 
-function draftIssueTitleFromBody(body: string): string {
-  const normalized = body.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+function draftIssueTitleFromText(value: string): string {
+  const normalized = value.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
   const firstLine = normalized
     .split("\n")
     .map((line) => line.trim())
     .find(Boolean);
   if (!firstLine) return "";
-  const collapsed = firstLine.replace(/^#+\s*/, "").split(/\s+/).join(" ");
+  const collapsed = firstLine.split(/\s+/).join(" ");
   const runes = Array.from(collapsed);
   if (runes.length > 64) {
     return `${runes.slice(0, 64).join("")}...`;

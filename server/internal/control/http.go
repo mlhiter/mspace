@@ -1033,10 +1033,11 @@ func (s *Server) handleOptimizeProjectTestCases(w http.ResponseWriter, r *http.R
 		return
 	}
 	issueID, err := s.store.CreateIssue(r.Context(), user, workspaceID, CreateIssueInput{
-		ProjectID: projectID,
-		Title:     "Optimize test cases",
-		Body:      buildTestCaseOptimizationIssueBody(project, cases, input.Prompt),
-		LabelKeys: []string{"type:test"},
+		ProjectID:   projectID,
+		Title:       "Optimize test cases",
+		TitleSource: issueTitleSourcePlainText,
+		Body:        buildTestCaseOptimizationIssueBody(project, cases, input.Prompt),
+		LabelKeys:   []string{"type:test"},
 	})
 	if err != nil {
 		writeStoreError(w, err)
@@ -1085,10 +1086,11 @@ func (s *Server) handleGenerateProjectTestCases(w http.ResponseWriter, r *http.R
 	}
 	body := buildTestCaseGenerationIssueBody(project, input)
 	issueID, err := s.store.CreateIssue(r.Context(), user, workspaceID, CreateIssueInput{
-		ProjectID: projectID,
-		Title:     "Generate test cases",
-		Body:      body,
-		LabelKeys: []string{"type:test"},
+		ProjectID:   projectID,
+		Title:       "Generate test cases",
+		TitleSource: issueTitleSourcePlainText,
+		Body:        body,
+		LabelKeys:   []string{"type:test"},
 	})
 	if err != nil {
 		writeStoreError(w, err)

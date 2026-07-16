@@ -62,7 +62,7 @@ Production deployment uses the root `vercel.json`:
 - Workspace Settings for team access, worker host installation, worker liveness, issue-linked runtime tasks, task events, task logs, and workspace automation.
 - Notion-like paper workspace UI built with React 19, Tailwind CSS 4, Radix UI, lucide-react, Material Icon Theme file icons, and shadcn/ui source components in `@mspace/ui`.
 - Bilingual desktop UI support for English and Simplified Chinese through `@mspace/i18n`.
-- Document-style issue creation and comments with TipTap Markdown editing, inline child issues from checklist rows, image rendering for stable attachment URLs, and lightweight comment reactions.
+- Document-style issue creation and comments with TipTap Markdown editing, plain-text Issue and child-task titles derived from formatted notes, non-blocking background title refinement, inline child issues from checklist rows, image rendering for stable attachment URLs, and lightweight comment reactions.
 - Agent mentions from issue comments, with `/` and `#` workflow skill tokens, server-side session records, runtime task queueing, profile instructions, trigger-comment tracking, worker logs, status updates, and issue timeline updates.
 - Per-session worker-managed git worktrees, changed file lists, diff previews, commits, and comparison against the project default branch.
 - Tests workspace with project-level Cases and Case suggestions plus workspace-level Plans and Runs, dedicated detail pages, modal create/import flows, preview-before-confirm Markdown/text/CSV/Excel `.xlsx` import, readiness scoring, case-detail run history, field-level case revision summaries, and human review before Codex suggestions update canonical cases.

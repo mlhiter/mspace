@@ -774,38 +774,51 @@ func (s *PostgresStore) UpdateIssue(ctx Context, userID, workspaceID, issueID st
 	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, userID); err != nil {
 		return Issue{}, err
 	}
-	existing, err := loadIssue(dbctx, s.pool, workspaceID, issueID)
+	expectedTitle, conditionalTitle, conditional, err := conditionalIssueTitleUpdate(input)
 	if err != nil {
 		return Issue{}, err
 	}
-	next := existing
+	if conditional {
+		row := s.pool.QueryRow(dbctx, `
+			UPDATE issues
+			SET title = $4, updated_at = now()
+			WHERE workspace_id = $1 AND id = $2 AND title = $3
+			RETURNING id::text, workspace_id::text, COALESCE(project_id::text, ''), COALESCE(parent_issue_id::text, ''), sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at
+		`, workspaceID, issueID, expectedTitle, conditionalTitle)
+		updated, err := scanIssue(row)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return loadIssue(dbctx, s.pool, workspaceID, issueID)
+		}
+		return updated, err
+	}
+	projectID := ""
 	if input.ProjectID != nil {
-		projectID := strings.TrimSpace(*input.ProjectID)
+		projectID = strings.TrimSpace(*input.ProjectID)
 		if projectID != "" {
 			project, err := resolveIssueProject(dbctx, s.pool, workspaceID, projectID, "")
 			if err != nil {
 				return Issue{}, err
 			}
-			next.ProjectID = project.ID
-		} else {
-			next.ProjectID = ""
+			projectID = project.ID
 		}
 	}
+	title := ""
 	if input.Title != nil {
-		next.Title = strings.TrimSpace(*input.Title)
-		if next.Title == "" {
+		title = plainIssueTitleFromText(*input.Title)
+		if title == "" {
 			return Issue{}, errors.New("issue title is required")
 		}
 	}
+	body := ""
 	if input.Body != nil {
-		next.Body = strings.TrimSpace(*input.Body)
+		body = strings.TrimSpace(*input.Body)
 	}
+	status := ""
 	if input.Status != nil {
-		status := normalizeIssueStatus(*input.Status)
+		status = normalizeIssueStatus(*input.Status)
 		if err := validateIssueStatus(status); err != nil {
 			return Issue{}, err
 		}
-		next.Status = status
 	}
 
 	tx, err := s.pool.Begin(dbctx)
@@ -815,11 +828,23 @@ func (s *PostgresStore) UpdateIssue(ctx Context, userID, workspaceID, issueID st
 	defer tx.Rollback(dbctx)
 	row := tx.QueryRow(dbctx, `
 		UPDATE issues
-		SET project_id = $3, title = $4, body = $5, status = $6, updated_at = now()
+		SET project_id = CASE WHEN $3::boolean THEN $4::uuid ELSE project_id END,
+			title = CASE WHEN $5::boolean THEN $6::text ELSE title END,
+			body = CASE WHEN $7::boolean THEN $8::text ELSE body END,
+			status = CASE WHEN $9::boolean THEN $10::text ELSE status END,
+			updated_at = now()
 		WHERE workspace_id = $1 AND id = $2
 		RETURNING id::text, workspace_id::text, COALESCE(project_id::text, ''), COALESCE(parent_issue_id::text, ''), sort_order, title, body, status, close_reason, triage_status, assignee, assignee_type, creator_name, creator_avatar_url, environment_url, created_at, updated_at
-	`, workspaceID, issueID, nullableText(next.ProjectID), next.Title, next.Body, next.Status)
+	`, workspaceID, issueID,
+		input.ProjectID != nil, nullableText(projectID),
+		input.Title != nil, title,
+		input.Body != nil, body,
+		input.Status != nil, status,
+	)
 	updated, err := scanIssue(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Issue{}, ErrNotFound
+	}
 	if err != nil {
 		return Issue{}, err
 	}

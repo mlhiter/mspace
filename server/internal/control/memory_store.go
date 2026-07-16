@@ -3266,10 +3266,11 @@ func (s *MemoryStore) startProjectTestRunLocked(user User, plan *TestPlan, cases
 		}
 	}
 	parentIssueID, err := s.createIssueLocked(user, run.WorkspaceID, CreateIssueInput{
-		ProjectID: run.ProjectID,
-		Title:     testRunTitle(plan, run, cases),
-		Body:      buildTestRunParentIssueBody(plan, run, cases),
-		LabelKeys: []string{"type:test"},
+		ProjectID:   run.ProjectID,
+		Title:       testRunTitle(plan, run, cases),
+		TitleSource: issueTitleSourcePlainText,
+		Body:        buildTestRunParentIssueBody(plan, run, cases),
+		LabelKeys:   []string{"type:test"},
 	})
 	if err != nil {
 		return TestRunDetail{}, err
@@ -4631,6 +4632,19 @@ func (s *MemoryStore) UpdateIssue(_ Context, userID, workspaceID, issueID string
 	if !ok || issue.WorkspaceID != strings.TrimSpace(workspaceID) {
 		return Issue{}, ErrNotFound
 	}
+	expectedTitle, conditionalTitle, conditional, err := conditionalIssueTitleUpdate(input)
+	if err != nil {
+		return Issue{}, err
+	}
+	if conditional {
+		if issue.Title != expectedTitle {
+			return issue, nil
+		}
+		issue.Title = conditionalTitle
+		issue.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		s.issues[issue.ID] = issue
+		return issue, nil
+	}
 	if input.ProjectID != nil {
 		projectID := strings.TrimSpace(*input.ProjectID)
 		if projectID != "" {
@@ -4644,7 +4658,7 @@ func (s *MemoryStore) UpdateIssue(_ Context, userID, workspaceID, issueID string
 		}
 	}
 	if input.Title != nil {
-		title := strings.TrimSpace(*input.Title)
+		title := plainIssueTitleFromText(*input.Title)
 		if title == "" {
 			return Issue{}, errors.New("issue title is required")
 		}
