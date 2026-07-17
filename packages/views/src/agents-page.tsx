@@ -501,19 +501,13 @@ function SkillsPanel(props: {
   }
   return (
     <div className="overflow-hidden rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[color:var(--line)] px-4 py-3">
+      <div className="flex flex-wrap items-center gap-3 border-b border-[color:var(--line)] px-4 py-3">
         <div className="min-w-0">
           <h2 className="text-[14px] font-semibold leading-5 text-[color:var(--text)]">{t("agents.skills.title")}</h2>
           <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">
             {t("agents.skills.summary", { enabled: props.enabledCount, total: props.skills.length })}
           </p>
         </div>
-        {props.canManage ? (
-          <Button variant="secondary" size="sm" onClick={props.onCreate} disabled={props.isMutating}>
-            <Plus data-icon />
-            {t("agents.skills.newSkill")}
-          </Button>
-        ) : null}
       </div>
       {!props.canManage ? (
         <div className="border-b border-[color:var(--line)] px-4 py-3">
@@ -648,7 +642,15 @@ function SkillRow(props: {
                       {t("agents.skills.delete")}
                     </DropdownMenuItem>
                   </>
-                ) : null}
+                ) : (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem disabled className="text-[color:var(--muted)]">
+                      <Trash2 data-icon />
+                      {t("agents.skills.deleteUnavailable")}
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
