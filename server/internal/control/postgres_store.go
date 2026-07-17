@@ -1264,8 +1264,8 @@ func (s *PostgresStore) RegisterRuntimeWorker(ctx Context, registration RuntimeR
 		return RuntimeWorker{}, err
 	}
 	row := tx.QueryRow(dbctx, `
-		INSERT INTO runtime_workers (workspace_id, registration_token_id, name, mode, status, version, current_load, capabilities, labels, last_seen_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), now())
+		INSERT INTO runtime_workers (workspace_id, registration_token_id, name, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now())
 		ON CONFLICT (workspace_id, name) DO UPDATE SET
 			registration_token_id = EXCLUDED.registration_token_id,
 			mode = EXCLUDED.mode,
@@ -1274,10 +1274,11 @@ func (s *PostgresStore) RegisterRuntimeWorker(ctx Context, registration RuntimeR
 			current_load = EXCLUDED.current_load,
 			capabilities = EXCLUDED.capabilities,
 			labels = EXCLUDED.labels,
+			agent_engine_diagnostics = EXCLUDED.agent_engine_diagnostics,
 			last_seen_at = now(),
 			updated_at = now()
-		RETURNING id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, last_seen_at, created_at, updated_at
-	`, registration.WorkspaceID, registration.TokenID, normalized.Name, normalized.Mode, normalized.Status, normalized.Version, normalized.CurrentLoad, normalized.Capabilities, normalized.Labels)
+		RETURNING id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, created_at, updated_at
+	`, registration.WorkspaceID, registration.TokenID, normalized.Name, normalized.Mode, normalized.Status, normalized.Version, normalized.CurrentLoad, normalized.Capabilities, normalized.Labels, normalized.AgentEngineDiagnostics)
 	worker, err := scanRuntimeWorker(row)
 	if err != nil {
 		return RuntimeWorker{}, err
@@ -1294,6 +1295,7 @@ func (s *PostgresStore) UpdateRuntimeWorkerHeartbeat(ctx Context, registration R
 	if workerID == "" || registration.TokenID == "" || registration.WorkspaceID == "" {
 		return RuntimeWorker{}, ErrNotFound
 	}
+	diagnosticsProvided := strings.TrimSpace(string(input.AgentEngineDiagnostics)) != ""
 	normalized, err := normalizeRuntimeHeartbeatInput(input)
 	if err != nil {
 		return RuntimeWorker{}, err
@@ -1312,19 +1314,41 @@ func (s *PostgresStore) UpdateRuntimeWorkerHeartbeat(ctx Context, registration R
 	`, registration.TokenID, registration.WorkspaceID); err != nil {
 		return RuntimeWorker{}, err
 	}
+	var storedCapabilities, storedDiagnostics []byte
+	if err := tx.QueryRow(dbctx, `
+		SELECT capabilities, agent_engine_diagnostics
+		FROM runtime_workers
+		WHERE id = $1 AND workspace_id = $2
+		FOR UPDATE
+	`, workerID, registration.WorkspaceID).Scan(&storedCapabilities, &storedDiagnostics); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RuntimeWorker{}, ErrNotFound
+		}
+		return RuntimeWorker{}, err
+	}
+	capabilities := json.RawMessage(storedCapabilities)
+	if string(normalized.Capabilities) != "{}" {
+		capabilities = normalized.Capabilities
+	}
+	diagnostics := normalizedRuntimeWorkerDiagnostics(json.RawMessage(storedDiagnostics))
+	if diagnosticsProvided {
+		diagnostics = normalized.AgentEngineDiagnostics
+	}
+	capabilities = downgradeUnavailableAgentEngineCapabilities(capabilities, diagnostics)
 	row := tx.QueryRow(dbctx, `
 		UPDATE runtime_workers
 		SET
 			status = $1,
 			version = CASE WHEN $2 <> '' THEN $2 ELSE version END,
 			current_load = $3,
-			capabilities = CASE WHEN $4::jsonb <> '{}'::jsonb THEN $4::jsonb ELSE capabilities END,
+			capabilities = $4::jsonb,
 			labels = CASE WHEN $5::jsonb <> '{}'::jsonb THEN $5::jsonb ELSE labels END,
+			agent_engine_diagnostics = $6::jsonb,
 			last_seen_at = now(),
 			updated_at = now()
-		WHERE id = $6 AND workspace_id = $7
-		RETURNING id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, last_seen_at, created_at, updated_at
-	`, normalized.Status, normalized.Version, normalized.CurrentLoad, normalized.Capabilities, normalized.Labels, workerID, registration.WorkspaceID)
+		WHERE id = $7 AND workspace_id = $8
+		RETURNING id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, created_at, updated_at
+	`, normalized.Status, normalized.Version, normalized.CurrentLoad, capabilities, normalized.Labels, diagnostics, workerID, registration.WorkspaceID)
 	worker, err := scanRuntimeWorker(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RuntimeWorker{}, ErrNotFound
@@ -1344,7 +1368,7 @@ func (s *PostgresStore) ListRuntimeWorkers(ctx Context, userID, workspaceID stri
 		return nil, err
 	}
 	rows, err := s.pool.Query(dbctx, `
-		SELECT id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, last_seen_at, created_at, updated_at
+		SELECT id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, created_at, updated_at
 		FROM runtime_workers
 		WHERE workspace_id = $1
 		ORDER BY last_seen_at DESC, created_at DESC
@@ -1416,7 +1440,11 @@ func (s *PostgresStore) CreateRuntimeTask(ctx Context, userID, workspaceID strin
 	}
 	defer tx.Rollback(dbctx)
 
-	if err := ensureWorkspaceMember(dbctx, tx, workspaceID, userID); err != nil {
+	if normalized.ServerManaged {
+		if err := ensureWorkspaceMember(dbctx, tx, workspaceID, userID); err != nil {
+			return RuntimeTask{}, err
+		}
+	} else if err := ensureWorkspaceRole(dbctx, tx, workspaceID, userID, "owner", "admin"); err != nil {
 		return RuntimeTask{}, err
 	}
 	if err := ensureRuntimeModeAllowedForWorkspace(dbctx, tx, workspaceID, normalized.RuntimeMode); err != nil {
@@ -2410,7 +2438,7 @@ func scanRuntimeRegistrationToken(row scanner) (RuntimeRegistrationToken, error)
 
 func scanRuntimeWorker(row scanner) (RuntimeWorker, error) {
 	var worker RuntimeWorker
-	var capabilities, labels []byte
+	var capabilities, labels, agentEngineDiagnostics []byte
 	var lastSeenAt, createdAt, updatedAt time.Time
 	if err := row.Scan(
 		&worker.ID,
@@ -2422,6 +2450,7 @@ func scanRuntimeWorker(row scanner) (RuntimeWorker, error) {
 		&worker.CurrentLoad,
 		&capabilities,
 		&labels,
+		&agentEngineDiagnostics,
 		&lastSeenAt,
 		&createdAt,
 		&updatedAt,
@@ -2430,6 +2459,7 @@ func scanRuntimeWorker(row scanner) (RuntimeWorker, error) {
 	}
 	worker.Capabilities = copyRawMessage(json.RawMessage(capabilities))
 	worker.Labels = copyRawMessage(json.RawMessage(labels))
+	worker.AgentEngineDiagnostics = normalizedRuntimeWorkerDiagnostics(json.RawMessage(agentEngineDiagnostics))
 	worker.LastSeenAt = lastSeenAt.UTC().Format(time.RFC3339)
 	worker.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	worker.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
@@ -2565,8 +2595,14 @@ func normalizeRuntimeWorkerInput(input RuntimeWorkerInput) (RuntimeWorkerInput, 
 	if err != nil {
 		return RuntimeWorkerInput{}, fmt.Errorf("labels %w", err)
 	}
+	agentEngineDiagnostics, err := normalizeAgentEngineDiagnostics(input.AgentEngineDiagnostics)
+	if err != nil {
+		return RuntimeWorkerInput{}, err
+	}
 	input.Capabilities = capabilities
 	input.Labels = labels
+	input.AgentEngineDiagnostics = agentEngineDiagnostics
+	input.Capabilities = downgradeUnavailableAgentEngineCapabilities(input.Capabilities, input.AgentEngineDiagnostics)
 	return input, nil
 }
 
@@ -2604,6 +2640,11 @@ func normalizeCreateRuntimeTaskInput(input CreateRuntimeTaskInput) (CreateRuntim
 	}
 	input.RequiredCapabilities = requiredCapabilities
 	input.Payload = payload
+	if !input.ServerManaged {
+		if err := validatePublicRuntimeTaskInput(input); err != nil {
+			return CreateRuntimeTaskInput{}, err
+		}
+	}
 	return input, nil
 }
 
@@ -2875,8 +2916,13 @@ func normalizeRuntimeHeartbeatInput(input RuntimeWorkerInput) (RuntimeWorkerInpu
 	if err != nil {
 		return RuntimeWorkerInput{}, fmt.Errorf("labels %w", err)
 	}
+	agentEngineDiagnostics, err := normalizeAgentEngineDiagnostics(input.AgentEngineDiagnostics)
+	if err != nil {
+		return RuntimeWorkerInput{}, err
+	}
 	input.Capabilities = capabilities
 	input.Labels = labels
+	input.AgentEngineDiagnostics = agentEngineDiagnostics
 	return input, nil
 }
 

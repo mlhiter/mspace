@@ -632,6 +632,7 @@ export interface RuntimeWorker {
 	currentLoad: number;
 	capabilities: Record<string, unknown>;
 	labels: Record<string, unknown>;
+	agentEngineDiagnostics?: Partial<Record<AgentEngine, AgentEngineDiagnostic>>;
 	lastSeenAt: string;
 	createdAt: string;
 	updatedAt: string;
@@ -649,6 +650,7 @@ export interface RuntimeAvailability {
 	state: string;
 	reasonCode: string;
 	canQueue: boolean;
+	claimableWorkerCount?: number;
 	canAutoStart: boolean;
 	retryAfterMs: number;
 	matchedWorker?: RuntimeWorker;
@@ -826,6 +828,15 @@ export interface IssueLabelDefinition {
 export type AgentEngine = "codex" | "claude_code" | "pi";
 
 export type AgentEngineCapability = "codex" | "claudeCode" | "pi";
+
+export type AgentEngineDiagnosticStatus = "ready" | "needs_setup" | "unverified" | "missing" | "probe_error";
+
+export interface AgentEngineDiagnostic {
+  status: AgentEngineDiagnosticStatus;
+  reasonCode?: string;
+  version?: string;
+  checkedAt?: string;
+}
 
 export interface AgentEngineCatalogItem {
   id: AgentEngine;
@@ -1610,6 +1621,7 @@ export interface MspaceDesktopAPI {
     workerName: string;
     capabilities?: Partial<Record<AgentEngineCapability | "browser" | "chrome_cdp", boolean>>;
   }>;
+  getPersonalWorkerHostId?: () => Promise<string>;
   stopPersonalWorker?: () => Promise<{
     ok: boolean;
     status: string;

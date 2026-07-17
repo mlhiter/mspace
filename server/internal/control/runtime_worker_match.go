@@ -79,6 +79,11 @@ func evaluateRuntimeAvailability(workspaceID, workspaceKind, runtimeMode string,
 	sort.SliceStable(modeWorkers, func(i, j int) bool {
 		return modeWorkers[i].LastSeenAt > modeWorkers[j].LastSeenAt
 	})
+	for _, worker := range modeWorkers {
+		if isActiveWorkerWithCapabilities(worker, workspaceID, runtimeMode, normalizedCapabilities, now) {
+			result.ClaimableWorkerCount++
+		}
+	}
 
 	var capabilityWorker *RuntimeWorker
 	var nonOnlineWorker *RuntimeWorker

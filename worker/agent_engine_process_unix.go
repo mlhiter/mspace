@@ -3,9 +3,14 @@
 package main
 
 import (
+	"io"
 	"os/exec"
 	"syscall"
 )
+
+func attachAgentEngineProcessTree(_ *exec.Cmd) (io.Closer, error) {
+	return nil, nil
+}
 
 func configureAgentEngineProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

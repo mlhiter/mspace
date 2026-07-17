@@ -63,31 +63,35 @@ type config struct {
 	PollInterval      time.Duration
 	HeartbeatInterval time.Duration
 	Once              bool
+	engineDiagnoser   agentEngineDiagnoser
+	engineDiagnostics *agentEngineDiagnosticState
 }
 
 type runtimeWorkerInput struct {
-	Name         string          `json:"name,omitempty"`
-	Mode         string          `json:"mode,omitempty"`
-	Status       string          `json:"status,omitempty"`
-	Version      string          `json:"version,omitempty"`
-	CurrentLoad  int             `json:"currentLoad"`
-	Capabilities json.RawMessage `json:"capabilities,omitempty"`
-	Labels       json.RawMessage `json:"labels,omitempty"`
+	Name                   string                 `json:"name,omitempty"`
+	Mode                   string                 `json:"mode,omitempty"`
+	Status                 string                 `json:"status,omitempty"`
+	Version                string                 `json:"version,omitempty"`
+	CurrentLoad            int                    `json:"currentLoad"`
+	Capabilities           json.RawMessage        `json:"capabilities,omitempty"`
+	Labels                 json.RawMessage        `json:"labels,omitempty"`
+	AgentEngineDiagnostics agentEngineDiagnostics `json:"agentEngineDiagnostics,omitempty"`
 }
 
 type runtimeWorker struct {
-	ID           string          `json:"id"`
-	WorkspaceID  string          `json:"workspaceId"`
-	Name         string          `json:"name"`
-	Mode         string          `json:"mode"`
-	Status       string          `json:"status"`
-	Version      string          `json:"version"`
-	CurrentLoad  int             `json:"currentLoad"`
-	Capabilities json.RawMessage `json:"capabilities"`
-	Labels       json.RawMessage `json:"labels"`
-	LastSeenAt   string          `json:"lastSeenAt"`
-	CreatedAt    string          `json:"createdAt"`
-	UpdatedAt    string          `json:"updatedAt"`
+	ID                     string                 `json:"id"`
+	WorkspaceID            string                 `json:"workspaceId"`
+	Name                   string                 `json:"name"`
+	Mode                   string                 `json:"mode"`
+	Status                 string                 `json:"status"`
+	Version                string                 `json:"version"`
+	CurrentLoad            int                    `json:"currentLoad"`
+	Capabilities           json.RawMessage        `json:"capabilities"`
+	Labels                 json.RawMessage        `json:"labels"`
+	AgentEngineDiagnostics agentEngineDiagnostics `json:"agentEngineDiagnostics,omitempty"`
+	LastSeenAt             string                 `json:"lastSeenAt"`
+	CreatedAt              string                 `json:"createdAt"`
+	UpdatedAt              string                 `json:"updatedAt"`
 }
 
 type runtimeTask struct {
@@ -516,6 +520,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	clearWorkerCredentialEnvironment()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -640,6 +645,9 @@ func normalizeConfig(cfg config) (config, error) {
 }
 
 func run(ctx context.Context, cfg config, logger *slog.Logger) error {
+	engineDiagnostics := newAgentEngineDiagnosticState(cfg.Capabilities, cfg.engineDiagnoser)
+	engineDiagnostics.refresh(ctx)
+	cfg.engineDiagnostics = engineDiagnostics
 	client := &runtimeClient{
 		baseURL:    cfg.ServerURL,
 		token:      cfg.Token,
@@ -659,6 +667,11 @@ func run(ctx context.Context, cfg config, logger *slog.Logger) error {
 
 func runLoop(ctx context.Context, client *runtimeClient, cfg config, logger *slog.Logger, workerID string) error {
 	var currentLoad int64
+	diagnosticsDone := make(chan struct{})
+	go func() {
+		defer close(diagnosticsDone)
+		cfg.engineDiagnostics.run(ctx)
+	}()
 	heartbeatDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatDone)
@@ -694,6 +707,7 @@ func runLoop(ctx context.Context, client *runtimeClient, cfg config, logger *slo
 		select {
 		case <-ctx.Done():
 			<-heartbeatDone
+			<-diagnosticsDone
 			return nil
 		case <-poll.C:
 		}
@@ -1106,7 +1120,7 @@ func executeAgentSessionTask(ctx context.Context, client *runtimeClient, cfg con
 	if err != nil {
 		return nil, err
 	}
-	if capabilityEnabled(cfg.Capabilities, "dryRun") {
+	if capabilityEnabled(cfg.effectiveCapabilities(), "dryRun") {
 		if err := client.appendTaskLog(ctx, workerID, task.ID, appendTaskLogInput{Stream: "system", Message: "Running dry-run agent session in worker-managed workspace."}); err != nil {
 			return nil, err
 		}
@@ -1122,7 +1136,7 @@ func executeAgentSessionTask(ctx context.Context, client *runtimeClient, cfg con
 	if err != nil {
 		return nil, err
 	}
-	if !capabilityEnabled(cfg.Capabilities, capabilityKey) {
+	if !capabilityEnabled(cfg.effectiveCapabilities(), capabilityKey) {
 		return nil, fmt.Errorf("worker does not advertise required %s capability for agentEngine %s", capabilityKey, payload.AgentEngine)
 	}
 	runCtx, stopCancelWatcher := client.watchTaskCancellation(ctx, workerID, task.ID, cfg.PollInterval)
@@ -1537,7 +1551,7 @@ func startCodexAppServer(codexPath string, payload agentSessionPayload) (*codexA
 		return nil, err
 	}
 	cmd.Dir = payload.Workdir
-	cmd.Env = defaultAgentEngineEnv(payload.Env)
+	cmd.Env = defaultAgentEngineEnv(agentEngineCodex, payload.Env)
 	configureAgentEngineProcess(cmd)
 
 	stdin, err := cmd.StdinPipe()
@@ -3727,11 +3741,26 @@ func (cfg config) workerInput(status string, currentLoad int, includeCapabilitie
 		Version:     cfg.Version,
 		CurrentLoad: currentLoad,
 	}
+	capabilities, diagnostics := cfg.engineDiagnostics.snapshot()
+	if len(capabilities) == 0 {
+		capabilities = cfg.Capabilities
+	}
+	input.AgentEngineDiagnostics = diagnostics
+	if includeCapabilities || len(diagnostics) > 0 {
+		input.Capabilities = capabilities
+	}
 	if includeCapabilities {
-		input.Capabilities = cfg.Capabilities
 		input.Labels = cfg.Labels
 	}
 	return input
+}
+
+func (cfg config) effectiveCapabilities() json.RawMessage {
+	capabilities, _ := cfg.engineDiagnostics.snapshot()
+	if len(capabilities) > 0 {
+		return capabilities
+	}
+	return cfg.Capabilities
 }
 
 func (c *runtimeClient) register(ctx context.Context, input runtimeWorkerInput) (runtimeWorker, error) {

@@ -777,6 +777,7 @@ func buildImportMappingRuntimeTaskInput(project Project, runtimeMode string, inp
 		RuntimeMode:          strings.TrimSpace(runtimeMode),
 		RequiredCapabilities: capabilities,
 		Payload:              payloadBody,
+		ServerManaged:        true,
 	}, nil
 }
 

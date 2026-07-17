@@ -1152,6 +1152,7 @@ func (s *MemoryStore) RegisterRuntimeWorker(_ Context, registration RuntimeRegis
 	worker.CurrentLoad = normalized.CurrentLoad
 	worker.Capabilities = copyRawMessage(normalized.Capabilities)
 	worker.Labels = copyRawMessage(normalized.Labels)
+	worker.AgentEngineDiagnostics = copyRawMessage(normalized.AgentEngineDiagnostics)
 	worker.LastSeenAt = now
 	worker.UpdatedAt = now
 	s.runtimeWorkers[key] = worker
@@ -1165,6 +1166,7 @@ func (s *MemoryStore) UpdateRuntimeWorkerHeartbeat(_ Context, registration Runti
 	if registration.TokenID == "" || registration.WorkspaceID == "" || strings.TrimSpace(workerID) == "" {
 		return RuntimeWorker{}, ErrNotFound
 	}
+	diagnosticsProvided := strings.TrimSpace(string(input.AgentEngineDiagnostics)) != ""
 	normalized, err := normalizeRuntimeHeartbeatInput(input)
 	if err != nil {
 		return RuntimeWorker{}, err
@@ -1187,11 +1189,20 @@ func (s *MemoryStore) UpdateRuntimeWorkerHeartbeat(_ Context, registration Runti
 			worker.Version = normalized.Version
 		}
 		worker.CurrentLoad = normalized.CurrentLoad
+		capabilities := worker.Capabilities
 		if string(normalized.Capabilities) != "{}" {
-			worker.Capabilities = copyRawMessage(normalized.Capabilities)
+			capabilities = normalized.Capabilities
 		}
+		diagnostics := worker.AgentEngineDiagnostics
+		if diagnosticsProvided {
+			diagnostics = normalized.AgentEngineDiagnostics
+		}
+		worker.Capabilities = downgradeUnavailableAgentEngineCapabilities(capabilities, diagnostics)
 		if string(normalized.Labels) != "{}" {
 			worker.Labels = copyRawMessage(normalized.Labels)
+		}
+		if diagnosticsProvided {
+			worker.AgentEngineDiagnostics = copyRawMessage(diagnostics)
 		}
 		worker.LastSeenAt = now
 		worker.UpdatedAt = now
@@ -1211,6 +1222,7 @@ func (s *MemoryStore) ListRuntimeWorkers(_ Context, userID, workspaceID string) 
 	workers := []RuntimeWorker{}
 	for _, worker := range s.runtimeWorkers {
 		if worker.WorkspaceID == strings.TrimSpace(workspaceID) {
+			worker.AgentEngineDiagnostics = normalizedRuntimeWorkerDiagnostics(worker.AgentEngineDiagnostics)
 			workers = append(workers, worker)
 		}
 	}
@@ -1233,6 +1245,9 @@ func (s *MemoryStore) createRuntimeTaskLocked(userID, workspaceID string, input 
 	workspaceID = strings.TrimSpace(workspaceID)
 	if !s.isWorkspaceMember(workspaceID, userID) {
 		return RuntimeTask{}, ErrNotFound
+	}
+	if !input.ServerManaged && !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
+		return RuntimeTask{}, ErrForbidden
 	}
 	normalized, err := normalizeCreateRuntimeTaskInput(input)
 	if err != nil {

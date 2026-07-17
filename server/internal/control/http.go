@@ -2645,16 +2645,17 @@ func (s *Server) handleCreateRuntimeTask(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if strings.EqualFold(strings.TrimSpace(input.Kind), "agent_session") {
-		writeError(w, http.StatusBadRequest, errors.New("agent_session runtime tasks are server-managed; use the issue session API"))
-		return
-	}
 	if err := rejectClientRuntimeTaskSkillBundles(input.Payload); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	normalized, err := normalizeCreateRuntimeTaskInput(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
-	task, err := s.store.CreateRuntimeTask(r.Context(), user.ID, workspaceID, input)
+	task, err := s.store.CreateRuntimeTask(r.Context(), user.ID, workspaceID, normalized)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -3138,7 +3139,7 @@ func rejectClientRuntimeTaskSkillBundles(raw json.RawMessage) error {
 		return nil
 	}
 	for _, key := range []string{"requiredSkills", "skills"} {
-		if _, ok := payload[key]; ok {
+		if jsonObjectHasFieldFold(payload, key) {
 			return errors.New("runtime task skill bundles are server-managed")
 		}
 	}
@@ -3154,7 +3155,7 @@ func rejectClientAgentSessionSkillBundles(raw json.RawMessage) error {
 		return nil
 	}
 	for _, key := range []string{"requiredSkills", "skills", "skillBundles"} {
-		if _, ok := payload[key]; ok {
+		if jsonObjectHasFieldFold(payload, key) {
 			return errors.New("agent session skill bundles are server-managed; use skillSlugs")
 		}
 	}
@@ -3188,7 +3189,7 @@ func rejectClientAgentSessionControlFields(raw json.RawMessage) error {
 		"approvalPolicy",
 		"sandbox",
 	} {
-		if _, ok := payload[key]; ok {
+		if jsonObjectHasFieldFold(payload, key) {
 			return fmt.Errorf("agent session field %s is server-managed", key)
 		}
 	}
@@ -3204,9 +3205,9 @@ func redactRuntimeTaskSkillPayload(raw json.RawMessage) json.RawMessage {
 		return raw
 	}
 	changed := false
-	for _, key := range []string{"requiredSkills", "skills"} {
-		if value, ok := payload[key]; ok {
-			payload[key] = redactRuntimeTaskSkillReferences(value)
+	for actualKey, value := range payload {
+		if strings.EqualFold(actualKey, "requiredSkills") || strings.EqualFold(actualKey, "skills") {
+			payload[actualKey] = redactRuntimeTaskSkillReferences(value)
 			changed = true
 		}
 	}
@@ -3218,6 +3219,15 @@ func redactRuntimeTaskSkillPayload(raw json.RawMessage) json.RawMessage {
 		return raw
 	}
 	return json.RawMessage(body)
+}
+
+func jsonObjectHasFieldFold(payload map[string]json.RawMessage, field string) bool {
+	for key := range payload {
+		if strings.EqualFold(key, field) {
+			return true
+		}
+	}
+	return false
 }
 
 func redactRuntimeTaskSkillReferences(value any) any {
@@ -3266,7 +3276,7 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	} else if errors.Is(err, ErrConflict) {
 		status = http.StatusConflict
-	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "requires") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "skill slug") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") || strings.Contains(err.Error(), "not safe") {
+	} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "requires") || strings.Contains(err.Error(), "must be") || strings.Contains(err.Error(), "skill slug") || strings.Contains(err.Error(), "greater than") || strings.Contains(err.Error(), "valid JSON") || strings.Contains(err.Error(), "unsupported") || strings.Contains(err.Error(), "cannot be empty") || strings.Contains(err.Error(), "not safe") || strings.Contains(err.Error(), "server-managed") {
 		status = http.StatusBadRequest
 	}
 	writeError(w, status, err)

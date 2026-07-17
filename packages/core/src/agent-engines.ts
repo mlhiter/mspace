@@ -29,6 +29,20 @@ export function agentEngineForSession(session: Pick<AgentSession, "agentEngine" 
     || "codex";
 }
 
+export function agentEngineForLinkedSession(
+  sessionId: string,
+  sessions: ReadonlyArray<Pick<AgentSession, "id" | "agentEngine" | "provider" | "agentProfile">>,
+): AgentEngine {
+  const linkedSessionId = sessionId.trim();
+  const linkedSession = linkedSessionId ? sessions.find((session) => session.id === linkedSessionId) : undefined;
+  return linkedSession ? agentEngineForSession(linkedSession) : "codex";
+}
+
+export function isNoActiveAgentWorkerError(error: unknown) {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /no active (?:agent|codex|claude(?: code)?|pi) worker/i.test(message);
+}
+
 export function agentCapabilityForEngine(value: unknown): AgentEngineCapability | undefined {
   const engine = parseAgentEngine(value);
   return engine ? agentEngineCapabilities[engine] : undefined;

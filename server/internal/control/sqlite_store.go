@@ -281,6 +281,10 @@ func (s *MemoryStore) restoreSnapshot(snapshot memoryStoreSnapshot) {
 	s.sessionHash = ensureMap(snapshot.SessionHash)
 	s.runtimeTokens = ensureMap(snapshot.RuntimeTokens)
 	s.runtimeWorkers = ensureMap(snapshot.RuntimeWorkers)
+	for key, worker := range s.runtimeWorkers {
+		worker.AgentEngineDiagnostics = normalizedRuntimeWorkerDiagnostics(worker.AgentEngineDiagnostics)
+		s.runtimeWorkers[key] = worker
+	}
 	s.runtimeTasks = ensureMap(snapshot.RuntimeTasks)
 	s.runtimeTaskEvents = ensureMap(snapshot.RuntimeTaskEvents)
 	s.runtimeTaskLogs = ensureMap(snapshot.RuntimeTaskLogs)

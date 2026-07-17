@@ -3021,6 +3021,7 @@ func createTestRunAgentSessionTask(ctx context.Context, q queryer, userID, works
 		RuntimeMode:          normalized.RuntimeMode,
 		RequiredCapabilities: capabilities,
 		Payload:              payload,
+		ServerManaged:        true,
 	})
 	if err != nil {
 		return AgentSession{}, err

@@ -144,8 +144,27 @@ export function personalWorkerRequiresBrowser(requiredCapabilities: Record<strin
   return requiredCapabilities?.browser === true || requiredCapabilities?.chrome_cdp === true;
 }
 
-export function personalWorkerName(workspaceId: string, requiredCapabilities?: Record<string, unknown>): string {
-  const baseName = `desktop-personal-${workspaceId.slice(0, 8)}`;
+export function personalWorkerRuntimeLabels(
+  hostId: string,
+  requiredCapabilities?: Record<string, unknown>,
+): Record<string, string> {
+  return {
+    provider: "desktop-local",
+    environment: "host",
+    hostId,
+    runtimeRole: personalWorkerRequiresBrowser(requiredCapabilities) ? "browser_companion" : "primary",
+  };
+}
+
+export function personalWorkerName(
+  workspaceId: string,
+  hostId: string,
+  requiredCapabilities?: Record<string, unknown>,
+): string {
+  const hostMatch = /^msh_([0-9a-f]{32})$/.exec(hostId);
+  if (!hostMatch) throw new Error("A valid anonymous host identity is required to name the personal worker.");
+  const hostShortId = hostMatch[1].slice(0, 8);
+  const baseName = `desktop-personal-${workspaceId.slice(0, 8)}-${hostShortId}`;
   return personalWorkerRequiresBrowser(requiredCapabilities) ? `${baseName}-browser` : baseName;
 }
 

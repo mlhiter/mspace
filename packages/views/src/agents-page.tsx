@@ -1,14 +1,44 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, CheckCircle2, Circle, Copy, Eye, FileText, MoreHorizontal, Pencil, Plus, Power, Save, Trash2, X } from "lucide-react";
 import {
+  AlertCircle,
+  Bot,
+  CheckCircle2,
+  Circle,
+  CircleHelp,
+  Copy,
+  Eye,
+  FileText,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Power,
+  Save,
+  ServerCog,
+  Trash2,
+  Wrench,
+  X,
+} from "lucide-react";
+import {
+  agentEngineDiagnosticDisplayState,
   agentRequiredCapabilities,
   controlPlaneApi,
+  isCurrentHostPrimaryWorker,
+  isCurrentHostWorker,
   isFixedAgentEngineCatalogItem,
   queryKeys,
+  resolveAgentEngineDiagnostic,
+  runtimeWorkerLabel,
+  runtimeWorkerLiveness,
+  type AgentEngine,
   type AgentEngineCatalogItem,
+  type AgentEngineReadinessStatus,
+  type ResolvedAgentEngineDiagnostic,
+  type RuntimeAvailability,
   type RuntimeSkillFile,
+  type RuntimeWorker,
+  type RuntimeWorkerLiveness,
   type SkillCatalogItem,
   type SkillDetail,
   type SkillInput,
@@ -32,8 +62,11 @@ import {
 } from "@mspace/ui";
 import { codexAvatarDataUrl } from "./agent-avatar";
 import { useMspaceAuth } from "./auth-context";
+import { formatAbsoluteTime, RelativeTime } from "./time";
 
 type AgentsTab = "agents" | "skills";
+
+const DEFAULT_ACTIVE_WORKER_MAX_AGE_MS = 45_000;
 
 type SkillForm = {
   slug: string;
@@ -92,12 +125,27 @@ export function AgentsPage() {
   const workspaceReady = auth.status === "signed-in" && Boolean(auth.token && workspaceId);
   const canManageWorkspace = auth.workspace?.role === "owner" || auth.workspace?.role === "admin";
   const runtimeMode = auth.workspace?.kind === "team" ? "team" : "personal";
+  const getPersonalWorkerHostId = typeof window !== "undefined" ? window.mspaceDesktop?.getPersonalWorkerHostId : undefined;
+  const canReadCurrentHostId = workspaceReady && runtimeMode === "personal" && Boolean(getPersonalWorkerHostId);
   const agentsQueryKey = queryKeys.agents(workspaceId, auth.token);
   const skillsQueryKey = queryKeys.skills(workspaceId, auth.token);
   const agentsQuery = useQuery({
     queryKey: agentsQueryKey,
     queryFn: () => controlPlaneApi.listAgents(auth.token, workspaceId),
     enabled: workspaceReady,
+  });
+  const workersQuery = useQuery({
+    queryKey: queryKeys.runtimeWorkers(workspaceId, auth.token),
+    queryFn: () => controlPlaneApi.listRuntimeWorkers(auth.token, workspaceId),
+    enabled: workspaceReady,
+    refetchInterval: 5_000,
+  });
+  const currentHostIdQuery = useQuery({
+    queryKey: ["desktop-personal-worker-host-id"],
+    queryFn: async () => String(await getPersonalWorkerHostId?.() || "").trim(),
+    enabled: canReadCurrentHostId,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
   });
   const skillsQuery = useQuery({
     queryKey: skillsQueryKey,
@@ -106,6 +154,10 @@ export function AgentsPage() {
   });
   const agents = useMemo(() => (agentsQuery.data || []).filter(isFixedAgentEngineCatalogItem), [agentsQuery.data]);
   const skills = useMemo(() => skillsQuery.data || [], [skillsQuery.data]);
+  const workers = useMemo(
+    () => (workersQuery.data || []).filter((worker) => worker.mode === runtimeMode),
+    [runtimeMode, workersQuery.data],
+  );
   const agentAvailability = useQueries({
     queries: agents.map((agent) => {
       const input = { runtimeMode, requiredCapabilities: agentRequiredCapabilities(agent) };
@@ -231,9 +283,15 @@ export function AgentsPage() {
         {activeTab === "agents" ? (
           <AgentsPanel
             agents={agents}
+            workers={workers}
             isPending={agentsQuery.isPending}
-            error={agentsQuery.error}
-            availability={agentAvailability.map((query) => query.data?.state)}
+            workersPending={workersQuery.isPending}
+            localIdentityPending={canReadCurrentHostId && currentHostIdQuery.isPending}
+            error={agentsQuery.error || workersQuery.error || agentAvailability.find((query) => query.error)?.error}
+            availability={agentAvailability.map((query) => query.data)}
+            availabilityPending={agentAvailability.map((query) => query.isPending)}
+            runtimeMode={runtimeMode}
+            currentHostId={runtimeMode === "personal" ? currentHostIdQuery.data || "" : ""}
           />
         ) : (
           <SkillsPanel
@@ -302,9 +360,15 @@ function AgentsTabs(props: { activeTab: AgentsTab; onChange: (tab: AgentsTab) =>
 
 function AgentsPanel(props: {
   agents: AgentEngineCatalogItem[];
+  workers: RuntimeWorker[];
   isPending: boolean;
+  workersPending: boolean;
+  localIdentityPending: boolean;
   error?: Error | null;
-  availability: Array<string | undefined>;
+  availability: Array<RuntimeAvailability | undefined>;
+  availabilityPending: boolean[];
+  runtimeMode: string;
+  currentHostId: string;
 }) {
   const { t } = useMspaceTranslation();
   if (props.isPending) {
@@ -323,25 +387,325 @@ function AgentsPanel(props: {
       />
     );
   }
+  const activeWorkerMaxAgeMs = props.availability.find((availability) => availability?.activeWorkerMaxAgeMs)?.activeWorkerMaxAgeMs
+    || DEFAULT_ACTIVE_WORKER_MAX_AGE_MS;
+  const workers = [...props.workers].sort((left, right) => {
+    const leftLocal = isCurrentHostPrimaryWorker(left, props.runtimeMode, props.currentHostId)
+      ? 2
+      : isCurrentHostWorker(left, props.runtimeMode, props.currentHostId) ? 1 : 0;
+    const rightLocal = isCurrentHostPrimaryWorker(right, props.runtimeMode, props.currentHostId)
+      ? 2
+      : isCurrentHostWorker(right, props.runtimeMode, props.currentHostId) ? 1 : 0;
+    if (leftLocal !== rightLocal) return rightLocal - leftLocal;
+    const leftOnline = runtimeWorkerLiveness(left, activeWorkerMaxAgeMs) === "online" ? 1 : 0;
+    const rightOnline = runtimeWorkerLiveness(right, activeWorkerMaxAgeMs) === "online" ? 1 : 0;
+    if (leftOnline !== rightOnline) return rightOnline - leftOnline;
+    return new Date(right.lastSeenAt).getTime() - new Date(left.lastSeenAt).getTime();
+  });
+  const localPrimaryWorker = workers.find((worker) => isCurrentHostPrimaryWorker(worker, props.runtimeMode, props.currentHostId));
+
   return (
-    <div className="overflow-hidden rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
-      {props.error ? <div className="border-b border-[color:var(--line)] px-4 py-3"><Notice tone="danger">{props.error.message}</Notice></div> : null}
-      <div className="overflow-x-auto">
-        <div className="min-w-[680px]">
-          <div className="grid grid-cols-[minmax(180px,0.9fr)_minmax(280px,1.5fr)_140px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
-            <span>{t("agents.agent")}</span>
-            <span>{t("agents.runtimeDescription")}</span>
-            <span>{t("agents.runtimeStatus")}</span>
-          </div>
-          <div className="divide-y divide-[color:var(--line)]">
-            {props.agents.map((agent, index) => (
-              <AgentRow key={agent.id} agent={agent} availability={props.availability[index]} />
-            ))}
+    <div className="space-y-5">
+      <section aria-labelledby="agent-readiness-heading">
+        <div className="mb-2 min-w-0">
+          <h2 id="agent-readiness-heading" className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">{t("agents.readiness.title")}</h2>
+          <p className="text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.readiness.description")}</p>
+        </div>
+        <div className="overflow-hidden rounded-[8px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+          {props.error ? <div className="border-b border-[color:var(--line)] px-4 py-3"><Notice tone="danger">{props.error.message}</Notice></div> : null}
+          <div className="overflow-x-auto">
+            <div className="min-w-[780px]">
+              <div className="grid grid-cols-[minmax(300px,1.35fr)_minmax(220px,1fr)_minmax(180px,0.8fr)] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
+                <span>{t("agents.agent")}</span>
+                <span>{t("agents.readiness.thisMac")}</span>
+                <span>{t("agents.readiness.workspaceCoverage")}</span>
+              </div>
+              <div className="divide-y divide-[color:var(--line)]">
+                {props.agents.map((agent, index) => (
+                  <AgentReadinessRow
+                    key={agent.id}
+                    agent={agent}
+                    availability={props.availability[index]}
+                    availabilityPending={props.availabilityPending[index]}
+                    localPrimaryWorker={localPrimaryWorker}
+                    workersPending={props.workersPending}
+                    localIdentityPending={props.localIdentityPending}
+                    activeWorkerMaxAgeMs={activeWorkerMaxAgeMs}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
         </div>
+      </section>
+
+      <section aria-labelledby="connected-workers-heading">
+        <div className="mb-2 min-w-0">
+          <h2 id="connected-workers-heading" className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">{t("agents.workers.title")}</h2>
+          <p className="text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.workers.description")}</p>
+        </div>
+        <div className="overflow-hidden rounded-[8px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+          <div className="overflow-x-auto">
+            <div className="min-w-[1120px]">
+              <div className="grid grid-cols-[minmax(240px,1.35fr)_125px_150px_150px_150px_70px_120px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
+                <span>{t("agents.workers.worker")}</span>
+                <span>{t("agents.status")}</span>
+                <span>Codex</span>
+                <span>Claude Code</span>
+                <span>Pi</span>
+                <span>{t("agents.workers.load")}</span>
+                <span>{t("agents.workers.lastSeen")}</span>
+              </div>
+              {props.workersPending && workers.length === 0 ? (
+                <div className="px-4 py-8 text-center text-[13px] text-[color:var(--muted)]">{t("agents.workers.loading")}</div>
+              ) : workers.length === 0 ? (
+                <div className="px-4 py-8 text-center">
+                  <ServerCog className="mx-auto size-5 text-[color:var(--faint)]" />
+                  <p className="mt-2 text-[13px] font-medium text-[color:var(--text)]">{t("agents.workers.emptyTitle")}</p>
+                  <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.workers.emptyBody")}</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-[color:var(--line)]">
+                  {workers.map((worker) => (
+                    <WorkerReadinessRow
+                      key={worker.id}
+                      worker={worker}
+                      activeWorkerMaxAgeMs={activeWorkerMaxAgeMs}
+                      runtimeMode={props.runtimeMode}
+                      currentHostId={props.currentHostId}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AgentReadinessRow(props: {
+  agent: AgentEngineCatalogItem;
+  localPrimaryWorker?: RuntimeWorker;
+  workersPending: boolean;
+  localIdentityPending: boolean;
+  availability?: RuntimeAvailability;
+  availabilityPending?: boolean;
+  activeWorkerMaxAgeMs?: number;
+}) {
+  const { t } = useMspaceTranslation();
+  const claimableCount = Number.isSafeInteger(props.availability?.claimableWorkerCount)
+    && Number(props.availability?.claimableWorkerCount) >= 0
+    ? Number(props.availability?.claimableWorkerCount)
+    : undefined;
+  const localDiagnostic = props.localPrimaryWorker
+    ? resolveAgentEngineDiagnostic(props.localPrimaryWorker, props.agent.id)
+    : undefined;
+  const localLiveness = props.localPrimaryWorker
+    ? runtimeWorkerLiveness(props.localPrimaryWorker, props.activeWorkerMaxAgeMs)
+    : undefined;
+  const overallState = props.availability?.state || (props.availabilityPending ? "checking" : "unknown");
+
+  return (
+    <article
+      className="grid grid-cols-[minmax(300px,1.35fr)_minmax(220px,1fr)_minmax(180px,0.8fr)] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]"
+      data-testid="agents.summary.item"
+      data-qa-resource-type="agent-engine"
+      data-qa-resource-id={props.agent.id}
+      data-qa-state={overallState}
+    >
+      <AgentIdentity agent={props.agent} />
+      <div className="min-w-0">
+        {(props.workersPending || props.localIdentityPending) && !props.localPrimaryWorker ? (
+          <span className="text-[12px] text-[color:var(--muted)]">{t("agents.runtimeChecking")}</span>
+        ) : props.localPrimaryWorker && localDiagnostic && localLiveness ? (
+          <div className="flex min-w-0 flex-col items-start gap-1.5">
+            <EngineDiagnosticPill diagnostic={localDiagnostic} />
+            <span className="truncate text-[11px] leading-4 text-[color:var(--faint)]">
+              {t(`agents.workerStates.${localLiveness}`)}
+            </span>
+          </div>
+        ) : (
+          <span className="text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.readiness.noLocalWorker")}</span>
+        )}
+      </div>
+      <div className="min-w-0">
+        {props.availabilityPending ? (
+          <span className="text-[12px] text-[color:var(--muted)]">{t("agents.runtimeChecking")}</span>
+        ) : claimableCount === undefined ? (
+          <span className="text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.readiness.coverageUnknown")}</span>
+        ) : (
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={cn("size-2 shrink-0 rounded-full", claimableCount > 0 ? "bg-[color:var(--success)]" : "bg-[color:var(--faint)]")} />
+            <span className="text-[12px] leading-5 text-[color:var(--text)]">
+              {t("agents.readiness.claimableWorkers", { count: claimableCount })}
+            </span>
+          </div>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function AgentIdentity(props: { agent: AgentEngineCatalogItem }) {
+  const { t } = useMspaceTranslation();
+  const isCodex = props.agent.id === "codex";
+  const initial = props.agent.id === "claude_code" ? "C" : props.agent.id === "pi" ? "P" : "C";
+  return (
+    <div className="flex min-w-0 items-start gap-2.5">
+      <span className="mt-0.5 grid size-9 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-[color:var(--paper)] text-[12px] font-semibold text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+        {isCodex ? <img src={codexAvatarDataUrl} alt="" className="size-full p-1" /> : initial}
+      </span>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <h3 className="truncate text-[14px] font-semibold leading-5 text-[color:var(--text)]">{props.agent.name}</h3>
+          <span className="shrink-0 font-mono text-[11px] leading-4 text-[color:var(--muted)]">{props.agent.mention}</span>
+        </div>
+        <p className="mt-0.5 line-clamp-2 text-[12px] leading-5 text-[color:var(--muted)]">{t(`agents.engineDescriptions.${props.agent.id}`)}</p>
       </div>
     </div>
   );
+}
+
+function WorkerReadinessRow(props: {
+  worker: RuntimeWorker;
+  activeWorkerMaxAgeMs?: number;
+  runtimeMode: string;
+  currentHostId: string;
+}) {
+  const { t } = useMspaceTranslation();
+  const liveness = runtimeWorkerLiveness(props.worker, props.activeWorkerMaxAgeMs);
+  const isThisMac = isCurrentHostWorker(props.worker, props.runtimeMode, props.currentHostId);
+  const hostId = runtimeWorkerLabel(props.worker, "hostId");
+  const runtimeRole = runtimeWorkerLabel(props.worker, "runtimeRole");
+  const roleLabel = runtimeRole === "primary"
+    ? t("agents.workers.primary")
+    : runtimeRole === "browser_companion"
+      ? t("agents.workers.browserCompanion")
+      : runtimeRole
+        ? t("agents.workers.secondaryRuntime")
+        : "";
+  const meta = [
+    roleLabel,
+    isThisMac ? props.worker.name : hostId ? t("agents.workers.host", { id: shortHostId(hostId) }) : props.worker.mode,
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <article
+      className="grid grid-cols-[minmax(240px,1.35fr)_125px_150px_150px_150px_70px_120px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]"
+      data-testid="agents.workers.item"
+      data-qa-resource-type="runtime-worker"
+      data-qa-resource-id={props.worker.id}
+      data-qa-state={liveness}
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span className="grid size-8 shrink-0 place-items-center rounded-[7px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+          <ServerCog className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <div className="truncate text-[13px] font-medium leading-5 text-[color:var(--text)]">{isThisMac ? t("agents.workers.thisMac") : props.worker.name}</div>
+          <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{meta || props.worker.mode}</div>
+        </div>
+      </div>
+      <div className="min-w-0">
+        <WorkerLivenessPill status={liveness} />
+        <div className="mt-1 truncate text-[11px] leading-4 text-[color:var(--faint)]">{props.worker.mode}</div>
+      </div>
+      {(["codex", "claude_code", "pi"] as const).map((engine) => (
+        <EngineDiagnosticCell key={engine} engine={engine} worker={props.worker} />
+      ))}
+      <span className="font-mono text-[12px] tabular-nums text-[color:var(--muted)]">{props.worker.currentLoad}</span>
+      <span className="text-[12px] leading-5 text-[color:var(--muted)]"><RelativeTime value={props.worker.lastSeenAt} /></span>
+    </article>
+  );
+}
+
+function EngineDiagnosticCell(props: { engine: AgentEngine; worker: RuntimeWorker }) {
+  const diagnostic = resolveAgentEngineDiagnostic(props.worker, props.engine);
+  return (
+    <div
+      className="min-w-0"
+      data-testid="agents.workers.engine-status"
+      data-qa-field={props.engine}
+      data-qa-state={diagnostic.status}
+      data-qa-legacy-capability={diagnostic.legacyCapability ? "true" : undefined}
+    >
+      <EngineDiagnosticPill diagnostic={diagnostic} />
+      {diagnostic.version ? <div className="mt-1 truncate font-mono text-[10px] leading-4 text-[color:var(--faint)]">{diagnostic.version}</div> : null}
+    </div>
+  );
+}
+
+function EngineDiagnosticPill(props: { diagnostic: ResolvedAgentEngineDiagnostic }) {
+  const { t } = useMspaceTranslation();
+  const { diagnostic } = props;
+  const displayState = agentEngineDiagnosticDisplayState(diagnostic);
+  const label = displayState === "disabled"
+    ? t("agents.diagnostics.disabled")
+    : diagnostic.status === "not_reported" && diagnostic.legacyCapability
+      ? t("agents.diagnostics.legacyUnverified")
+      : t(`agents.diagnostics.${diagnostic.status}`);
+  const hintKey = displayState === "disabled"
+    ? "disabled_by_configuration"
+    : diagnostic.status === "not_reported" && diagnostic.legacyCapability
+      ? "legacy_capability"
+      : diagnostic.status;
+  const titleParts = [
+    t(`agents.diagnosticHints.${hintKey}`),
+    diagnostic.version ? t("agents.diagnostics.version", { version: diagnostic.version }) : "",
+    diagnostic.checkedAt ? t("agents.diagnostics.checkedAt", { time: formatAbsoluteTime(diagnostic.checkedAt) }) : "",
+  ].filter(Boolean);
+  const tone = diagnosticTone(diagnostic.status);
+  const Icon = diagnostic.status === "ready"
+    ? CheckCircle2
+    : displayState === "disabled"
+      ? Power
+      : diagnostic.status === "needs_setup"
+        ? Wrench
+        : diagnostic.status === "probe_error"
+          ? AlertCircle
+          : CircleHelp;
+
+  return (
+    <span
+      className={cn("inline-flex h-6 max-w-full items-center gap-1.5 rounded-full px-2 text-[11px] font-medium leading-5", tone)}
+      title={titleParts.join(" · ")}
+    >
+      <Icon className="size-3 shrink-0" />
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
+function WorkerLivenessPill(props: { status: RuntimeWorkerLiveness }) {
+  const { t } = useMspaceTranslation();
+  const tone = props.status === "online"
+    ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
+    : props.status === "draining"
+      ? "bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
+      : props.status === "stale"
+        ? "bg-[color:var(--warning-soft)] text-[color:var(--warning)]"
+        : "bg-[color:var(--block)] text-[color:var(--muted)]";
+  return (
+    <span className={cn("inline-flex h-6 max-w-full items-center gap-1.5 rounded-full px-2 text-[11px] font-medium leading-5", tone)}>
+      <Circle className="size-2.5 shrink-0 fill-current" />
+      <span className="truncate">{t(`agents.workerStates.${props.status}`)}</span>
+    </span>
+  );
+}
+
+function diagnosticTone(status: AgentEngineReadinessStatus) {
+  if (status === "ready") return "bg-[color:var(--success-soft)] text-[color:var(--success)]";
+  if (status === "needs_setup") return "bg-[color:var(--warning-soft)] text-[color:var(--warning)]";
+  if (status === "probe_error") return "bg-[color:var(--danger-soft)] text-[color:var(--danger)]";
+  return "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
+}
+
+function shortHostId(value: string) {
+  const normalized = value.trim();
+  if (normalized.length <= 12) return normalized;
+  return normalized.slice(-8);
 }
 
 function SkillsPanel(props: {
@@ -543,52 +907,6 @@ function SkillStatus(props: { enabled: boolean; label: string }) {
       )}
     >
       {props.enabled ? <CheckCircle2 data-icon /> : <Circle data-icon />}
-      {props.label}
-    </span>
-  );
-}
-
-function AgentRow(props: { agent: AgentEngineCatalogItem; availability?: string }) {
-  const { agent } = props;
-  const { t } = useMspaceTranslation();
-  const isCodex = agent.id === "codex";
-  const initial = agent.id === "claude_code" ? "C" : agent.id === "pi" ? "P" : "C";
-  const description = t(`agents.engineDescriptions.${agent.id}`);
-  const statusLabel = props.availability === "ready"
-    ? t("agents.runtimeReady")
-    : props.availability
-      ? t("agents.runtimeUnavailable")
-      : t("agents.runtimeChecking");
-  return (
-    <article className="grid grid-cols-[minmax(180px,0.9fr)_minmax(280px,1.5fr)_140px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-[color:var(--paper)] text-[12px] font-semibold text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
-            {isCodex ? <img src={codexAvatarDataUrl} alt="" className="size-full p-1" /> : initial}
-          </span>
-          <div className="min-w-0">
-            <h3 className="truncate text-[15px] font-semibold leading-6 text-[color:var(--text)]">{agent.name}</h3>
-            <div className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">{agent.mention}</div>
-          </div>
-        </div>
-      </div>
-      <p className="line-clamp-2 min-w-0 text-[13px] leading-5 text-[color:var(--muted)]">{description}</p>
-      <AgentStatus ready={props.availability === "ready"} label={statusLabel} />
-    </article>
-  );
-}
-
-function AgentStatus(props: { ready: boolean; label: string }) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium",
-        props.ready
-          ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
-          : "bg-[color:var(--block)] text-[color:var(--muted-strong)]",
-      )}
-    >
-      {props.ready ? <CheckCircle2 data-icon /> : <Circle data-icon />}
       {props.label}
     </span>
   );

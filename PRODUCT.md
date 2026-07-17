@@ -20,6 +20,8 @@ mspace exposes three fixed execution Agents: Codex (`@codex`), Claude Code (`@cl
 
 Skills and Workflows are separate. Skills are server-managed, versioned instruction bundles that can be attached to a Session. Workflows are mspace-owned product automations such as issue analysis, triage, Tests, import mapping, deploy, and cleanup; these remain Codex-backed until mspace defines an explicit engine policy for them. Workers are execution hosts, while Environments are the targets those Workers operate.
 
+The Agents route answers two operational questions without turning into a settings marketplace: whether This Mac can run each fixed Agent, and how many connected Workers in the current workspace can claim that Agent's work. A second matrix shows each Worker's liveness and per-engine installation/configuration state; Skills stay in their own tab.
+
 ## Brand Personality
 
 Calm, operational, and exact. The interface should feel like a serious document workspace for real engineering work: quiet enough for daily use, explicit about runtime and namespace scope, and direct about what agents are doing.

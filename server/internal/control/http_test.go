@@ -1215,6 +1215,12 @@ func TestWorkspaceMembersCannotMutateRuntimeConfiguration(t *testing.T) {
 			body:   `{"autoCreateDraftPr":true}`,
 		},
 		{
+			name:   "create raw runtime task",
+			method: http.MethodPost,
+			path:   "/api/workspaces/" + workspaceID + "/runtime-tasks",
+			body:   `{"kind":"noop","runtimeMode":"team","requiredCapabilities":{"protocolSmoke":true},"payload":{"prompt":"smoke"}}`,
+		},
+		{
 			name:   "create cluster",
 			method: http.MethodPost,
 			path:   "/api/workspaces/" + workspaceID + "/clusters",
@@ -3890,6 +3896,18 @@ func TestCreateAgentSessionRejectsClientSkillBundles(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), "server-managed") {
 		t.Fatalf("expected server-managed error, got %s", recorder.Body.String())
 	}
+
+	mixedCaseRecorder := httptest.NewRecorder()
+	mixedCaseReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/issue-0001/sessions", strings.NewReader(`{
+		"agentEngine":"codex",
+		"command":"@codex use unsafe skill",
+		"RequiredSkills":[{"slug":"think","files":[{"path":"SKILL.md","content":"unsafe"}]}]
+	}`))
+	mixedCaseReq.Header.Set("Authorization", "Bearer "+sessionToken)
+	router.ServeHTTP(mixedCaseRecorder, mixedCaseReq)
+	if mixedCaseRecorder.Code != http.StatusBadRequest || !strings.Contains(mixedCaseRecorder.Body.String(), "server-managed") {
+		t.Fatalf("mixed-case client skill bundle status=%d body=%s", mixedCaseRecorder.Code, mixedCaseRecorder.Body.String())
+	}
 }
 
 func TestCreateIssueQueuesAutomaticThinkAnalysis(t *testing.T) {
@@ -4137,8 +4155,52 @@ func TestCreateRuntimeTaskRejectsRawAgentSession(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("create raw agent session status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(recorder.Body.String(), "agent_session runtime tasks are server-managed") {
+	if !strings.Contains(recorder.Body.String(), "agent_session") || !strings.Contains(recorder.Body.String(), "server-managed") {
 		t.Fatalf("expected server-managed agent session error, got %s", recorder.Body.String())
+	}
+}
+
+func TestCreateRuntimeTaskRejectsSystemKindsAndControlFields(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "raw-system-task-user",
+		Login:          "raw-system-task-user",
+		Name:           "Raw System Task User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	router := NewServer(Config{}, store, fakeGitHubClient{}).Routes()
+	path := "/api/workspaces/" + workspaces[0].ID + "/runtime-tasks"
+
+	for _, test := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "triage workflow", body: `{"kind":"issue_type_triage","runtimeMode":"personal","requiredCapabilities":{"codex":true},"payload":{}}`, want: "server-managed"},
+		{name: "import mapping workflow", body: `{"kind":"test_case_import_mapping","runtimeMode":"personal","requiredCapabilities":{"codex":true},"payload":{}}`, want: "server-managed"},
+		{name: "unknown executable kind", body: `{"kind":"custom_exec","runtimeMode":"personal","requiredCapabilities":{},"payload":{}}`, want: "server-managed"},
+		{name: "internal flag injection", body: `{"kind":"issue_type_triage","runtimeMode":"personal","serverManaged":true,"requiredCapabilities":{"codex":true},"payload":{}}`, want: "server-managed"},
+		{name: "issue binding", body: `{"issueId":"issue-1","kind":"noop","runtimeMode":"personal","requiredCapabilities":{},"payload":{}}`, want: "cannot bind"},
+		{name: "automation payload", body: `{"kind":"noop","runtimeMode":"personal","requiredCapabilities":{},"payload":{"automation":"test_run_execution"}}`, want: "automation is server-managed"},
+		{name: "mixed case automation payload", body: `{"kind":"noop","runtimeMode":"personal","requiredCapabilities":{},"payload":{"Automation":"test_run_execution"}}`, want: "automation is server-managed"},
+		{name: "engine payload", body: `{"kind":"noop","runtimeMode":"personal","requiredCapabilities":{},"payload":{"agentEngine":"pi"}}`, want: "agentEngine is server-managed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(test.body))
+			request.Header.Set("Authorization", "Bearer "+sessionToken)
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), test.want) {
+				t.Fatalf("status=%d body=%s want=%q", recorder.Code, recorder.Body.String(), test.want)
+			}
+		})
 	}
 }
 
@@ -4158,7 +4220,7 @@ func TestCreateAgentSessionRejectsServerOwnedControlFields(t *testing.T) {
 		t.Fatalf("create auth session: %v", err)
 	}
 	server := NewServer(Config{}, store, fakeGitHubClient{})
-	for _, field := range []string{"automation", "testRunId", "sourceSessionId", "env", "workdir", "sandbox"} {
+	for _, field := range []string{"automation", "Automation", "testRunId", "sourceSessionId", "SourceSessionID", "env", "workdir", "sandbox"} {
 		t.Run(field, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			body := fmt.Sprintf(`{"agentEngine":"pi","command":"@pi inspect","%s":"attacker-controlled"}`, field)
@@ -4259,6 +4321,9 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	if personalWorker.ID == "" || personalWorker.WorkspaceID != personalWorkspaceID || personalWorker.Mode != "personal" {
 		t.Fatalf("unexpected personal worker: %+v", personalWorker)
 	}
+	if string(personalWorker.AgentEngineDiagnostics) != "{}" {
+		t.Fatalf("worker without diagnostics should return an empty object, got %s", personalWorker.AgentEngineDiagnostics)
+	}
 
 	createTokenRecorder := httptest.NewRecorder()
 	createTokenReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-registration-tokens", strings.NewReader(`{"name":"team worker","expiresInHours":12}`))
@@ -4291,7 +4356,7 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	}
 
 	registerRecorder := httptest.NewRecorder()
-	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"team-worker-1","mode":"team","version":"0.1.0","capabilities":{"codex":true,"docker":true},"labels":{"region":"local"}}`))
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"team-worker-1","mode":"team","version":"0.1.0","capabilities":{"codex":true,"docker":true},"labels":{"region":"local"},"agentEngineDiagnostics":{"codex":{"status":"ready","reasonCode":"auth_ok","version":"0.1.0","checkedAt":"2026-07-17T08:00:00Z","secret":"must-not-persist"},"pi":{"status":"unverified","reasonCode":"unknown_reason","version":"/Users/example/.pi/session.jsonl","checkedAt":"not-a-time","rawOutput":"must-not-persist"},"unknown":{"status":"ready"}}}`))
 	registerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
 	router.ServeHTTP(registerRecorder, registerReq)
 	if registerRecorder.Code != http.StatusCreated {
@@ -4307,9 +4372,12 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	if !strings.Contains(string(worker.Capabilities), `"codex":true`) {
 		t.Fatalf("expected codex capability, got %s", worker.Capabilities)
 	}
+	if string(worker.AgentEngineDiagnostics) != `{"codex":{"status":"ready","reasonCode":"auth_ok","version":"0.1.0","checkedAt":"2026-07-17T08:00:00Z"},"pi":{"status":"unverified"}}` {
+		t.Fatalf("expected sanitized engine diagnostics, got %s", worker.AgentEngineDiagnostics)
+	}
 
 	heartbeatRecorder := httptest.NewRecorder()
-	heartbeatReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/heartbeat", strings.NewReader(`{"status":"draining","currentLoad":2}`))
+	heartbeatReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/heartbeat", strings.NewReader(`{"status":"draining","currentLoad":2,"agentEngineDiagnostics":{"claude_code":{"status":"needs_setup","reasonCode":"auth_required","internalError":"must-not-persist"}}}`))
 	heartbeatReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
 	router.ServeHTTP(heartbeatRecorder, heartbeatReq)
 	if heartbeatRecorder.Code != http.StatusOK {
@@ -4320,6 +4388,56 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	}
 	if worker.Status != "draining" || worker.CurrentLoad != 2 {
 		t.Fatalf("unexpected heartbeat worker: %+v", worker)
+	}
+	if string(worker.AgentEngineDiagnostics) != `{"claude_code":{"status":"needs_setup","reasonCode":"auth_required"}}` {
+		t.Fatalf("heartbeat should replace diagnostics with a sanitized snapshot, got %s", worker.AgentEngineDiagnostics)
+	}
+	var heartbeatCapabilities map[string]bool
+	if err := json.Unmarshal(worker.Capabilities, &heartbeatCapabilities); err != nil {
+		t.Fatalf("parse heartbeat capabilities: %v", err)
+	}
+	if heartbeatCapabilities["claudeCode"] || !heartbeatCapabilities["codex"] || !heartbeatCapabilities["docker"] {
+		t.Fatalf("unavailable diagnostics should only downgrade the matching engine capability, got %s", worker.Capabilities)
+	}
+
+	omittedDiagnosticsRecorder := httptest.NewRecorder()
+	omittedDiagnosticsReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/heartbeat", strings.NewReader(`{"status":"draining","currentLoad":2,"capabilities":{"codex":true,"docker":true,"claudeCode":true}}`))
+	omittedDiagnosticsReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(omittedDiagnosticsRecorder, omittedDiagnosticsReq)
+	if omittedDiagnosticsRecorder.Code != http.StatusOK {
+		t.Fatalf("omitted diagnostics heartbeat status=%d body=%s", omittedDiagnosticsRecorder.Code, omittedDiagnosticsRecorder.Body.String())
+	}
+	if err := json.Unmarshal(omittedDiagnosticsRecorder.Body.Bytes(), &worker); err != nil {
+		t.Fatalf("parse omitted diagnostics heartbeat worker: %v", err)
+	}
+	if string(worker.AgentEngineDiagnostics) != `{"claude_code":{"status":"needs_setup","reasonCode":"auth_required"}}` {
+		t.Fatalf("omitted diagnostics should preserve the prior snapshot, got %s", worker.AgentEngineDiagnostics)
+	}
+	if err := json.Unmarshal(worker.Capabilities, &heartbeatCapabilities); err != nil {
+		t.Fatalf("parse omitted diagnostics capabilities: %v", err)
+	}
+	if heartbeatCapabilities["claudeCode"] {
+		t.Fatalf("omitting diagnostics must not let a heartbeat re-upgrade an unavailable engine, got %s", worker.Capabilities)
+	}
+
+	clearDiagnosticsRecorder := httptest.NewRecorder()
+	clearDiagnosticsReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/heartbeat", strings.NewReader(`{"status":"draining","currentLoad":2,"agentEngineDiagnostics":{}}`))
+	clearDiagnosticsReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(clearDiagnosticsRecorder, clearDiagnosticsReq)
+	if clearDiagnosticsRecorder.Code != http.StatusOK {
+		t.Fatalf("clear diagnostics heartbeat status=%d body=%s", clearDiagnosticsRecorder.Code, clearDiagnosticsRecorder.Body.String())
+	}
+	if err := json.Unmarshal(clearDiagnosticsRecorder.Body.Bytes(), &worker); err != nil {
+		t.Fatalf("parse clear diagnostics heartbeat worker: %v", err)
+	}
+	if string(worker.AgentEngineDiagnostics) != "{}" {
+		t.Fatalf("explicit empty diagnostics should clear the prior snapshot, got %s", worker.AgentEngineDiagnostics)
+	}
+	if err := json.Unmarshal(worker.Capabilities, &heartbeatCapabilities); err != nil {
+		t.Fatalf("parse cleared diagnostics capabilities: %v", err)
+	}
+	if heartbeatCapabilities["claudeCode"] {
+		t.Fatalf("clearing diagnostics alone must not alter existing capabilities, got %s", worker.Capabilities)
 	}
 
 	listRecorder := httptest.NewRecorder()
@@ -4335,6 +4453,9 @@ func TestRuntimeWorkerRegistrationFlow(t *testing.T) {
 	}
 	if len(workers) != 1 || workers[0].ID != worker.ID || workers[0].Status != "draining" {
 		t.Fatalf("unexpected workers: %+v", workers)
+	}
+	if string(workers[0].AgentEngineDiagnostics) != string(worker.AgentEngineDiagnostics) {
+		t.Fatalf("listed worker should preserve heartbeat diagnostics, got %s", workers[0].AgentEngineDiagnostics)
 	}
 
 	revokeRecorder := httptest.NewRecorder()
@@ -4432,6 +4553,9 @@ func TestRuntimeAvailabilityFlow(t *testing.T) {
 	if availability.State != "unavailable" || availability.ReasonCode != "no_worker" || availability.CanQueue || !availability.CanAutoStart {
 		t.Fatalf("unexpected no-worker availability with only other workspace workers online: %+v", availability)
 	}
+	if availability.ClaimableWorkerCount != 0 {
+		t.Fatalf("other workspaces must not contribute claimable workers: %+v", availability)
+	}
 	if !strings.Contains(string(availability.RequiredCapabilities), `"codex":true`) {
 		t.Fatalf("default availability should require codex, got %s", availability.RequiredCapabilities)
 	}
@@ -4444,6 +4568,32 @@ func TestRuntimeAvailabilityFlow(t *testing.T) {
 	if availability.MatchedWorker == nil || availability.MatchedWorker.ID != worker.ID || availability.LastSeenAt == "" {
 		t.Fatalf("expected matched worker, got %+v", availability)
 	}
+	if availability.ClaimableWorkerCount != 1 {
+		t.Fatalf("expected one claimable worker, got %+v", availability)
+	}
+	if !strings.Contains(string(availability.MatchedWorker.AgentEngineDiagnostics), `"codex":{"status":"ready"`) {
+		t.Fatalf("matched worker should include engine diagnostics, got %+v", availability.MatchedWorker)
+	}
+
+	downgradeRecorder := httptest.NewRecorder()
+	downgradeReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/heartbeat", strings.NewReader(`{"status":"online","capabilities":{"codex":true},"agentEngineDiagnostics":{"codex":{"status":"needs_setup","reasonCode":"auth_required"}}}`))
+	downgradeReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(downgradeRecorder, downgradeReq)
+	if downgradeRecorder.Code != http.StatusOK {
+		t.Fatalf("downgrade heartbeat status=%d body=%s", downgradeRecorder.Code, downgradeRecorder.Body.String())
+	}
+	availability = getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal")
+	if availability.State != "unavailable" || availability.ReasonCode != "missing_capability" || availability.CanQueue || availability.ClaimableWorkerCount != 0 {
+		t.Fatalf("unavailable diagnostics must prevent claimability, got %+v", availability)
+	}
+
+	restoreRecorder := httptest.NewRecorder()
+	restoreReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/heartbeat", strings.NewReader(`{"status":"online","capabilities":{"codex":true},"agentEngineDiagnostics":{"codex":{"status":"ready"}}}`))
+	restoreReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
+	router.ServeHTTP(restoreRecorder, restoreReq)
+	if restoreRecorder.Code != http.StatusOK {
+		t.Fatalf("restore heartbeat status=%d body=%s", restoreRecorder.Code, restoreRecorder.Body.String())
+	}
 
 	availability = getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal&capabilities=codex,browser")
 	if availability.State != "unavailable" || availability.ReasonCode != "missing_capability" || availability.CanQueue || !availability.CanAutoStart {
@@ -4451,6 +4601,9 @@ func TestRuntimeAvailabilityFlow(t *testing.T) {
 	}
 	if len(availability.MissingCapabilities) != 1 || availability.MissingCapabilities[0] != "browser" {
 		t.Fatalf("expected missing browser capability, got %+v", availability.MissingCapabilities)
+	}
+	if availability.ClaimableWorkerCount != 0 {
+		t.Fatalf("missing capability should have no claimable workers: %+v", availability)
 	}
 
 	drainingRecorder := httptest.NewRecorder()
@@ -4463,6 +4616,9 @@ func TestRuntimeAvailabilityFlow(t *testing.T) {
 	availability = getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal")
 	if availability.State != "unavailable" || availability.ReasonCode != "worker_draining" || availability.CanQueue || !availability.CanAutoStart {
 		t.Fatalf("unexpected draining availability: %+v", availability)
+	}
+	if availability.ClaimableWorkerCount != 0 {
+		t.Fatalf("draining worker must not be claimable: %+v", availability)
 	}
 
 	store.mu.Lock()
@@ -4478,6 +4634,9 @@ func TestRuntimeAvailabilityFlow(t *testing.T) {
 	availability = getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal")
 	if availability.State != "unavailable" || availability.ReasonCode != "stale_heartbeat" || availability.CanQueue || !availability.CanAutoStart {
 		t.Fatalf("unexpected stale availability: %+v", availability)
+	}
+	if availability.ClaimableWorkerCount != 0 {
+		t.Fatalf("stale worker must not be claimable: %+v", availability)
 	}
 
 	availability = getAvailability("/api/workspaces/" + teamWorkspace.ID + "/runtime/availability?runtimeMode=personal")
@@ -4711,7 +4870,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	}
 
 	createTaskRecorder := httptest.NewRecorder()
-	createTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-1","sessionId":"session-1","projectId":"project-1","kind":"noop","priority":5,"runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
+	createTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"noop","priority":5,"runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
 	createTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(createTaskRecorder, createTaskReq)
 	if createTaskRecorder.Code != http.StatusCreated {
@@ -4875,7 +5034,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	}
 
 	createTask2Recorder := httptest.NewRecorder()
-	createTask2Req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-2","sessionId":"session-2","projectId":"project-1","kind":"noop","priority":5,"runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"finish it"}}`))
+	createTask2Req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"noop","priority":5,"runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"finish it"}}`))
 	createTask2Req.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(createTask2Recorder, createTask2Req)
 	if createTask2Recorder.Code != http.StatusCreated {
@@ -4960,7 +5119,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	}
 
 	unmatchedTaskRecorder := httptest.NewRecorder()
-	unmatchedTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-2","kind":"noop","runtimeMode":"team","requiredCapabilities":{"kubectl":true},"payload":{"prompt":"deploy it"}}`))
+	unmatchedTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"noop","runtimeMode":"team","requiredCapabilities":{"kubectl":true},"payload":{"prompt":"deploy it"}}`))
 	unmatchedTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(unmatchedTaskRecorder, unmatchedTaskReq)
 	if unmatchedTaskRecorder.Code != http.StatusCreated {
@@ -5007,7 +5166,7 @@ func TestRuntimeTaskListPagination(t *testing.T) {
 	createdIDs := make([]string, 0, 12)
 	for index := 0; index < 12; index++ {
 		createRecorder := httptest.NewRecorder()
-		body := fmt.Sprintf(`{"issueId":"issue-%02d","kind":"noop","priority":%d,"runtimeMode":"personal","requiredCapabilities":{"protocolSmoke":true},"payload":{"prompt":"task %02d"}}`, index, index, index)
+		body := fmt.Sprintf(`{"kind":"noop","priority":%d,"runtimeMode":"personal","requiredCapabilities":{"protocolSmoke":true},"payload":{"prompt":"task %02d"}}`, index, index)
 		createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(body))
 		createReq.Header.Set("Authorization", "Bearer "+sessionToken)
 		router.ServeHTTP(createRecorder, createReq)
@@ -5395,7 +5554,7 @@ func registerTestRuntimeWorkerWithCapabilities(t *testing.T, router http.Handler
 	}
 
 	registerRecorder := httptest.NewRecorder()
-	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"test-worker","mode":"personal","version":"0.1.0","capabilities":`+capabilities+`,"labels":{"host":"local"}}`))
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"test-worker","mode":"personal","version":"0.1.0","capabilities":`+capabilities+`,"labels":{"host":"local"},"agentEngineDiagnostics":{"codex":{"status":"ready"}}}`))
 	registerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
 	router.ServeHTTP(registerRecorder, registerReq)
 	if registerRecorder.Code != http.StatusCreated {

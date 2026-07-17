@@ -12,6 +12,7 @@ import {
   personalWorkerName,
   personalWorkerRequiresBrowser,
   personalWorkerRequiresCodexAuth,
+  personalWorkerRuntimeLabels,
   personalWorkerWorkRoot,
 } from "../src/main/personal-worker-runtime.ts";
 
@@ -139,12 +140,34 @@ test("explicit browser capabilities require a browser", () => {
 });
 
 test("browser-backed work uses a separate personal worker identity", () => {
-  assert.equal(personalWorkerName("workspace-123", { codex: true }), "desktop-personal-workspac");
-  assert.equal(personalWorkerName("workspace-123", { claudeCode: true }), "desktop-personal-workspac");
-  assert.equal(personalWorkerName("workspace-123", { pi: true }), "desktop-personal-workspac");
-  assert.equal(personalWorkerName("workspace-123", { browser: true }), "desktop-personal-workspac-browser");
-  assert.equal(personalWorkerName("workspace-123", { chrome_cdp: true }), "desktop-personal-workspac-browser");
+  const hostId = "msh_0123456789abcdef0123456789abcdef";
+  assert.equal(personalWorkerName("workspace-123", hostId, { codex: true }), "desktop-personal-workspac-01234567");
+  assert.equal(personalWorkerName("workspace-123", hostId, { claudeCode: true }), "desktop-personal-workspac-01234567");
+  assert.equal(personalWorkerName("workspace-123", hostId, { pi: true }), "desktop-personal-workspac-01234567");
+  assert.equal(personalWorkerName("workspace-123", hostId, { browser: true }), "desktop-personal-workspac-01234567-browser");
+  assert.equal(personalWorkerName("workspace-123", hostId, { chrome_cdp: true }), "desktop-personal-workspac-01234567-browser");
+  assert.notEqual(
+    personalWorkerName("workspace-123", hostId),
+    personalWorkerName("workspace-123", "msh_fedcba9876543210fedcba9876543210"),
+  );
+  assert.throws(() => personalWorkerName("workspace-123", "local-hostname"), /valid anonymous host identity/);
   assert.equal(personalWorkerWorkRoot("/tmp/mspace-worker", { codex: true }), "/tmp/mspace-worker");
   assert.equal(personalWorkerWorkRoot("/tmp/mspace-worker", { claudeCode: true }), "/tmp/mspace-worker");
   assert.equal(personalWorkerWorkRoot("/tmp/mspace-worker", { browser: true }), "/tmp/mspace-worker/browser-companion");
+});
+
+test("primary and browser companion labels share one anonymous host identity", () => {
+  const hostId = "msh_0123456789abcdef0123456789abcdef";
+  assert.deepEqual(personalWorkerRuntimeLabels(hostId, { codex: true }), {
+    provider: "desktop-local",
+    environment: "host",
+    hostId,
+    runtimeRole: "primary",
+  });
+  assert.deepEqual(personalWorkerRuntimeLabels(hostId, { browser: true }), {
+    provider: "desktop-local",
+    environment: "host",
+    hostId,
+    runtimeRole: "browser_companion",
+  });
 });

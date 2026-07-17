@@ -67,6 +67,7 @@ func (s *Server) enqueueIssueTypeTriage(ctx context.Context, userID, workspaceID
 		RuntimeMode:          workspace.Kind,
 		RequiredCapabilities: capabilities,
 		Payload:              payload,
+		ServerManaged:        true,
 	})
 }
 

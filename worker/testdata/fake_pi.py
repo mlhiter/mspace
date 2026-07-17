@@ -20,8 +20,8 @@ def emit(payload):
 
 
 mode = os.environ.get("MSPACE_FAKE_PI_MODE", "success")
-if mode == "unsafe_session":
-    print("Pi session file: /tmp/private/pi-session.json", file=sys.stderr, flush=True)
+if mode in ("unsafe_session", "runtime_error"):
+    print('sessionFile="/tmp/private/pi-session.json" cwd=/Users/private/project', file=sys.stderr, flush=True)
 for line in sys.stdin:
     request = json.loads(line)
     command = request.get("type")
@@ -45,6 +45,8 @@ for line in sys.stdin:
             if ready:
                 with open(ready, "w", encoding="utf-8") as handle:
                     handle.write("ready\n")
+        elif mode == "runtime_error":
+            emit({"type": "error", "error": "sessionFile /tmp/private/pi-session.json failed"})
         else:
             print("unknown fake Pi mode: " + mode, file=sys.stderr)
             sys.exit(2)

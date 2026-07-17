@@ -418,6 +418,7 @@ func TestEnsureIssueTypeTriageTaskRechecksClassifiedIssueBeforeInsert(t *testing
 		RuntimeMode:          workspaces[0].Kind,
 		RequiredCapabilities: json.RawMessage(`{"codex":true}`),
 		Payload:              payload,
+		ServerManaged:        true,
 	})
 	if !errors.Is(err, errIssueTypeTriageNotNeeded) {
 		t.Fatalf("expected stale enqueue to be skipped, got %v", err)

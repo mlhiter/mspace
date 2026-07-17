@@ -1718,18 +1718,19 @@ type RuntimeRegistration struct {
 }
 
 type RuntimeWorker struct {
-	ID           string          `json:"id"`
-	WorkspaceID  string          `json:"workspaceId"`
-	Name         string          `json:"name"`
-	Mode         string          `json:"mode"`
-	Status       string          `json:"status"`
-	Version      string          `json:"version"`
-	CurrentLoad  int             `json:"currentLoad"`
-	Capabilities json.RawMessage `json:"capabilities"`
-	Labels       json.RawMessage `json:"labels"`
-	LastSeenAt   string          `json:"lastSeenAt"`
-	CreatedAt    string          `json:"createdAt"`
-	UpdatedAt    string          `json:"updatedAt"`
+	ID                     string          `json:"id"`
+	WorkspaceID            string          `json:"workspaceId"`
+	Name                   string          `json:"name"`
+	Mode                   string          `json:"mode"`
+	Status                 string          `json:"status"`
+	Version                string          `json:"version"`
+	CurrentLoad            int             `json:"currentLoad"`
+	Capabilities           json.RawMessage `json:"capabilities"`
+	Labels                 json.RawMessage `json:"labels"`
+	AgentEngineDiagnostics json.RawMessage `json:"agentEngineDiagnostics"`
+	LastSeenAt             string          `json:"lastSeenAt"`
+	CreatedAt              string          `json:"createdAt"`
+	UpdatedAt              string          `json:"updatedAt"`
 }
 
 type RuntimeAvailability struct {
@@ -1745,16 +1746,18 @@ type RuntimeAvailability struct {
 	LastSeenAt           string          `json:"lastSeenAt,omitempty"`
 	MissingCapabilities  []string        `json:"missingCapabilities,omitempty"`
 	ActiveWorkerMaxAgeMs int64           `json:"activeWorkerMaxAgeMs"`
+	ClaimableWorkerCount int             `json:"claimableWorkerCount"`
 }
 
 type RuntimeWorkerInput struct {
-	Name         string          `json:"name"`
-	Mode         string          `json:"mode"`
-	Status       string          `json:"status"`
-	Version      string          `json:"version"`
-	CurrentLoad  int             `json:"currentLoad"`
-	Capabilities json.RawMessage `json:"capabilities"`
-	Labels       json.RawMessage `json:"labels"`
+	Name                   string          `json:"name"`
+	Mode                   string          `json:"mode"`
+	Status                 string          `json:"status"`
+	Version                string          `json:"version"`
+	CurrentLoad            int             `json:"currentLoad"`
+	Capabilities           json.RawMessage `json:"capabilities"`
+	Labels                 json.RawMessage `json:"labels"`
+	AgentEngineDiagnostics json.RawMessage `json:"agentEngineDiagnostics"`
 }
 
 type RuntimeTask struct {
@@ -1822,6 +1825,7 @@ type CreateRuntimeTaskInput struct {
 	RuntimeMode          string          `json:"runtimeMode"`
 	RequiredCapabilities json.RawMessage `json:"requiredCapabilities"`
 	Payload              json.RawMessage `json:"payload"`
+	ServerManaged        bool            `json:"-"`
 }
 
 type UpdateRuntimeTaskStatusInput struct {

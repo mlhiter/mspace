@@ -42,12 +42,14 @@ import {
 import {
   agentEngineCapabilities,
   agentEngineDisplayName,
+  agentEngineForLinkedSession,
   agentEngineForSession,
   agentEngineMention,
   agentRequiredCapabilities as requiredCapabilitiesForAgent,
   controlPlaneApi,
   getStoredAuthIdentity,
   isFixedAgentEngineCatalogItem,
+  isNoActiveAgentWorkerError,
   parseAgentEngine,
   queryKeys,
   type AgentEngine,
@@ -476,10 +478,6 @@ function cleanupDecisionLabel(status: string) {
   if (status === "cleaned") return translate("issueDetail.environment.cleaned");
   if (status === "cleanup_failed") return translate("issueDetail.environment.cleanupFailed");
   return status ? status.replace(/[_-]+/g, " ") : translate("issueDetail.environment.notDecided");
-}
-
-function isNoActiveAgentWorkerError(error: unknown) {
-  return error instanceof Error && /no active (?:agent|codex|claude(?: code)?|pi) worker/i.test(error.message);
 }
 
 function formatRuntimeAvailabilityReason(
@@ -5270,7 +5268,7 @@ export function IssueDetailPage() {
   const projects = listOrEmpty(projectsQuery.data);
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
   const enabledAgents = agents;
-  const continueAgent = enabledAgents.find((agent) => mentionKey(agent.mention) === "codex") || enabledAgents[0];
+  const defaultSkillAgent = enabledAgents.find((agent) => mentionKey(agent.mention) === "codex") || enabledAgents[0];
   const hasProject = Boolean(detail?.project?.id);
   const projectName = projectDisplayName(detail?.project);
   const projectRepository = projectRepositoryLabel(detail?.project);
@@ -5703,7 +5701,7 @@ export function IssueDetailPage() {
 
   function selectSkillSuggestion(skill: SkillCatalogItem) {
     const token = skillCommandToken(skill);
-    const agentPrefix = !extractAgentMention(composerBody) && continueAgent ? `${agentMentionText(continueAgent)} ` : "";
+    const agentPrefix = !extractAgentMention(composerBody) && defaultSkillAgent ? `${agentMentionText(defaultSkillAgent)} ` : "";
     const match = composerEditor ? skillCommandMatchInEditor(composerEditor) || composerSkillMatch : null;
     if (composerEditor) {
       if (match) {
@@ -5714,7 +5712,7 @@ export function IssueDetailPage() {
       }
       window.requestAnimationFrame(() => syncComposerEditorState(composerEditor));
     } else {
-      setComposerBody(insertSkillCommand(composerBody, skill, continueAgent));
+      setComposerBody(insertSkillCommand(composerBody, skill, defaultSkillAgent));
     }
     setActiveSkillIndex(0);
     setSkillMenuDismissed(false);
@@ -5744,7 +5742,7 @@ export function IssueDetailPage() {
 
   function selectEditingSkillSuggestion(skill: SkillCatalogItem) {
     const token = skillCommandToken(skill);
-    const agentPrefix = !extractAgentMention(editingCommentBody) && continueAgent ? `${agentMentionText(continueAgent)} ` : "";
+    const agentPrefix = !extractAgentMention(editingCommentBody) && defaultSkillAgent ? `${agentMentionText(defaultSkillAgent)} ` : "";
     const match = editingCommentEditor ? skillCommandMatchInEditor(editingCommentEditor) || editingCommentSkillMatch : null;
     if (editingCommentEditor) {
       if (match) {
@@ -5755,7 +5753,7 @@ export function IssueDetailPage() {
       }
       window.requestAnimationFrame(() => syncEditingCommentEditorState(editingCommentEditor));
     } else {
-      setEditingCommentBody(insertSkillCommand(editingCommentBody, skill, continueAgent));
+      setEditingCommentBody(insertSkillCommand(editingCommentBody, skill, defaultSkillAgent));
     }
     setActiveEditingSkillIndex(0);
     setEditingSkillMenuDismissed(false);
@@ -6178,10 +6176,11 @@ export function IssueDetailPage() {
     });
   }
 
-  function continueFromFailure(failure: SessionFailure, session?: AgentSession) {
-	const agent = session ? sessionAgent(session, agents) : continueAgent;
-	if (!agent || hasActiveSession) return;
-	const draft = failureContinueDraft(failure, agent);
+  function continueFromFailure(failure: SessionFailure) {
+    if (hasActiveSession) return;
+    const agentEngine = agentEngineForLinkedSession(failure.sessionId, listOrEmpty(detail?.sessions));
+    const agent = findAgent(agents, agentEngine) || fallbackAgent(agentEngine);
+    const draft = failureContinueDraft(failure, agent);
     setComposerBody(draft);
     setMentionMenuDismissed(true);
     window.requestAnimationFrame(() => {
@@ -6549,8 +6548,8 @@ export function IssueDetailPage() {
                           key={`failure-${item.failure.id}`}
                           failure={item.failure}
                           session={session}
-                          canContinue={Boolean(continueAgent) && !hasActiveSession}
-						  onContinue={() => continueFromFailure(item.failure, session)}
+                          canContinue={!hasActiveSession}
+                          onContinue={() => continueFromFailure(item.failure)}
                           canRetry={canRetryFailure}
                           isRetrying={startTestDeploy.isPending}
                           onRetry={() => {

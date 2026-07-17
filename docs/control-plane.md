@@ -21,7 +21,7 @@ The control plane owns:
 - workspace settings, the fixed Agent catalog contract, built-in and workspace custom workflow Skill catalog/revisions/settings, reusable Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review/failure/source records;
 - audit and collaboration sync;
 - runtime registration tokens;
-- runtime worker identity, liveness, and capability snapshots;
+- runtime worker identity, liveness, capability snapshots, and sanitized Agent-engine diagnostics;
 - runtime task queue state, claim audit, worker logs, cancellation, and task results.
 
 The desktop app owns:
@@ -137,20 +137,23 @@ Workspace owner/admin
   -> can revoke leaked or stale tokens
 Runtime provider
   -> registers with Authorization: Bearer msw_...
-  -> reports name, mode, version, capabilities, labels, and load
+  -> reports name, mode, version, capabilities, labels, load, and optional Agent diagnostics
   -> sends heartbeats while online
 Server
-  -> stores worker liveness and capability snapshot
+  -> validates and stores worker liveness, capability, and diagnostic snapshots
+  -> lets diagnostics downgrade advertised engine capabilities, never upgrade them
   -> lets online workers claim queued tasks that match mode and capabilities
 ```
 
 Registration tokens are workspace-scoped bootstrap secrets for worker daemons. The raw token is returned only once when created; the server stores only its hash and prefix.
 
-The public runtime-task debug endpoint accepts non-product tasks such as `protocol_smoke` and `noop`, but rejects raw `agent_session` payloads. User Agent Sessions must enter through the Issue Session route, which owns engine selection, Issue/Project links, automation markers, environment, Skills, and artifact contracts. Helm Workers receive only their runtime-token Secret key, and Agent subprocesses strip control-plane and Worker-registration variables before launch.
+The public runtime-task debug endpoint is owner/admin-only and accepts only unbound `protocol_smoke` and `noop`. It rejects raw Agent, Skill, automation, Issue/Session/Project, repository, workdir, environment, and other server-owned control fields case-insensitively. User Agent Sessions must enter through the Issue Session route, which owns engine selection, Issue/Project links, automation markers, environment, Skills, and artifact contracts. Helm Workers receive only their runtime-token Secret key, and Agent subprocesses strip control-plane and Worker-registration variables before launch.
 
 Worker mode is part of the workspace trust boundary. Personal workspace tokens can register only personal workers and can queue only personal runtime tasks. Team workspace tokens can register only team workers and can queue only team runtime tasks. This keeps open self-registration useful for local personal runners without granting access to shared server runners until the user has been invited into the team workspace.
 
-Desktop personal Workers are managed by Electron rather than by a human copying a token. Once a personal workspace is selected, the desktop creates a short-lived workspace registration credential, starts or reuses one generic Worker in `personal` mode, and advertises only installed engine capabilities. An explicit Codex action checks for `CODEX_HOME/auth.json`; Claude Code and Pi authentication are left to their CLI adapters. Browser-required Codex Workflows may add one separately named companion Worker against the same credential file and an isolated repo/workdir root.
+Desktop personal Workers are managed by Electron rather than by a human copying a token. Once a personal workspace is selected, the desktop creates a short-lived workspace registration credential, starts or reuses one generic Worker in `personal` mode, and advertises discovered engines as an execution allowlist. Electron persists an anonymous stable host id, includes its short suffix in Worker names, and labels Workers as `primary` or `browser_companion`, so multiple Macs cannot upsert the same row and the renderer can identify This Mac through trusted IPC. Worker diagnostics may then downgrade engines that are missing, unauthenticated, or fail their safe probe. Browser-required Codex Workflows use the companion Worker against the same credential file and an isolated repo/workdir root.
+
+`runtime_workers.agent_engine_diagnostics` stores only fixed fields: `status`, `reasonCode`, sanitized `version`, and `checkedAt`. Migration 031 adds this JSONB column for Postgres; the SQLite personal store carries the same snapshot field. The server permits only the fixed engine/status/reason enums, valid timestamps, and path-free version text. Omitted heartbeat diagnostics preserve the locked stored value, while explicit `{}` clears it. `GET /runtime/availability` returns `claimableWorkerCount`, derived by the server with the same workspace mode, status, heartbeat TTL, load, and capability rules used for claiming. Older Workers remain compatible when they omit diagnostics; their historical capability can still route tasks, but clients must show the diagnostic as not reported rather than ready.
 
 The Worker daemon in `worker/` registers, heartbeats, and claims tasks by exact capability. Shared Worker Core prepares repository caches/worktrees, materializes pinned Skills under the artifact directory, races required Tests artifacts against engine completion, captures source, and assembles generic results. The Codex adapter uses app-server stdio; Claude Code uses print-mode stream JSON and requires a terminal `result`; Pi uses official RPC, sends `abort` on cancellation, and requires `agent_end`. Missing `agentEngine` maps to Codex only for historical payloads; explicit unknown values fail closed. Docker-backed workers keep repository caches and worktrees under `/var/lib/mspace-worker`.
 

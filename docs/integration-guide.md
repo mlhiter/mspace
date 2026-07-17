@@ -628,15 +628,15 @@ curl -H "Authorization: Bearer <msp-token>" \
 | `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived worker registration token. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration token metadata without raw token values. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. |
-| `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and heartbeat state. |
-| `GET` | `/api/workspaces/{workspaceID}/runtime/availability` | Return structured readiness for a runtime mode and required capability set. Use this for product action preflight instead of reimplementing heartbeat TTLs in clients. |
-| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a non-product runtime task manually for API-level smoke/debug tooling, such as `protocol_smoke` or `noop`. Raw `agent_session` payloads are rejected; use the Issue Session API so engine, repository, environment, and automation fields remain server-owned. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers, heartbeat state, labels, capabilities, and sanitized Agent-engine diagnostics. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime/availability` | Return structured readiness plus server-derived `claimableWorkerCount` for a runtime mode and required capability set. Use this for product action preflight instead of reimplementing heartbeat TTLs or matching in clients. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Owner/admin-only creation of unbound `protocol_smoke` or `noop` diagnostics. Raw payloads cannot bind product records or include Agent, Skill, automation, repository, workdir, environment, or other server-owned fields. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks?limit=10&offset=0` | List runtime tasks with pagination metadata and status counts. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/logs` | List worker-appended logs for one runtime task. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/cancel` | Request cancellation for a queued, claimed, or running task. |
 | `POST` | `/api/runtime/workers/register` | Register or refresh a worker using `Authorization: Bearer msw_...`. |
-| `POST` | `/api/runtime/workers/{workerID}/heartbeat` | Update worker liveness, status, load, and optional capability metadata. |
+| `POST` | `/api/runtime/workers/{workerID}/heartbeat` | Update worker liveness, status, load, optional capability metadata, and optional sanitized `agentEngineDiagnostics`. |
 | `POST` | `/api/runtime/workers/{workerID}/tasks/claim` | Claim the next queued task that matches the worker mode and required capabilities. |
 | `GET` | `/api/runtime/workers/{workerID}/tasks/{taskID}` | Let the claiming worker inspect task state while executing. |
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/logs` | Append a log line to a claimed/running task. |
@@ -661,13 +661,28 @@ The response is HTTP `200` even for unavailable states so clients can branch on 
   "state": "unavailable",
   "reasonCode": "no_worker",
   "canQueue": false,
+  "claimableWorkerCount": 0,
   "canAutoStart": true,
   "retryAfterMs": 5000,
   "activeWorkerMaxAgeMs": 45000
 }
 ```
 
-`reasonCode` may be `ready`, `no_worker`, `missing_capability`, `stale_heartbeat`, `worker_draining`, `worker_offline`, or `wrong_runtime_mode`. Personal desktop clients should ask Electron main to idempotently ensure the host-local worker before trusting a ready heartbeat, then poll availability again when the worker is starting. Team clients must treat unavailable states as a Connect Environment problem.
+`reasonCode` may be `ready`, `no_worker`, `missing_capability`, `stale_heartbeat`, `worker_draining`, `worker_offline`, or `wrong_runtime_mode`. `claimableWorkerCount` is computed with the server's workspace-mode, liveness, heartbeat TTL, load, and exact-capability rules. Clients connected to an older Server that omits the field should show an unknown count rather than recomputing it. Personal desktop clients should ask Electron main to idempotently ensure the host-local worker before trusting a ready heartbeat, then poll availability again when the worker is starting. Team clients must treat unavailable states as a Connect Environment problem.
+
+Current Workers may send the following optional diagnostic object during register and heartbeat:
+
+```json
+{
+  "agentEngineDiagnostics": {
+    "codex": { "status": "ready", "reasonCode": "auth_ok", "version": "codex-cli 1.2.3", "checkedAt": "2026-07-17T08:00:00Z" },
+    "claude_code": { "status": "needs_setup", "reasonCode": "auth_required", "version": "claude 2.1.89", "checkedAt": "2026-07-17T08:00:00Z" },
+    "pi": { "status": "unverified", "reasonCode": "probe_unsupported", "version": "pi 0.35.0", "checkedAt": "2026-07-17T08:00:00Z" }
+  }
+}
+```
+
+Statuses are `ready`, `needs_setup`, `unverified`, `missing`, or `probe_error`. The Server discards unknown engines and invalid diagnostic fields, rejects an oversized object, and uses a diagnostic only to turn a previously allowed engine capability off. Heartbeats that omit `agentEngineDiagnostics` preserve the stored snapshot; an explicit empty object clears it. Probe output, credentials, executable paths, and Pi session paths are never part of this API.
 
 Create a worker install command:
 
@@ -693,7 +708,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/runtime-tasks" \
 
 The server rejects runtime worker registration and runtime task creation when the submitted mode does not match the workspace kind. An install command or token minted in a personal workspace can only register a personal worker, and one minted in a team workspace can only register a team worker. Manual runtime task requests follow the same rule: `runtimeMode:"personal"` for personal workspaces and `runtimeMode:"team"` for team workspaces.
 
-Desktop personal workers use the same token endpoints, but the user normally never sees the raw credential. Electron creates a 12-hour personal worker credential, writes it to an Electron user-data token file, renews it before expiry, and revokes the replaced credential after a short grace period. The worker supports `MSPACE_RUNTIME_TOKEN_FILE` and rereads that file for runtime API calls, so token renewal is designed to be invisible to personal users. Ordinary startup creates one generic base Worker that advertises whichever of Codex, Claude Code, and Pi were discovered without launching those CLIs. When server-provided `requiredCapabilities` asks for `browser` or `chrome_cdp`, Electron starts a separately named browser companion Worker against the same credential file; clients wait for runtime availability to report that capability instead of replacing or stopping the base Worker.
+Desktop personal workers use the same token endpoints, but the user normally never sees the raw credential. Electron creates a 12-hour personal worker credential, writes it to an Electron user-data token file, renews it before expiry, and revokes the replaced credential after a short grace period. The worker supports `MSPACE_RUNTIME_TOKEN_FILE` and rereads that file for runtime API calls, so token renewal is designed to be invisible to personal users. Electron also persists an anonymous `msh_...` host id and labels the base Worker `primary`; browser-required work starts a separately named `browser_companion` with the same host id and isolated execution roots. The renderer identifies This Mac only by exact trusted host-id match. The personal Worker and Agent CLI still share an OS user, so environment filtering does not replace filesystem isolation for the token file.
 
 Workspace Settings lists runtime tasks as an operations surface: task purpose, linked Issue title when available, status, worker, update time, and detail/cancel actions. Agent-session task links include `sessionId` so Issue Detail can scroll to the relevant session card. Pure protocol tasks such as `issue_type_triage` may only open the Issue page because they do not have a session card. Protocol payloads remain in expanded details instead of the primary row, but server-provided skill bundles are redacted to compact references on workspace user APIs; full bundled files are returned only through worker claim/get endpoints.
 

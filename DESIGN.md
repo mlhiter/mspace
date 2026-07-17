@@ -168,7 +168,7 @@ Screen priorities:
 - Issue Detail: document body first, then activity, session, and evidence. Keep the right metadata sidebar on Overview only; Commits, Sessions, and Evidence use the full page width so diffs, paths, command output, and Kubernetes evidence have room.
 - Tests: project-level cases, case suggestions, plans, and runs. Creation/import can use focused modals; row details should open dedicated pages rather than a persistent list/detail split.
 - Session Detail: logs, worktree state, branch comparison, evidence.
-- Agents: read-only availability for the fixed Codex, Claude Code, and Pi catalog, plus a separate Skills management tab. Do not add Agent profile forms, prompt instructions, enabled toggles, arbitrary commands, model selectors, or MCP settings.
+- Agents: use a compact top matrix for fixed Codex, Claude Code, and Pi readiness on This Mac plus server-derived workspace coverage, followed by a horizontally scrollable Connected Workers matrix with liveness, per-engine diagnostic text, load, and last heartbeat. `This Mac` may appear only for an exact trusted Electron host-id match, never from a name heuristic. Legacy, disabled, missing, and not-reported states need readable text and cannot rely on color alone. Keep Skills in a separate management tab. Do not add Agent profile forms, prompt instructions, enabled toggles, arbitrary commands, model selectors, or MCP settings.
 - Clusters: reusable kubeconfig, registry, and preview exposure defaults.
 - Projects: repository and runtime policy, not a daily conversation feed.
 

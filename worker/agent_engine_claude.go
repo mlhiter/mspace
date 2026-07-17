@@ -54,7 +54,7 @@ func (claudeCodeEngineAdapter) Execute(ctx context.Context, executionContext age
 		return execution, err
 	}
 	cmd.Dir = payload.Workdir
-	cmd.Env = defaultAgentEngineEnv(payload.Env)
+	cmd.Env = defaultAgentEngineEnv(agentEngineClaudeCode, payload.Env)
 	configureAgentEngineProcess(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

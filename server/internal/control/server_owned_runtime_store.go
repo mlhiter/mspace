@@ -2412,6 +2412,7 @@ func (s *PostgresStore) queueAutomaticTestDeployIfEnabled(ctx context.Context, q
 		RuntimeMode:          input.RuntimeMode,
 		RequiredCapabilities: capabilities,
 		Payload:              payload,
+		ServerManaged:        true,
 	})
 	if err != nil {
 		return err

@@ -30,9 +30,11 @@ import {
   personalWorkerName,
   personalWorkerRequiresBrowser,
   personalWorkerRequiresCodexAuth,
+  personalWorkerRuntimeLabels,
   personalWorkerWorkRoot,
   type PersonalWorkerCapabilities,
 } from "./personal-worker-runtime";
+import { loadOrCreatePersonalWorkerHostId } from "./personal-worker-host-identity";
 
 let mainWindow: BrowserWindow | null = null;
 let projectFolderPickerRegistered = false;
@@ -588,16 +590,15 @@ async function startElectronPersonalWorkerBrowserRuntime(
 async function preparePersonalWorkerRuntime(
   requiredCapabilities?: Record<string, unknown>,
   engineRuntime = discoverPersonalWorkerEngineRuntime(),
+  hostId?: string,
 ): Promise<PersonalWorkerRuntime> {
   const capabilities: PersonalWorkerCapabilities = {
     protocolSmoke: true,
     ...engineRuntime.capabilities,
     dryRun: false,
   };
-  const labels: Record<string, string> = {
-    provider: "desktop-local",
-    environment: "host",
-  };
+  const resolvedHostId = hostId || await loadOrCreatePersonalWorkerHostId(app.getPath("userData"));
+  const labels = personalWorkerRuntimeLabels(resolvedHostId, requiredCapabilities);
   const env: Record<string, string> = engineRuntime.executableSearchPath ? { PATH: engineRuntime.executableSearchPath } : {};
 
   if (!personalWorkerRequiresBrowser(requiredCapabilities)) {
@@ -883,6 +884,7 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
   if (!workspaceId) {
     throw new Error("A signed-in personal workspace is required to start a local worker.");
   }
+  const hostId = await loadOrCreatePersonalWorkerHostId(app.getPath("userData"));
   const serverUrl = String(input.serverUrl || getServerBaseUrl()).trim().replace(/\/+$/, "");
   const credentialInput: EnsurePersonalWorkerInput = {
     ...input,
@@ -907,7 +909,7 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
     return {
       ok: true,
       status: "running",
-      workerName: personalWorkerName(workspaceId, credentialInput.requiredCapabilities),
+      workerName: personalWorkerName(workspaceId, hostId, credentialInput.requiredCapabilities),
       capabilities: personalWorkerRuntime?.capabilities,
     };
   }
@@ -917,9 +919,9 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
     personalWorkerCompanionProcesses.size > 0 &&
     !personalWorkerRequiresBrowser(credentialInput.requiredCapabilities)
   ) {
-    return { ok: true, status: "running", workerName: personalWorkerName(workspaceId) };
+    return { ok: true, status: "running", workerName: personalWorkerName(workspaceId, hostId) };
   }
-  const workerName = personalWorkerName(workspaceId, credentialInput.requiredCapabilities);
+  const workerName = personalWorkerName(workspaceId, hostId, credentialInput.requiredCapabilities);
   const upgradingCurrentWorker = Boolean(personalWorkerProcess && personalWorkerWorkspaceId === workspaceId);
   const previousWorkerProcess = upgradingCurrentWorker ? personalWorkerProcess : null;
   const previousWorkerRuntime = upgradingCurrentWorker ? personalWorkerRuntime : null;
@@ -927,7 +929,7 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
   let token: RuntimeRegistrationTokenResult | null = null;
   let tokenPath = "";
   if (upgradingCurrentWorker) {
-    runtime = await preparePersonalWorkerRuntime(credentialInput.requiredCapabilities, engineRuntime);
+    runtime = await preparePersonalWorkerRuntime(credentialInput.requiredCapabilities, engineRuntime, hostId);
     assertPersonalWorkerCapabilities(runtime, credentialInput.requiredCapabilities);
     const browserCdpUrl = String(runtime.env.MSPACE_CHROME_CDP_URL || "").trim();
     if (personalWorkerRequiresBrowser(credentialInput.requiredCapabilities) && !(await isChromeCdpReachable(browserCdpUrl))) {
@@ -940,7 +942,7 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
     if (personalWorkerProcess || (personalWorkerWorkspaceId && personalWorkerWorkspaceId !== workspaceId)) {
       await stopPersonalWorker();
     }
-    runtime = await preparePersonalWorkerRuntime(credentialInput.requiredCapabilities, engineRuntime);
+    runtime = await preparePersonalWorkerRuntime(credentialInput.requiredCapabilities, engineRuntime, hostId);
     if (personalWorkerWorkspaceId === workspaceId && personalWorkerCredential && existsSync(resolvePersonalWorkerTokenPath(workspaceId))) {
       token = personalWorkerCredential;
       tokenPath = resolvePersonalWorkerTokenPath(workspaceId);
@@ -998,6 +1000,10 @@ function registerPersonalWorkerHandlers(): void {
 
   ipcMain.handle("mspace:ensure-personal-worker", async (_event, input: EnsurePersonalWorkerInput): Promise<EnsurePersonalWorkerResult> => {
     return ensurePersonalWorker(input || {});
+  });
+
+  ipcMain.handle("mspace:get-personal-worker-host-id", async () => {
+    return loadOrCreatePersonalWorkerHostId(app.getPath("userData"));
   });
 
   ipcMain.handle("mspace:stop-personal-worker", async () => {

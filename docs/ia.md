@@ -71,6 +71,10 @@ The ownership model should be clear:
 - Evidence is the result attached back to the issue.
 - Test Case is project-level quality knowledge; Test Plan and Test Run are workspace-level orchestration and review records that preserve per-case project identity.
 
+## Agents
+
+Agents is an operational readiness surface, not an Agent builder. Its default tab shows the three fixed execution engines, each engine's installation/configuration state on This Mac, and the server-derived number of current-workspace Workers that can claim that engine. A Connected Workers matrix below separates Worker liveness from per-engine readiness and includes remote and legacy Workers. In personal desktop mode, `This Mac` comes only from an exact trusted host-id match; team mode does not invent a local Worker. The Skills tab remains the separate place to inspect and manage server-owned Workflow Skills.
+
 ## Screen Map
 
 Current implemented desktop routes:

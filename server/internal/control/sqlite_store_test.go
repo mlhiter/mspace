@@ -365,6 +365,7 @@ func TestSQLiteStorePersistsTestModuleWorkflowSnapshot(t *testing.T) {
 		RuntimeMode:          "personal",
 		RequiredCapabilities: json.RawMessage(`{"codex":true}`),
 		Payload:              json.RawMessage(`{"sessionId":"sqlite-proposal-session"}`),
+		ServerManaged:        true,
 	})
 	if err != nil {
 		t.Fatalf("create proposal task: %v", err)

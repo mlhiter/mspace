@@ -1349,6 +1349,9 @@ func testConfig(serverURL string) config {
 		PollInterval:      time.Millisecond,
 		HeartbeatInterval: time.Second,
 		Once:              true,
+		engineDiagnoser: agentEngineDiagnoserFunc(func(context.Context) agentEngineDiagnostics {
+			return nil
+		}),
 	}
 }
 

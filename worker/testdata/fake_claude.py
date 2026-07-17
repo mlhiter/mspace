@@ -4,6 +4,12 @@ import os
 import sys
 
 
+for forbidden in ("MSPACE_RUNTIME_TOKEN", "MSPACE_RUNTIME_TOKEN_FILE", "MSPACE_SERVER_URL", "DATABASE_URL", "GITHUB_TOKEN", "SENTRY_AUTH_TOKEN"):
+    if os.environ.get(forbidden):
+        print("control-plane or unrelated secret leaked through " + forbidden, file=sys.stderr)
+        sys.exit(88)
+
+
 args = sys.argv[1:]
 required = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
 if any(value not in args for value in required):

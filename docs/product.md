@@ -20,7 +20,7 @@ The repository now has a runnable local desktop MVP:
 - classify new issues asynchronously by queueing `issue_type_triage` runtime tasks that are claimed by Codex-capable workers and reconciled into one Conventional Commit type label by the server;
 - let updated triage workers return a rewritten title in the same background turn, while the server applies it only when the user has not changed the immediate plain-text draft;
 - label priority manually from Issue Detail, and scan/filter labels from the Issues list;
-- view the fixed Codex, Claude Code, and Pi catalog plus per-engine Worker availability from the Agents route, while managing Workflow Skills separately;
+- view fixed Codex, Claude Code, and Pi readiness for This Mac, server-derived claimable Worker coverage, and per-engine status across connected Workers from the Agents route, while managing Workflow Skills separately;
 - use Inbox as a review feed for unread issue and session updates;
 - open document-style issue detail pages with Markdown-backed rich comments, image attachment thumbnails, lightweight reactions, and linked sessions;
 - mention `@codex`, `@claude`, or `@pi` from Issue Detail only when a Worker exposes the exact engine capability, then queue a server-owned `agent_session` for the corresponding adapter;

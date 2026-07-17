@@ -3,12 +3,14 @@ import test from "node:test";
 
 import {
   agentCapabilityForEngine,
+  agentEngineForLinkedSession,
   agentEngineForSession,
   agentEngineMention,
   agentRequiredCapabilities,
   engineRunRef,
   engineSessionRef,
   isFixedAgentEngineCatalogItem,
+  isNoActiveAgentWorkerError,
   parseAgentEngine,
 } from "../src/agent-engines.ts";
 
@@ -36,4 +38,24 @@ test("reads engine identity and generic refs with legacy fallbacks", () => {
   assert.equal(engineSessionRef({ codexThreadId: "thread-old" }), "thread-old");
   assert.equal(engineSessionRef({ engineSessionRef: "session-new", codexThreadId: "thread-old" }), "session-new");
   assert.equal(engineRunRef({ codexTurnId: "turn-old" }), "turn-old");
+});
+
+test("continues failures with the linked Session engine before historical fallback", () => {
+  const sessions = [
+    { id: "session-claude", agentEngine: "claude_code" },
+    { id: "session-pi", agentEngine: "pi" },
+  ];
+
+  assert.equal(agentEngineForLinkedSession("session-claude", sessions), "claude_code");
+  assert.equal(agentEngineForLinkedSession("session-pi", sessions), "pi");
+  assert.equal(agentEngineMention(agentEngineForLinkedSession("session-claude", sessions)), "@claude");
+  assert.equal(agentEngineMention(agentEngineForLinkedSession("session-pi", sessions)), "@pi");
+  assert.equal(agentEngineForLinkedSession("historical-missing-session", sessions), "codex");
+});
+
+test("recognizes server worker races without matching unrelated errors", () => {
+  assert.equal(isNoActiveAgentWorkerError(new Error("no active agent worker matches the request")), true);
+  assert.equal(isNoActiveAgentWorkerError(new Error("No active Claude Code worker")), true);
+  assert.equal(isNoActiveAgentWorkerError("control plane: no active pi worker"), true);
+  assert.equal(isNoActiveAgentWorkerError(new Error("agent session validation failed")), false);
 });

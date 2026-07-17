@@ -25,6 +25,8 @@ func TestParseAgentSessionPayloadNormalizesEngineAndFailsClosed(t *testing.T) {
 		{name: "legacy payload defaults to Codex", fields: map[string]any{"agentProfile": "custom-old-profile"}, wantEngine: agentEngineCodex},
 		{name: "legacy Codex provider", fields: map[string]any{"provider": "codex"}, wantEngine: agentEngineCodex},
 		{name: "unknown legacy provider", fields: map[string]any{"provider": "claude"}, wantError: `unsupported legacy agent provider "claude"`},
+		{name: "legacy Claude Code provider", fields: map[string]any{"provider": "claude_code"}, wantError: `unsupported legacy agent provider "claude_code"`},
+		{name: "legacy Pi provider", fields: map[string]any{"provider": "pi"}, wantError: `unsupported legacy agent provider "pi"`},
 		{name: "explicit engine wins over legacy aliases", fields: map[string]any{"agentEngine": agentEnginePi, "provider": "codex", "agentProfile": "design"}, wantEngine: agentEnginePi},
 		{name: "Claude Code", fields: map[string]any{"agentEngine": agentEngineClaudeCode}, wantEngine: agentEngineClaudeCode},
 		{name: "Pi", fields: map[string]any{"agentEngine": agentEnginePi}, wantEngine: agentEnginePi},
@@ -58,9 +60,15 @@ func TestParseAgentSessionPayloadNormalizesEngineAndFailsClosed(t *testing.T) {
 }
 
 func TestBuildAgentEngineEnvStripsControlPlaneCredentials(t *testing.T) {
-	env := buildAgentEngineEnv([]string{
+	env := buildAgentEngineEnvForEngine(agentEngineCodex, []string{
 		"PATH=/usr/local/bin:/usr/bin",
 		"HOME=/worker-home",
+		"OPENAI_API_KEY=codex-auth",
+		"ANTHROPIC_API_KEY=unrelated-agent-auth",
+		"NODE_OPTIONS=--require=/tmp/injected.js",
+		"SSH_AUTH_SOCK=/private/ssh-agent.sock",
+		"GPG_TTY=/dev/ttys001",
+		"SENTRY_AUTH_TOKEN=unrelated-secret",
 		"DATABASE_URL=postgres://control-plane",
 		"MSPACE_RUNTIME_TOKEN=msw_secret",
 		"MSPACE_RUNTIME_TOKEN_FILE=/worker/token",
@@ -68,8 +76,13 @@ func TestBuildAgentEngineEnvStripsControlPlaneCredentials(t *testing.T) {
 		"POSTGRES_PASSWORD=database-password",
 		"GH_TOKEN=github-token",
 	}, map[string]string{
-		"MSPACE_SESSION_ID": "session-123",
-		"MSPACE_ISSUE_ID":   "issue-123",
+		"MSPACE_SESSION_ID":         "session-123",
+		"MSPACE_ISSUE_ID":           "issue-123",
+		"MSPACE_AGENT_TOKEN":        "session-scoped-token",
+		"MSPACE_RUNTIME_TOKEN":      "payload-msw-secret",
+		"MSPACE_RUNTIME_TOKEN_FILE": "/payload/worker-token",
+		"DATABASE_URL":              "postgres://payload-control-plane",
+		"UNRELATED_TOKEN":           "payload-secret",
 	})
 	joined := "\n" + strings.Join(env, "\n") + "\n"
 	for _, forbidden := range []string{
@@ -79,20 +92,72 @@ func TestBuildAgentEngineEnvStripsControlPlaneCredentials(t *testing.T) {
 		"MSPACE_GITHUB_APP_PRIVATE_KEY=",
 		"POSTGRES_PASSWORD=",
 		"GH_TOKEN=",
+		"ANTHROPIC_API_KEY=",
+		"NODE_OPTIONS=",
+		"SENTRY_AUTH_TOKEN=",
+		"SSH_AUTH_SOCK=",
+		"GPG_TTY=",
+		"UNRELATED_TOKEN=",
 	} {
 		if strings.Contains(joined, "\n"+forbidden) {
 			t.Fatalf("agent environment leaked %s: %v", forbidden, env)
 		}
 	}
-	for _, required := range []string{"PATH=/usr/local/bin:/usr/bin", "HOME=/worker-home", "MSPACE_SESSION_ID=session-123", "MSPACE_ISSUE_ID=issue-123"} {
+	for _, required := range []string{
+		"PATH=/usr/local/bin:/usr/bin",
+		"HOME=/worker-home",
+		"OPENAI_API_KEY=codex-auth",
+		"MSPACE_SESSION_ID=session-123",
+		"MSPACE_ISSUE_ID=issue-123",
+		"MSPACE_AGENT_TOKEN=session-scoped-token",
+	} {
 		if !strings.Contains(joined, "\n"+required+"\n") {
 			t.Fatalf("agent environment lost %s: %v", required, env)
 		}
 	}
 }
 
+func TestBuildAgentEngineEnvKeepsOnlySelectedEngineAuthentication(t *testing.T) {
+	parent := []string{
+		"PATH=/usr/bin",
+		"HOME=/home/worker",
+		"CODEX_HOME=/home/worker/.codex",
+		"OPENAI_API_KEY=openai-secret",
+		"CLAUDE_CODE_OAUTH_TOKEN=claude-oauth",
+		"ANTHROPIC_API_KEY=anthropic-secret",
+		"AWS_ACCESS_KEY_ID=bedrock-key",
+		"AWS_SECRET_ACCESS_KEY=bedrock-secret",
+		"SLACK_TOKEN=unrelated-secret",
+	}
+	claude := "\n" + strings.Join(buildAgentEngineEnvForEngine(agentEngineClaudeCode, parent, nil), "\n") + "\n"
+	for _, required := range []string{"CLAUDE_CODE_OAUTH_TOKEN=claude-oauth", "ANTHROPIC_API_KEY=anthropic-secret", "AWS_SECRET_ACCESS_KEY=bedrock-secret"} {
+		if !strings.Contains(claude, "\n"+required+"\n") {
+			t.Fatalf("Claude environment lost %s: %s", required, claude)
+		}
+	}
+	for _, forbidden := range []string{"CODEX_HOME=", "OPENAI_API_KEY=", "SLACK_TOKEN="} {
+		if strings.Contains(claude, "\n"+forbidden) {
+			t.Fatalf("Claude environment inherited %s: %s", forbidden, claude)
+		}
+	}
+}
+
+func TestClearWorkerCredentialEnvironmentRemovesParentDiscovery(t *testing.T) {
+	t.Setenv("MSPACE_RUNTIME_TOKEN", "msw_parent_secret")
+	t.Setenv("MSPACE_RUNTIME_TOKEN_FILE", "/Users/private/mspace/runtime.token")
+	clearWorkerCredentialEnvironment()
+	for _, key := range []string{"MSPACE_RUNTIME_TOKEN", "MSPACE_RUNTIME_TOKEN_FILE"} {
+		if value, exists := os.LookupEnv(key); exists || value != "" {
+			t.Fatalf("Worker credential environment %s remains discoverable: %q", key, value)
+		}
+	}
+}
+
 func TestClaudeCodeEngineUsesStreamJSONAndSharedSessionCore(t *testing.T) {
 	installFakeEngine(t, "claude", "fake_claude.py")
+	t.Setenv("MSPACE_RUNTIME_TOKEN", "msw_parent_secret")
+	t.Setenv("MSPACE_RUNTIME_TOKEN_FILE", "/private/worker.token")
+	t.Setenv("SENTRY_AUTH_TOKEN", "unrelated-parent-secret")
 	executionContext, logs, closeServer := newAgentEngineTestContext(t)
 	defer closeServer()
 	sourceCapture := false
@@ -104,7 +169,12 @@ func TestClaudeCodeEngineUsesStreamJSONAndSharedSessionCore(t *testing.T) {
 		ApprovalPolicy:        "never",
 		Sandbox:               "danger-full-access",
 		SourceCapture:         &sourceCapture,
-		Env:                   map[string]string{"MSPACE_FAKE_CLAUDE_MODE": "success"},
+		Env: map[string]string{
+			"MSPACE_FAKE_CLAUDE_MODE": "success",
+			"MSPACE_AGENT_TOKEN":      "session-scoped-token",
+			"MSPACE_RUNTIME_TOKEN":    "msw_payload_secret",
+			"DATABASE_URL":            "postgres://payload-control-plane",
+		},
 	}
 	result, err := runAgentSession(context.Background(), executionContext.RuntimeClient, executionContext.Config, executionContext.WorkerID, executionContext.TaskID, payload)
 	if err != nil {
@@ -175,6 +245,27 @@ func TestPiEngineUsesRPCAndReturnsOnlyOpaqueSessionID(t *testing.T) {
 	}
 	if strings.Contains(taskLogMessages(logs()), "/tmp/private/pi-session.json") {
 		t.Fatalf("Pi local session path must not escape through runtime logs: %s", taskLogMessages(logs()))
+	}
+	if !strings.Contains(taskLogMessages(logs()), "details suppressed") {
+		t.Fatalf("expected safe Pi diagnostic signal, got %s", taskLogMessages(logs()))
+	}
+}
+
+func TestPiEngineRedactsStructuredRuntimeErrors(t *testing.T) {
+	installFakeEngine(t, "pi", "fake_pi.py")
+	executionContext, logs, closeServer := newAgentEngineTestContext(t)
+	defer closeServer()
+	payload := directEnginePayload(t, agentEnginePi)
+	payload.Env = map[string]string{"MSPACE_FAKE_PI_MODE": "runtime_error"}
+	_, err := (piEngineAdapter{}).Execute(context.Background(), executionContext, payload, func(agentEngineExecution) {})
+	if err == nil || err.Error() != "Pi RPC reported an error" {
+		t.Fatalf("expected allowlisted Pi runtime error, got %v", err)
+	}
+	combined := err.Error() + "\n" + taskLogMessages(logs())
+	for _, forbidden := range []string{"sessionFile", "/tmp/private", "/Users/private"} {
+		if strings.Contains(combined, forbidden) {
+			t.Fatalf("Pi runtime diagnostics leaked %q: %s", forbidden, combined)
+		}
 	}
 }
 

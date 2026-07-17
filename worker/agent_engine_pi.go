@@ -47,10 +47,10 @@ func (piEngineAdapter) Execute(ctx context.Context, executionContext agentEngine
 	}
 	cmd, err := newAgentEngineCommand(piPath, args...)
 	if err != nil {
-		return execution, err
+		return execution, errors.New("Pi CLI could not be prepared")
 	}
 	cmd.Dir = payload.Workdir
-	cmd.Env = defaultAgentEngineEnv(payload.Env)
+	cmd.Env = defaultAgentEngineEnv(agentEnginePi, payload.Env)
 	configureAgentEngineProcess(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -58,12 +58,10 @@ func (piEngineAdapter) Execute(ctx context.Context, executionContext agentEngine
 	}
 	process, stdout, stderr, err := startAgentEngineProcess(cmd, stdin)
 	if err != nil {
-		return execution, fmt.Errorf("start Pi RPC: %w", err)
+		return execution, errors.New("start Pi RPC: launch failed")
 	}
 	defer process.stop(time.Second)
-	// Pi can print its local session file path on stderr. Do not persist that
-	// provider-local diagnostic stream to server-owned runtime logs.
-	go drainAgentEngineDiagnosticStream(stderr)
+	go capturePiDiagnosticStream(ctx, executionContext, stderr)
 
 	encoder := json.NewEncoder(stdin)
 	if err := encoder.Encode(map[string]any{"id": "mspace-state", "type": "get_state"}); err != nil {
@@ -137,6 +135,20 @@ func scanPiRPC(reader io.Reader, reads chan<- piRPCRead) {
 	}
 	if err := scanner.Err(); err != nil {
 		reads <- piRPCRead{err: fmt.Errorf("read Pi RPC output: %w", err)}
+	}
+}
+
+// Pi stderr is provider-local and can contain sessionFile or absolute paths.
+// Runtime logs receive only this fixed allowlisted signal, never stderr text.
+func capturePiDiagnosticStream(ctx context.Context, executionContext agentEngineExecutionContext, reader io.Reader) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 16*1024), 1024*1024)
+	logged := false
+	for scanner.Scan() {
+		if !logged && strings.TrimSpace(scanner.Text()) != "" {
+			executionContext.log(ctx, "pi-stderr", "Pi emitted local diagnostic output; details suppressed.")
+			logged = true
+		}
 	}
 }
 

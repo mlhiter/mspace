@@ -84,6 +84,7 @@ const desktopAPI = {
     workerName: string;
     capabilities?: PersonalWorkerCapabilities;
   }>,
+  getPersonalWorkerHostId: () => ipcRenderer.invoke("mspace:get-personal-worker-host-id") as Promise<string>,
   stopPersonalWorker: () => ipcRenderer.invoke("mspace:stop-personal-worker") as Promise<{
     ok: boolean;
     status: string;

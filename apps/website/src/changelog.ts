@@ -8,14 +8,16 @@ export type ChangelogEntry = {
 export const changelog: ChangelogEntry[] = [
   {
     date: "2026-07-17",
-    title: "Codex, Claude Code, and Pi as fixed Agents",
+    title: "Fixed Agents and Worker readiness",
     summary:
-      "mspace now treats coding Agents as execution engines instead of custom prompt profiles, with exact Worker routing for Codex, Claude Code, and Pi.",
+      "mspace now treats coding Agents as execution engines instead of custom prompt profiles, with exact Worker routing and visible readiness for Codex, Claude Code, and Pi.",
     items: [
       "Replaced @triage, @bugfix, @design, and custom Agent Profiles with the fixed @codex, @claude, and @pi catalog while keeping workspace Skills as a separate management surface.",
       "Routes each new Agent Session through an explicit agentEngine and matching codex, claudeCode, or pi Worker capability so one engine cannot silently execute another engine's task.",
       "Added Worker adapters for Claude Code stream JSON and Pi RPC with protocol terminal checks, cancellation, generic Session references, and shared worktree, artifact, evidence, and source capture behavior.",
       "Moved desktop/server compatibility to protocol 2 so mixed versions fail during health checks instead of silently losing or misrouting fixed Agent Sessions.",
+      "Added safe Worker diagnostics for installation and authentication state without uploading probe output, credentials, executable paths, or Pi session paths.",
+      "Added This Mac and Connected Workers readiness matrices, with server-derived claimable counts, stable anonymous host identity, and explicit legacy Worker states.",
     ],
   },
   {

@@ -4,7 +4,7 @@
 
 The desktop app and runtime workers are clients of this service. They do not own collaboration identity or product truth.
 
-The server is intentionally Codex-free. It does not install the Codex CLI, mount `CODEX_HOME`, read Codex credentials, or start `codex app-server`. LLM-backed work is expressed as runtime tasks and executed by workers. The server can still own workflow skill metadata and bundle content, so every worker receives the same required skill revision with a task instead of depending on worker-local skill installs.
+The server is intentionally Agent-runtime-free. It does not install Codex, Claude Code, or Pi, mount their homes, read their credentials, or start their processes. Agent work is expressed as runtime tasks and executed by workers. The server can still own workflow skill metadata and bundle content, so every worker receives the same required skill revision with a task instead of depending on worker-local skill installs.
 
 ## Run
 
@@ -199,7 +199,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration credential. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and their latest heartbeat state. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime/availability` | Return readiness for a runtime mode and required capabilities. |
-| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a non-product runtime task for API-level smoke/debug tooling, such as `protocol_smoke` or `noop`. Raw `agent_session` payloads are rejected; use the Issue Session API. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Workspace owner/admin API for unbound `protocol_smoke` or `noop` diagnostics. Raw tasks cannot bind Issue/Session/Project records or include Agent, Skill, automation, workdir, environment, or other server-owned control fields. Product and system tasks must use their dedicated server-owned flows. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks?limit=10&offset=0` | List runtime tasks for the workspace with pagination metadata and status counts. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/logs` | List worker-appended logs for one runtime task. |
@@ -244,6 +244,8 @@ Agent-session creation is guarded by project attachment and Worker liveness. The
 Normal team worker setup should use the Workspace Settings worker install action, backed by `POST /api/workspaces/{workspaceID}/worker-installations`. The response contains a one-time install command that embeds a short-lived bootstrap credential and starts the Docker-backed worker on the target host. The raw `msw_...` registration credential endpoints remain for Electron's automatic personal worker lifecycle and API-level recovery/debugging, but they are no longer the main product setup path.
 
 Runtime registration credentials use the `msw_` prefix and are returned only once. The server stores a hash and prefix, then workers use the credential to register, heartbeat, claim eligible tasks, and report task status.
+
+Migration 031 adds `runtime_workers.agent_engine_diagnostics`. Workers may report only fixed-engine `status`, `reasonCode`, sanitized `version`, and `checkedAt` fields; the server validates their enums and format. Diagnostics can downgrade an advertised engine capability but cannot enable one. Omitting the heartbeat field preserves the stored snapshot, while explicit `{}` clears it. Availability responses include a server-derived `claimableWorkerCount`; older Workers without diagnostics remain capability-compatible and are displayed as not reported by current clients.
 
 The current queue is intentionally narrow: it records workspace task metadata, required capability JSON, payload/result JSON, claim ownership, timestamps, a compact audit event stream, and Worker-appended task logs. Product UI should present these records as issue-linked runtime tasks with the Issue title and Worker/status context first, while leaving protocol fields in details. Workers stream normalized Agent status and output back through the log endpoint without the server needing direct network access to the Worker host or any Agent runtime dependency. Workspace users can request task cancellation; Workers poll their claimed task while executing and interrupt the selected engine process when cancellation is requested.
 
