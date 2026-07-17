@@ -293,7 +293,6 @@ const resources = {
           skills: "Skills",
         },
         skills: {
-          title: "Skills",
           loading: "Loading skills...",
           newSkill: "New skill",
           createSkill: "Create skill",
@@ -304,7 +303,6 @@ const resources = {
           viewDescription: "Review the server-managed skill revision used by new agent sessions.",
           emptyTitle: "No skills yet",
           emptyBody: "Create a workspace skill or use the built-in skills already available to issue comments.",
-          summary: "{{enabled}} enabled / {{total}} total",
           skill: "Skill",
           source: "Source",
           revision: "Revision",
@@ -2182,7 +2180,6 @@ const resources = {
           skills: "技能",
         },
         skills: {
-          title: "技能",
           loading: "正在加载技能...",
           newSkill: "新建技能",
           createSkill: "创建技能",
@@ -2193,7 +2190,6 @@ const resources = {
           viewDescription: "查看服务端托管的技能修订，新会话会使用这份内容。",
           emptyTitle: "还没有技能",
           emptyBody: "可以创建工作区技能，也可以直接使用内置技能。",
-          summary: "{{enabled}} 个已启用 / 共 {{total}} 个",
           skill: "技能",
           source: "来源",
           revision: "修订",

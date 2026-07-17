@@ -143,7 +143,6 @@ export function AgentsPage() {
   const agents = useMemo(() => agentsQuery.data || [], [agentsQuery.data]);
   const skills = useMemo(() => skillsQuery.data || [], [skillsQuery.data]);
   const enabledCount = agents.filter((agent) => agent.enabled).length;
-  const enabledSkillCount = skills.filter((skill) => skill.enabled).length;
   const [activeTab, setActiveTab] = useState<AgentsTab>("agents");
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<AgentProfileInput>(emptyAgentForm);
@@ -319,7 +318,6 @@ export function AgentsPage() {
         ) : (
           <SkillsPanel
             skills={skills}
-            enabledCount={enabledSkillCount}
             isPending={skillsQuery.isPending}
             canManage={canManageWorkspace}
             error={skillsQuery.error || loadSkill.error || createSkill.error || updateSkill.error || toggleSkill.error || deleteSkill.error || duplicateSkill.error}
@@ -467,7 +465,6 @@ function AgentsPanel(props: {
 
 function SkillsPanel(props: {
   skills: SkillCatalogItem[];
-  enabledCount: number;
   isPending: boolean;
   isMutating: boolean;
   canManage: boolean;
@@ -503,14 +500,6 @@ function SkillsPanel(props: {
   }
   return (
     <div className="overflow-hidden rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
-      <div className="flex flex-wrap items-center gap-3 border-b border-[color:var(--line)] px-4 py-3">
-        <div className="min-w-0">
-          <h2 className="text-[14px] font-semibold leading-5 text-[color:var(--text)]">{t("agents.skills.title")}</h2>
-          <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">
-            {t("agents.skills.summary", { enabled: props.enabledCount, total: props.skills.length })}
-          </p>
-        </div>
-      </div>
       {!props.canManage ? (
         <div className="border-b border-[color:var(--line)] px-4 py-3">
           <Notice>{t("agents.skills.manageRestricted")}</Notice>
