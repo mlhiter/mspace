@@ -139,12 +139,8 @@ interface ActorIdentity {
 }
 
 type LogLine = Pick<SessionLog, "stream" | "message" | "createdAt">;
-type AnalysisProgressEntry = {
-  labelKey: string;
-  message: string;
-  createdAt: string;
-};
 type SessionSnapshot = {
+  sessionStatus: AgentSession["status"];
   logs: LogLine[];
   changes: WorkspaceChange[];
 };
@@ -525,57 +521,6 @@ function isNoisySystemComment(comment: Comment) {
 
 function latestAgentMessage(logs: LogLine[]) {
   return [...logs].reverse().find((log) => log.stream === "agent")?.message || "";
-}
-
-function analysisStatusLabelKey(message: string) {
-  const normalized = message.trim().toLowerCase();
-  if (normalized === "agentmessage") return "issueDetail.timeline.analysisProgressWriting";
-  if (normalized === "reasoning") return "issueDetail.timeline.analysisProgressReasoning";
-  if (normalized === "filechange") return "issueDetail.timeline.analysisProgressFiles";
-  if (normalized.startsWith("turn-")) return "issueDetail.timeline.analysisProgressRunning";
-  if (normalized.startsWith("thread-")) return "issueDetail.timeline.analysisProgressStarting";
-  return "";
-}
-
-function compactAnalysisLogMessage(message: string) {
-  const normalized = normalizeSessionLogMessage(message);
-  return normalized.length > 700 ? `${normalized.slice(0, 697)}...` : normalized;
-}
-
-function issueAnalysisProgressEntries(logs: LogLine[]) {
-  const entries: AnalysisProgressEntry[] = [];
-  const seen = new Set<string>();
-  for (const log of [...logs].reverse()) {
-    const stream = log.stream.toLowerCase();
-    const normalizedMessage = compactAnalysisLogMessage(log.message);
-    if (!normalizedMessage) continue;
-
-    let labelKey = "";
-    let message = "";
-    if (stream === "agent") {
-      labelKey = "issueDetail.timeline.analysisProgressAgent";
-      message = normalizedMessage;
-    } else if (stream === "plan") {
-      labelKey = "issueDetail.timeline.analysisProgressPlan";
-      message = normalizedMessage;
-    } else if (stream === "reasoning") {
-      labelKey = "issueDetail.timeline.analysisProgressReasoning";
-      message = normalizedMessage;
-    } else if (stream === "command") {
-      labelKey = "issueDetail.timeline.analysisProgressCommand";
-      message = normalizedMessage.replace(/^\$\s*/, "");
-    } else if (stream === "codex-status") {
-      labelKey = analysisStatusLabelKey(normalizedMessage);
-    }
-    if (!labelKey) continue;
-
-    const key = `${labelKey}:${message}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    entries.push({ labelKey, message, createdAt: log.createdAt });
-    if (entries.length >= 5) break;
-  }
-  return entries.reverse();
 }
 
 const ansiEscapePattern = /\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
@@ -2832,35 +2777,47 @@ function SessionSummarySkeleton() {
   );
 }
 
-function AnalysisProgressList(props: { entries: AnalysisProgressEntry[]; compact?: boolean }) {
-  const { t } = useMspaceTranslation();
-  const entries = props.entries;
+function AgentActivityMessage(props: { message: string }) {
+  const normalizedMessage = normalizeSessionLogMessage(props.message);
+  const [currentMessage, setCurrentMessage] = useState(normalizedMessage);
+  const [previousMessage, setPreviousMessage] = useState("");
+  const transitionTimerRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    if (!normalizedMessage || normalizedMessage === currentMessage) return;
+    setPreviousMessage(currentMessage);
+    setCurrentMessage(normalizedMessage);
+    if (transitionTimerRef.current) window.clearTimeout(transitionTimerRef.current);
+    transitionTimerRef.current = window.setTimeout(() => {
+      setPreviousMessage("");
+      transitionTimerRef.current = undefined;
+    }, 220);
+  }, [currentMessage, normalizedMessage]);
+
+  useEffect(() => () => {
+    if (transitionTimerRef.current) window.clearTimeout(transitionTimerRef.current);
+  }, []);
+
+  if (!normalizedMessage) return null;
   return (
-    <div
-      className={cn(
-        "mt-3 grid gap-2 rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--line)]",
-        props.compact ? "mt-2 px-2.5 py-2" : "",
-      )}
-    >
-      <div className="flex min-w-0 items-center gap-2 font-medium text-[color:var(--muted-strong)]">
-        <Activity data-icon className="size-3.5 shrink-0" />
-        <span>{t("issueDetail.timeline.analysisProgressTitle")}</span>
-      </div>
-      {entries.length === 0 ? (
-        <div className="text-[color:var(--muted)]">{t("issueDetail.timeline.analysisProgressWaiting")}</div>
-      ) : (
-        <div className="grid gap-1.5">
-          {entries.map((entry, index) => (
-            <div key={`${entry.labelKey}-${index}-${entry.createdAt}`} className="grid gap-0.5 rounded-[7px] bg-[color:var(--paper)] px-2.5 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
-              <div className="flex min-w-0 items-center justify-between gap-2 text-[11px] font-medium leading-4 text-[color:var(--muted)]">
-                <span>{t(entry.labelKey)}</span>
-                {entry.createdAt ? <span title={formatAbsoluteTime(entry.createdAt)}>{formatRelativeTime(entry.createdAt)}</span> : null}
-              </div>
-              {entry.message ? <div className="whitespace-pre-wrap text-[12px] leading-5 text-[color:var(--text)] [overflow-wrap:anywhere]">{entry.message}</div> : null}
-            </div>
-          ))}
+    <div className="mt-2 flex h-9 min-w-0 items-center gap-2 overflow-hidden rounded-[8px] bg-[color:var(--block-subtle)] px-2.5 text-[12px] leading-5 text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+      <Activity data-icon className="size-3.5 shrink-0 text-[color:var(--muted)]" />
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="relative h-5 min-w-0 flex-1 overflow-hidden"
+        title={currentMessage}
+      >
+        {previousMessage && previousMessage !== currentMessage ? (
+          <div aria-hidden="true" className="mspace-agent-activity-exit absolute inset-0 truncate">
+            {previousMessage}
+          </div>
+        ) : null}
+        <div key={currentMessage} className="mspace-agent-activity-enter absolute inset-0 truncate">
+          {currentMessage}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -3663,21 +3620,6 @@ function DeployTimelineItem(props: {
   );
 }
 
-function AnalysisSessionNote(props: { compact?: boolean }) {
-  const { t } = useMspaceTranslation();
-  return (
-    <div
-      className={cn(
-        "flex min-w-0 items-start gap-2 rounded-[8px] bg-[color:var(--paper)] px-2.5 py-2 text-[12px] leading-5 text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]",
-        props.compact ? "mt-2 py-1.5" : "mt-2",
-      )}
-    >
-      <WandSparkles data-icon className="mt-0.5 shrink-0 text-[color:var(--muted-strong)]" />
-      <span>{t("issueDetail.timeline.analysisUsesThink")}</span>
-    </div>
-  );
-}
-
 function SessionTimelineItem(props: {
   session: AgentSession;
   logs: LogLine[];
@@ -3697,7 +3639,6 @@ function SessionTimelineItem(props: {
   const isActive = ["queued", "running"].includes(session.status);
   const isCompleted = session.status === "completed";
   const isAnalysisSession = isIssueAnalysisSession(session);
-  const analysisProgress = isAnalysisSession ? issueAnalysisProgressEntries(logs) : [];
   const sessionDisplayName = isAnalysisSession ? t("issueDetail.timeline.issueAnalysis") : agent.name;
   const isEmptyCancelledSession = session.status === "cancelled" && !agentMessage && props.changes.length === 0;
   const title = isAnalysisSession
@@ -3746,13 +3687,7 @@ function SessionTimelineItem(props: {
             {props.onStop ? <StopSessionButton isStopping={props.isStopping} onStop={props.onStop} /> : null}
           </div>
           {props.stopError ? <div className="mt-1 text-[12px] leading-5 text-[color:var(--danger)]">{props.stopError.message}</div> : null}
-          {isAnalysisSession ? <AnalysisSessionNote /> : null}
-          {isAnalysisSession ? <AnalysisProgressList entries={analysisProgress} /> : null}
-          {agentMessage ? (
-            <RichText agents={props.agents} basePath={session.workdir} className="mt-3 rounded-[9px] bg-[color:var(--block-subtle)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
-              {agentMessage}
-            </RichText>
-          ) : null}
+          {agentMessage ? <AgentActivityMessage message={agentMessage} /> : null}
           <SessionFileChanges changes={props.changes} workdir={session.workdir} />
         </div>
       ) : (
@@ -3763,17 +3698,14 @@ function SessionTimelineItem(props: {
             </div>
           ) : null}
 
-          {isAnalysisSession ? <AnalysisSessionNote compact /> : null}
           {agentMessage ? (
             <RichText
               agents={props.agents}
               basePath={session.workdir}
-              className={cn(isAnalysisSession && "mt-2 pt-1", !isCompleted && !isAnalysisSession && "mt-2")}
+              className={cn(!isCompleted && "mt-2")}
             >
               {agentMessage}
             </RichText>
-          ) : isAnalysisSession && analysisProgress.length > 0 ? (
-            <AnalysisProgressList entries={analysisProgress} compact />
           ) : props.isSnapshotPending ? (
             <SessionSummarySkeleton />
           ) : (
@@ -5467,13 +5399,14 @@ export function IssueDetailPage() {
       return;
     }
     let cancelled = false;
+    let terminalRetryTimer: number | undefined;
     async function loadSessionSnapshots(targetSessions: AgentSession[], replace: boolean) {
-      const entries = await Promise.all(
+      const results = await Promise.all(
         targetSessions.map(async (session) => {
-          const sessionDetail = await controlPlaneApi.getSession(auth.token, workspaceId, session.id);
-          return [
-            session.id,
-            {
+          try {
+            const sessionDetail = await controlPlaneApi.getSession(auth.token, workspaceId, session.id);
+            const snapshot: SessionSnapshot = {
+              sessionStatus: session.status,
               logs: listOrEmpty(sessionDetail.logs).map((log) => ({
                 stream: log.stream,
                 message: log.message,
@@ -5482,13 +5415,32 @@ export function IssueDetailPage() {
               changes: listOrEmpty(sessionDetail.workspace?.changes).length > 0
                 ? listOrEmpty(sessionDetail.workspace?.changes)
                 : listOrEmpty(sessionDetail.workspace?.comparison?.changes),
-            },
-          ] as const;
+            };
+            return { session, snapshot };
+          } catch {
+            return { session, snapshot: null };
+          }
         }),
       );
       if (cancelled) return;
+      const entries = results.flatMap(({ session, snapshot }) => snapshot ? [[session.id, snapshot] as const] : []);
       const nextEntries = Object.fromEntries(entries);
-      setSessionSnapshotsById((current) => replace ? nextEntries : { ...current, ...nextEntries });
+      setSessionSnapshotsById((current) => {
+        const base = replace
+          ? Object.fromEntries(Object.entries(current).filter(([sessionId]) => sessions.some((session) => session.id === sessionId)))
+          : current;
+        return { ...base, ...nextEntries };
+      });
+
+      const failedTerminalSessions = results
+        .filter(({ session, snapshot }) => !snapshot && !["queued", "running"].includes(session.status))
+        .map(({ session }) => session);
+      if (failedTerminalSessions.length > 0 && !terminalRetryTimer) {
+        terminalRetryTimer = window.setTimeout(() => {
+          terminalRetryTimer = undefined;
+          void loadSessionSnapshots(failedTerminalSessions, false);
+        }, 2_500);
+      }
     }
 
     const activeSessions = sessions.filter((session) => ["queued", "running"].includes(session.status));
@@ -5501,6 +5453,7 @@ export function IssueDetailPage() {
     return () => {
       cancelled = true;
       if (interval) window.clearInterval(interval);
+      if (terminalRetryTimer) window.clearTimeout(terminalRetryTimer);
     };
   }, [auth.token, detail?.sessions, workspaceId]);
 
@@ -6533,6 +6486,7 @@ export function IssueDetailPage() {
                     }
                     if (item.kind === "session") {
                       const sessionSnapshot = sessionSnapshotsById[item.session.id];
+                      const currentSessionSnapshot = sessionSnapshot?.sessionStatus === item.session.status ? sessionSnapshot : undefined;
                       const isDeploySession = detail.testEnvironment?.lastDeploySessionId === item.session.id;
                       if (isDeploySession && detail.testEnvironment) {
                         return (
@@ -6540,11 +6494,11 @@ export function IssueDetailPage() {
                             key={`session-${item.session.id}`}
                             anchorId={issueSessionDomId(item.session.id)}
                             session={item.session}
-                            logs={sessionSnapshot?.logs || []}
-                            changes={sessionSnapshot?.changes || []}
+                            logs={currentSessionSnapshot?.logs || []}
+                            changes={currentSessionSnapshot?.changes || []}
                             agents={agents}
                             testEnvironment={detail.testEnvironment}
-                            isSnapshotPending={!sessionSnapshot}
+                            isSnapshotPending={!currentSessionSnapshot}
                             isRetrying={startTestDeploy.isPending}
                             canRetry={!hasActiveSession && !startTestDeploy.isPending && changeNodes.length > 0}
                             onRetry={() => {
@@ -6554,48 +6508,48 @@ export function IssueDetailPage() {
                           />
                         );
                       }
-	                      return (
-	                        <SessionTimelineItem
-	                          key={`session-${item.session.id}`}
-                            anchorId={issueSessionDomId(item.session.id)}
-	                          session={item.session}
-                          logs={sessionSnapshot?.logs || []}
-                          changes={sessionSnapshot?.changes || []}
+                      return (
+                        <SessionTimelineItem
+                          key={`session-${item.session.id}`}
+                          anchorId={issueSessionDomId(item.session.id)}
+                          session={item.session}
+                          logs={currentSessionSnapshot?.logs || []}
+                          changes={currentSessionSnapshot?.changes || []}
                           agents={agents}
-                          isSnapshotPending={!sessionSnapshot}
+                          isSnapshotPending={!currentSessionSnapshot}
                           hasStopAction={stoppedSessionActionRefs.some((sessionRef) => sessionActionMatchesSession(sessionRef, item.session.id))}
                           isStopping={stopSession.isPending && stopSession.variables === item.session.id}
                           stopError={stopSession.error && stopSession.variables === item.session.id ? stopSession.error : null}
                           onStop={["queued", "running"].includes(item.session.status) ? () => stopSession.mutate(item.session.id) : undefined}
-	                        />
-	                      );
-	                    }
-	                    if (item.kind === "failure") {
-	                      const session = listOrEmpty(detail.sessions).find((candidate) => candidate.id === item.failure.sessionId);
-	                      const canRetryFailure = failureCanRetryDeploy(item.failure, detail.testEnvironment) && !hasActiveSession && !startTestDeploy.isPending && changeNodes.length > 0;
-	                      const canStopFailure = Boolean(session && ["queued", "running"].includes(session.status));
-	                      const failureSessionId = session?.id || "";
-	                      return (
-	                        <SessionFailureTimelineItem
-	                          key={`failure-${item.failure.id}`}
-	                          failure={item.failure}
-	                          session={session}
-	                          canContinue={Boolean(continueAgent) && !hasActiveSession}
-	                          onContinue={() => continueFromFailure(item.failure)}
-	                          canRetry={canRetryFailure}
-	                          isRetrying={startTestDeploy.isPending}
-	                          onRetry={() => {
-	                            if (!detail || hasActiveSession) return;
-	                            startTestDeploy.mutate(testDeployDefaults(detail, clusters));
-	                          }}
-	                          canStop={canStopFailure}
-	                          isStopping={Boolean(failureSessionId) && stopSession.isPending && stopSession.variables === failureSessionId}
-	                          onStop={failureSessionId && canStopFailure ? () => stopSession.mutate(failureSessionId) : undefined}
-	                        />
-	                      );
-	                    }
-	                    return null;
-	                  })}
+                        />
+                      );
+                    }
+                    if (item.kind === "failure") {
+                      const session = listOrEmpty(detail.sessions).find((candidate) => candidate.id === item.failure.sessionId);
+                      const canRetryFailure = failureCanRetryDeploy(item.failure, detail.testEnvironment) && !hasActiveSession && !startTestDeploy.isPending && changeNodes.length > 0;
+                      const canStopFailure = Boolean(session && ["queued", "running"].includes(session.status));
+                      const failureSessionId = session?.id || "";
+                      return (
+                        <SessionFailureTimelineItem
+                          key={`failure-${item.failure.id}`}
+                          failure={item.failure}
+                          session={session}
+                          canContinue={Boolean(continueAgent) && !hasActiveSession}
+                          onContinue={() => continueFromFailure(item.failure)}
+                          canRetry={canRetryFailure}
+                          isRetrying={startTestDeploy.isPending}
+                          onRetry={() => {
+                            if (!detail || hasActiveSession) return;
+                            startTestDeploy.mutate(testDeployDefaults(detail, clusters));
+                          }}
+                          canStop={canStopFailure}
+                          isStopping={Boolean(failureSessionId) && stopSession.isPending && stopSession.variables === failureSessionId}
+                          onStop={failureSessionId && canStopFailure ? () => stopSession.mutate(failureSessionId) : undefined}
+                        />
+                      );
+                    }
+                    return null;
+                  })}
                 </div>
               </section>
 

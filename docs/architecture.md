@@ -114,7 +114,7 @@ Codex
   -> reads the session-scoped think skill and produces read-only analysis
 ```
 
-The analysis session is conservative: it is skipped when the issue has no project, no active worker, or an existing `issue_analysis` task. It is queued before asynchronous type triage when the issue is created with a project, and project attachment later retries the same queueing path for projectless top-level issues. It runs with a read-only sandbox, disables worker source capture, and server reconciliation ignores source/test/deploy/review artifacts from that automation. It should not edit files, create commits, or replace the normal human-triggered implementation turn. The UI presents it as `Issue analysis` so the first next-step analysis does not require a manual `@codex` comment.
+The analysis session is conservative: it is skipped when the issue has no project, no active worker, or an existing `issue_analysis` task. It is queued before asynchronous type triage when the issue is created with a project, and project attachment later retries the same queueing path for projectless top-level issues. It runs with a read-only sandbox, disables worker source capture, and server reconciliation ignores source/test/deploy/review artifacts from that automation. It should not edit files, create commits, or replace the normal human-triggered implementation turn. The UI presents it as `Issue analysis` so the first next-step analysis does not require a manual `@codex` comment. While it is active, the timeline shows only the latest Codex-authored agent message in a fixed-height activity row; command, reasoning, plan, tool, file, and status logs remain execution detail rather than sources for synthesized progress copy.
 
 ## Test Module Flow
 

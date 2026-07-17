@@ -7,6 +7,17 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-17",
+    title: "Compact Codex activity in Issue Detail",
+    summary:
+      "Issue Detail now shows Codex-authored process updates without expanding raw execution logs into the issue timeline.",
+    items: [
+      "Shows only the latest Codex agent message in one fixed-height activity row while a session is running.",
+      "Slides between new process messages and respects reduced-motion preferences without turning commands, reasoning, plans, tools, files, or status events into product-authored copy.",
+      "Keeps completed replies as full timeline content and refreshes status-matched session snapshots so stale process text cannot become the final answer.",
+    ],
+  },
+  {
     date: "2026-07-16",
     title: "Browser workers start only when needed",
     summary:

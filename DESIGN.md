@@ -196,7 +196,7 @@ Screen priorities:
 - Use cards for repeated objects, panels, and modal-like grouped content.
 - Do not use cards as generic page sections.
 - Cards should have a real job: issue row, evidence block, session summary, project row, or config panel.
-- Render completed Codex replies as plain timeline content beneath the actor row, without an outer card or decorative completion mark. Keep active, failed, cancelled, and missing-summary feedback explicit; analysis metadata and file changes remain separate structured blocks.
+- Render completed Codex replies as plain timeline content beneath the actor row, without an outer card or decorative completion mark. While a session is active, show at most the latest Codex-authored process message in one fixed-height row and replace it with restrained motion; never translate command, reasoning, plan, tool, file, or status logs into product-authored progress copy. Keep failed, cancelled, and missing-summary feedback explicit, and leave raw execution detail to Session Detail.
 
 ### Badges And Status
 

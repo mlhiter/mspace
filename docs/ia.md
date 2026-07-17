@@ -333,7 +333,7 @@ Current implementation:
 - shows Type and Priority controls in the quiet metadata sidebar, with a `Classifying...` state while a worker-backed `issue_type_triage` task assigns type;
 - keeps the quiet metadata sidebar on Overview only, while Commits, Sessions, and Evidence use the full page width for review-heavy content;
 - exposes a Stop action for queued or running sessions, cancelling only that session and rendering the stop as a compact, non-editable event while leaving the issue status unchanged;
-- streams session logs and status while a session is running, but keeps debug output collapsed by default;
+- refreshes active session logs and status while showing only the latest Codex-authored agent message in one fixed-height activity row; command, reasoning, plan, tool, file, and status logs stay out of user-facing progress copy and remain available through Session Detail;
 - renders a compact failure event with only the user-facing error summary when a session fails;
 - keeps structured failure records continueable from the timeline with Continue / Retry deploy / Stop affordances when applicable, while failed commands, runtime excerpts, phase, session ids, and namespace/resource hints stay internal for debugging instead of becoming user-facing evidence entry points;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
