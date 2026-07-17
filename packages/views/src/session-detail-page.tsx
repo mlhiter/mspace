@@ -2,7 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { Clipboard, Files, GitBranch, GitCommit, GitCompareArrows, HardDrive, SquareTerminal } from "lucide-react";
-import { controlPlaneApi, queryKeys, type WorkspaceChange, type WorkspaceSnapshot } from "@mspace/core";
+import {
+  agentEngineDisplayName,
+  agentEngineForSession,
+  controlPlaneApi,
+  engineRunRef,
+  engineSessionRef,
+  queryKeys,
+  type WorkspaceChange,
+  type WorkspaceSnapshot,
+} from "@mspace/core";
 import {
   Button,
   CodeBlock,
@@ -90,19 +99,19 @@ export function SessionDetailPage() {
     if (!sessionQuery.data) return "";
 
     const { session } = sessionQuery.data;
+    const agentEngine = agentEngineForSession(session);
     const workspace = normalizeWorkspace(sessionQuery.data.workspace);
     const evidence = listOrEmpty(sessionQuery.data.evidence);
     const lines = [
       t("sessionDetail.summaryHeading", { id: session.id.slice(0, 8) }),
       "",
       `- ${t("sessionDetail.summary.status")}: ${session.status}`,
-      `- ${t("sessionDetail.summary.provider")}: ${session.provider}`,
-      `- ${t("sessionDetail.summary.agentProfile")}: ${session.agentProfile || "codex"}`,
+      `- ${t("sessionDetail.summary.agentEngine")}: ${agentEngineDisplayName(agentEngine)}`,
       `- ${t("sessionDetail.summary.agentStatus")}: ${session.agentStatus || t("sessionDetail.unknown")}`,
       `- ${t("sessionDetail.summary.cleanupStatus")}: ${session.cleanupStatus || t("sessionDetail.retained")}`,
       `- ${t("sessionDetail.summary.cleanedAt")}: ${session.cleanedAt || t("sessionDetail.notCleaned")}`,
-      `- ${t("sessionDetail.summary.codexThread")}: ${session.codexThreadId || t("sessionDetail.notStarted")}`,
-      `- ${t("sessionDetail.summary.codexTurn")}: ${session.codexTurnId || t("sessionDetail.notStarted")}`,
+      `- ${t("sessionDetail.summary.engineSession")}: ${engineSessionRef(session) || t("sessionDetail.notStarted")}`,
+      `- ${t("sessionDetail.summary.engineRun")}: ${engineRunRef(session) || t("sessionDetail.notStarted")}`,
       `- ${t("sessionDetail.summary.branch")}: ${workspace.branch || session.branch || t("sessionDetail.unknown")}`,
       `- ${t("sessionDetail.summary.workspace")}: ${session.workdir || t("sessionDetail.notReported")}`,
       `- ${t("sessionDetail.summary.baseRef")}: ${workspace.comparison.baseRef || t("sessionDetail.unknown")}`,
@@ -163,6 +172,7 @@ export function SessionDetailPage() {
   }
 
   const { session, issue, project } = sessionQuery.data;
+  const agentEngine = agentEngineForSession(session);
   const repositoryLabel = projectRepositoryLabel(project);
   const projectName = project?.name || t("sessionDetail.noProject");
   const workspace = normalizeWorkspace(sessionQuery.data.workspace);
@@ -208,8 +218,7 @@ export function SessionDetailPage() {
         <div className="flex flex-col gap-6">
           <Panel title={t("sessionDetail.sessionMetadata")} aside={<StatusBadge value={session.status} />}>
             <div className="grid gap-3">
-              <DataBlock label={t("sessionDetail.summary.provider")} icon={SquareTerminal}>{session.provider}</DataBlock>
-              <DataBlock label={t("sessionDetail.summary.agentProfile")} icon={SquareTerminal}>{session.agentProfile || "codex"}</DataBlock>
+              <DataBlock label={t("sessionDetail.summary.agentEngine")} icon={SquareTerminal}>{agentEngineDisplayName(agentEngine)}</DataBlock>
               <DataBlock label={t("sessionDetail.runtimeMode")} icon={HardDrive}>{session.runtimeMode}</DataBlock>
               <DataBlock label={t("sessionDetail.summary.agentStatus")} icon={SquareTerminal}>{session.agentStatus || t("sessionDetail.notReportedYet")}</DataBlock>
               <DataBlock label={t("sessionDetail.summary.cleanupStatus")} icon={Files}>
@@ -218,9 +227,9 @@ export function SessionDetailPage() {
                 ) : t("sessionDetail.retained")}
               </DataBlock>
               <DataBlock label={t("sessionDetail.sessionBranch")} icon={GitBranch}>{session.branch}</DataBlock>
-              <DataBlock label={t("sessionDetail.agentInstructions")} icon={SquareTerminal}>{session.command || t("sessionDetail.defaultAgentInstructions")}</DataBlock>
-              <DataBlock label={t("sessionDetail.codexThread")} icon={SquareTerminal}>{session.codexThreadId || t("sessionDetail.notStartedYet")}</DataBlock>
-              <DataBlock label={t("sessionDetail.codexTurn")} icon={SquareTerminal}>{session.codexTurnId || t("sessionDetail.notStartedYet")}</DataBlock>
+              <DataBlock label={t("sessionDetail.agentRequest")} icon={SquareTerminal}>{session.command || t("sessionDetail.defaultAgentRequest")}</DataBlock>
+              <DataBlock label={t("sessionDetail.engineSession")} icon={SquareTerminal}>{engineSessionRef(session) || t("sessionDetail.notStartedYet")}</DataBlock>
+              <DataBlock label={t("sessionDetail.engineRun")} icon={SquareTerminal}>{engineRunRef(session) || t("sessionDetail.notStartedYet")}</DataBlock>
               <DataBlock label={t("sessionDetail.sessionWorkspace")} icon={Files}>{session.workdir || t("sessionDetail.notReportedYet")}</DataBlock>
               <DataBlock label={t("sessionDetail.artifactDirectory")} icon={Files}>{session.artifactDir || t("sessionDetail.notReportedYet")}</DataBlock>
               <DataBlock label={t("sessionDetail.sourceRepository")} icon={Files}>{repositoryLabel || t("sessionDetail.notConfigured")}</DataBlock>

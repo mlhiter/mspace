@@ -48,7 +48,6 @@ type MemoryStore struct {
 	workspaceSkills      map[string]WorkspaceSkill
 	skillRevisions       map[string]WorkspaceSkillRevision
 	builtinSkillSettings map[string]WorkspaceBuiltinSkillSetting
-	agentProfiles        map[string]AgentProfile
 	clusters             map[string]Cluster
 	environments         map[string]Environment
 	environmentSSHAuth   map[string]virtualMachineStoredSSHAuth
@@ -138,7 +137,6 @@ func NewMemoryStore() *MemoryStore {
 		workspaceSkills:      map[string]WorkspaceSkill{},
 		skillRevisions:       map[string]WorkspaceSkillRevision{},
 		builtinSkillSettings: map[string]WorkspaceBuiltinSkillSetting{},
-		agentProfiles:        map[string]AgentProfile{},
 		clusters:             map[string]Cluster{},
 		environments:         map[string]Environment{},
 		environmentSSHAuth:   map[string]virtualMachineStoredSSHAuth{},
@@ -1751,79 +1749,6 @@ func (s *MemoryStore) nextWorkspaceSkillCopySlugLocked(workspaceID, base string)
 	}
 }
 
-func (s *MemoryStore) ListAgentProfiles(_ Context, userID, workspaceID string) ([]AgentProfile, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	workspaceID = strings.TrimSpace(workspaceID)
-	if !s.isWorkspaceMember(workspaceID, userID) {
-		return nil, ErrNotFound
-	}
-	s.seedDefaultAgentProfilesLocked(workspaceID)
-	profiles := []AgentProfile{}
-	for _, profile := range s.agentProfiles {
-		if strings.HasPrefix(profile.ID, workspaceID+":") {
-			item := profile
-			item.ID = strings.TrimPrefix(item.ID, workspaceID+":")
-			profiles = append(profiles, item)
-		}
-	}
-	sort.Slice(profiles, func(i, j int) bool {
-		if profiles[i].SortOrder == profiles[j].SortOrder {
-			return profiles[i].Name < profiles[j].Name
-		}
-		return profiles[i].SortOrder < profiles[j].SortOrder
-	})
-	return profiles, nil
-}
-
-func (s *MemoryStore) CreateAgentProfile(_ Context, userID, workspaceID string, input AgentProfileInput) (AgentProfile, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	workspaceID = strings.TrimSpace(workspaceID)
-	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
-		return AgentProfile{}, ErrForbidden
-	}
-	profile, err := normalizeAgentProfileInput(AgentProfile{}, input, false)
-	if err != nil {
-		return AgentProfile{}, err
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	profile.CreatedAt = now
-	profile.UpdatedAt = now
-	key := workspaceID + ":" + profile.ID
-	if _, ok := s.agentProfiles[key]; ok {
-		return AgentProfile{}, errors.New("agent profile already exists")
-	}
-	stored := profile
-	stored.ID = key
-	s.agentProfiles[key] = stored
-	return profile, nil
-}
-
-func (s *MemoryStore) UpdateAgentProfile(_ Context, userID, workspaceID, agentID string, input AgentProfileInput) (AgentProfile, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	workspaceID = strings.TrimSpace(workspaceID)
-	if !s.hasWorkspaceRole(workspaceID, userID, "owner", "admin") {
-		return AgentProfile{}, ErrForbidden
-	}
-	s.seedDefaultAgentProfilesLocked(workspaceID)
-	existing, key, ok := s.agentProfileLocked(workspaceID, agentID)
-	if !ok {
-		return AgentProfile{}, ErrNotFound
-	}
-	updated, err := normalizeAgentProfileInput(existing, input, true)
-	if err != nil {
-		return AgentProfile{}, err
-	}
-	updated.CreatedAt = existing.CreatedAt
-	updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	stored := updated
-	stored.ID = key
-	s.agentProfiles[key] = stored
-	return updated, nil
-}
-
 func (s *MemoryStore) ListClusters(_ Context, userID, workspaceID string) ([]Cluster, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -3180,7 +3105,7 @@ func (s *MemoryStore) StartAdHocWorkspaceTestRun(_ Context, user User, workspace
 		Environment:     normalized.Environment,
 		EnvironmentID:   normalized.EnvironmentID,
 		EnvironmentKind: normalized.EnvironmentKind,
-		AgentProfile:    normalized.AgentProfile,
+		AgentEngine:     normalized.AgentEngine,
 		RuntimeMode:     normalized.RuntimeMode,
 		BatchSize:       normalized.BatchSize,
 		ResultLocale:    normalized.ResultLocale,
@@ -3439,7 +3364,10 @@ func (s *MemoryStore) RetryWorkspaceTestRun(_ Context, user User, workspaceID, r
 	if err != nil {
 		return TestRunDetail{}, err
 	}
-	normalized := normalizeRetryTestRunInput(input)
+	normalized, err := normalizeRetryTestRunInput(input)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
 	if normalized.RuntimeMode == "" {
 		workspace, ok := s.workspaceLocked(run.WorkspaceID)
 		if !ok {
@@ -3482,7 +3410,7 @@ func (s *MemoryStore) RetryWorkspaceTestRun(_ Context, user User, workspaceID, r
 	run.ResultLocale = normalized.ResultLocale
 	run.UpdatedAt = now
 	s.testRuns[run.ID] = run
-	createRunInput := CreateTestRunInput{AgentProfile: normalized.AgentProfile, RuntimeMode: normalized.RuntimeMode, BatchSize: defaultTestRunBatchSize, ResultLocale: normalized.ResultLocale}
+	createRunInput := CreateTestRunInput{AgentEngine: normalized.AgentEngine, RuntimeMode: normalized.RuntimeMode, BatchSize: defaultTestRunBatchSize, ResultLocale: normalized.ResultLocale}
 	if err := s.startTestRunExecutionSessionsLocked(user.ID, run.ID, createRunInput); err != nil {
 		return TestRunDetail{}, err
 	}
@@ -3837,12 +3765,12 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 	if !ok || project.WorkspaceID != workspaceID {
 		return AgentSession{}, ErrNotFound
 	}
-	normalized := normalizeCreateAgentSessionInput(input)
+	normalized, err := normalizeCreateAgentSessionInput(input)
+	if err != nil {
+		return AgentSession{}, err
+	}
 	if normalized.Command == "" {
 		return AgentSession{}, errors.New("command is required")
-	}
-	if normalized.Provider != "codex" {
-		return AgentSession{}, errors.New("provider must be codex")
 	}
 	if err := resolveAgentSessionSkillBundles(&normalized, func(slug string) (AgentSessionSkillReference, RuntimeSkillBundle, error) {
 		return s.resolveAgentSessionSkillBundleLocked(workspaceID, slug)
@@ -3863,7 +3791,7 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 		return AgentSession{}, err
 	}
 	if !s.hasActiveWorkerWithCapabilitiesLocked(workspaceID, normalized.RuntimeMode, requiredCapabilities, time.Now().UTC()) {
-		return AgentSession{}, ErrNoActiveCodexWorker
+		return AgentSession{}, ErrNoActiveAgentWorker
 	}
 	sessionID, err := newAgentSessionID()
 	if err != nil {
@@ -3994,9 +3922,12 @@ func (s *MemoryStore) queueIssueTestDeployLocked(userID, workspaceID, issueID st
 	}
 	environment.SourceSessionID = sourceNode.SessionID
 	environment.SourceCommitSHA = sourceNode.CommitSHA
+	engine, err := requireCodexWorkflowAgentEngine(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		return TestEnvironmentSessionResult{}, err
+	}
 	session, err := s.createAgentSessionLocked(userID, workspaceID, issueID, CreateAgentSessionInput{
-		Provider:        "codex",
-		AgentProfile:    firstNonEmpty(input.AgentProfile, "codex"),
+		AgentEngine:     engine,
 		Command:         buildIssueTestDeployPrompt(detail, environment, sourceNode, automated),
 		SourceSessionID: sourceNode.SessionID,
 		SourceCommitSHA: sourceNode.CommitSHA,
@@ -4027,10 +3958,13 @@ func (s *MemoryStore) RequestIssueTestEnvironmentCleanup(_ Context, userID, work
 	environment := *detail.TestEnvironment
 	environment.NamespaceStatus = "cleanup_requested"
 	environment.CleanupStatus = "cleanup_requested"
+	engine, err := requireCodexWorkflowAgentEngine(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		return TestEnvironmentSessionResult{}, err
+	}
 	session, err := s.createAgentSessionLocked(userID, workspaceID, issueID, CreateAgentSessionInput{
-		Provider:     "codex",
-		AgentProfile: firstNonEmpty(input.AgentProfile, "codex"),
-		Command:      buildIssueTestCleanupPrompt(detail, environment),
+		AgentEngine: engine,
+		Command:     buildIssueTestCleanupPrompt(detail, environment),
 	})
 	if err != nil {
 		return TestEnvironmentSessionResult{}, err
@@ -4257,35 +4191,6 @@ func (s *MemoryStore) workspaceSettingsLocked(workspaceID string) WorkspaceSetti
 		s.workspaceSettings[workspaceID] = settings
 	}
 	return settings
-}
-
-func (s *MemoryStore) seedDefaultAgentProfilesLocked(workspaceID string) {
-	for _, profile := range defaultAgentProfiles(time.Now().UTC()) {
-		key := workspaceID + ":" + profile.ID
-		if _, ok := s.agentProfiles[key]; ok {
-			continue
-		}
-		stored := profile
-		stored.ID = key
-		s.agentProfiles[key] = stored
-	}
-}
-
-func (s *MemoryStore) agentProfileLocked(workspaceID, value string) (AgentProfile, string, bool) {
-	keyValue := agentProfileLookupKey(value)
-	mention := "@" + keyValue
-	for key, profile := range s.agentProfiles {
-		if !strings.HasPrefix(key, workspaceID+":") {
-			continue
-		}
-		id := strings.TrimPrefix(key, workspaceID+":")
-		if strings.EqualFold(id, keyValue) || strings.EqualFold(profile.Mention, mention) {
-			item := profile
-			item.ID = id
-			return item, key, true
-		}
-	}
-	return AgentProfile{}, "", false
 }
 
 func (s *MemoryStore) testEnvironmentPointerLocked(issueID string) *IssueTestEnvironment {
@@ -6085,8 +5990,7 @@ func (s *MemoryStore) startTestRunExecutionSessionsLocked(userID, runID string, 
 			}
 			s.issues[child.ID] = child
 			session, err := s.createAgentSessionLocked(userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
-				Provider:             "codex",
-				AgentProfile:         input.AgentProfile,
+				AgentEngine:          input.AgentEngine,
 				RuntimeMode:          input.RuntimeMode,
 				Command:              body,
 				Automation:           testRunExecutionAutomation,
@@ -6148,8 +6052,7 @@ func (s *MemoryStore) startTestRunSetupSessionLocked(userID, runID string, input
 	}
 	s.issues[child.ID] = child
 	session, err := s.createAgentSessionLocked(userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
-		Provider:         "codex",
-		AgentProfile:     input.AgentProfile,
+		AgentEngine:      input.AgentEngine,
 		RuntimeMode:      input.RuntimeMode,
 		Command:          body,
 		Automation:       testRunSetupAutomation,

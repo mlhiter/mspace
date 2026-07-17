@@ -24,9 +24,9 @@ The working thesis is:
 
 > mspace does not make agents better at writing code. It makes agent output easier for a team to verify, inherit, and finish.
 
-## Why This Is Not Just a Codex Wrapper
+## Why This Is Not Just an Agent Wrapper
 
-Codex can already handle much of the raw work:
+Codex, Claude Code, Pi, and other coding agents can already handle much of the raw work:
 
 - inspect a repository;
 - edit files;
@@ -36,7 +36,7 @@ Codex can already handle much of the raw work:
 - deploy to a test Environment when the user provides access;
 - summarize what changed.
 
-That makes a thin wrapper around Codex a weak product. A thin wrapper would add little more than a different UI for a workflow that already works from the terminal.
+That makes a thin wrapper around any one Agent a weak product. It would add little more than a different UI for a workflow that already works from the terminal.
 
 mspace earns its place when it owns the state that sits around the agent run:
 
@@ -55,7 +55,7 @@ This state is difficult to reconstruct from terminal history, chat logs, and ad 
 
 mspace should be positioned as an Environment-backed issue workspace for coding agents, with Kubernetes as the default validation target and VM targets for higher-level deployment tests.
 
-It should not be framed as a generic agent platform, a generic task manager, a Sealos API wrapper, or a replacement for Codex. Its strongest wedge is narrower:
+It should not be framed as a generic agent platform, a generic task manager, a Sealos API wrapper, or a replacement for the underlying coding engines. Its strongest wedge is narrower:
 
 ```text
 coding agent

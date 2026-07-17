@@ -112,7 +112,7 @@ Set:
 - `codexHome.existingSecret=mspace-codex-home`
 - optional storage classes
 
-With `bootstrap.teamWorkspace.enabled=true`, Helm creates one `msw_...` runtime token in the release Secret, the server registers that token against the default team workspace during bootstrap, and the fixed worker StatefulSet uses the same token to register back to the server. This keeps the server Codex-free: Helm only passes mspace runtime registration data to the server, while Codex auth/config stays in the worker-mounted `mspace-codex-home` Secret.
+With `bootstrap.teamWorkspace.enabled=true`, Helm creates one `msw_...` runtime token in the release Secret, the server registers that token against the default team workspace during bootstrap, and the fixed Worker StatefulSet receives only that Secret key to register back to the server. The Worker does not import the Server Secret as environment, so database, GitHub App, OAuth, and bootstrap-admin credentials stay out of Agent processes. This keeps the server Codex-free: Helm only passes mspace runtime registration data to the server, while Codex auth/config stays in the Worker-mounted `mspace-codex-home` Secret.
 
 Keep `buildkit.enabled=false` for the first worker registration unless the customer cluster accepts rootless BuildKit's `Unconfined` seccomp profile.
 
@@ -301,5 +301,6 @@ helm -n mspace-system rollback mspace <revision>
 - The default Helm path bootstraps exactly one admin-owned team workspace and fixed worker token for the release. Additional workspaces still need their own external worker install command or explicit runtime token path.
 - The mounted kubeconfig is the current deployment credential boundary.
 - Codex credentials/config are mounted only into the worker. The server image and server Deployment are Codex-free.
+- The Worker receives only its runtime registration key from the release Secret; Agent subprocesses strip inherited Worker-registration and control-plane variables.
 - Server-owned GitHub App installation status is part of the control plane, but token minting, branch publishing, and PR execution are not part of this deployment package yet.
 - The worker must not report container-local `localhost` URLs as user-facing previews.

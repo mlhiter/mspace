@@ -1846,6 +1846,7 @@ export function TestsPage() {
       await workerReadiness.ensureReady();
       return controlPlaneApi.optimizeProjectTestCases(auth.token, workspaceId, effectiveProjectId, {
         caseIds: selectedCaseIds,
+        agentEngine: "codex",
         runtimeMode: workerReadiness.runtimeMode,
       });
     },
@@ -1860,6 +1861,7 @@ export function TestsPage() {
     mutationFn: async () => {
       await workerReadiness.ensureReady();
       return controlPlaneApi.generateProjectTestCases(auth.token, workspaceId, effectiveProjectId, {
+        agentEngine: "codex",
         runtimeMode: workerReadiness.runtimeMode,
       });
     },
@@ -1927,6 +1929,7 @@ export function TestsPage() {
         environment: plan.environment,
         environmentId: plan.environmentId,
         environmentKind: plan.environmentKind,
+        agentEngine: "codex",
         runtimeMode: workerReadiness.runtimeMode,
         resultLocale: language,
       });
@@ -3259,6 +3262,7 @@ export function TestPlanDetailPage() {
         environment: plan.environment,
         environmentId: plan.environmentId,
         environmentKind: plan.environmentKind,
+        agentEngine: "codex",
         runtimeMode: workerReadiness.runtimeMode,
         resultLocale: language,
       });
@@ -3673,6 +3677,7 @@ export function TestRunDetailPage() {
         runQuery.data?.items.map((item) => item.testCase) || [],
       ));
       return controlPlaneApi.retryWorkspaceTestRun(auth.token, workspaceId, runId, {
+        agentEngine: "codex",
         runtimeMode: workerReadiness.runtimeMode,
         resultLocale: language,
       });

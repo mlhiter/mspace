@@ -29,6 +29,7 @@ import {
 	type LucideIcon,
 } from "lucide-react";
 import {
+	agentEngineMention,
 	controlPlaneApi,
 	getControlPlaneBaseUrl,
 	queryKeys,
@@ -1546,7 +1547,7 @@ function runtimeTaskDisplay(task: RuntimeTask, issueTitleFallback = ""): Runtime
 	const issueColumn = issueLabel || translate("workspaceSettings.list.noLinkedIssue");
 	const projectLabel = projectName || (task.projectId ? translate("workspaceSettings.list.projectFallback", { id: shortId(task.projectId) }) : "");
 	const sessionLabel = task.sessionId ? translate("workspaceSettings.list.sessionFallback", { id: shortId(task.sessionId) }) : "";
-	const agentProfile = payloadText(task.payload, ["agentProfile"]);
+	const agentEngine = payloadText(task.payload, ["agentEngine", "provider", "agentProfile"]);
 	const automation = payloadText(task.payload, ["automation"]);
 	const sourceSessionId = payloadText(task.payload, ["sourceSessionId"]);
 
@@ -1560,7 +1561,7 @@ function runtimeTaskDisplay(task: RuntimeTask, issueTitleFallback = ""): Runtime
 
 	if (task.kind === "agent_session") {
 		const titleKey = automation === "auto_test_deploy" ? "workspaceSettings.list.taskAutoDeploy" : "workspaceSettings.list.taskAgentSession";
-		const actor = agentProfile ? `@${agentProfile}` : translate("workspaceSettings.list.agentFallback");
+		const actor = agentEngineMention(agentEngine) || translate("workspaceSettings.list.agentFallback");
 		return {
 			title: translate(titleKey, { actor }),
 			subtitle: compactTaskParts([

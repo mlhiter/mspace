@@ -22,7 +22,7 @@
     <text x="146" y="220" fill="#171512" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700">Desktop workspace</text>
     <text x="110" y="264" fill="#756a5f" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14">Inbox</text>
     <text x="110" y="303" fill="#756a5f" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14">Issues and comments</text>
-    <text x="110" y="342" fill="#756a5f" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14">Agent profiles</text>
+    <text x="110" y="342" fill="#756a5f" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14">Agent engines</text>
     <text x="110" y="381" fill="#756a5f" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14">Project runtime settings</text>
     <rect x="110" y="407" width="176" height="1" fill="#e8e2d8"/>
     <text x="110" y="434" fill="#9a8e82" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13">Electron + React + shadcn/ui</text>

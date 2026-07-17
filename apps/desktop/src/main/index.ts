@@ -22,7 +22,17 @@ import {
   setConfiguredServerBaseUrl,
   stopServer,
 } from "./server-manager";
-import { personalWorkerName, personalWorkerRequiresBrowser, personalWorkerWorkRoot } from "./personal-worker-runtime";
+import {
+  buildAgentExecutableSearchPath,
+  discoverAgentEngineCapabilities,
+  missingAgentEngineExecutables,
+  missingPersonalWorkerCapabilities,
+  personalWorkerName,
+  personalWorkerRequiresBrowser,
+  personalWorkerRequiresCodexAuth,
+  personalWorkerWorkRoot,
+  type PersonalWorkerCapabilities,
+} from "./personal-worker-runtime";
 
 let mainWindow: BrowserWindow | null = null;
 let projectFolderPickerRegistered = false;
@@ -88,12 +98,18 @@ type EnsurePersonalWorkerResult = {
   ok: boolean;
   status: string;
   workerName: string;
+  capabilities?: PersonalWorkerCapabilities;
 };
 
 type PersonalWorkerRuntime = {
-  capabilities: Record<string, boolean>;
+  capabilities: PersonalWorkerCapabilities;
   labels: Record<string, string>;
   env: Record<string, string>;
+};
+
+type PersonalWorkerEngineRuntime = {
+  capabilities: Pick<PersonalWorkerCapabilities, "codex" | "claudeCode" | "pi">;
+  executableSearchPath: string;
 };
 
 type RuntimeRegistrationTokenResult = {
@@ -108,6 +124,41 @@ function runtimeHasRequiredCapabilities(runtime: PersonalWorkerRuntime | null, r
   if (!requiredCapabilities) return true;
   if (!runtime) return false;
   return Object.entries(requiredCapabilities).every(([capability, required]) => required !== true || runtime.capabilities[capability] === true);
+}
+
+function assertPersonalWorkerCapabilities(runtime: PersonalWorkerRuntime, requiredCapabilities: Record<string, unknown> | undefined): void {
+  const missing = missingPersonalWorkerCapabilities(runtime.capabilities, requiredCapabilities);
+  if (missing.length === 0) return;
+  if (missing.every((capability) => capability === "browser" || capability === "chrome_cdp")) {
+    throw new Error("The local personal worker could not prepare the required browser/CDP capability.");
+  }
+  throw new Error(`The local personal worker is missing required capabilities: ${missing.join(", ")}.`);
+}
+
+function discoverPersonalWorkerEngineRuntime(): PersonalWorkerEngineRuntime {
+  const executableSearchPath = buildAgentExecutableSearchPath({
+    env: process.env,
+    homeDir: homedir(),
+    platform: process.platform,
+  });
+  return {
+    capabilities: discoverAgentEngineCapabilities({
+      env: process.env,
+      homeDir: homedir(),
+      platform: process.platform,
+    }),
+    executableSearchPath,
+  };
+}
+
+function assertRequestedAgentExecutables(
+  engineRuntime: PersonalWorkerEngineRuntime,
+  requiredCapabilities: Record<string, unknown> | undefined,
+): void {
+  const missing = missingAgentEngineExecutables(engineRuntime.capabilities, requiredCapabilities);
+  if (missing.length === 0) return;
+  const commands = missing.map(({ capability, command }) => `${capability} (${command})`);
+  throw new Error(`The local personal worker could not find required Agent CLI(s) on PATH: ${commands.join(", ")}.`);
 }
 
 function resolveBrandIconPath(): string | undefined {
@@ -351,10 +402,10 @@ function resolveCodexAuthPath(): string {
   return join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json");
 }
 
-function assertCodexAuthAvailable(): void {
+function assertCodexAuthAvailable(context = "Codex worker"): void {
   const authPath = resolveCodexAuthPath();
   if (!existsSync(authPath)) {
-    throw new Error(`Codex auth was not found at ${authPath}. Run codex login first, or set CODEX_HOME before starting the Docker worker.`);
+    throw new Error(`Codex auth was not found at ${authPath}. Run codex login first, or set CODEX_HOME before starting the ${context}.`);
   }
 }
 
@@ -437,7 +488,7 @@ function refreshPersonalWorkerAfterBrowserLoss(reason: string): void {
 }
 
 function setPersonalWorkerBrowserCapability(
-  capabilities: Record<string, boolean>,
+  capabilities: PersonalWorkerCapabilities,
   labels: Record<string, string>,
   env: Record<string, string>,
   cdpUrl: string,
@@ -498,7 +549,7 @@ app.whenReady().then(() => {
 }
 
 async function startElectronPersonalWorkerBrowserRuntime(
-  capabilities: Record<string, boolean>,
+  capabilities: PersonalWorkerCapabilities,
   labels: Record<string, string>,
   env: Record<string, string>,
 ): Promise<boolean> {
@@ -534,17 +585,20 @@ async function startElectronPersonalWorkerBrowserRuntime(
   return false;
 }
 
-async function preparePersonalWorkerRuntime(requiredCapabilities?: Record<string, unknown>): Promise<PersonalWorkerRuntime> {
-  const capabilities: Record<string, boolean> = {
+async function preparePersonalWorkerRuntime(
+  requiredCapabilities?: Record<string, unknown>,
+  engineRuntime = discoverPersonalWorkerEngineRuntime(),
+): Promise<PersonalWorkerRuntime> {
+  const capabilities: PersonalWorkerCapabilities = {
     protocolSmoke: true,
-    codex: true,
+    ...engineRuntime.capabilities,
     dryRun: false,
   };
   const labels: Record<string, string> = {
     provider: "desktop-local",
     environment: "host",
   };
-  const env: Record<string, string> = {};
+  const env: Record<string, string> = engineRuntime.executableSearchPath ? { PATH: engineRuntime.executableSearchPath } : {};
 
   if (!personalWorkerRequiresBrowser(requiredCapabilities)) {
     return { capabilities, labels, env };
@@ -825,7 +879,6 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
   if (process.env.MSPACE_AUTO_PERSONAL_WORKER === "0") {
     return { ok: false, status: "disabled", workerName: "" };
   }
-  assertCodexAuthAvailable();
   const workspaceId = String(input.workspaceId || "").trim();
   if (!workspaceId) {
     throw new Error("A signed-in personal workspace is required to start a local worker.");
@@ -837,6 +890,11 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
     serverUrl,
     credentialServerUrl: String(input.credentialServerUrl || serverUrl).trim().replace(/\/+$/, ""),
   };
+  const engineRuntime = discoverPersonalWorkerEngineRuntime();
+  assertRequestedAgentExecutables(engineRuntime, credentialInput.requiredCapabilities);
+  if (personalWorkerRequiresCodexAuth(credentialInput.requiredCapabilities)) {
+    assertCodexAuthAvailable("local personal worker");
+  }
   if (
     personalWorkerProcess &&
     personalWorkerWorkspaceId === workspaceId &&
@@ -846,7 +904,12 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
     if (personalWorkerCredential) {
       schedulePersonalWorkerCredentialRenewal(credentialInput, personalWorkerCredential);
     }
-    return { ok: true, status: "running", workerName: personalWorkerName(workspaceId, credentialInput.requiredCapabilities) };
+    return {
+      ok: true,
+      status: "running",
+      workerName: personalWorkerName(workspaceId, credentialInput.requiredCapabilities),
+      capabilities: personalWorkerRuntime?.capabilities,
+    };
   }
   if (
     !personalWorkerProcess &&
@@ -864,10 +927,8 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
   let token: RuntimeRegistrationTokenResult | null = null;
   let tokenPath = "";
   if (upgradingCurrentWorker) {
-    runtime = await preparePersonalWorkerRuntime(credentialInput.requiredCapabilities);
-    if (!runtimeHasRequiredCapabilities(runtime, credentialInput.requiredCapabilities)) {
-      throw new Error("The local personal worker could not prepare the required browser/CDP capability.");
-    }
+    runtime = await preparePersonalWorkerRuntime(credentialInput.requiredCapabilities, engineRuntime);
+    assertPersonalWorkerCapabilities(runtime, credentialInput.requiredCapabilities);
     const browserCdpUrl = String(runtime.env.MSPACE_CHROME_CDP_URL || "").trim();
     if (personalWorkerRequiresBrowser(credentialInput.requiredCapabilities) && !(await isChromeCdpReachable(browserCdpUrl))) {
       stopPersonalWorkerBrowserRuntime();
@@ -879,15 +940,13 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
     if (personalWorkerProcess || (personalWorkerWorkspaceId && personalWorkerWorkspaceId !== workspaceId)) {
       await stopPersonalWorker();
     }
-    runtime = await preparePersonalWorkerRuntime(credentialInput.requiredCapabilities);
+    runtime = await preparePersonalWorkerRuntime(credentialInput.requiredCapabilities, engineRuntime);
     if (personalWorkerWorkspaceId === workspaceId && personalWorkerCredential && existsSync(resolvePersonalWorkerTokenPath(workspaceId))) {
       token = personalWorkerCredential;
       tokenPath = resolvePersonalWorkerTokenPath(workspaceId);
     }
   }
-  if (!runtimeHasRequiredCapabilities(runtime, credentialInput.requiredCapabilities)) {
-    throw new Error("The local personal worker could not prepare the required browser/CDP capability.");
-  }
+  assertPersonalWorkerCapabilities(runtime, credentialInput.requiredCapabilities);
   personalWorkerStopping = false;
   personalWorkerWorkspaceId = workspaceId;
   personalWorkerCredentialInput = credentialInput;
@@ -915,7 +974,7 @@ async function ensurePersonalWorkerUnlocked(input: EnsurePersonalWorkerInput): P
     throw error;
   }
   schedulePersonalWorkerCredentialRenewal(credentialInput, token);
-  return { ok: true, status: "starting", workerName };
+  return { ok: true, status: "starting", workerName, capabilities: runtime.capabilities };
 }
 
 async function ensurePersonalWorker(input: EnsurePersonalWorkerInput): Promise<EnsurePersonalWorkerResult> {

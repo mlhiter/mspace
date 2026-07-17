@@ -209,6 +209,10 @@ export interface ImportTestCasesPreview {
 export interface OptimizeTestCasesInput {
   caseIds: string[];
   prompt?: string;
+  agentEngine?: AgentEngine | string;
+  /** @deprecated Read-only compatibility alias for older clients. */
+  provider?: string;
+  /** @deprecated Read-only compatibility alias for older clients. */
   agentProfile?: string;
   runtimeMode?: string;
 }
@@ -216,6 +220,10 @@ export interface OptimizeTestCasesInput {
 export interface GenerateTestCasesInput {
   prompt?: string;
   area?: string;
+  agentEngine?: AgentEngine | string;
+  /** @deprecated Read-only compatibility alias for older clients. */
+  provider?: string;
+  /** @deprecated Read-only compatibility alias for older clients. */
   agentProfile?: string;
   runtimeMode?: string;
 }
@@ -388,6 +396,10 @@ export interface CreateTestRunInput {
   environment?: string;
   environmentId?: string;
   environmentKind?: EnvironmentKind | string;
+  agentEngine?: AgentEngine | string;
+  /** @deprecated Read-only compatibility alias for older clients. */
+  provider?: string;
+  /** @deprecated Read-only compatibility alias for older clients. */
   agentProfile?: string;
   runtimeMode?: string;
   batchSize?: number;
@@ -402,6 +414,10 @@ export interface CreateAdHocTestRunInput {
   environment?: string;
   environmentId?: string;
   environmentKind?: EnvironmentKind | string;
+  agentEngine?: AgentEngine | string;
+  /** @deprecated Read-only compatibility alias for older clients. */
+  provider?: string;
+  /** @deprecated Read-only compatibility alias for older clients. */
   agentProfile?: string;
   runtimeMode?: string;
   batchSize?: number;
@@ -410,6 +426,10 @@ export interface CreateAdHocTestRunInput {
 
 export interface RetryTestRunInput {
   itemIds?: string[];
+  agentEngine?: AgentEngine | string;
+  /** @deprecated Read-only compatibility alias for older clients. */
+  provider?: string;
+  /** @deprecated Read-only compatibility alias for older clients. */
   agentProfile?: string;
   runtimeMode?: string;
   resultLocale?: string;
@@ -803,18 +823,15 @@ export interface IssueLabelDefinition {
   updatedAt: string;
 }
 
-export interface AgentProfile {
-  id: string;
+export type AgentEngine = "codex" | "claude_code" | "pi";
+
+export type AgentEngineCapability = "codex" | "claudeCode" | "pi";
+
+export interface AgentEngineCatalogItem {
+  id: AgentEngine;
   name: string;
   mention: string;
-  provider: string;
-  description: string;
-  instructions: string;
-  enabled: boolean;
-  builtIn: boolean;
-  sortOrder: number;
-  createdAt: string;
-  updatedAt: string;
+  capability: AgentEngineCapability;
 }
 
 export interface SkillCatalogItem {
@@ -880,16 +897,23 @@ export type AgentSessionSkillReference =
 export interface AgentSession {
   id: string;
   issueId: string;
-  provider: string;
-  agentProfile: string;
+  agentEngine?: AgentEngine | string;
+  /** @deprecated Historical response alias. */
+  provider?: string;
+  /** @deprecated Historical response alias. */
+  agentProfile?: string;
   runtimeMode: string;
   runtimeTaskId: string;
   command: string;
   status: string;
   branch: string;
   workdir: string;
-  codexThreadId: string;
-  codexTurnId: string;
+  engineSessionRef?: string;
+  engineRunRef?: string;
+  /** @deprecated Historical Codex response alias. */
+  codexThreadId?: string;
+  /** @deprecated Historical Codex response alias. */
+  codexTurnId?: string;
   agentStatus: string;
   artifactDir: string;
   sourceSessionId: string;
@@ -1303,7 +1327,10 @@ export interface UpdateCommentInput {
 }
 
 export interface CreateAgentSessionInput {
-  provider: string;
+  agentEngine: AgentEngine | string;
+  /** @deprecated Compatibility alias for older clients. */
+  provider?: string;
+  /** @deprecated Compatibility alias for older clients. */
   agentProfile?: string;
   runtimeMode?: "personal" | "team" | string;
   command?: string;
@@ -1317,15 +1344,6 @@ export interface CreateAgentSessionInput {
 export interface UpdateIssueLabelsInput {
   labels?: string[];
   labelKeys?: string[];
-}
-
-export interface AgentProfileInput {
-  name: string;
-  mention: string;
-  provider: string;
-  description: string;
-  instructions: string;
-  enabled: boolean;
 }
 
 export interface ClusterInput {
@@ -1382,6 +1400,10 @@ export interface KubeconfigImportResult {
 }
 
 export interface StartTestDeployInput {
+  agentEngine?: AgentEngine | string;
+  /** @deprecated Compatibility alias for older clients. */
+  provider?: string;
+  /** @deprecated Compatibility alias for older clients. */
   agentProfile?: string;
   clusterId?: string;
   environmentId?: string;
@@ -1586,6 +1608,7 @@ export interface MspaceDesktopAPI {
     ok: boolean;
     status: string;
     workerName: string;
+    capabilities?: Partial<Record<AgentEngineCapability | "browser" | "chrome_cdp", boolean>>;
   }>;
   stopPersonalWorker?: () => Promise<{
     ok: boolean;

@@ -1,6 +1,6 @@
 # Reference Notes
 
-> Status: public reference scan and implementation notes, updated 2026-05-20
+> Status: public reference scan and implementation notes, updated 2026-07-17
 
 ## Multica
 
@@ -16,20 +16,24 @@ What to borrow:
 - agents report progress, blockers, and results;
 - dashboard shows agent lifecycle rather than hiding work in terminals;
 - provider-neutral stance across Claude Code, Codex, Cursor, Kimi, OpenCode, and similar tools.
+- a runtime adapter boundary that normalizes provider events/results while the task system remains provider-neutral;
+- explicit runtime capability discovery instead of assuming every installed daemon can execute every Agent.
 
 What not to copy directly:
 
 - local daemon as the main runtime model;
 - broad managed-agent platform positioning;
 - generic skill marketplace compounding as the main product wedge.
+- workspace-defined executable/runtime profiles, provider credentials in the control plane, and a duplicated task/session model per provider;
+- treating process exit code zero as success when the Agent protocol did not emit terminal evidence.
 
 mspace interpretation:
 
-Multica proves the interaction model. mspace should borrow the teammate/task/status feel, then anchor execution in Kubernetes namespaces.
+Multica proves the interaction model and the value of adapter-based execution. mspace keeps a narrower model: Codex, Claude Code, and Pi are fixed execution Agents; Skills are versioned instruction bundles; mspace system Workflows are separate product automations; Workers execute; Environments are operated targets. The control plane routes exact capabilities but never owns Agent CLIs or credentials.
 
 Current implementation note:
 
-The current codebase is independent. It borrows the Inbox, Issue, comments, sessions, and agent-as-collaborator shape without forking Multica or depending on Multica runtime code.
+The current codebase is independent. It borrows the Inbox, Issue, comments, Sessions, agent-as-collaborator shape, and engine-adapter boundary without forking Multica or depending on its runtime code. Unlike Multica's broader profile/runtime configuration, mspace intentionally removed persisted Agent Profiles and exposes only `@codex`, `@claude`, and `@pi`.
 
 ## Optio
 

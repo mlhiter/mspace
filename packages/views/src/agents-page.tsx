@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, CheckCircle2, Circle, Clock3, Copy, Eye, FileText, MoreHorizontal, Pencil, Plus, Power, Save, Settings2, SquareTerminal, Trash2, X } from "lucide-react";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bot, CheckCircle2, Circle, Copy, Eye, FileText, MoreHorizontal, Pencil, Plus, Power, Save, Trash2, X } from "lucide-react";
 import {
+  agentRequiredCapabilities,
   controlPlaneApi,
+  isFixedAgentEngineCatalogItem,
   queryKeys,
-  type AgentProfile,
-  type AgentProfileInput,
+  type AgentEngineCatalogItem,
   type RuntimeSkillFile,
   type SkillCatalogItem,
   type SkillDetail,
@@ -23,29 +24,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Field,
-  InlineMeta,
   Input,
   Notice,
   PageFrame,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   Textarea,
   cn,
 } from "@mspace/ui";
-import { RelativeTime } from "./time";
+import { codexAvatarDataUrl } from "./agent-avatar";
 import { useMspaceAuth } from "./auth-context";
-
-const emptyAgentForm: AgentProfileInput = {
-  name: "",
-  mention: "",
-  provider: "codex",
-  description: "",
-  instructions: "",
-  enabled: true,
-};
 
 type AgentsTab = "agents" | "skills";
 
@@ -66,29 +52,6 @@ const emptySkillForm: SkillForm = {
   skillMd: "---\nname: \ndescription: \n---\n# Skill\n",
   files: [],
 };
-
-function agentToForm(agent: AgentProfile): AgentProfileInput {
-  return {
-    name: agent.name,
-    mention: agent.mention,
-    provider: agent.provider,
-    description: agent.description,
-    instructions: agent.instructions,
-    enabled: agent.enabled,
-  };
-}
-
-function normalizeAgentForm(form: AgentProfileInput): AgentProfileInput {
-  const mention = form.mention.trim();
-  return {
-    ...form,
-    name: form.name.trim(),
-    mention: mention && !mention.startsWith("@") ? `@${mention}` : mention,
-    provider: form.provider || "codex",
-    description: form.description.trim(),
-    instructions: form.instructions.trim(),
-  };
-}
 
 function skillIdentifier(skill: SkillCatalogItem) {
   return skill.builtIn ? skill.slug : skill.id || skill.slug;
@@ -128,6 +91,7 @@ export function AgentsPage() {
   const workspaceId = auth.workspace?.id || "";
   const workspaceReady = auth.status === "signed-in" && Boolean(auth.token && workspaceId);
   const canManageWorkspace = auth.workspace?.role === "owner" || auth.workspace?.role === "admin";
+  const runtimeMode = auth.workspace?.kind === "team" ? "team" : "personal";
   const agentsQueryKey = queryKeys.agents(workspaceId, auth.token);
   const skillsQueryKey = queryKeys.skills(workspaceId, auth.token);
   const agentsQuery = useQuery({
@@ -140,38 +104,23 @@ export function AgentsPage() {
     queryFn: () => controlPlaneApi.listSkills(auth.token, workspaceId),
     enabled: workspaceReady,
   });
-  const agents = useMemo(() => agentsQuery.data || [], [agentsQuery.data]);
+  const agents = useMemo(() => (agentsQuery.data || []).filter(isFixedAgentEngineCatalogItem), [agentsQuery.data]);
   const skills = useMemo(() => skillsQuery.data || [], [skillsQuery.data]);
-  const enabledCount = agents.filter((agent) => agent.enabled).length;
+  const agentAvailability = useQueries({
+    queries: agents.map((agent) => {
+      const input = { runtimeMode, requiredCapabilities: agentRequiredCapabilities(agent) };
+      return {
+        queryKey: queryKeys.runtimeAvailability(workspaceId, auth.token, input),
+        queryFn: () => controlPlaneApi.getRuntimeAvailability(auth.token, workspaceId, input),
+        enabled: workspaceReady,
+        refetchInterval: 5_000,
+      };
+    }),
+  });
   const [activeTab, setActiveTab] = useState<AgentsTab>("agents");
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createForm, setCreateForm] = useState<AgentProfileInput>(emptyAgentForm);
-  const [settingsAgent, setSettingsAgent] = useState<AgentProfile | null>(null);
-  const [settingsForm, setSettingsForm] = useState<AgentProfileInput>(emptyAgentForm);
   const [skillModalMode, setSkillModalMode] = useState<"create" | "edit" | "view" | null>(null);
   const [editingSkill, setEditingSkill] = useState<SkillCatalogItem | null>(null);
   const [skillForm, setSkillForm] = useState<SkillForm>(emptySkillForm);
-
-  const createAgent = useMutation({
-    mutationFn: (input: AgentProfileInput) => controlPlaneApi.createAgent(auth.token, workspaceId, input),
-    onSuccess: async () => {
-      setCreateForm(emptyAgentForm);
-      setCreateOpen(false);
-      await queryClient.invalidateQueries({ queryKey: agentsQueryKey });
-    },
-  });
-
-  const updateAgent = useMutation({
-    mutationFn: (input: AgentProfileInput) => {
-      if (!settingsAgent) throw new Error("No agent selected.");
-      return controlPlaneApi.updateAgent(auth.token, workspaceId, settingsAgent.id, input);
-    },
-    onSuccess: async () => {
-      setSettingsAgent(null);
-      setSettingsForm(emptyAgentForm);
-      await queryClient.invalidateQueries({ queryKey: agentsQueryKey });
-    },
-  });
 
   const loadSkill = useMutation({
     mutationFn: (skill: SkillCatalogItem) => controlPlaneApi.getSkill(auth.token, workspaceId, skillIdentifier(skill)),
@@ -226,28 +175,6 @@ export function AgentsPage() {
     },
   });
 
-  function openCreateModal() {
-    setCreateForm(emptyAgentForm);
-    createAgent.reset();
-    setCreateOpen(true);
-  }
-
-  function openSettings(agent: AgentProfile) {
-    setSettingsAgent(agent);
-    setSettingsForm(agentToForm(agent));
-    updateAgent.reset();
-  }
-
-  function submitCreate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    createAgent.mutate(normalizeAgentForm(createForm));
-  }
-
-  function submitSettings(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    updateAgent.mutate(normalizeAgentForm(settingsForm));
-  }
-
   function openCreateSkillModal() {
     if (!canManageWorkspace) return;
     setEditingSkill(null);
@@ -280,20 +207,14 @@ export function AgentsPage() {
     updateSkill.reset();
   }
 
-  const tabAction =
-    activeTab === "skills" ? (
+  const tabAction = activeTab === "skills" ? (
       canManageWorkspace ? (
         <Button variant="secondary" onClick={openCreateSkillModal}>
           <Plus data-icon />
           {t("agents.skills.newSkill")}
         </Button>
       ) : null
-    ) : (
-      <Button variant="secondary" onClick={openCreateModal}>
-        <Plus data-icon />
-        {t("agents.newAgent")}
-      </Button>
-    );
+    ) : null;
 
   return (
     <PageFrame
@@ -310,10 +231,9 @@ export function AgentsPage() {
         {activeTab === "agents" ? (
           <AgentsPanel
             agents={agents}
-            enabledCount={enabledCount}
             isPending={agentsQuery.isPending}
-            onCreate={openCreateModal}
-            onSettings={openSettings}
+            error={agentsQuery.error}
+            availability={agentAvailability.map((query) => query.data?.state)}
           />
         ) : (
           <SkillsPanel
@@ -338,38 +258,6 @@ export function AgentsPage() {
           />
         )}
       </div>
-
-      {createOpen ? (
-        <AgentModal
-          title={t("agents.newAgent")}
-          description={t("agents.newAgentDescription")}
-          isPending={createAgent.isPending}
-          error={createAgent.error}
-          form={createForm}
-          submitLabel={t("agents.createAgent")}
-          pendingLabel={t("agents.creating")}
-          onClose={() => setCreateOpen(false)}
-          onSubmit={submitCreate}
-          onChange={setCreateForm}
-        />
-      ) : null}
-
-      {settingsAgent ? (
-        <AgentModal
-          compact
-          title={t("agents.settingsTitle")}
-          description={t("agents.settingsDescription")}
-          isPending={updateAgent.isPending}
-          error={updateAgent.error}
-          form={settingsForm}
-          agent={settingsAgent}
-          submitLabel={t("agents.saveSettings")}
-          pendingLabel={t("agents.saving")}
-          onClose={() => setSettingsAgent(null)}
-          onSubmit={submitSettings}
-          onChange={setSettingsForm}
-        />
-      ) : null}
 
       {skillModalMode ? (
         <SkillModal
@@ -413,11 +301,10 @@ function AgentsTabs(props: { activeTab: AgentsTab; onChange: (tab: AgentsTab) =>
 }
 
 function AgentsPanel(props: {
-  agents: AgentProfile[];
-  enabledCount: number;
+  agents: AgentEngineCatalogItem[];
   isPending: boolean;
-  onCreate: () => void;
-  onSettings: (agent: AgentProfile) => void;
+  error?: Error | null;
+  availability: Array<string | undefined>;
 }) {
   const { t } = useMspaceTranslation();
   if (props.isPending) {
@@ -433,31 +320,25 @@ function AgentsPanel(props: {
         icon={Bot}
         title={t("agents.emptyTitle")}
         body={t("agents.emptyBody")}
-        action={
-          <Button variant="secondary" onClick={props.onCreate}>
-            <Plus data-icon />
-            {t("agents.newAgent")}
-          </Button>
-        }
       />
     );
   }
   return (
-    <div className="rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
-      <div className="grid grid-cols-[minmax(190px,1.05fr)_minmax(260px,1.5fr)_150px_116px_116px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
-        <span>{t("agents.agent")}</span>
-        <span>{t("agents.role")}</span>
-        <span>{t("agents.provider")}</span>
-        <span>{t("agents.status")}</span>
-        <span className="text-right">{t("agents.actions")}</span>
-      </div>
-      <div className="divide-y divide-[color:var(--line)]">
-        {props.agents.map((agent) => (
-          <AgentRow key={agent.id} agent={agent} onSettings={() => props.onSettings(agent)} />
-        ))}
-      </div>
-      <div className="border-t border-[color:var(--line)] px-4 py-2.5 text-[12px] leading-5 text-[color:var(--muted)]">
-        {t("agents.enabledSummary", { enabled: props.enabledCount, total: props.agents.length })}
+    <div className="overflow-hidden rounded-[10px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+      {props.error ? <div className="border-b border-[color:var(--line)] px-4 py-3"><Notice tone="danger">{props.error.message}</Notice></div> : null}
+      <div className="overflow-x-auto">
+        <div className="min-w-[680px]">
+          <div className="grid grid-cols-[minmax(180px,0.9fr)_minmax(280px,1.5fr)_140px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
+            <span>{t("agents.agent")}</span>
+            <span>{t("agents.runtimeDescription")}</span>
+            <span>{t("agents.runtimeStatus")}</span>
+          </div>
+          <div className="divide-y divide-[color:var(--line)]">
+            {props.agents.map((agent, index) => (
+              <AgentRow key={agent.id} agent={agent} availability={props.availability[index]} />
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -667,177 +548,49 @@ function SkillStatus(props: { enabled: boolean; label: string }) {
   );
 }
 
-function AgentRow(props: { agent: AgentProfile; onSettings: () => void }) {
+function AgentRow(props: { agent: AgentEngineCatalogItem; availability?: string }) {
   const { agent } = props;
   const { t } = useMspaceTranslation();
+  const isCodex = agent.id === "codex";
+  const initial = agent.id === "claude_code" ? "C" : agent.id === "pi" ? "P" : "C";
+  const description = t(`agents.engineDescriptions.${agent.id}`);
+  const statusLabel = props.availability === "ready"
+    ? t("agents.runtimeReady")
+    : props.availability
+      ? t("agents.runtimeUnavailable")
+      : t("agents.runtimeChecking");
   return (
-    <article className="grid grid-cols-[minmax(190px,1.05fr)_minmax(260px,1.5fr)_150px_116px_116px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
+    <article className="grid grid-cols-[minmax(180px,0.9fr)_minmax(280px,1.5fr)_140px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]">
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-            <Bot data-icon />
+          <span className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-[color:var(--paper)] text-[12px] font-semibold text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
+            {isCodex ? <img src={codexAvatarDataUrl} alt="" className="size-full p-1" /> : initial}
           </span>
           <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <h3 className="truncate text-[15px] font-semibold leading-6 text-[color:var(--text)]">{agent.name}</h3>
-              {agent.builtIn ? (
-                <span className="shrink-0 rounded-full bg-[color:var(--block)] px-2 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted-strong)]">
-                  {t("agents.builtIn")}
-                </span>
-              ) : null}
-            </div>
+            <h3 className="truncate text-[15px] font-semibold leading-6 text-[color:var(--text)]">{agent.name}</h3>
             <div className="mt-0.5 text-[12px] leading-5 text-[color:var(--muted)]">{agent.mention}</div>
           </div>
         </div>
       </div>
-
-      <div className="min-w-0">
-        <div className="line-clamp-2 text-[13px] leading-5 text-[color:var(--muted)]">
-          {agent.description || t("agents.noDescription")}
-        </div>
-        <div className="mt-1">
-          <InlineMeta icon={Clock3}><RelativeTime prefix={t("time.updated")} value={agent.updatedAt} /></InlineMeta>
-        </div>
-      </div>
-
-      <div className="min-w-0">
-        <InlineMeta icon={SquareTerminal}>{agent.provider}</InlineMeta>
-      </div>
-
-      <div>
-        <AgentStatus enabled={agent.enabled} />
-      </div>
-
-      <div className="flex justify-end">
-        <Button variant="secondary" size="sm" onClick={props.onSettings}>
-          <Settings2 data-icon />
-          {t("agents.settings")}
-        </Button>
-      </div>
+      <p className="line-clamp-2 min-w-0 text-[13px] leading-5 text-[color:var(--muted)]">{description}</p>
+      <AgentStatus ready={props.availability === "ready"} label={statusLabel} />
     </article>
   );
 }
 
-function AgentStatus(props: { enabled: boolean }) {
-  const { t } = useMspaceTranslation();
+function AgentStatus(props: { ready: boolean; label: string }) {
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[12px] font-medium",
-        props.enabled
+        props.ready
           ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
           : "bg-[color:var(--block)] text-[color:var(--muted-strong)]",
       )}
     >
-      {props.enabled ? <CheckCircle2 data-icon /> : <Circle data-icon />}
-      {props.enabled ? t("agents.enabled") : t("agents.disabled")}
+      {props.ready ? <CheckCircle2 data-icon /> : <Circle data-icon />}
+      {props.label}
     </span>
-  );
-}
-
-function AgentModal(props: {
-  title: string;
-  description: string;
-  form: AgentProfileInput;
-  submitLabel: string;
-  pendingLabel: string;
-  onClose: () => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onChange: (form: AgentProfileInput) => void;
-  isPending: boolean;
-  error?: Error | null;
-  agent?: AgentProfile;
-  compact?: boolean;
-}) {
-  const { t } = useMspaceTranslation();
-  return (
-    <Modal title={props.title} description={props.description} onClose={props.onClose} compact={props.compact}>
-      <form className="flex flex-col gap-4" onSubmit={props.onSubmit}>
-        {props.error ? <Notice tone="danger">{props.error.message}</Notice> : null}
-        {props.agent?.builtIn ? (
-          <Notice>
-            {t("agents.defaultNotice")}
-          </Notice>
-        ) : null}
-
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label={t("agents.name")}>
-            <Input
-              value={props.form.name}
-              onChange={(event) => props.onChange({ ...props.form, name: event.target.value })}
-              placeholder={t("agents.namePlaceholder")}
-            />
-          </Field>
-          <Field label={t("agents.mention")}>
-            <Input
-              value={props.form.mention}
-              onChange={(event) => props.onChange({ ...props.form, mention: event.target.value })}
-              placeholder="@review"
-            />
-          </Field>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
-          <Field label={t("agents.description")}>
-            <Input
-              value={props.form.description}
-              onChange={(event) => props.onChange({ ...props.form, description: event.target.value })}
-              placeholder={t("agents.descriptionPlaceholder")}
-            />
-          </Field>
-          <Field label={t("agents.provider")}>
-            <Select
-              value={props.form.provider}
-              onValueChange={(value) => props.onChange({ ...props.form, provider: value })}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="codex">{t("agents.providerCodex")}</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-        </div>
-
-        <Field label={t("agents.instructions")} hint={t("agents.instructionsHint")}>
-          <Textarea
-            value={props.form.instructions}
-            onChange={(event) => props.onChange({ ...props.form, instructions: event.target.value })}
-            className="h-[220px] !min-h-[220px] leading-6"
-            placeholder={t("agents.instructionsPlaceholder")}
-          />
-        </Field>
-
-        <label className="flex items-center gap-3 rounded-[8px] bg-[color:var(--block)] px-3 py-3 text-[13px] text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
-          <input
-            type="checkbox"
-            checked={props.form.enabled}
-            onChange={(event) => props.onChange({ ...props.form, enabled: event.target.checked })}
-            className="size-4 rounded border-[color:var(--line)] accent-[color:var(--ink)]"
-          />
-          <span className="min-w-0">
-            <span className="flex items-center gap-2 font-medium text-[color:var(--text)]">
-              <SquareTerminal data-icon />
-              {t("agents.enabledForMentions")}
-            </span>
-            <span className="mt-1 block text-[12px] leading-5 text-[color:var(--muted)]">
-              {t("agents.disabledDescription")}
-            </span>
-          </span>
-        </label>
-
-        <div className="mt-1 flex justify-end gap-2">
-          <Button type="button" variant="secondary" onClick={props.onClose} disabled={props.isPending}>
-            {t("common.cancel")}
-          </Button>
-          <Button type="submit" disabled={props.isPending}>
-            <Save data-icon />
-            {props.isPending ? props.pendingLabel : props.submitLabel}
-          </Button>
-        </div>
-      </form>
-    </Modal>
   );
 }
 

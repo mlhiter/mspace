@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowRight, CheckCircle2, Clock3, Inbox, Layers3, MessageSquarePlus, Plus, Search } from "lucide-react";
-import { controlPlaneApi, getStoredAuthIdentity, queryKeys, type IssueListItem } from "@mspace/core";
+import { agentEngineDisplayName, controlPlaneApi, getStoredAuthIdentity, parseAgentEngine, queryKeys, type IssueListItem } from "@mspace/core";
 import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import {
   Button,
@@ -41,6 +41,8 @@ const toolbarSelectClass =
 
 function issueAssigneeName(issue: IssueListItem): string {
   if (issue.assigneeType === "agent") {
+    const engine = parseAgentEngine(issue.assignee);
+    if (engine) return agentEngineDisplayName(engine);
     const normalized = issue.assignee.replace(/^@/, "").trim();
     return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : "Codex";
   }
@@ -58,7 +60,8 @@ function IssueAssigneeMeta(props: { issue: IssueListItem }) {
   const [failed, setFailed] = useState(false);
   const stored = getStoredAuthIdentity();
   const name = issueAssigneeName(props.issue);
-  const avatarUrl = props.issue.assigneeType === "agent" ? codexAvatarDataUrl : stored.avatarUrl || "";
+  const assigneeEngine = props.issue.assigneeType === "agent" ? parseAgentEngine(props.issue.assignee) || "codex" : undefined;
+  const avatarUrl = assigneeEngine === "codex" ? codexAvatarDataUrl : props.issue.assigneeType === "agent" ? "" : stored.avatarUrl || "";
 
   useEffect(() => {
     setFailed(false);

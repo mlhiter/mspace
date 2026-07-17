@@ -141,6 +141,9 @@ type apiError struct {
 }
 
 type agentSessionPayload struct {
+	AgentEngine           string            `json:"agentEngine"`
+	LegacyProvider        string            `json:"provider"`
+	LegacyAgentProfile    string            `json:"agentProfile"`
 	Workdir               string            `json:"workdir"`
 	Prompt                string            `json:"prompt"`
 	DeveloperInstructions string            `json:"developerInstructions"`
@@ -250,8 +253,11 @@ type repositorySpec struct {
 }
 
 type agentSessionResult struct {
-	ThreadID          string                       `json:"threadId"`
-	TurnID            string                       `json:"turnId"`
+	AgentEngine       string                       `json:"agentEngine,omitempty"`
+	EngineSessionRef  string                       `json:"engineSessionRef,omitempty"`
+	EngineRunRef      string                       `json:"engineRunRef,omitempty"`
+	ThreadID          string                       `json:"threadId,omitempty"`
+	TurnID            string                       `json:"turnId,omitempty"`
 	Status            string                       `json:"status"`
 	CompletedAt       string                       `json:"completedAt"`
 	DryRun            bool                         `json:"dryRun"`
@@ -373,13 +379,12 @@ type testResultArtifactItem struct {
 }
 
 type codexAppServerClient struct {
-	cmd           *exec.Cmd
+	process       *agentEngineProcess
 	stdin         io.WriteCloser
 	stderr        io.Reader
 	encoder       *json.Encoder
 	pending       map[int64]chan codexRPCResponse
 	notifications chan codexRPCNotification
-	waitDone      chan error
 	mu            sync.Mutex
 	nextID        int64
 }
@@ -1113,14 +1118,21 @@ func executeAgentSessionTask(ctx context.Context, client *runtimeClient, cfg con
 		body, err := json.Marshal(result)
 		return body, err
 	}
-	runCtx, stopCancelWatcher := client.watchTaskCancellation(ctx, workerID, task.ID, cfg.PollInterval)
-	defer stopCancelWatcher()
-	if err := client.appendTaskLog(ctx, workerID, task.ID, appendTaskLogInput{Stream: "system", Message: "Starting Codex app-server with stdio transport."}); err != nil {
+	capabilityKey, err := agentEngineCapabilityKey(payload.AgentEngine)
+	if err != nil {
 		return nil, err
 	}
-	result, err := runCodexAgentSession(runCtx, client, cfg, workerID, task.ID, payload)
+	if !capabilityEnabled(cfg.Capabilities, capabilityKey) {
+		return nil, fmt.Errorf("worker does not advertise required %s capability for agentEngine %s", capabilityKey, payload.AgentEngine)
+	}
+	runCtx, stopCancelWatcher := client.watchTaskCancellation(ctx, workerID, task.ID, cfg.PollInterval)
+	defer stopCancelWatcher()
+	if err := client.appendTaskLog(ctx, workerID, task.ID, appendTaskLogInput{Stream: "system", Message: "Starting " + payload.AgentEngine + " agent engine."}); err != nil {
+		return nil, err
+	}
+	result, err := runAgentSession(runCtx, client, cfg, workerID, task.ID, payload)
 	if err != nil {
-		_ = client.appendTaskLog(context.WithoutCancel(ctx), workerID, task.ID, appendTaskLogInput{Stream: "codex-error", Message: err.Error()})
+		_ = client.appendTaskLog(context.WithoutCancel(ctx), workerID, task.ID, appendTaskLogInput{Stream: "agent-error", Message: err.Error()})
 		return nil, err
 	}
 	body, err := json.Marshal(result)
@@ -1147,14 +1159,19 @@ func runDryRunAgentSession(ctx context.Context, runtimeClient *runtimeClient, cf
 		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Source capture disabled for this agent session."})
 	}
 	result := agentSessionResult{
-		ThreadID:    "dry-run-thread-" + shortTaskID(taskID),
-		TurnID:      "dry-run-turn-" + shortTaskID(taskID),
-		Status:      "completed",
-		CompletedAt: time.Now().UTC().Format(time.RFC3339),
-		DryRun:      true,
-		Workdir:     payload.Workdir,
-		ArtifactDir: payload.ArtifactDir,
-		Source:      source,
+		AgentEngine:      payload.AgentEngine,
+		EngineSessionRef: "dry-run-session-" + shortTaskID(taskID),
+		EngineRunRef:     "dry-run-run-" + shortTaskID(taskID),
+		Status:           "completed",
+		CompletedAt:      time.Now().UTC().Format(time.RFC3339),
+		DryRun:           true,
+		Workdir:          payload.Workdir,
+		ArtifactDir:      payload.ArtifactDir,
+		Source:           source,
+	}
+	if payload.AgentEngine == agentEngineCodex {
+		result.ThreadID = "dry-run-thread-" + shortTaskID(taskID)
+		result.TurnID = "dry-run-turn-" + shortTaskID(taskID)
 	}
 	result.attachArtifacts(payload)
 	return result, nil
@@ -1224,6 +1241,20 @@ func parseAgentSessionPayload(raw json.RawMessage) (agentSessionPayload, error) 
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return agentSessionPayload{}, fmt.Errorf("agent_session payload must be a JSON object: %w", err)
 	}
+	payload.AgentEngine = strings.TrimSpace(payload.AgentEngine)
+	if payload.AgentEngine == "" {
+		legacyProvider := strings.ToLower(strings.TrimSpace(payload.LegacyProvider))
+		if legacyProvider != "" && legacyProvider != agentEngineCodex {
+			return agentSessionPayload{}, fmt.Errorf("unsupported legacy agent provider %q", payload.LegacyProvider)
+		}
+		payload.AgentEngine = agentEngineCodex
+	} else {
+		engine, err := normalizeAgentEngine(payload.AgentEngine)
+		if err != nil {
+			return agentSessionPayload{}, err
+		}
+		payload.AgentEngine = engine
+	}
 	payload.Workdir = strings.TrimSpace(payload.Workdir)
 	payload.Prompt = strings.TrimSpace(payload.Prompt)
 	payload.DeveloperInstructions = strings.TrimSpace(payload.DeveloperInstructions)
@@ -1274,24 +1305,15 @@ func parseAgentSessionPayload(raw json.RawMessage) (agentSessionPayload, error) 
 	return payload, nil
 }
 
-func runCodexAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg config, workerID, taskID string, payload agentSessionPayload) (agentSessionResult, error) {
-	prepared, err := prepareAgentSessionWorkspace(ctx, runtimeClient, cfg, workerID, taskID, payload)
-	if err != nil {
-		return agentSessionResult{}, err
-	}
-	payload = prepared
-	if testArtifactsReady(payload) {
-		if result, ok := completedAgentSessionResultFromArtifacts(ctx, runtimeClient, workerID, taskID, payload, "", ""); ok {
-			return result, nil
-		}
-	}
+func runCodexEngineProtocol(ctx context.Context, runtimeClient *runtimeClient, cfg config, workerID, taskID string, payload agentSessionPayload, updateRefs func(agentEngineExecution)) (agentEngineExecution, error) {
+	execution := agentEngineExecution{AgentEngine: agentEngineCodex}
 	codexPath, err := exec.LookPath("codex")
 	if err != nil {
-		return agentSessionResult{}, errors.New("codex CLI is not available on PATH")
+		return execution, errors.New("codex CLI is not available on PATH")
 	}
 	appClient, err := startCodexAppServer(codexPath, payload)
 	if err != nil {
-		return agentSessionResult{}, err
+		return execution, err
 	}
 	defer appClient.close()
 
@@ -1308,7 +1330,7 @@ func runCodexAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg
 			"experimentalApi": true,
 		},
 	}, &initResp); err != nil {
-		return agentSessionResult{}, fmt.Errorf("initialize codex app-server: %w", err)
+		return execution, fmt.Errorf("initialize codex app-server: %w", err)
 	}
 	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Codex app-server ready: " + initResp.UserAgent})
 
@@ -1326,11 +1348,14 @@ func runCodexAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg
 		"experimentalRawEvents":  false,
 		"persistExtendedHistory": true,
 	}, &threadResp); err != nil {
-		return agentSessionResult{}, fmt.Errorf("start codex thread: %w", err)
+		return execution, fmt.Errorf("start codex thread: %w", err)
 	}
 	if strings.TrimSpace(threadResp.Thread.ID) == "" {
-		return agentSessionResult{}, errors.New("codex app-server returned an empty thread id")
+		return execution, errors.New("codex app-server returned an empty thread id")
 	}
+	execution.EngineSessionRef = opaqueEngineRef(threadResp.Thread.ID)
+	execution.LegacyThreadID = threadResp.Thread.ID
+	updateRefs(execution)
 	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Codex thread: " + threadResp.Thread.ID})
 
 	var turnResp codexTurnStartResponse
@@ -1353,93 +1378,20 @@ func runCodexAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg
 			"mspace.worker_name":     cfg.Name,
 		},
 	}, &turnResp); err != nil {
-		return agentSessionResult{}, fmt.Errorf("start codex turn: %w", err)
+		return execution, fmt.Errorf("start codex turn: %w", err)
 	}
 	if strings.TrimSpace(turnResp.Turn.ID) == "" {
-		return agentSessionResult{}, errors.New("codex app-server returned an empty turn id")
+		return execution, errors.New("codex app-server returned an empty turn id")
 	}
+	execution.EngineRunRef = opaqueEngineRef(turnResp.Turn.ID)
+	execution.LegacyTurnID = turnResp.Turn.ID
+	updateRefs(execution)
 	_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Codex turn: " + turnResp.Turn.ID})
 
-	artifactCompleted, err := waitCodexTurnOrTestArtifact(ctx, runtimeClient, appClient, workerID, taskID, threadResp.Thread.ID, turnResp.Turn.ID, payload)
-	if err != nil {
-		if fallback, ok := completedAgentSessionResultFromArtifacts(ctx, runtimeClient, workerID, taskID, payload, threadResp.Thread.ID, turnResp.Turn.ID); ok {
-			return fallback, nil
-		}
-		return agentSessionResult{}, err
+	if err := waitCodexTurn(ctx, runtimeClient, appClient, workerID, taskID, threadResp.Thread.ID, turnResp.Turn.ID); err != nil {
+		return execution, err
 	}
-	if artifactCompleted {
-		result, ok := completedAgentSessionResultFromArtifacts(ctx, runtimeClient, workerID, taskID, payload, threadResp.Thread.ID, turnResp.Turn.ID)
-		if !ok {
-			return agentSessionResult{}, errors.New("test artifact completion was detected but no artifact could be attached")
-		}
-		return result, nil
-	}
-	result := agentSessionResult{
-		ThreadID:    threadResp.Thread.ID,
-		TurnID:      turnResp.Turn.ID,
-		Status:      "completed",
-		CompletedAt: time.Now().UTC().Format(time.RFC3339),
-		DryRun:      false,
-		Workdir:     payload.Workdir,
-		ArtifactDir: payload.ArtifactDir,
-	}
-	if sourceCaptureEnabled(payload) {
-		source, err := captureAgentSessionSource(ctx, runtimeClient, workerID, taskID, payload)
-		if err != nil {
-			return agentSessionResult{}, err
-		}
-		result.Source = source
-	} else {
-		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Source capture disabled for this agent session."})
-	}
-	result.attachArtifacts(payload)
-	return result, nil
-}
-
-func waitCodexTurnOrTestArtifact(ctx context.Context, runtimeClient *runtimeClient, appClient *codexAppServerClient, workerID, taskID, threadID, turnID string, payload agentSessionPayload) (bool, error) {
-	if !canCompleteFromTestArtifacts(payload) {
-		return false, waitCodexTurn(ctx, runtimeClient, appClient, workerID, taskID, threadID, turnID)
-	}
-	outputBuffers := map[string]*strings.Builder{}
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	for {
-		if testArtifactsReady(payload) {
-			return true, nil
-		}
-		select {
-		case <-ctx.Done():
-			interruptCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = appClient.request(interruptCtx, "turn/interrupt", map[string]any{
-				"threadId": threadID,
-				"turnId":   turnID,
-			}, nil)
-			cancel()
-			return false, context.Canceled
-		case <-ticker.C:
-		case notification, ok := <-appClient.notifications:
-			if !ok {
-				return false, errors.New("codex app-server exited before the turn completed")
-			}
-			done, err := handleCodexNotification(ctx, runtimeClient, workerID, taskID, threadID, turnID, notification, outputBuffers)
-			if done {
-				if err != nil {
-					return false, err
-				}
-				if testArtifactsReadiness(payload) == testArtifactPending {
-					ready, waitErr := waitForTestArtifactsReady(ctx, payload, testArtifactCompletionSettleTimeout)
-					if waitErr != nil {
-						return false, waitErr
-					}
-					if ready {
-						return true, nil
-					}
-					return false, fmt.Errorf("test result references screenshot files that are not available: %s", strings.Join(testResultArtifactPendingScreenshotPaths(payload), ", "))
-				}
-				return false, missingTestCompletionArtifactError(payload)
-			}
-		}
-	}
+	return execution, nil
 }
 
 func canCompleteFromTestArtifacts(payload agentSessionPayload) bool {
@@ -1533,35 +1485,6 @@ func artifactMatchesRun(expectedRunID, artifactRunID string) bool {
 	return strings.TrimSpace(artifactRunID) == expectedRunID
 }
 
-func completedAgentSessionResultFromArtifacts(ctx context.Context, runtimeClient *runtimeClient, workerID, taskID string, payload agentSessionPayload, threadID, turnID string) (agentSessionResult, bool) {
-	result := agentSessionResult{
-		ThreadID:    threadID,
-		TurnID:      turnID,
-		Status:      "completed",
-		CompletedAt: time.Now().UTC().Format(time.RFC3339),
-		DryRun:      false,
-		Workdir:     payload.Workdir,
-		ArtifactDir: payload.ArtifactDir,
-	}
-	if !result.attachMatchingTestCompletionArtifact(payload) {
-		return agentSessionResult{}, false
-	}
-	source := agentSessionSource{}
-	if sourceCaptureEnabled(payload) {
-		var err error
-		source, err = captureAgentSessionSource(ctx, runtimeClient, workerID, taskID, payload)
-		if err != nil {
-			_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Artifact completion fallback skipped source capture: " + err.Error()})
-			source = agentSessionSource{}
-		}
-	} else {
-		_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Source capture disabled for this agent session."})
-	}
-	result.Source = source
-	_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Completing task from session artifacts after Codex turn ended without a final completion notification."})
-	return result, true
-}
-
 func sourceCaptureEnabled(payload agentSessionPayload) bool {
 	return payload.SourceCapture == nil || *payload.SourceCapture
 }
@@ -1609,39 +1532,32 @@ func (result *agentSessionResult) attachArtifacts(payload agentSessionPayload) {
 }
 
 func startCodexAppServer(codexPath string, payload agentSessionPayload) (*codexAppServerClient, error) {
-	cmd := exec.Command(codexPath, "app-server", "--listen", "stdio://")
+	cmd, err := newAgentEngineCommand(codexPath, "app-server", "--listen", "stdio://")
+	if err != nil {
+		return nil, err
+	}
 	cmd.Dir = payload.Workdir
-	cmd.Env = append(os.Environ(), payloadEnv(payload.Env)...)
+	cmd.Env = defaultAgentEngineEnv(payload.Env)
+	configureAgentEngineProcess(cmd)
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("codex stdin pipe: %w", err)
 	}
-	stdout, err := cmd.StdoutPipe()
+	process, stdout, stderr, err := startAgentEngineProcess(cmd, stdin)
 	if err != nil {
-		return nil, fmt.Errorf("codex stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("codex stderr pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start codex app-server: %w", err)
 	}
 
 	client := &codexAppServerClient{
-		cmd:           cmd,
+		process:       process,
 		stdin:         stdin,
 		stderr:        stderr,
 		encoder:       json.NewEncoder(stdin),
 		pending:       map[int64]chan codexRPCResponse{},
 		notifications: make(chan codexRPCNotification, 128),
-		waitDone:      make(chan error, 1),
 	}
 	go client.readLoop(stdout)
-	go func() {
-		client.waitDone <- cmd.Wait()
-	}()
 	return client, nil
 }
 
@@ -1765,29 +1681,18 @@ func (c *codexAppServerClient) failPending(err error) {
 }
 
 func (c *codexAppServerClient) close() {
-	if c == nil || c.cmd == nil {
+	if c == nil || c.process == nil {
 		return
 	}
 	if c.stdin != nil {
 		_ = c.stdin.Close()
 	}
 	select {
-	case <-c.waitDone:
+	case <-c.process.done:
 		return
 	case <-time.After(500 * time.Millisecond):
 	}
-	if c.cmd.Process != nil {
-		_ = c.cmd.Process.Signal(os.Interrupt)
-	}
-	select {
-	case <-c.waitDone:
-		return
-	case <-time.After(2 * time.Second):
-	}
-	if c.cmd.Process != nil {
-		_ = c.cmd.Process.Kill()
-	}
-	<-c.waitDone
+	c.process.stop(2 * time.Second)
 }
 
 func waitCodexTurn(ctx context.Context, runtimeClient *runtimeClient, appClient *codexAppServerClient, workerID, taskID, threadID, turnID string) error {

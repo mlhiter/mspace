@@ -1,6 +1,6 @@
 # mspace Control Plane
 
-> Status: server-owned runtime, workflow skill, and test-module surfaces, updated 2026-07-07
+> Status: fixed Agent engines, server-owned runtime, Workflow Skill, and test-module surfaces, updated 2026-07-17
 
 ## Decision
 
@@ -18,7 +18,7 @@ The control plane owns:
 - GitHub identity links;
 - workspace GitHub App installation state;
 - workspace projects, project runbooks, issues, child issue tasks, comments, reactions, labels, and Inbox receipts;
-- workspace settings, agent profiles, built-in and workspace custom workflow skill catalog/revisions/settings, reusable Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review/failure/source records;
+- workspace settings, the fixed Agent catalog contract, built-in and workspace custom workflow Skill catalog/revisions/settings, reusable Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review/failure/source records;
 - audit and collaboration sync;
 - runtime registration tokens;
 - runtime worker identity, liveness, and capability snapshots;
@@ -37,12 +37,12 @@ Runtime workers own:
 
 - repository cache;
 - per-session workdir preparation;
-- Codex app-server process lifecycle;
+- Agent CLI process lifecycle and protocol adaptation;
 - command execution and source capture;
 - session artifacts while running;
 - streaming logs and final task results back to the server.
 
-The control plane intentionally has no Codex runtime dependency. It does not install the Codex CLI, mount `CODEX_HOME`, read Codex credentials, or start `codex app-server`. It queues work, records logs/results, and applies validated results. It may own workflow skill content and attach pinned skill bundles to runtime tasks, but Codex auth/config and skill materialization stay in worker runtimes.
+The control plane intentionally has no Agent runtime dependency. It does not install Codex, Claude Code, or Pi, read their credentials, or start their processes. It queues work with one exact engine capability, records logs/results, and applies validated results. It may own Workflow Skill content and attach pinned bundles to runtime tasks, but Agent authentication/configuration, Skill materialization, CLI protocol handling, and cancellation stay in Worker runtimes.
 
 ## Auth Shape
 
@@ -103,7 +103,7 @@ The server module provides:
 - issue labels, issues, child tasks, comments, comment edits, and comment reactions;
 - workspace settings and workspace GitHub App installation status;
 - workflow skill metadata and basic management through `/api/workspaces/{workspaceID}/skills`;
-- workspace agent profiles;
+- fixed Agent catalog reads (`codex`, `claude_code`, `pi`); no Agent write APIs;
 - Environment APIs plus Kubernetes cluster compatibility APIs and kubeconfig discovery/import;
 - issue test deployment, cleanup, retain, preview probe, and namespace resources;
 - issue source handoff create/refresh records;
@@ -114,9 +114,9 @@ The server module provides:
 - a server-owned SQLite personal store selected by `MSPACE_STORE=sqlite` or by omitting `DATABASE_URL`;
 - memory-backed store used only by tests.
 
-Workspaces have an explicit `kind`: `personal` or `team`. The first password registration or GitHub sign-in creates a default personal workspace. Personal and team workspaces both store projects, runbooks, test cases, test case suggestions, test plans, test runs, issues, child tasks, comments, reactions, labels, Inbox receipts, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, PR handoffs, agent sessions, runtime tasks, worker logs, and runtime results in the server store. Team/customer/shared deployments use Postgres. Packaged personal desktop mode can use the local SQLite store under the Electron user-data path. Team collaboration is opt-in: server admins create team workspaces through `POST /api/workspaces`, and invitation/member APIs reject personal workspaces.
+Workspaces have an explicit `kind`: `personal` or `team`. Personal and team workspaces store projects, runbooks, test knowledge, issues, comments, reactions, labels, Inbox receipts, Skills, Environments, issue test environments, PR handoffs, Agent Sessions, runtime tasks, Worker logs, and runtime results in the server store. Agent definitions are not workspace records: `GET /agents` returns the same code-owned catalog for each authorized workspace, and PostgreSQL migration 030 removes the old `agent_profiles` table. Team/customer/shared deployments use Postgres; packaged personal desktop mode can use local server-owned SQLite.
 
-The desktop requires an mspace session before product data is available. In personal desktop mode, the shell asks Electron main to ensure the host-local Codex Worker once auth and workspace selection are ready, then uses the server runtime availability API as the shared readiness confirmation for the requested runtime mode and capabilities. Ordinary startup keeps this Worker Codex-only and does not launch Chrome. Test Plan and Run detail responses expose the server-computed `requiredCapabilities` union; when it includes `browser` or `chrome_cdp`, Electron starts a separately named browser companion Worker without stopping the base Worker. Renderer code must not treat a fresh `runtime_workers` snapshot by itself as proof that the current Electron main process owns a live Worker, because heartbeat state can briefly outlive an app restart. For agent mentions, Issue Detail first resolves project attachment and then verifies Worker availability before writing the trigger comment; team workspaces require a connected team Worker and never replace that path with a local personal Worker. Only after that preflight does the renderer write the server comment and call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions`. The server repeats the project and Worker-liveness checks and returns HTTP `409` with `no active codex worker` if the task cannot be claimed, so unsupported `@codex` comments do not sit in the queue waiting for a Worker that is not there.
+The desktop requires an mspace session before product data is available. In personal mode, Electron ensures one generic host-local Worker and discovers installed Agent executables without launching them. Issue Detail maps `@codex`, `@claude`, or `@pi` to `codex`, `claudeCode`, or `pi`, checks runtime availability, asks Electron to ensure that capability, then writes the trigger comment and posts a Session with `agentEngine`. Team workspaces require a connected team Worker. The server repeats engine, project, runtime-mode, and liveness checks and returns HTTP `409` with `no active agent worker` when no matching Worker can claim the task. Browser-backed Tests remain Codex Workflows and use a separately named browser companion Worker.
 
 Issue titles are plain text while Issue bodies remain Markdown. The desktop derives a draft title from TipTap's plain-text document projection, marks it with `titleSource="plain_text"`, creates the Issue immediately, and never waits for final refinement; omitting `titleSource` preserves compatibility with older clients whose draft still contains Markdown from the body. After project analysis is queued, the server passes the normalized draft as `expectedTitle` in the existing priority-0 `issue_type_triage` task. Issue list/detail reads remain side-effect free. If a compatibility task is already active without `expectedTitle`, the create path upgrades it atomically instead of dropping the title request or starting a duplicate turn. Updated workers return a rewritten title with the type result, while older title-less results remain valid for rolling upgrades. The server projects the untrusted title through CommonMark/GFM to at most 72 plain-text characters, and Memory/Postgres update only when the stored title still equals `expectedTitle`. Human edits win, body storage is unchanged, and the deterministic `suggest-title` route remains only a compatibility fallback.
 
@@ -146,13 +146,15 @@ Server
 
 Registration tokens are workspace-scoped bootstrap secrets for worker daemons. The raw token is returned only once when created; the server stores only its hash and prefix.
 
+The public runtime-task debug endpoint accepts non-product tasks such as `protocol_smoke` and `noop`, but rejects raw `agent_session` payloads. User Agent Sessions must enter through the Issue Session route, which owns engine selection, Issue/Project links, automation markers, environment, Skills, and artifact contracts. Helm Workers receive only their runtime-token Secret key, and Agent subprocesses strip control-plane and Worker-registration variables before launch.
+
 Worker mode is part of the workspace trust boundary. Personal workspace tokens can register only personal workers and can queue only personal runtime tasks. Team workspace tokens can register only team workers and can queue only team runtime tasks. This keeps open self-registration useful for local personal runners without granting access to shared server runners until the user has been invited into the team workspace.
 
-Desktop personal Workers are managed by Electron rather than by a human copying a token. Once a personal workspace is selected, the desktop creates a 12-hour workspace registration credential when needed, writes it to an Electron user-data token file, starts or reuses a host-local Codex-only Worker in `personal` mode, and schedules renewal before expiry. The same ensure path is reused as an action-level fallback before agent or test work is queued, and Electron serializes concurrent ensure requests so reloads or repeated preflights do not start duplicate bundled Workers. Browser-required preflight may add one separately named companion Worker against the same credential file and an isolated repo/workdir root; both are stopped together when the personal runtime or server source is stopped. Workers read the token file for runtime API calls, so renewal is normally invisible; Electron revokes the previous credential after a short grace period and also revokes the active credential when the personal runtime is stopped or the server source changes.
+Desktop personal Workers are managed by Electron rather than by a human copying a token. Once a personal workspace is selected, the desktop creates a short-lived workspace registration credential, starts or reuses one generic Worker in `personal` mode, and advertises only installed engine capabilities. An explicit Codex action checks for `CODEX_HOME/auth.json`; Claude Code and Pi authentication are left to their CLI adapters. Browser-required Codex Workflows may add one separately named companion Worker against the same credential file and an isolated repo/workdir root.
 
-The first worker daemon exists as `worker/`. It registers, heartbeats, claims matching tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks that can return both a rewritten title and type, and can run `agent_session` tasks by preparing its own repository cache and session worktree from the task payload, then starting `codex app-server --listen stdio://` in that worker-managed workdir. Title generation reuses the existing automatic triage turn rather than adding another user-controlled Codex prompt. When an agent-session payload contains `requiredSkills`, the worker validates bundle paths and hashes, writes the files under `<artifact-dir>/skills/`, sets `MSPACE_SESSION_SKILLS_DIR` and `MSPACE_SESSION_SKILL_MANIFEST`, and leaves global `CODEX_HOME` untouched. Docker-backed workers keep repository caches and worktrees under `/var/lib/mspace-worker`, backed by a Docker volume, so target project source is isolated from the host checkout.
+The Worker daemon in `worker/` registers, heartbeats, and claims tasks by exact capability. Shared Worker Core prepares repository caches/worktrees, materializes pinned Skills under the artifact directory, races required Tests artifacts against engine completion, captures source, and assembles generic results. The Codex adapter uses app-server stdio; Claude Code uses print-mode stream JSON and requires a terminal `result`; Pi uses official RPC, sends `abort` on cancellation, and requires `agent_end`. Missing `agentEngine` maps to Codex only for historical payloads; explicit unknown values fail closed. Docker-backed workers keep repository caches and worktrees under `/var/lib/mspace-worker`.
 
-Workers forward system, status, agent, command, file, and tool logs to `runtime_task_logs`, poll claimed tasks for cancellation, interrupt Codex when requested, capture a source commit when code changed, and return worker workdir, artifact dir, source commit, changed files, and diff preview in the task result.
+Workers forward normalized logs to `runtime_task_logs`, poll claimed tasks for cancellation, interrupt the selected engine, capture source when code changed, and return `agentEngine`, opaque `engineSessionRef`/`engineRunRef`, workdir, artifacts, source commit, changed files, and diff preview. Codex results retain `threadId`/`turnId` compatibility; Pi session file paths never leave the Worker.
 
 For UI-only local testing, the Docker dev worker can advertise `codex:true,dryRun:true`; it still uses the same queue and workspace preparation path, but writes a deterministic dry-run source file and returns a dry-run commit instead of launching Codex. Dry-run commits are diagnostic runtime records, not PR source candidates.
 

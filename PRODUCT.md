@@ -14,6 +14,12 @@ mspace is an Inbox, Issue, and Tests workspace for coding agents. It turns a fra
 
 The product succeeds when a team can create or route an issue, manage project-level test cases, assign a worker-backed agent session, let that agent modify code, then record a branch/PR handoff and run an issue-scoped Kubernetes test deployment or issue-backed test run with enough setup, preview, and evidence to decide what happens next.
 
+## Agent Model
+
+mspace exposes three fixed execution Agents: Codex (`@codex`), Claude Code (`@claude`), and Pi (`@pi`). An Agent is an execution engine, not a stored persona or prompt profile. The product does not offer custom Agent definitions, role instructions, arbitrary command profiles, models, or MCP configuration.
+
+Skills and Workflows are separate. Skills are server-managed, versioned instruction bundles that can be attached to a Session. Workflows are mspace-owned product automations such as issue analysis, triage, Tests, import mapping, deploy, and cleanup; these remain Codex-backed until mspace defines an explicit engine policy for them. Workers are execution hosts, while Environments are the targets those Workers operate.
+
 ## Brand Personality
 
 Calm, operational, and exact. The interface should feel like a serious document workspace for real engineering work: quiet enough for daily use, explicit about runtime and namespace scope, and direct about what agents are doing.
@@ -33,7 +39,7 @@ The public website can use a sharper brand surface, but it should still be speci
 
 - Issues are durable working documents, not transient job cards.
 - Inbox is for messages and state changes that need human review, not the full issue database.
-- Agents should appear as collaborators with assignees, sessions, blockers, and progress updates.
+- Fixed Agents should appear as collaborators with their own engine identity, Sessions, blockers, and progress updates; Claude Code and Pi must never be presented as Codex.
 - Server-managed workflow skills should reduce issue handoff friction for mspace-owned flows and user-invoked issue comments. Workspaces can inspect pinned skill revisions, manage basic custom skills, and enable or disable built-ins, but mspace should not become a generic skill marketplace or remote installer.
 - Test cases are durable project objects. Codex can generate or refine Case suggestions, but humans approve suggestions before canonical test coverage changes. Formal test plans can include lightweight setup steps for real preconditions before case execution; setup should stay issue-backed and artifact-driven rather than becoming a separate template product. Case revision history should make changed fields readable from the detail page instead of showing only version titles.
 - Runtime evidence belongs next to the issue story: branch, logs, status, selected worker, selected cluster, namespace, preview URL, and environment links should support review.

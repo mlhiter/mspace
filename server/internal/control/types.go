@@ -13,6 +13,7 @@ var (
 	ErrForbidden           = errors.New("forbidden")
 	ErrConflict            = errors.New("conflict")
 	ErrNoActiveCodexWorker = errors.New("no active codex worker")
+	ErrNoActiveAgentWorker = errors.New("no active agent worker")
 )
 
 type Config struct {
@@ -489,17 +490,21 @@ func testCaseImportSkipsOrEmpty(values []TestCaseImportSkip) []TestCaseImportSki
 }
 
 type OptimizeTestCasesInput struct {
-	CaseIDs      []string `json:"caseIds"`
-	Prompt       string   `json:"prompt"`
-	AgentProfile string   `json:"agentProfile"`
-	RuntimeMode  string   `json:"runtimeMode"`
+	CaseIDs            []string `json:"caseIds"`
+	Prompt             string   `json:"prompt"`
+	AgentEngine        string   `json:"agentEngine"`
+	LegacyProvider     string   `json:"provider,omitempty"`
+	LegacyAgentProfile string   `json:"agentProfile,omitempty"`
+	RuntimeMode        string   `json:"runtimeMode"`
 }
 
 type GenerateTestCasesInput struct {
-	Prompt       string `json:"prompt"`
-	Area         string `json:"area"`
-	AgentProfile string `json:"agentProfile"`
-	RuntimeMode  string `json:"runtimeMode"`
+	Prompt             string `json:"prompt"`
+	Area               string `json:"area"`
+	AgentEngine        string `json:"agentEngine"`
+	LegacyProvider     string `json:"provider,omitempty"`
+	LegacyAgentProfile string `json:"agentProfile,omitempty"`
+	RuntimeMode        string `json:"runtimeMode"`
 }
 
 type TestCaseAgentSessionResult struct {
@@ -739,24 +744,28 @@ type CreateTestRunInput struct {
 	EnvironmentID       string          `json:"environmentId"`
 	EnvironmentKind     string          `json:"environmentKind"`
 	EnvironmentSnapshot json.RawMessage `json:"environmentSnapshot,omitempty"`
-	AgentProfile        string          `json:"agentProfile"`
+	AgentEngine         string          `json:"agentEngine"`
+	LegacyProvider      string          `json:"provider,omitempty"`
+	LegacyAgentProfile  string          `json:"agentProfile,omitempty"`
 	RuntimeMode         string          `json:"runtimeMode"`
 	BatchSize           int             `json:"batchSize"`
 	ResultLocale        string          `json:"resultLocale"`
 }
 
 type CreateAdHocTestRunInput struct {
-	CaseIDs         []string            `json:"caseIds"`
-	Cases           []TestPlanCaseInput `json:"cases"`
-	TargetType      string              `json:"targetType"`
-	TargetValue     string              `json:"targetValue"`
-	Environment     string              `json:"environment"`
-	EnvironmentID   string              `json:"environmentId"`
-	EnvironmentKind string              `json:"environmentKind"`
-	AgentProfile    string              `json:"agentProfile"`
-	RuntimeMode     string              `json:"runtimeMode"`
-	BatchSize       int                 `json:"batchSize"`
-	ResultLocale    string              `json:"resultLocale"`
+	CaseIDs            []string            `json:"caseIds"`
+	Cases              []TestPlanCaseInput `json:"cases"`
+	TargetType         string              `json:"targetType"`
+	TargetValue        string              `json:"targetValue"`
+	Environment        string              `json:"environment"`
+	EnvironmentID      string              `json:"environmentId"`
+	EnvironmentKind    string              `json:"environmentKind"`
+	AgentEngine        string              `json:"agentEngine"`
+	LegacyProvider     string              `json:"provider,omitempty"`
+	LegacyAgentProfile string              `json:"agentProfile,omitempty"`
+	RuntimeMode        string              `json:"runtimeMode"`
+	BatchSize          int                 `json:"batchSize"`
+	ResultLocale       string              `json:"resultLocale"`
 }
 
 type ReviewTestRunInput struct {
@@ -764,10 +773,12 @@ type ReviewTestRunInput struct {
 }
 
 type RetryTestRunInput struct {
-	ItemIDs      []string `json:"itemIds"`
-	AgentProfile string   `json:"agentProfile"`
-	RuntimeMode  string   `json:"runtimeMode"`
-	ResultLocale string   `json:"resultLocale"`
+	ItemIDs            []string `json:"itemIds"`
+	AgentEngine        string   `json:"agentEngine"`
+	LegacyProvider     string   `json:"provider,omitempty"`
+	LegacyAgentProfile string   `json:"agentProfile,omitempty"`
+	RuntimeMode        string   `json:"runtimeMode"`
+	ResultLocale       string   `json:"resultLocale"`
 }
 
 type Issue struct {
@@ -897,8 +908,7 @@ type IssueDetail struct {
 type AgentSession struct {
 	ID               string                       `json:"id"`
 	IssueID          string                       `json:"issueId"`
-	Provider         string                       `json:"provider"`
-	AgentProfile     string                       `json:"agentProfile"`
+	AgentEngine      string                       `json:"agentEngine"`
 	RuntimeMode      string                       `json:"runtimeMode"`
 	RuntimeTaskID    string                       `json:"runtimeTaskId"`
 	Command          string                       `json:"command"`
@@ -907,6 +917,8 @@ type AgentSession struct {
 	Workdir          string                       `json:"workdir"`
 	CodexThreadID    string                       `json:"codexThreadId"`
 	CodexTurnID      string                       `json:"codexTurnId"`
+	EngineSessionRef string                       `json:"engineSessionRef"`
+	EngineRunRef     string                       `json:"engineRunRef"`
 	AgentStatus      string                       `json:"agentStatus"`
 	ArtifactDir      string                       `json:"artifactDir"`
 	SourceSessionID  string                       `json:"sourceSessionId"`
@@ -1305,8 +1317,9 @@ type SessionDetail struct {
 }
 
 type CreateAgentSessionInput struct {
-	Provider             string               `json:"provider"`
-	AgentProfile         string               `json:"agentProfile"`
+	AgentEngine          string               `json:"agentEngine"`
+	LegacyProvider       string               `json:"provider,omitempty"`
+	LegacyAgentProfile   string               `json:"agentProfile,omitempty"`
 	RuntimeMode          string               `json:"runtimeMode"`
 	Command              string               `json:"command"`
 	Branch               string               `json:"branch"`
@@ -1316,7 +1329,7 @@ type CreateAgentSessionInput struct {
 	Automation           string               `json:"automation"`
 	TestRunID            string               `json:"testRunId"`
 	TestRunBatchSize     int                  `json:"testRunBatchSize"`
-	RequiredCapabilities json.RawMessage      `json:"requiredCapabilities,omitempty"`
+	RequiredCapabilities json.RawMessage      `json:"-"`
 	SkillSlugs           []string             `json:"skillSlugs,omitempty"`
 	SkillBundles         []RuntimeSkillBundle `json:"-"`
 }
@@ -1505,29 +1518,6 @@ type WorkspaceGitHubAppInstallation struct {
 	UpdatedAt           string            `json:"updatedAt"`
 }
 
-type AgentProfile struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Mention      string `json:"mention"`
-	Provider     string `json:"provider"`
-	Description  string `json:"description"`
-	Instructions string `json:"instructions"`
-	Enabled      bool   `json:"enabled"`
-	BuiltIn      bool   `json:"builtIn"`
-	SortOrder    int    `json:"sortOrder"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
-}
-
-type AgentProfileInput struct {
-	Name         string `json:"name"`
-	Mention      string `json:"mention"`
-	Provider     string `json:"provider"`
-	Description  string `json:"description"`
-	Instructions string `json:"instructions"`
-	Enabled      *bool  `json:"enabled"`
-}
-
 type Cluster struct {
 	ID                  string `json:"id"`
 	WorkspaceID         string `json:"workspaceId"`
@@ -1654,15 +1644,17 @@ type KubeconfigImportResult struct {
 }
 
 type StartTestDeployInput struct {
-	AgentProfile    string `json:"agentProfile"`
-	ClusterID       string `json:"clusterId"`
-	EnvironmentID   string `json:"environmentId"`
-	ExposureMode    string `json:"exposureMode"`
-	PreviewDomain   string `json:"previewDomain"`
-	IngressClass    string `json:"ingressClass"`
-	NodeHost        string `json:"nodeHost"`
-	SourceSessionID string `json:"sourceSessionId"`
-	SourceCommitSHA string `json:"sourceCommitSha"`
+	AgentEngine        string `json:"agentEngine"`
+	LegacyProvider     string `json:"provider,omitempty"`
+	LegacyAgentProfile string `json:"agentProfile,omitempty"`
+	ClusterID          string `json:"clusterId"`
+	EnvironmentID      string `json:"environmentId"`
+	ExposureMode       string `json:"exposureMode"`
+	PreviewDomain      string `json:"previewDomain"`
+	IngressClass       string `json:"ingressClass"`
+	NodeHost           string `json:"nodeHost"`
+	SourceSessionID    string `json:"sourceSessionId"`
+	SourceCommitSHA    string `json:"sourceCommitSha"`
 }
 
 type TestEnvironmentSessionResult struct {
@@ -1978,9 +1970,6 @@ type Store interface {
 	UpdateSkill(ctx Context, userID, workspaceID, skillID string, input SkillInput) (SkillDetail, error)
 	DeleteSkill(ctx Context, userID, workspaceID, skillID string) error
 	DuplicateSkill(ctx Context, userID, workspaceID, skillID string, input DuplicateSkillInput) (SkillDetail, error)
-	ListAgentProfiles(ctx Context, userID, workspaceID string) ([]AgentProfile, error)
-	CreateAgentProfile(ctx Context, userID, workspaceID string, input AgentProfileInput) (AgentProfile, error)
-	UpdateAgentProfile(ctx Context, userID, workspaceID, agentID string, input AgentProfileInput) (AgentProfile, error)
 	ListEnvironments(ctx Context, userID, workspaceID string) ([]Environment, error)
 	CreateEnvironment(ctx Context, userID, workspaceID string, input EnvironmentInput) (Environment, error)
 	UpdateEnvironment(ctx Context, userID, workspaceID, environmentID string, input EnvironmentInput) (Environment, error)

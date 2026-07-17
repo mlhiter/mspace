@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-07-07
+> Status: local MVP implementation snapshot, updated 2026-07-17
 
 ## One-Line Definition
 
@@ -20,10 +20,10 @@ The repository now has a runnable local desktop MVP:
 - classify new issues asynchronously by queueing `issue_type_triage` runtime tasks that are claimed by Codex-capable workers and reconciled into one Conventional Commit type label by the server;
 - let updated triage workers return a rewritten title in the same background turn, while the server applies it only when the user has not changed the immediate plain-text draft;
 - label priority manually from Issue Detail, and scan/filter labels from the Issues list;
-- manage Codex-backed agents from the Agents route, including mention, description, enabled state, and role instructions;
+- view the fixed Codex, Claude Code, and Pi catalog plus per-engine Worker availability from the Agents route, while managing Workflow Skills separately;
 - use Inbox as a review feed for unread issue and session updates;
 - open document-style issue detail pages with Markdown-backed rich comments, image attachment thumbnails, lightweight reactions, and linked sessions;
-- mention an enabled agent from issue detail only when a matching active Codex worker exists, then queue server-owned runtime tasks that a worker runs through Codex app-server with the matching managed profile;
+- mention `@codex`, `@claude`, or `@pi` from Issue Detail only when a Worker exposes the exact engine capability, then queue a server-owned `agent_session` for the corresponding adapter;
 - edit the latest unconsumed human comment, then stop and retry a session when a bad prompt has already been consumed;
 - stop a queued or running session from Issue Detail or Session Detail without cancelling the whole issue;
 - run sessions in worker-managed git workdirs under the configured worker root;
@@ -32,7 +32,7 @@ The repository now has a runnable local desktop MVP:
 - show a project runbook in Projects, open it from the Issue Detail sidebar as a read-only TipTap modal, and update it either from direct Markdown edits or from successful agent session artifacts;
 - manage project-level test cases and case suggestions plus workspace-level test plans and issue-backed test runs that start from plans in the Tests route, including modal create/import flows, preview-before-confirm Markdown/text/CSV/Excel `.xlsx` import, field-level case revision summaries, readiness scoring, retry for failed run items, and lightweight human review records for run outcomes;
 - keep signed-in workspace product and runtime state in the server store, including sessions, logs, evidence, environments, Kubernetes cluster compatibility records, issue test environments, handoffs, and execution metadata;
-- keep the server control plane free of Codex runtime dependencies: no Codex CLI in the server image, no Codex home mount in the server Deployment, and no in-process Codex app-server client;
+- keep the server control plane free of Agent runtime dependencies: no Codex, Claude Code, or Pi CLI, credentials, or in-process client in the server;
 - keep workflow skills server-owned and worker-materialized per task, including built-in skills and workspace custom skill revisions, so workers can use the same pinned revision without depending on local global skill installs;
 - inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
 - manage workspace automation policy, keeping source commit capture always on while recording branch / PR handoff state from captured source commits;
@@ -177,16 +177,18 @@ An Issue should hold:
 
 ### Session Creation
 
-A user creates a session by writing an issue comment that mentions an enabled agent profile. In the MVP path, mspace saves the comment first, queues a server-owned runtime task, and then:
+A user creates a Session by writing an Issue comment that mentions one fixed Agent: `@codex`, `@claude`, or `@pi`. In the MVP path, mspace saves the comment first, queues a server-owned runtime task, and then:
 
 - uses a registered runtime worker that claims server tasks;
 - prepares a git worktree for the repository;
-- starts `codex app-server --listen stdio://` inside that worker-prepared worktree for Codex-backed sessions;
-- stores the selected profile in `agent_sessions.agent_profile` and injects the profile instructions from `agent_profiles` into the Codex prompt;
+- freezes `agentEngine` as `codex`, `claude_code`, or `pi` and requires the exact `codex`, `claudeCode`, or `pi` Worker capability;
+- starts the selected engine adapter inside the Worker-prepared worktree while shared Worker Core retains Skill materialization, artifact handling, source capture, and cancellation;
 - streams agent messages, command execution items, status changes, and diagnostics;
 - passes the selected Environment plus environment-specific Kubernetes context, issue namespace, image registry, and exposure settings into the app-server process and turn prompt for deploy/test sessions.
 
-Before the trigger comment is written, mspace resolves the issue's project attachment and checks that a matching active Codex worker exists. Personal desktop workspaces proactively keep the host-local personal worker ready after sign-in and workspace selection, and can still start it as a fallback before an action waits for the next heartbeat; team workspaces require a connected team worker. The server enforces the same project and worker checks and returns a visible conflict instead of creating an unclaimable agent session.
+Before the trigger comment is written, mspace resolves the Issue's project attachment and checks that an active Worker exposes the mentioned Agent's exact capability. Personal desktop workspaces proactively keep one generic host-local Worker ready and discover installed Agent CLIs without launching them; team workspaces require a connected team Worker. The server enforces the same engine, project, runtime-mode, and Worker checks and returns a visible conflict instead of creating an unclaimable Session.
+
+Agent, Skill, Workflow, Worker, and Environment are separate product concepts. Agents are fixed execution engines. Skills are server-managed versioned instruction bundles. Workflows are mspace-owned automations; issue analysis, triage, Tests, import mapping, deploy, and cleanup remain Codex-backed in this release. Workers execute tasks, and Environments are operated targets.
 
 Scoped namespace, ServiceAccount, and kubeconfig generation are target behavior, not implemented behavior in the current local MVP.
 
@@ -228,7 +230,7 @@ MVP features:
 - Tests route with project cases, case suggestions, workspace plans, workspace runs, and dedicated detail pages;
 - issue comments and assignee field;
 - type and priority labels, with worker-backed asynchronous type triage and manual priority selection from Issue Detail;
-- manage agent profiles and create a Codex session from an enabled agent mention in an issue comment;
+- choose Codex, Claude Code, or Pi from the fixed Agent catalog and create a Worker-backed Session from its Issue mention;
 - edit the latest human comment before it has triggered a session;
 - cancel queued or running sessions while keeping the issue retryable;
 - fixed Server Worker development runtime;
@@ -253,7 +255,7 @@ Still outside the current implemented MVP:
 - server-owned GitHub App token minting, branch publishing, and PR automation;
 - automated namespace cleanup policy beyond the current manual cleanup/retain decision.
 
-The product architecture now uses the server control plane as the product and runtime truth for every signed-in workspace. Users, local password credentials, workspaces, membership, optional GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, handoffs, audit, runtime tasks, worker logs, and GitHub App installation state live in the server.
+The product architecture uses the server control plane as the product and runtime truth for every signed-in workspace. Users, local password credentials, workspaces, membership, optional GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, Skills, Environments, Kubernetes cluster compatibility records, issue test environments, handoffs, audit, runtime tasks, worker logs, and GitHub App installation state live in the server. The fixed Agent catalog lives in code and is returned read-only; it is not workspace data.
 
 Display name/avatar fields are snapshots for rendering only. They should not become a second account system; shared issue ownership, comments, and permissions belong behind the control plane.
 
@@ -263,6 +265,7 @@ Display name/avatar fields are snapshots for rendering only. They should not bec
 - No generalized DevOps troubleshooting assistant.
 - No Sealos API dependency as the primary control path.
 - No cluster-wide write permissions for agents.
+- No custom Agent profiles, prompt personas, arbitrary executable definitions, model marketplace, or Agent credential storage in the control plane.
 - No secret reading by default.
 - No multi-agent scheduling before the single-session workflow works.
 - No generic AGENTS.md / CLAUDE.md / Cursor rules management product.

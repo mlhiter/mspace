@@ -70,7 +70,6 @@ async function ensurePersonalWorkerReadiness(input: { authToken: string; workspa
       workspaceId: input.workspaceId,
       queryClient,
       runtimeMode: "personal",
-      requiredCapabilities: { codex: true },
       unavailableMessage: "Personal worker is unavailable.",
       startingMessage: "Personal worker is starting.",
       ensurePersonalWorker: window.mspaceDesktop.ensurePersonalWorker,
@@ -78,7 +77,6 @@ async function ensurePersonalWorkerReadiness(input: { authToken: string; workspa
     await queryClient.invalidateQueries({
       queryKey: queryKeys.runtimeAvailability(input.workspaceId, input.authToken, {
         runtimeMode: "personal",
-        requiredCapabilities: { codex: true },
       }),
     });
     await queryClient.invalidateQueries({ queryKey: queryKeys.runtimeWorkers(input.workspaceId, input.authToken) });
@@ -178,7 +176,7 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function hasExpectedServerHealth(payload: ServerHealthPayload): boolean {
-  if (payload.ok !== true || payload.serverProtocol !== 1) return false;
+  if (payload.ok !== true || payload.serverProtocol !== 2) return false;
   const capabilities = payload.capabilities;
   if (!isObjectRecord(capabilities)) return false;
   return expectedServerCapabilities.every((capability) => capabilities[capability] === true);

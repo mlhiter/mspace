@@ -1,6 +1,6 @@
 # mspace Runbook
 
-> Status: server-owned local MVP operations guide, updated 2026-07-07
+> Status: server-owned local MVP operations guide, updated 2026-07-17
 
 ## Local Data
 
@@ -26,7 +26,7 @@ The product and runtime state for signed-in workspaces lives in the server store
 
 For Tests setup and execution sessions, `test-setup-result.json` and `test-result.json` are runtime completion checkpoints. If a Codex turn writes the matching artifact but the app-server turn never reports final completion, the worker should still complete the runtime task from the artifact. If the Codex turn completes without the matching artifact, the worker should fail the runtime task with a missing-artifact error so the run cannot appear successful without evidence. If a `test-result.json` references local screenshot paths, the completion checkpoint is not ready until those screenshots can be read and embedded for server persistence. If the worker is restarted with the same worker name, it may reclaim its own stale `running` task, reuse the existing session workdir, wait for referenced screenshots when needed, and submit the artifact-backed final result so the server can reconcile the run.
 
-The server store records users, local password credentials, GitHub identities, workspaces, memberships, OAuth state, OAuth results, mspace auth sessions, projects, project runbooks, project test cases, test case revisions, test case suggestions, test plans, test runs, issues, comments, reactions, labels, Inbox receipts, agent profiles, workspace custom workflow skills, skill revisions, built-in skill settings, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, workspace GitHub App installation state, agent sessions, runtime registration tokens, runtime workers, runtime tasks, task events, and task logs. Postgres stores these in migrated tables. SQLite personal mode stores a server-owned snapshot in `store_snapshots` and persists after mutating requests plus the OAuth GET routes that create or consume login state.
+The server store records users, local password credentials, GitHub identities, workspaces, memberships, OAuth state/results, mspace auth sessions, projects, runbooks, Tests state, issues, comments, reactions, labels, Inbox receipts, workspace Skills and revisions, Environments, issue test environments, handoffs, GitHub App state, Agent Sessions, runtime credentials, Workers, tasks, events, and logs. The fixed Codex/Claude Code/Pi Agent catalog is code-owned and is not stored in Postgres or SQLite. Migration `030_fixed_agent_engines.sql` drops the obsolete `agent_profiles` table when a server next runs its normal migration sequence; do not run that migration manually against production as part of local verification.
 
 Docker-backed workers store target project source under the worker root volume, not in the host checkout. The dry-run worker defaults to the `mspace-worker-dev-root` Docker volume, and the Codex-capable worker defaults to `mspace-worker-codex-dev-root`; both mount that volume at `/var/lib/mspace-worker`.
 
@@ -63,9 +63,9 @@ cp .env.example .env.local
 pnpm run server
 ```
 
-For personal desktop workspaces, the app starts and keeps alive a host-local Codex worker as soon as auth and workspace selection are ready, with action-level preflight still available before submitting agent or test work. Electron main owns the bundled worker process and serializes concurrent ensure requests; the server `runtime_workers` row is a heartbeat snapshot, not proof that the current app process still owns a worker after restart. Renderer readiness flows call the server runtime availability API with the requested `runtimeMode` and capabilities, ask Electron main to idempotently ensure the personal worker in personal mode, and never auto-start a worker for team workspaces. The worker uses the active desktop server URL, a short-lived workspace registration credential, `MSPACE_WORKER_MODE=personal`, and the user's local Codex configuration. Electron writes the credential to `<Electron userData>/worker/tokens/<workspace-id>.token`, renews the 12-hour credential before expiry, and revokes the previous credential after a short grace period. The worker rereads the token file for runtime API calls, so credential renewal should be invisible during normal personal use. Workspace Settings labels these rows as automatic desktop credentials and keeps expired/replaced rows under credential history. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
+For personal desktop workspaces, the app starts and keeps alive one generic host-local Worker as soon as auth and workspace selection are ready. Electron main owns the bundled process, discovers installed Agent executables without running them, and serializes concurrent ensure requests. Renderer readiness calls the server with the requested engine capability and asks Electron main to idempotently ensure it; team workspaces never auto-start a Worker. The Worker uses the active desktop server URL, a short-lived registration credential, `MSPACE_WORKER_MODE=personal`, and each installed Agent CLI's local configuration. Set `MSPACE_AUTO_PERSONAL_WORKER=0` to disable this behavior while debugging.
 
-Ordinary personal-workspace startup prepares a Codex-only worker and does not launch Chrome. For browser-backed test batches, including `ui` cases and functional cases that explicitly require platform/session UI entry, the server returns `browser:true` plus `chrome_cdp:true` in the Test Plan or Run detail `requiredCapabilities`; renderer action preflight uses that map instead of reclassifying cases. Electron then prepares a dedicated CDP endpoint and starts a separate `-browser` companion Worker while leaving the Codex-only Worker alive. Both processes reread the same managed credential file, but use different Worker names, capability snapshots, and execution roots; the companion stores its repo cache and workdirs under `<Electron userData>/worker/browser-companion`, avoiding cross-process Git cache/worktree races. Electron first honors `MSPACE_CHROME_CDP_URL` if it is already reachable, otherwise it tries a desktop-managed Chrome profile under `<Electron userData>/worker/browser-profile`, then falls back to an Electron-managed Chromium host under `<Electron userData>/worker/electron-browser-profile` when local Chrome cannot expose CDP. The reachable CDP URL is passed only to the browser-capable Worker as `MSPACE_CHROME_CDP_URL`. If no CDP endpoint can be reached, the browser-required preflight fails and leaves the Codex-only Worker untouched.
+Ordinary personal-workspace startup does not launch Chrome. Browser-backed Tests remain Codex system Workflows: when the server requires `codex`, `browser`, and `chrome_cdp`, Electron prepares CDP and starts a separate `-browser` companion Worker while leaving the generic base Worker alive. The processes use different names, capability snapshots, and execution roots; the companion stores its repo cache/workdirs under `<Electron userData>/worker/browser-companion`. If no CDP endpoint can be reached, browser-required preflight fails and leaves the base Worker untouched.
 
 For team or self-hosted worker runtime hosts, connect a worker from Workspace Settings:
 
@@ -84,7 +84,7 @@ export MSPACE_RUNTIME_TOKEN="msw_..."
 pnpm worker
 ```
 
-The worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, runs `issue_type_triage` tasks that can return both the final title candidate and type classification, and can execute `agent_session` tasks by preparing its own repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, then starting `codex app-server --listen stdio://` there. The combined result keeps the existing `codex:true` capability and priority-0 queue contract, so rolling upgrades preserve type classification even when an older worker omits `title`. If an `agent_session` payload carries `requiredSkills`, the worker verifies file paths and hashes, writes the skill bundle under `<artifact-dir>/skills/`, and injects `MSPACE_SESSION_SKILLS_DIR` plus `MSPACE_SESSION_SKILL_MANIFEST` without changing global Codex configuration. Workspace Settings shows these tasks as issue-linked operational rows and keeps protocol payloads, results, events, and logs in expandable details.
+The Worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, and keeps system Workflows such as `issue_type_triage` on Codex. User `agent_session` tasks select the exact `codex`, `claudeCode`, or `pi` capability. Shared Worker Core prepares the repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, materializes server-owned Skills, handles artifacts and source capture, and assembles the common result; the Codex, Claude Code, and Pi adapters own their CLI protocols, cancellation, terminal evidence, and opaque refs. If an `agent_session` payload carries `requiredSkills`, the Worker verifies file paths and hashes, writes the Skill bundle under `<artifact-dir>/skills/`, and injects `MSPACE_SESSION_SKILLS_DIR` plus `MSPACE_SESSION_SKILL_MANIFEST` without changing global engine configuration. Agent subprocesses do not inherit Worker registration or control-plane credentials. Workspace Settings shows these tasks as issue-linked operational rows and keeps protocol payloads, results, events, and logs in expandable details.
 
 Codex configuration and authentication belong to worker runtimes. The server control plane queues work and applies runtime results, but it does not install Codex or mount Codex credentials.
 
@@ -276,7 +276,7 @@ Environment, project, and issue test environment fields are passed into sessions
 | `MSPACE_INGRESS_CLASS` | Optional issue ingress class. |
 | `MSPACE_NODE_HOST` | Optional issue NodePort host. |
 
-Session metadata is also passed into the Codex app-server process environment as:
+Session metadata is passed into the selected Agent process environment as:
 
 | Variable | Source |
 | --- | --- |
@@ -284,7 +284,7 @@ Session metadata is also passed into the Codex app-server process environment as
 | `MSPACE_ISSUE_ID` | Current issue id. |
 | `MSPACE_SESSION_ID` | Current session id. |
 | `MSPACE_AGENT_TOKEN` | Scoped bearer token for agent writes. |
-| `MSPACE_AGENT_PROFILE` | Selected managed agent profile id. |
+| `MSPACE_AGENT_ENGINE` | Selected fixed engine id: `codex`, `claude_code`, or `pi`. |
 | `MSPACE_SESSION_BRANCH` | Planned session branch. |
 | `MSPACE_SESSION_WORKDIR` | Prepared agent working directory. For local project subdirectories, this is the subdirectory inside the worker-created git worktree. |
 | `MSPACE_SOURCE_SESSION_ID` | Selected source session for a deploy/test continuation, when present. |
@@ -346,7 +346,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 
 ## Workspace Runtime Checks
 
-List server-owned agent profiles:
+List the fixed read-only Agent catalog:
 
 ```bash
 curl -H "Authorization: Bearer <msp-token>" \
@@ -511,7 +511,7 @@ docker exec mspace-postgres-dev psql -U mspace -d mspace -Atc "select count(*) f
 
 ### Worker does not claim tasks
 
-Agent mentions are rejected before queueing when no matching active Codex worker exists. First check the server readiness contract for the runtime mode and required capabilities, then inspect worker/task details when the reason code points at liveness or capability drift:
+Agent mentions are rejected before queueing when no active Worker exposes the selected engine capability. Check readiness with `codex`, `claudeCode`, or `pi`, then inspect Worker/task details when the reason code points at liveness or capability drift:
 
 ```bash
 curl -G http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime/availability \
@@ -530,9 +530,9 @@ curl -H "Authorization: Bearer <msp-token>" \
   "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks?limit=10&offset=0"
 ```
 
-The task's `runtimeMode` and `requiredCapabilities` must match a ready worker heartbeat.
+The task's `runtimeMode` and `requiredCapabilities` must match a ready Worker heartbeat. New `agent_session` tasks are normalized so exactly one engine capability is true; conflicting raw debug payloads are rejected. Missing `agentEngine` is treated as Codex only for legacy payload compatibility.
 
-If a Tests plan includes any `ui` cases or functional cases that explicitly require browser/platform/session UI entry, the server requires a fresh worker with `{"codex":true,"browser":true,"chrome_cdp":true}`. In personal desktop mode, the start or retry action asks Electron to launch a managed CDP endpoint and a separate browser companion Worker; restarting the desktop or stopping the Codex-only Worker is not required. If Chrome exists but CDP never becomes reachable, Electron should fall back to its bundled Chromium host in local dev. If no browser-capable Worker appears, provide a reachable `MSPACE_CHROME_CDP_URL`, or set `MSPACE_CHROME_EXECUTABLE` / `MSPACE_ELECTRON_EXECUTABLE` before starting the desktop app.
+If a Tests plan includes any `ui` cases or functional cases that explicitly require browser/platform/session UI entry, the server requires a fresh Worker with `{"codex":true,"browser":true,"chrome_cdp":true}`. In personal desktop mode, the start or retry action asks Electron to launch a managed CDP endpoint and a separate browser companion Worker; restarting the desktop or stopping the generic base Worker is not required. If Chrome exists but CDP never becomes reachable, Electron should fall back to its bundled Chromium host in local dev. If no browser-capable Worker appears, provide a reachable `MSPACE_CHROME_CDP_URL`, or set `MSPACE_CHROME_EXECUTABLE` / `MSPACE_ELECTRON_EXECUTABLE` before starting the desktop app.
 
 ### Test run stays running after artifacts exist
 
@@ -570,6 +570,19 @@ test -s ~/.mspace/codex-worker-home/config.toml
 ```
 
 Re-run `scripts/run-server-worker-codex-dev.sh` after refreshing `${CODEX_HOME:-~/.codex}`.
+
+### Claude Code or Pi Session fails before terminal completion
+
+Confirm the command is installed in the same `PATH` passed to the Worker:
+
+```bash
+command -v claude
+command -v pi
+claude --version
+pi --version
+```
+
+Claude Code must emit a terminal stream-JSON `result`; Pi must emit RPC `agent_end`. Exit code zero without that evidence is a failed task. Pi cancellation sends an RPC `abort` before process termination, and Pi `sessionFile` paths remain local to the Worker. Authentication and model configuration are owned by each CLI installation; do not put those credentials in the mspace server.
 
 ### Test environment resources fail to load
 

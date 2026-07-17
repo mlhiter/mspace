@@ -63,22 +63,16 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "mspace.fullname" . }}-config
-            - secretRef:
-                name: {{ include "mspace.secretName" . }}
-          {{- if or .Values.secrets.runtimeTokenExistingSecret .Values.worker.env }}
           env:
-            {{- if .Values.secrets.runtimeTokenExistingSecret }}
             - name: MSPACE_RUNTIME_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "mspace.runtimeTokenSecretName" . }}
                   key: {{ include "mspace.runtimeTokenSecretKey" . }}
-            {{- end }}
             {{- range $key, $value := .Values.worker.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
-          {{- end }}
           volumeMounts:
             - name: work
               mountPath: {{ .Values.worker.workRoot }}

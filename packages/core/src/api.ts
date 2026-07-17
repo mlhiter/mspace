@@ -1,6 +1,5 @@
 import type {
-  AgentProfile,
-  AgentProfileInput,
+  AgentEngineCatalogItem,
   AgentSession,
   AuthMeResult,
   AuthPollResult,
@@ -774,7 +773,7 @@ export const controlPlaneApi = {
       headers: authHeaders(token),
     }),
   listAgents: (token: string, workspaceId: string) =>
-    requestControlPlane<AgentProfile[]>(`/api/workspaces/${workspaceId}/agents`, {
+    requestControlPlane<AgentEngineCatalogItem[]>(`/api/workspaces/${workspaceId}/agents`, {
       headers: authHeaders(token),
     }),
   listSkills: (token: string, workspaceId: string) =>
@@ -805,18 +804,6 @@ export const controlPlaneApi = {
   duplicateSkill: (token: string, workspaceId: string, skillId: string, input: DuplicateSkillInput = {}) =>
     requestControlPlane<SkillDetail>(`/api/workspaces/${workspaceId}/skills/${encodeURIComponent(skillId)}/duplicate`, {
       method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify(input),
-    }),
-  createAgent: (token: string, workspaceId: string, input: AgentProfileInput) =>
-    requestControlPlane<AgentProfile>(`/api/workspaces/${workspaceId}/agents`, {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify(input),
-    }),
-  updateAgent: (token: string, workspaceId: string, agentId: string, input: AgentProfileInput) =>
-    requestControlPlane<AgentProfile>(`/api/workspaces/${workspaceId}/agents/${agentId}`, {
-      method: "PUT",
       headers: authHeaders(token),
       body: JSON.stringify(input),
     }),
@@ -927,7 +914,7 @@ export const controlPlaneApi = {
       headers: authHeaders(token),
       body: JSON.stringify(input),
     }),
-  requestTestEnvironmentCleanup: (token: string, workspaceId: string, issueId: string, input?: { agentProfile?: string }) =>
+  requestTestEnvironmentCleanup: (token: string, workspaceId: string, issueId: string, input?: { agentEngine?: string; provider?: string; agentProfile?: string }) =>
     requestControlPlane<{ sessionId: string; testEnvironment: IssueTestEnvironment }>(`/api/workspaces/${workspaceId}/issues/${issueId}/test-environment/cleanup`, {
       method: "POST",
       headers: authHeaders(token),

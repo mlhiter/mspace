@@ -1,6 +1,6 @@
 # mspace MVP Information Architecture
 
-> Status: local MVP implementation snapshot, updated 2026-07-07
+> Status: local MVP implementation snapshot, updated 2026-07-17
 
 ## IA Goal
 
@@ -36,7 +36,7 @@ Navigation rules:
 - Inbox is the unread review surface for issue and session updates.
 - Issues is the durable knowledge surface and issue creation home.
 - Tests is the workspace quality surface for project-level cases/suggestions and workspace-level plans/runs. It sits after Issues because test execution still routes through issue-backed worker sessions.
-- Agents is the managed profile surface for Codex-backed collaborators and mentions, plus the basic workspace skill management surface for inspecting server-managed skill revisions and governing issue-comment `/` and `#` calls.
+- Agents is the read-only availability surface for fixed Codex, Claude Code, and Pi collaborators, plus a separate workspace Skill management surface for server-managed revisions and Issue-comment `/` and `#` calls.
 - Environments is reusable target access: Kubernetes kubeconfig import, reachability status, registry/exposure defaults, and virtual machine SSH target metadata with password/private-key login validation.
 - Projects is configuration and project-level history.
 - Workspace Settings is accessed from the workspace identity menu instead of the main rail, because it controls automation, membership, and runtime worker policy for the current workspace rather than daily issue work.
@@ -236,7 +236,7 @@ The header should show:
 - assignee;
 - latest activity summary.
 
-Primary action should stay in the reply composer, not in a large runtime control panel. To ask an agent, the user writes a normal issue comment and mentions an enabled agent from the Agents module.
+Primary action should stay in the reply composer, not in a large runtime control panel. To ask an Agent, the user writes a normal Issue comment and mentions `@codex`, `@claude`, or `@pi` from the fixed catalog.
 
 When an issue has no attached project, Issue Detail should stay readable and commentable but block agent execution, PR handoff, test environments, and project runbook access until a project is attached. Project attachment remains available from the Project sidebar section, and the reply/edit composer must also open the same attachment flow when a user tries to save or send a supported agent mention. The trigger comment should not be written before the project is attached.
 
@@ -272,7 +272,7 @@ The composer is the main interaction control:
 - Markdown comments stay on the issue through the same TipTap-backed document editor used for issue creation, including image upload, paste, drop, and thumbnail previews;
 - comment reactions stay as lightweight metadata on comments and should not rewrite the Markdown body or agent prompt history;
 - the latest human-authored comment can be edited inline only while it is still unconsumed by an agent session, including adding a supported agent mention and then saving that edit to queue the turn;
-- supported agent mentions first resolve an attached project, then verify a matching active Codex worker, then save the trigger comment and queue a worker-backed Codex app-server turn with the selected managed profile;
+- supported Agent mentions first resolve an attached project, then verify the exact engine capability, save the trigger comment, and queue a Worker-backed Session with `agentEngine`;
 - unsupported agent mentions should be visible but not queued;
 - when an agent is already working, a second agent turn should be disabled until the current turn finishes or is stopped.
 - issue lifecycle actions live in the composer footer with the comment submit controls. Show the primary close or reopen action directly, hide less common close reasons such as `Close as not planned` behind a compact dropdown, and do not repeat the current issue status inside the composer.
@@ -283,7 +283,7 @@ The UI can provide lightweight mention assistance, but it should not feel like a
 
 Agent turns should appear inline in the timeline and show the currently attached session first:
 
-- provider and model;
+- Agent engine plus opaque engine Session/run references;
 - runtime mode and selected worker, with personal/team or Kubernetes-hosted fixed worker called out explicitly;
 - deployment target Environment and namespace when attached;
 - current state;
@@ -322,18 +322,18 @@ In the default test path, the current review packet should be grounded in the is
 
 Current implementation:
 
-- shows issue body first, then a timeline of human comments, Codex turns, and failure/deploy attention events;
+- shows Issue body first, then a timeline of human comments, fixed-Agent turns, and failure/deploy attention events;
 - supports rich Markdown comments and managed agent mentions from the same reply box;
-- reads enabled mention suggestions from the Agents module instead of a frontend constant;
+- reads the fixed `@codex`, `@claude`, and `@pi` catalog from the server and rejects old Profile-shaped responses;
 - resolves project attachment and checks worker liveness before saving an agent trigger comment; personal desktop mode may auto-start the local worker, while team workspaces require a connected team worker;
-- saves the trigger comment before queuing the worker-backed Codex session, so accepted turns are visible in the issue history;
+- saves the trigger comment before queueing the Worker-backed Agent Session, so accepted turns are visible in Issue history;
 - sends the mention-stripped comment as the current turn request, ahead of the original issue context;
-- renders completed Codex replies as plain timeline content without an outer result card or redundant completion mark, while keeping active and abnormal session states explicit;
+- renders completed Agent replies as plain timeline content without an outer result card or redundant completion mark, while keeping engine identity and abnormal states explicit;
 - shows server-queued `issue_analysis` sessions as read-only Issue analysis using the `think` workflow skill, rather than as a generic runtime task or hidden background job;
 - shows Type and Priority controls in the quiet metadata sidebar, with a `Classifying...` state while a worker-backed `issue_type_triage` task assigns type;
 - keeps the quiet metadata sidebar on Overview only, while Commits, Sessions, and Evidence use the full page width for review-heavy content;
 - exposes a Stop action for queued or running sessions, cancelling only that session and rendering the stop as a compact, non-editable event while leaving the issue status unchanged;
-- refreshes active session logs and status while showing only the latest Codex-authored agent message in one fixed-height activity row; command, reasoning, plan, tool, file, and status logs stay out of user-facing progress copy and remain available through Session Detail;
+- refreshes active Session logs and status while showing only the latest normalized Agent message in one fixed-height activity row; command, reasoning, plan, tool, file, status, and diagnostic logs stay out of user-facing progress copy and remain available through Session Detail;
 - renders a compact failure event with only the user-facing error summary when a session fails;
 - keeps structured failure records continueable from the timeline with Continue / Retry deploy / Stop affordances when applicable, while failed commands, runtime excerpts, phase, session ids, and namespace/resource hints stay internal for debugging instead of becoming user-facing evidence entry points;
 - exposes manual test deployment controls in the metadata sidebar: deploy test env, cleanup namespace, and retain namespace;
@@ -344,7 +344,7 @@ Current implementation:
 - shows issue-level branch / PR handoff state on the Commits tab and sidebar, with actions to record one handoff for the selected source branch and refresh the server-owned handoff record; GitHub App-backed PR creation/refresh remains a later executor step;
 - keeps raw command trails collapsed in session logs, with exploratory commands excluded from persisted review evidence;
 - shows a compact Project runbook entry in the Workflow sidebar; clicking it opens a read-only TipTap runbook modal;
-- renders the issue creator, human comments, system comments, Codex-backed agent turns, and actor-authored status changes with their current display names and avatar sources;
+- renders the Issue creator, human comments, system comments, Codex/Claude Code/Pi turns, and actor-authored status changes with distinct engine identities;
 - renders comment reactions inline with quiet reaction chips and a compact icon picker;
 - renders status changes as compact one-line events with `from` and `to` badges instead of showing the full stored status-change comment body;
 - links into full session detail for deep inspection.
@@ -468,8 +468,7 @@ This page is for deep execution inspection. It should not replace Issue Detail a
 
 Current implementation:
 
-- shows session metadata, agent instructions, Codex thread/turn state, branch, workdir, status, issue, and project;
-- exposes the stored agent profile in metadata and generated summaries;
+- shows Session metadata, Agent engine, generic engine Session/run refs, historical Codex thread/turn fallbacks, branch, workdir, status, Issue, and project;
 - exposes manual worktree cleanup for retained, non-active sessions;
 - shows session-scoped logs and evidence;
 - inspects the session worktree with `git status`, changed files, and diff preview;
@@ -526,7 +525,7 @@ Must-have for MVP:
 - Issues list and issue creation flow
 - Issue detail as the main work surface
 - Comments, reactions, and progress updates
-- Manage Agents, manage workspace workflow skills, and queue worker-backed Codex sessions from enabled agent-profile issue comments
+- View fixed Agent availability, manage workspace Workflow Skills, and queue Worker-backed Sessions from `@codex`, `@claude`, or `@pi` Issue comments
 - Issue labels
 - Stop queued or running sessions
 - Agent turns inline on the issue timeline
@@ -573,7 +572,7 @@ Implemented as of 2026-06-03:
 1. Inbox review list, Issues list, and issue creation flow.
 2. Issue detail shell with document body and activity thread.
 3. Project create, settings, guarded delete, and repository validation.
-4. Managed Agents route plus dynamic mention flow from issue comments.
+4. Read-only fixed Agents route plus dynamic engine mention flow from Issue comments.
 5. Inline agent turn summaries and live session state updates.
 6. Session detail with logs, workspace snapshot, branch comparison, and issue summary draft.
 7. Server control plane, runtime worker registration, and git worktree isolation.

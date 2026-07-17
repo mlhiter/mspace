@@ -1,6 +1,6 @@
 # mspace Architecture Notes
 
-> Status: server-owned runtime, workflow skill, and test-module surfaces, updated 2026-07-07
+> Status: fixed Agent engines, server-owned runtime, workflow Skill, and test-module surfaces, updated 2026-07-17
 
 ## Current Implementation Snapshot
 
@@ -20,44 +20,45 @@ The control plane owns:
 
 - users, local password credentials, workspaces, membership, GitHub identity, and mspace auth sessions;
 - projects, project runbooks, project test cases, test case revisions, test case proposals, workspace test plans, workspace test runs, issues, child issue tasks, comments, reactions, labels, Inbox events, and per-user receipts;
-- workspace settings, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review evidence, failures, and source change records;
+- workspace settings, the fixed Agent catalog contract, Skills, Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, review evidence, failures, and source change records;
 - runtime worker registration, task queue state, task logs, task events, cancellation, and task results;
 - workspace GitHub App installation state.
 
 Workers own:
 
 - repository cache and per-session workdir preparation;
-- Codex app-server lifecycle;
+- Agent CLI lifecycle and protocol adaptation;
 - command execution and source capture;
 - session artifacts while running;
 - streaming logs and final results back to the server.
 
-The server does not own any Codex process or credential lifecycle. It queues tasks that require `{"codex":true}`, records task events/logs/results, and reconciles final output back into product state. The Codex CLI, `CODEX_HOME`, `auth.json`, and `config.toml` belong to worker runtimes only.
+The server does not own any Agent process or credential lifecycle. It freezes `agentEngine`, queues the exact `codex`, `claudeCode`, or `pi` capability, records task events/logs/results, and reconciles final output back into product state. Agent CLI authentication and configuration belong to Worker runtimes only.
 
-The server owns the workflow skill catalog. Built-in skills are embedded from `mlhiter/skills` under `server/internal/control/builtin_skills/`; workspace custom skills, revisions, and built-in workspace settings live in the server store. `/api/workspaces/{workspaceID}/skills` exposes catalog metadata and basic management endpoints, while issue-session creation still accepts only `skillSlugs`. When a product or user flow requires a skill, the server pins the selected skill bundle and includes the files in the runtime task payload. Workers materialize those files into the session artifact directory and point Codex at that session-scoped skill root; workers do not choose local installed skills as the source of truth.
+The server owns the Workflow Skill catalog. Built-ins are embedded from `mlhiter/skills`; workspace custom Skills, revisions, and built-in settings live in the server store. Session creation accepts only `skillSlugs`; the server pins bundles and Workers materialize them into the Session artifact directory. Agent adapters receive common instructions pointing at that session-scoped Skill root. Workers never choose locally installed Skills as product truth.
 
 ## Runtime Flow
 
 ```text
 Desktop Issue Detail
   -> resolve attached project before agent turns
-  -> verify matching active Codex worker
+  -> map @codex / @claude / @pi to one exact engine capability
+  -> verify matching active Worker
   -> POST server comment
-  -> POST server agent session with optional skill slugs from /slug or #slug tokens
+  -> POST server Agent Session with agentEngine and optional Skill slugs
 Server
-  -> validate workspace membership and project attachment
+  -> validate workspace membership, project attachment, engine, and runtime mode
   -> resolve enabled built-in or workspace skill slugs to server-owned bundles
   -> snapshot issue/project/runbook context
-  -> create agent_sessions row
-  -> enqueue runtime_tasks(kind=agent_session)
+  -> enqueue provider-neutral runtime_tasks(kind=agent_session) with exact capability
 Worker
   -> claim matching task
   -> prepare repo cache and session workdir
   -> resolve local git subdirectory projects to repo root plus agent cwd
-  -> start codex app-server --listen stdio://
+  -> start Codex app-server, Claude Code stream JSON, or Pi RPC adapter
+  -> require engine-specific terminal evidence
   -> stream logs to runtime_task_logs
   -> capture source metadata and artifacts
-  -> complete runtime task with result JSON
+  -> complete with agentEngine and opaque engineSessionRef / engineRunRef
 Server
   -> derives Session Detail and Issue change nodes from task records
 Desktop
@@ -68,11 +69,11 @@ Personal and team workspaces use the same server API and runtime task protocol. 
 
 For personal local projects, the selected project path may be the repository root or a directory inside a git repository. The worker resolves the git root for clone/cache and worktree creation, then points the agent working directory at the selected subdirectory inside that session worktree. Team projects still use GitHub URLs so remote team workers do not depend on a user's Mac-local folder path.
 
-In desktop personal mode, Electron manages the local worker bootstrap credential lifecycle and treats the worker as platform readiness after auth and workspace selection. It creates a short-lived personal `msw_...` credential when needed, writes it to an Electron user-data token file, starts a host-local Codex-only Worker with `MSPACE_RUNTIME_TOKEN_FILE`, renews the credential before expiry, and revokes the previous token after a grace period. Ordinary startup never prepares CDP. When action preflight explicitly requires `browser` or `chrome_cdp`, Electron prepares CDP and starts a separately named browser companion Worker that rereads the same token file but uses an isolated repo/workdir root. The base Worker stays alive, avoiding task interruption and cross-process Git cache races while the browser capability becomes available.
+In desktop personal mode, Electron manages one generic local Worker and its short-lived registration credential. It discovers installed `codex`, `claude`, and `pi` executables without launching them and advertises exact engine capabilities. Explicit Codex actions still check for a Codex auth file; other engine auth is adapter-owned. Ordinary startup never prepares CDP. Browser-backed Codex Workflows use a separately named companion Worker with an isolated repo/workdir root.
 
-In customer Helm deployments, the fixed-worker path can bootstrap the team workspace and runtime token in one install. When `bootstrap.teamWorkspace.enabled=true`, the chart stores one `msw_...` token in the release Secret, passes it to the server as `MSPACE_BOOTSTRAP_RUNTIME_TOKEN`, and passes the same Secret key to the worker as `MSPACE_RUNTIME_TOKEN`. Server startup ensures the bootstrap admin, creates or finds the named team workspace owned by that admin, and registers the token against that workspace. Codex auth/config still stays out of the server: the worker mounts `mspace-codex-home` with `auth.json` and `config.toml`, while the server only sees the mspace runtime registration token.
+In customer Helm deployments, the fixed-worker path can bootstrap the team workspace and runtime token in one install. When `bootstrap.teamWorkspace.enabled=true`, the chart stores one `msw_...` token in the release Secret, passes it to the server as `MSPACE_BOOTSTRAP_RUNTIME_TOKEN`, and injects only that Secret key into the Worker as `MSPACE_RUNTIME_TOKEN`; the Worker does not receive database, GitHub, OAuth, or bootstrap-admin values from the Server Secret. Server startup ensures the bootstrap admin, creates or finds the named team workspace owned by that admin, and registers the token against that workspace. Codex auth/config still stays out of the server: the Worker mounts `mspace-codex-home` with `auth.json` and `config.toml`, while the server only sees the mspace runtime registration token. Agent subprocesses strip the Worker registration and control-plane environment before adding server-owned Session metadata.
 
-Agent session creation is guarded rather than left to wait in the queue. Issue Detail uses `GET /api/workspaces/{workspaceID}/runtime/availability` as the product-facing preflight for the selected runtime mode and required capabilities; personal desktop mode still asks Electron main to ensure the host-local Worker before trusting a fresh server heartbeat snapshot. Test Plan and Run detail responses carry the server-computed `requiredCapabilities` union, and renderer preflight forwards that map instead of maintaining a second browser-classification rule. The server repeats the same active Codex worker check and returns HTTP `409` with `no active codex worker` when no matching online worker exists.
+Agent Session creation is guarded rather than left to wait in the queue. Issue Detail uses `GET /runtime/availability` with the selected engine capability, and personal mode asks Electron main to ensure the local Worker before trusting heartbeat state. The server repeats the same check and returns HTTP `409` with `no active agent worker` when no matching online Worker exists. Public raw debug task creation rejects `agent_session`; only the Issue Session and system Workflow paths may construct its engine, repository, environment, automation, and artifact fields.
 
 Final title refinement reuses the existing issue type triage boundary, so Issue creation does not add a second automatic Codex turn:
 
@@ -183,7 +184,7 @@ Main server-owned state groups:
 - Product state: `projects`, `project_runbooks`, `project_runbook_revisions`, `issues`, `comments`, `comment_reactions`, `issue_label_definitions`, `issue_labels`.
 - Test module: `test_cases`, `test_case_revisions`, `test_case_proposals`, `test_plans`, `test_plan_cases`, `test_runs`, `test_run_items`, and `test_artifacts`. Cases and suggestions are project-level. Plans and runs are workspace-level orchestration records that keep a primary project for compatibility and preserve per-case/per-item project identity. Plans can store lightweight setup steps; runs freeze setup text plus setup status, setup issue/session, setup result, and run context. Valid test case types are `functional`, `ui`, `api`, and `deployment`; specialized UI/CDP, API harness, deployment orchestration, and multi-worker scheduling remain later execution capabilities behind the same Issue/Worker loop.
 - Inbox: `issue_events`, `issue_event_receipts`, `issue_watchers`.
-- Runtime surfaces: `workspace_settings`, `workspace_github_app_installations`, `agent_profiles`, embedded built-in workflow skill catalog, `workspace_skills`, `workspace_skill_revisions`, `workspace_builtin_skill_settings`, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`.
+- Runtime surfaces: `workspace_settings`, `workspace_github_app_installations`, a code-owned fixed Agent catalog, embedded built-in Workflow Skill catalog, `workspace_skills`, `workspace_skill_revisions`, `workspace_builtin_skill_settings`, `environments`, `clusters`, `issue_test_environments`, `issue_handoffs`. Migration 030 drops the obsolete `agent_profiles` table.
 - Runtime queue: `runtime_registration_tokens`, `runtime_workers`, `runtime_tasks`, `runtime_task_events`, `runtime_task_logs`.
 - Issue title refinement and type classification share `runtime_tasks.kind="issue_type_triage"`; title compare-and-set and type-label reconciliation remain field-independent when the task reaches a final state.
 - Automatic issue analysis is represented as `runtime_tasks.kind="agent_session"` with payload `automation="issue_analysis"`, `sandbox="read-only"`, `sourceCapture=false`, and a required server-owned `think` skill bundle.
@@ -219,7 +220,7 @@ Server route groups:
 - project and runbook APIs;
 - project test case, case revision, case proposal, test plan, and test run APIs;
 - issue/comment/task/label/reaction APIs;
-- workspace setting, agent profile, skill catalog, environment, and cluster compatibility APIs;
+- workspace setting, read-only fixed Agent catalog, Skill catalog, Environment, and cluster compatibility APIs;
 - issue test environment deploy/cleanup/retain/resources/probe APIs;
 - issue handoff create/refresh APIs;
 - session creation/detail/cancellation APIs;
@@ -312,7 +313,7 @@ Team invitation setup follows the same user-centered rule. Workspace Settings cr
 
 Open account registration creates a personal workspace and a personal runtime boundary. Only server-admin logins configured by `MSPACE_SERVER_ADMIN_LOGINS` or `MSPACE_BOOTSTRAP_ADMIN_LOGIN` can create team workspaces. Team server runners are reachable only through membership in a team workspace, and runtime worker/task mode must match the workspace kind.
 
-Tests stays focused on project-level cases/suggestions plus workspace-level plans, runs, retry, and run review records. Agents stays focused on mentionable Codex-backed role behavior plus basic workspace skill management. Environments stays focused on reusable Kubernetes and VM validation targets. Projects stays focused on repository metadata and project runbooks. Workflow skills are an execution contract for mspace product flows and issue comments, not a generic marketplace or remote installer.
+Tests stays focused on project-level cases/suggestions plus workspace-level plans, runs, retry, and run review records. Agents shows read-only Codex, Claude Code, and Pi availability plus separate Skill management. Environments stays focused on reusable Kubernetes and VM validation targets. Workflow Skills are an execution contract for product flows and Issue comments, not Agent personas, a marketplace, or a remote installer.
 
 The desktop visual language is a quiet Notion-like workspace: narrow left sidebar, document pages, compact status rows, subdued blocks, restrained icon actions, and no decorative dashboard language.
 

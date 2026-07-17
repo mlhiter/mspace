@@ -2596,20 +2596,25 @@ func normalizeCreateRuntimeTaskInput(input CreateRuntimeTaskInput) (CreateRuntim
 	if err != nil {
 		return CreateRuntimeTaskInput{}, fmt.Errorf("payload %w", err)
 	}
+	if input.Kind == "agent_session" {
+		requiredCapabilities, payload, err = normalizeAgentSessionRuntimeTask(requiredCapabilities, payload)
+		if err != nil {
+			return CreateRuntimeTaskInput{}, err
+		}
+	}
 	input.RequiredCapabilities = requiredCapabilities
 	input.Payload = payload
 	return input, nil
 }
 
-func normalizeCreateAgentSessionInput(input CreateAgentSessionInput) CreateAgentSessionInput {
-	input.Provider = strings.ToLower(strings.TrimSpace(input.Provider))
-	if input.Provider == "" {
-		input.Provider = "codex"
+func normalizeCreateAgentSessionInput(input CreateAgentSessionInput) (CreateAgentSessionInput, error) {
+	engine, err := normalizeAgentEngineInput(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		return CreateAgentSessionInput{}, err
 	}
-	input.AgentProfile = strings.TrimSpace(input.AgentProfile)
-	if input.AgentProfile == "" {
-		input.AgentProfile = "codex"
-	}
+	input.AgentEngine = engine
+	input.LegacyProvider = ""
+	input.LegacyAgentProfile = ""
 	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
 	input.Command = strings.TrimSpace(input.Command)
 	input.Branch = strings.TrimSpace(input.Branch)
@@ -2618,7 +2623,7 @@ func normalizeCreateAgentSessionInput(input CreateAgentSessionInput) CreateAgent
 	input.TriggerCommentID = strings.TrimSpace(input.TriggerCommentID)
 	input.Automation = strings.TrimSpace(input.Automation)
 	input.TestRunID = strings.TrimSpace(input.TestRunID)
-	return input
+	return input, nil
 }
 
 func normalizeUpdateRuntimeTaskStatusInput(input UpdateRuntimeTaskStatusInput) (UpdateRuntimeTaskStatusInput, bool, error) {

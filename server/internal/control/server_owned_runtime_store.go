@@ -559,262 +559,6 @@ func (s *PostgresStore) loadVirtualMachineStoredSSHAuth(ctx context.Context, wor
 	return auth, nil
 }
 
-func (s *PostgresStore) ListAgentProfiles(ctx Context, userID, workspaceID string) ([]AgentProfile, error) {
-	dbctx := asContext(ctx)
-	workspaceID = strings.TrimSpace(workspaceID)
-	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
-		return nil, err
-	}
-	if err := seedDefaultAgentProfiles(dbctx, s.pool, workspaceID); err != nil {
-		return nil, err
-	}
-	rows, err := s.pool.Query(dbctx, `
-		SELECT id, name, mention, provider, description, instructions, enabled, built_in, sort_order, created_at, updated_at
-		FROM agent_profiles
-		WHERE workspace_id = $1
-		ORDER BY sort_order ASC, created_at ASC, name ASC
-	`, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	profiles := []AgentProfile{}
-	for rows.Next() {
-		profile, err := scanAgentProfile(rows)
-		if err != nil {
-			return nil, err
-		}
-		profiles = append(profiles, profile)
-	}
-	return profiles, rows.Err()
-}
-
-func (s *PostgresStore) CreateAgentProfile(ctx Context, userID, workspaceID string, input AgentProfileInput) (AgentProfile, error) {
-	dbctx := asContext(ctx)
-	workspaceID = strings.TrimSpace(workspaceID)
-	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
-		return AgentProfile{}, err
-	}
-	profile, err := normalizeAgentProfileInput(AgentProfile{}, input, false)
-	if err != nil {
-		return AgentProfile{}, err
-	}
-	row := s.pool.QueryRow(dbctx, `
-		INSERT INTO agent_profiles (workspace_id, id, name, mention, provider, description, instructions, enabled, built_in, sort_order)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, $9)
-		RETURNING id, name, mention, provider, description, instructions, enabled, built_in, sort_order, created_at, updated_at
-	`, workspaceID, profile.ID, profile.Name, profile.Mention, profile.Provider, profile.Description, profile.Instructions, profile.Enabled, profile.SortOrder)
-	return scanAgentProfile(row)
-}
-
-func (s *PostgresStore) UpdateAgentProfile(ctx Context, userID, workspaceID, agentID string, input AgentProfileInput) (AgentProfile, error) {
-	dbctx := asContext(ctx)
-	workspaceID = strings.TrimSpace(workspaceID)
-	agentID = agentProfileLookupKey(agentID)
-	if err := ensureWorkspaceRole(dbctx, s.pool, workspaceID, strings.TrimSpace(userID), "owner", "admin"); err != nil {
-		return AgentProfile{}, err
-	}
-	existing, err := loadAgentProfile(dbctx, s.pool, workspaceID, agentID)
-	if err != nil {
-		return AgentProfile{}, err
-	}
-	updated, err := normalizeAgentProfileInput(existing, input, true)
-	if err != nil {
-		return AgentProfile{}, err
-	}
-	row := s.pool.QueryRow(dbctx, `
-		UPDATE agent_profiles
-		SET name = $3,
-			mention = $4,
-			provider = $5,
-			description = $6,
-			instructions = $7,
-			enabled = $8,
-			sort_order = $9,
-			updated_at = now()
-		WHERE workspace_id = $1 AND id = $2
-		RETURNING id, name, mention, provider, description, instructions, enabled, built_in, sort_order, created_at, updated_at
-	`, workspaceID, existing.ID, updated.Name, updated.Mention, updated.Provider, updated.Description, updated.Instructions, updated.Enabled, updated.SortOrder)
-	profile, err := scanAgentProfile(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return AgentProfile{}, ErrNotFound
-	}
-	return profile, err
-}
-
-func seedDefaultAgentProfiles(ctx context.Context, q queryer, workspaceID string) error {
-	now := time.Now().UTC()
-	for _, profile := range defaultAgentProfiles(now) {
-		if _, err := q.Exec(ctx, `
-			INSERT INTO agent_profiles (workspace_id, id, name, mention, provider, description, instructions, enabled, built_in, sort_order, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10, $10)
-			ON CONFLICT (workspace_id, id) DO NOTHING
-		`, workspaceID, profile.ID, profile.Name, profile.Mention, profile.Provider, profile.Description, profile.Instructions, profile.Enabled, profile.SortOrder, now); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func defaultAgentProfiles(now time.Time) []AgentProfile {
-	timestamp := now.UTC().Format(time.RFC3339)
-	return []AgentProfile{
-		{
-			ID:          "triage",
-			Name:        "Triage",
-			Mention:     "@triage",
-			Provider:    "codex",
-			Description: "Automatic issue type classification for new issues.",
-			Instructions: strings.TrimSpace(`
-Use the triage profile only for classification. Read the issue title, body, and project context, then choose exactly one Conventional Commit type: feat, fix, docs, style, refactor, perf, test, build, ci, chore, or revert. Do not assign priority, change status, or perform implementation work.
-`),
-			Enabled:   false,
-			BuiltIn:   true,
-			SortOrder: 5,
-			CreatedAt: timestamp,
-			UpdatedAt: timestamp,
-		},
-		{
-			ID:          "codex",
-			Name:        "Codex",
-			Mention:     "@codex",
-			Provider:    "codex",
-			Description: "General implementation, explanation, and follow-up work.",
-			Instructions: strings.TrimSpace(`
-Use the general Codex profile. Answer questions directly, make focused code changes when requested, and choose the smallest practical path through implementation and validation.
-`),
-			Enabled:   true,
-			BuiltIn:   true,
-			SortOrder: 10,
-			CreatedAt: timestamp,
-			UpdatedAt: timestamp,
-		},
-		{
-			ID:          "bugfix",
-			Name:        "Bugfix",
-			Mention:     "@bugfix",
-			Provider:    "codex",
-			Description: "Debugging, reproduction, root cause analysis, and narrow fixes.",
-			Instructions: strings.TrimSpace(`
-Use the bugfix profile. Start by identifying the failing behavior and the most likely root cause. Reproduce or inspect the real path before editing when practical. Keep the fix narrow, add or update regression coverage when the codebase supports it, and report the exact validation result.
-`),
-			Enabled:   true,
-			BuiltIn:   true,
-			SortOrder: 20,
-			CreatedAt: timestamp,
-			UpdatedAt: timestamp,
-		},
-		{
-			ID:          "design",
-			Name:        "Design",
-			Mention:     "@design",
-			Provider:    "codex",
-			Description: "UI, UX, interaction polish, and product surface decisions.",
-			Instructions: strings.TrimSpace(`
-Use the design profile. Improve product UI with the existing design system and the Issue/document-first mspace direction. Keep the interface quiet, text-led, keyboard-accessible, and avoid dashboard/card-heavy patterns unless they are already the local convention for that surface.
-`),
-			Enabled:   true,
-			BuiltIn:   true,
-			SortOrder: 30,
-			CreatedAt: timestamp,
-			UpdatedAt: timestamp,
-		},
-	}
-}
-
-func loadAgentProfile(ctx context.Context, q queryer, workspaceID, value string) (AgentProfile, error) {
-	key := agentProfileLookupKey(value)
-	if key == "" {
-		key = "codex"
-	}
-	mention := "@" + key
-	row := q.QueryRow(ctx, `
-		SELECT id, name, mention, provider, description, instructions, enabled, built_in, sort_order, created_at, updated_at
-		FROM agent_profiles
-		WHERE workspace_id = $1 AND (lower(id) = $2 OR lower(mention) = $3)
-	`, workspaceID, key, mention)
-	profile, err := scanAgentProfile(row)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return AgentProfile{}, ErrNotFound
-	}
-	return profile, err
-}
-
-func scanAgentProfile(row scanner) (AgentProfile, error) {
-	var profile AgentProfile
-	var createdAt, updatedAt time.Time
-	if err := row.Scan(&profile.ID, &profile.Name, &profile.Mention, &profile.Provider, &profile.Description, &profile.Instructions, &profile.Enabled, &profile.BuiltIn, &profile.SortOrder, &createdAt, &updatedAt); err != nil {
-		return AgentProfile{}, err
-	}
-	profile.CreatedAt = createdAt.UTC().Format(time.RFC3339)
-	profile.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
-	return profile, nil
-}
-
-func normalizeAgentProfileInput(existing AgentProfile, input AgentProfileInput, isUpdate bool) (AgentProfile, error) {
-	profile := existing
-	profile.Name = strings.Join(strings.Fields(strings.TrimSpace(input.Name)), " ")
-	if profile.Name == "" {
-		return AgentProfile{}, errors.New("agent name is required")
-	}
-	mentionInput := input.Mention
-	if strings.TrimSpace(mentionInput) == "" {
-		mentionInput = profile.Name
-	}
-	mention, err := normalizeAgentMention(mentionInput)
-	if err != nil {
-		return AgentProfile{}, err
-	}
-	profile.Mention = mention
-	if !isUpdate {
-		profile.ID = strings.TrimPrefix(mention, "@")
-		profile.BuiltIn = false
-		profile.SortOrder = 100
-	}
-	provider := strings.ToLower(strings.TrimSpace(input.Provider))
-	if provider == "" && isUpdate {
-		provider = existing.Provider
-	}
-	if provider == "" {
-		provider = "codex"
-	}
-	if provider != "codex" {
-		return AgentProfile{}, errors.New("only the codex provider is supported right now")
-	}
-	profile.Provider = provider
-	profile.Description = strings.TrimSpace(input.Description)
-	profile.Instructions = strings.TrimSpace(input.Instructions)
-	if profile.Instructions == "" {
-		return AgentProfile{}, errors.New("agent instructions are required")
-	}
-	if input.Enabled == nil {
-		profile.Enabled = !isUpdate || existing.Enabled
-	} else {
-		profile.Enabled = *input.Enabled
-	}
-	return profile, nil
-}
-
-func normalizeAgentMention(value string) (string, error) {
-	value = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(value, "@")))
-	value = strings.ReplaceAll(value, " ", "-")
-	if value == "" {
-		return "", errors.New("agent mention is required")
-	}
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			continue
-		}
-		return "", fmt.Errorf("agent mention %q can only use letters, numbers, hyphen, or underscore", value)
-	}
-	return "@" + value, nil
-}
-
-func agentProfileLookupKey(value string) string {
-	return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(value, "@")))
-}
-
 func (s *PostgresStore) ListClusters(ctx Context, userID, workspaceID string) ([]Cluster, error) {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
@@ -1380,9 +1124,12 @@ func (s *PostgresStore) queueIssueTestDeployForDetail(ctx Context, dbctx context
 	}
 	environment.SourceSessionID = sourceNode.SessionID
 	environment.SourceCommitSHA = sourceNode.CommitSHA
+	engine, err := requireCodexWorkflowAgentEngine(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		return TestEnvironmentSessionResult{}, err
+	}
 	session, err := s.CreateAgentSession(ctx, userID, workspaceID, issueID, CreateAgentSessionInput{
-		Provider:        "codex",
-		AgentProfile:    firstNonEmpty(strings.TrimSpace(input.AgentProfile), "codex"),
+		AgentEngine:     engine,
 		Command:         buildIssueTestDeployPrompt(detail, environment, sourceNode, automated),
 		SourceSessionID: sourceNode.SessionID,
 		SourceCommitSHA: sourceNode.CommitSHA,
@@ -1433,10 +1180,13 @@ func (s *PostgresStore) RequestIssueTestEnvironmentCleanup(ctx Context, userID, 
 	environment := *detail.TestEnvironment
 	environment.NamespaceStatus = "cleanup_requested"
 	environment.CleanupStatus = "cleanup_requested"
+	engine, err := requireCodexWorkflowAgentEngine(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		return TestEnvironmentSessionResult{}, err
+	}
 	session, err := s.CreateAgentSession(ctx, userID, workspaceID, issueID, CreateAgentSessionInput{
-		Provider:     "codex",
-		AgentProfile: firstNonEmpty(strings.TrimSpace(input.AgentProfile), "codex"),
-		Command:      buildIssueTestCleanupPrompt(detail, environment),
+		AgentEngine: engine,
+		Command:     buildIssueTestCleanupPrompt(detail, environment),
 	})
 	if err != nil {
 		return TestEnvironmentSessionResult{}, err
@@ -2634,8 +2384,7 @@ func (s *PostgresStore) queueAutomaticTestDeployIfEnabled(ctx context.Context, q
 		return err
 	}
 	input := CreateAgentSessionInput{
-		Provider:        "codex",
-		AgentProfile:    "codex",
+		AgentEngine:     agentEngineCodex,
 		RuntimeMode:     firstNonEmpty(task.RuntimeMode, workspace.Kind),
 		Command:         buildIssueTestDeployPrompt(detail, environment, sourceNode, true),
 		SourceSessionID: sourceNode.SessionID,

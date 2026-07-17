@@ -52,14 +52,13 @@ func (s *Server) enqueueIssueAnalysis(ctx context.Context, userID, workspaceID, 
 	}
 	workspace := workspaceForTriage(detail, workspaceID)
 	_, err = s.store.CreateAgentSession(ctx, userID, workspaceID, issueID, CreateAgentSessionInput{
-		Provider:     "codex",
-		AgentProfile: "codex",
+		AgentEngine:  agentEngineCodex,
 		RuntimeMode:  workspace.Kind,
 		Command:      buildIssueAnalysisPrompt(detail),
 		Automation:   issueAnalysisAutomation,
 		SkillBundles: []RuntimeSkillBundle{bundle},
 	})
-	if errors.Is(err, ErrNoActiveCodexWorker) {
+	if errors.Is(err, ErrNoActiveAgentWorker) {
 		return errIssueAnalysisNotNeeded
 	}
 	return err

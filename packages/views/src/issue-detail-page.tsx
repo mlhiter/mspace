@@ -40,10 +40,18 @@ import {
   X,
 } from "lucide-react";
 import {
+  agentEngineCapabilities,
+  agentEngineDisplayName,
+  agentEngineForSession,
+  agentEngineMention,
+  agentRequiredCapabilities as requiredCapabilitiesForAgent,
   controlPlaneApi,
   getStoredAuthIdentity,
+  isFixedAgentEngineCatalogItem,
+  parseAgentEngine,
   queryKeys,
-  type AgentProfile,
+  type AgentEngine,
+  type AgentEngineCatalogItem,
   type AgentSession,
   type Cluster,
   type Comment,
@@ -117,7 +125,7 @@ type TimelineItem =
   | { kind: "failure"; createdAt: string; failure: SessionFailure };
 
 type IssueTab = "overview" | "commits" | "sessions" | "resources" | "evidence";
-type ActorKind = "human" | "codex" | "system" | "evidence";
+type ActorKind = "human" | "agent" | "system" | "evidence";
 type ProjectAttachSource = "local" | "github";
 
 function isIssueTab(value: unknown): value is IssueTab {
@@ -136,6 +144,7 @@ interface ActorIdentity {
   kind: ActorKind;
   name?: string;
   avatarUrl?: string;
+  agentEngine?: AgentEngine;
 }
 
 type LogLine = Pick<SessionLog, "stream" | "message" | "createdAt">;
@@ -216,7 +225,7 @@ function mentionKey(value: string) {
   return value.trim().replace(/^@/, "").toLowerCase();
 }
 
-function findAgent(agents: AgentProfile[], agentId: string) {
+function findAgent(agents: AgentEngineCatalogItem[], agentId: string) {
   const key = mentionKey(agentId);
   return agents.find((agent) => agent.id.toLowerCase() === key || mentionKey(agent.mention) === key);
 }
@@ -274,11 +283,11 @@ function skillCommandMatchInEditor(editor: Editor): EditorSkillCommandMatch | nu
   };
 }
 
-function agentMentionText(agent: AgentProfile) {
+function agentMentionText(agent: AgentEngineCatalogItem) {
   return agent.mention.startsWith("@") ? agent.mention : `@${agent.mention}`;
 }
 
-function insertAgentMention(value: string, agent: AgentProfile) {
+function insertAgentMention(value: string, agent: AgentEngineCatalogItem) {
   const mention = agentMentionText(agent);
   if (trailingMentionQuery(value) !== null) {
     return value.replace(/@([a-z0-9_-]*)$/i, `${mention} `);
@@ -322,14 +331,14 @@ function extractSkillSlugsFromComment(value: string, skills: SkillCatalogItem[])
   return slugs;
 }
 
-function insertSkillCommand(value: string, skill: SkillCatalogItem, defaultAgent?: AgentProfile) {
+function insertSkillCommand(value: string, skill: SkillCatalogItem, defaultAgent?: AgentEngineCatalogItem) {
   const token = skillCommandToken(skill);
   const agentPrefix = !extractAgentMention(value) && defaultAgent ? `${agentMentionText(defaultAgent)} ` : "";
   const separator = value === "" || value.endsWith(" ") || value.endsWith("\n") ? "" : " ";
   return `${value}${separator}${agentPrefix}${token} `;
 }
 
-function agentMentionOptionId(agent: AgentProfile) {
+function agentMentionOptionId(agent: AgentEngineCatalogItem) {
   return `issue-agent-mention-${agent.id.replace(/[^a-z0-9_-]/gi, "-")}`;
 }
 
@@ -346,25 +355,19 @@ function mentionMenuPositionForEditor(editor: Editor, match: EditorMentionMatch)
   };
 }
 
-function fallbackAgent(agentId: string): AgentProfile {
-  const id = mentionKey(agentId) || "codex";
+function fallbackAgent(agentId: string): AgentEngineCatalogItem {
+  const id = parseAgentEngine(agentId) || "codex";
   return {
     id,
-    name: id.charAt(0).toUpperCase() + id.slice(1),
-    mention: `@${id}`,
-    provider: "codex",
-    description: translate("agents.agent"),
-    instructions: "",
-    enabled: true,
-    builtIn: false,
-    sortOrder: 999,
-    createdAt: "",
-    updatedAt: "",
+    name: agentEngineDisplayName(id),
+    mention: agentEngineMention(id),
+    capability: agentEngineCapabilities[id],
   };
 }
 
-function sessionAgent(session: AgentSession, agents: AgentProfile[]) {
-  return findAgent(agents, session.agentProfile || session.provider) || fallbackAgent(session.agentProfile || session.provider);
+function sessionAgent(session: AgentSession, agents: AgentEngineCatalogItem[]) {
+  const engine = agentEngineForSession(session);
+  return findAgent(agents, engine) || fallbackAgent(engine);
 }
 
 function objectValue(value: unknown, key: string) {
@@ -433,7 +436,7 @@ function isIssueAnalysisSession(session: AgentSession) {
   return sessionUsesSkill(session, "think") && [session.command, ...markers].some(markerIndicatesIssueAnalysis);
 }
 
-function formatMentionPlaceholder(agents: AgentProfile[]) {
+function formatMentionPlaceholder(agents: AgentEngineCatalogItem[]) {
   if (agents.length === 0) return translate("issueDetail.composer.noAgentsPlaceholder");
   const mentions = agents.slice(0, 3).map((agent) => agent.mention).join(", ");
   return translate("issueDetail.composer.placeholderWithMentions", { mentions });
@@ -448,7 +451,7 @@ function testDeployDefaults(detail: IssueDetail, clusters: Cluster[]): StartTest
     changeNodes.find((node) => node.sessionId === detail.testEnvironment?.sourceSessionId) ||
     changeNodes[0];
   return {
-    agentProfile: "codex",
+    agentEngine: "codex",
     clusterId,
     environmentId: clusterId,
     exposureMode: "",
@@ -475,8 +478,8 @@ function cleanupDecisionLabel(status: string) {
   return status ? status.replace(/[_-]+/g, " ") : translate("issueDetail.environment.notDecided");
 }
 
-function isNoActiveCodexWorkerError(error: unknown) {
-  return error instanceof Error && /no active codex worker/i.test(error.message);
+function isNoActiveAgentWorkerError(error: unknown) {
+  return error instanceof Error && /no active (?:agent|codex|claude(?: code)?|pi) worker/i.test(error.message);
 }
 
 function formatRuntimeAvailabilityReason(
@@ -589,7 +592,7 @@ type MarkdownNode = {
   children?: MarkdownNode[];
 };
 
-function RichText(props: { children: string; basePath?: string; className?: string; agents?: AgentProfile[] }) {
+function RichText(props: { children: string; basePath?: string; className?: string; agents?: AgentEngineCatalogItem[] }) {
   const text = stringsOrEmpty(props.children);
   const mentionPlugin = useMemo(() => createAgentMentionRemarkPlugin(props.agents || []), [props.agents]);
   if (!text) return null;
@@ -669,8 +672,8 @@ function RichText(props: { children: string; basePath?: string; className?: stri
   );
 }
 
-function createAgentMentionRemarkPlugin(agents: AgentProfile[]) {
-  const mentionLookup = new Map<string, AgentProfile>();
+function createAgentMentionRemarkPlugin(agents: AgentEngineCatalogItem[]) {
+  const mentionLookup = new Map<string, AgentEngineCatalogItem>();
   for (const agent of agents) {
     mentionLookup.set(mentionKey(agent.id), agent);
     mentionLookup.set(mentionKey(agent.mention), agent);
@@ -682,7 +685,7 @@ function createAgentMentionRemarkPlugin(agents: AgentProfile[]) {
   };
 }
 
-function transformMentionTextNodes(node: MarkdownNode | undefined, mentionLookup: Map<string, AgentProfile>) {
+function transformMentionTextNodes(node: MarkdownNode | undefined, mentionLookup: Map<string, AgentEngineCatalogItem>) {
   if (!node) return;
   if (mentionLookup.size === 0 || !node.children || node.type === "link") return;
   node.children = node.children.flatMap((child) => {
@@ -694,7 +697,7 @@ function transformMentionTextNodes(node: MarkdownNode | undefined, mentionLookup
   });
 }
 
-function splitAgentMentionText(value: string, mentionLookup: Map<string, AgentProfile>): MarkdownNode[] {
+function splitAgentMentionText(value: string, mentionLookup: Map<string, AgentEngineCatalogItem>): MarkdownNode[] {
   const pieces: MarkdownNode[] = [];
   const mentionPattern = /(^|[^\w])@([a-z][\w-]*)/gi;
   let cursor = 0;
@@ -736,15 +739,16 @@ function plainText(value: React.ReactNode): string {
   return "";
 }
 
-function AgentMentionPill(props: { agent: AgentProfile; label: string }) {
-  const isCodex = props.agent.provider === "codex" || mentionKey(props.agent.id) === "codex";
+function AgentMentionPill(props: { agent: AgentEngineCatalogItem; label: string }) {
+  const isCodex = props.agent.id === "codex";
+  const fallbackInitial = props.agent.id === "claude_code" ? "C" : "P";
   return (
     <span
       title={props.agent.name}
       className="mx-0.5 inline-flex h-6 max-w-full items-center gap-1.5 rounded-full bg-[color:var(--block)] px-1.5 pr-2 align-middle text-[12px] font-semibold leading-none text-[color:var(--text)]"
     >
       <span className="grid size-4 shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--paper)] text-[color:var(--accent-blue)] shadow-[inset_0_0_0_1px_var(--line)]">
-        {isCodex ? <img src={codexAvatarDataUrl} alt="" className="size-full p-0.5" /> : <Bot data-icon className="size-3" />}
+        {isCodex ? <img src={codexAvatarDataUrl} alt="" className="size-full p-0.5" /> : <span>{fallbackInitial}</span>}
       </span>
       <span className="truncate">{props.label}</span>
     </span>
@@ -1676,7 +1680,7 @@ function IssueCommitsTab(props: {
   issueId: string;
   changeNodes: IssueChangeNode[];
   sessions: AgentSession[];
-  agents: AgentProfile[];
+  agents: AgentEngineCatalogItem[];
   handoffs: IssueHandoff[];
   actionsDisabled?: boolean;
   actionsDisabledReason?: string;
@@ -1765,7 +1769,7 @@ function CommitListRow(props: {
   issueId: string;
   node: IssueChangeNode;
   session?: AgentSession;
-  agents: AgentProfile[];
+  agents: AgentEngineCatalogItem[];
 }) {
   const { t } = useMspaceTranslation();
   const agent = props.session ? sessionAgent(props.session, props.agents) : undefined;
@@ -1873,7 +1877,7 @@ export function IssueCommitDetailPage() {
   });
 
   const detail = issueQuery.data;
-  const agents = listOrEmpty(agentsQuery.data);
+  const agents = listOrEmpty(agentsQuery.data).filter(isFixedAgentEngineCatalogItem);
   const nodes = listOrEmpty(detail?.changeNodes);
   const selectedNode = nodes.find((node) => node.commitSha === commitRef || node.shortCommitSha === commitRef || node.commitSha.startsWith(commitRef));
   const selectedSession = selectedNode ? changeNodeSession(selectedNode, listOrEmpty(detail?.sessions)) : undefined;
@@ -1960,7 +1964,7 @@ export function IssueCommitDetailPage() {
   );
 }
 
-function IssueSessionsTab(props: { sessions: AgentSession[]; agents: AgentProfile[] }) {
+function IssueSessionsTab(props: { sessions: AgentSession[]; agents: AgentEngineCatalogItem[] }) {
   const { t } = useMspaceTranslation();
   const sessions = listOrEmpty(props.sessions);
   if (sessions.length === 0) {
@@ -1976,7 +1980,7 @@ function IssueSessionsTab(props: { sessions: AgentSession[]; agents: AgentProfil
         return (
           <div id={issueSessionDomId(session.id)} key={session.id} className="scroll-mt-8 grid gap-1 rounded-[9px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <ActorMark actor={codexActor(agent.name)} size="sm" />
+              <ActorMark actor={agentActor(agent.id, agent.name)} size="sm" />
               <span className="font-medium text-[13px] leading-5 text-[color:var(--text)]">{title}</span>
               <StatusBadge value={session.status} />
               {isAnalysisSession ? (
@@ -2852,8 +2856,14 @@ function systemActor(name = "mspace"): ActorIdentity {
   return { kind: "system", name };
 }
 
-function codexActor(name = "Codex"): ActorIdentity {
-  return { kind: "codex", name, avatarUrl: codexAvatarDataUrl };
+function agentActor(value: unknown, name?: string): ActorIdentity {
+  const agentEngine = parseAgentEngine(value) || "codex";
+  return {
+    kind: "agent",
+    agentEngine,
+    name: name || agentEngineDisplayName(agentEngine),
+    avatarUrl: agentEngine === "codex" ? codexAvatarDataUrl : "",
+  };
 }
 
 function evidenceActor(): ActorIdentity {
@@ -2862,16 +2872,18 @@ function evidenceActor(): ActorIdentity {
 
 function actorForComment(comment: Comment): ActorIdentity {
   if (comment.authorType === "human") return humanActor(comment.authorName, comment.authorAvatarUrl);
-  if (comment.authorType === "agent") return codexActor(comment.authorName || "Codex");
+  if (comment.authorType === "agent") return agentActor(comment.authorName, comment.authorName || "Codex");
   return systemActor(comment.authorName || "mspace");
 }
 
 function actorForAssignee(assigneeType: string, assignee: string): ActorIdentity {
-  if (assigneeType === "agent") return codexActor(displayAgentName(assignee));
+  if (assigneeType === "agent") return agentActor(assignee, displayAgentName(assignee));
   return humanActor(assignee);
 }
 
 function displayAgentName(value: string): string {
+  const engine = parseAgentEngine(value);
+  if (engine) return agentEngineDisplayName(engine);
   const normalized = mentionKey(value) || value.trim();
   return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : "Codex";
 }
@@ -2883,7 +2895,7 @@ function actorInitial(actor: ActorIdentity): string {
 function ActorMark(props: { actor: ActorIdentity; size?: "sm" | "md" }) {
   const [failed, setFailed] = useState(false);
   const size = props.size || "md";
-  const imageUrl = props.actor.kind === "codex" ? codexAvatarDataUrl : props.actor.avatarUrl;
+  const imageUrl = props.actor.avatarUrl;
   const Icon = props.actor.kind === "evidence" ? CheckCircle2 : props.actor.kind === "system" ? CircleDot : Bot;
 
   useEffect(() => {
@@ -2895,14 +2907,14 @@ function ActorMark(props: { actor: ActorIdentity; size?: "sm" | "md" }) {
       className={cn(
         "relative z-10 grid shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--paper)] shadow-[0_0_0_1px_var(--line)]",
         size === "sm" ? "size-5 text-[10px] [&_[data-icon]]:size-3" : "size-8 text-[12px] [&_[data-icon]]:size-4",
-        props.actor.kind === "codex" && "text-[color:var(--accent-blue)]",
+        props.actor.kind === "agent" && "text-[color:var(--accent-blue)]",
         props.actor.kind === "human" && "font-semibold text-[color:var(--text)]",
         props.actor.kind === "system" && "text-[color:var(--muted)]",
         props.actor.kind === "evidence" && "text-[color:var(--success)]",
       )}
     >
       {imageUrl && !failed ? (
-        <img src={imageUrl} alt="" className={cn("size-full object-cover", props.actor.kind === "codex" && "p-1")} onError={() => setFailed(true)} />
+        <img src={imageUrl} alt="" className={cn("size-full object-cover", props.actor.kind === "agent" && props.actor.agentEngine === "codex" && "p-1")} onError={() => setFailed(true)} />
       ) : props.actor.kind === "human" ? (
         <span>{actorInitial(props.actor)}</span>
       ) : (
@@ -3042,7 +3054,7 @@ function CommentReactionPicker(props: {
 
 function CommentTimelineItem(props: {
   comment: Comment;
-  agents?: AgentProfile[];
+  agents?: AgentEngineCatalogItem[];
   sessions?: AgentSession[];
   canEdit?: boolean;
   isEditing?: boolean;
@@ -3100,7 +3112,7 @@ function CommentTimelineItem(props: {
   }
 
   const title =
-    actor.kind === "human" || actor.kind === "codex"
+    actor.kind === "human" || actor.kind === "agent"
       ? t("issueDetail.comments.commented", { name: actor.name })
       : t("issueDetail.comments.updatedIssue", { name: actor.name || "mspace" });
   return (
@@ -3248,7 +3260,7 @@ function actorForStatusTransitionComment(actor: ActorIdentity, transition: Statu
   if (actor.kind !== "system") return actor;
   const actorName = transition.actorName.trim();
   if (!actorName || actorName === actor.name) return actor;
-  if (actorName.toLowerCase() === "codex") return codexActor(actorName);
+  if (parseAgentEngine(actorName)) return agentActor(actorName, actorName);
   return { kind: "human", name: actorName };
 }
 
@@ -3348,7 +3360,7 @@ function failureCanRetryDeploy(failure: SessionFailure, environment: IssueTestEn
   return ["image_push", "pod_startup", "network_exposure", "preview_probe", "cleanup"].includes(failure.phase);
 }
 
-function failureContinueDraft(failure: SessionFailure, agent: AgentProfile) {
+function failureContinueDraft(failure: SessionFailure, agent: AgentEngineCatalogItem) {
   const mention = mentionKey(agent.mention);
   const message = failureDisplayMessage(failure);
   const lines = [
@@ -3519,7 +3531,7 @@ function DeployTimelineItem(props: {
   session: AgentSession;
   logs: LogLine[];
   changes: WorkspaceChange[];
-  agents: AgentProfile[];
+  agents: AgentEngineCatalogItem[];
   testEnvironment: IssueTestEnvironment;
   isSnapshotPending?: boolean;
   onRetry?: () => void;
@@ -3538,7 +3550,7 @@ function DeployTimelineItem(props: {
   return (
     <TimelineShell
       id={props.anchorId}
-      actor={codexActor(agent.name)}
+      actor={agentActor(agent.id, agent.name)}
       title={
         <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
           <span>{agent.name}</span>
@@ -3624,7 +3636,7 @@ function SessionTimelineItem(props: {
   session: AgentSession;
   logs: LogLine[];
   changes: WorkspaceChange[];
-  agents: AgentProfile[];
+  agents: AgentEngineCatalogItem[];
   isSnapshotPending?: boolean;
   hasStopAction?: boolean;
   isStopping?: boolean;
@@ -3655,7 +3667,7 @@ function SessionTimelineItem(props: {
     return (
       <TimelineShell
         id={props.anchorId}
-        actor={codexActor(agent.name)}
+        actor={agentActor(agent.id, agent.name)}
         title={
           <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
             <span className="font-semibold text-[color:var(--text)]">{sessionDisplayName}</span>
@@ -3671,7 +3683,7 @@ function SessionTimelineItem(props: {
   return (
     <TimelineShell
       id={props.anchorId}
-      actor={codexActor(agent.name)}
+      actor={agentActor(agent.id, agent.name)}
       title={title}
       time={session.updatedAt || session.createdAt}
     >
@@ -4322,11 +4334,11 @@ function IssueLifecycleActions(props: {
 }
 
 function AgentMentionMenu(props: {
-  agents: AgentProfile[];
+  agents: AgentEngineCatalogItem[];
   activeIndex: number;
   position: MentionMenuPosition;
   onActiveIndexChange: (index: number) => void;
-  onSelect: (agent: AgentProfile) => void;
+  onSelect: (agent: AgentEngineCatalogItem) => void;
 }) {
   const { t } = useMspaceTranslation();
   return (
@@ -4360,7 +4372,7 @@ function AgentMentionMenu(props: {
             </span>
             <span className="grid min-w-0 flex-1">
               <span className="truncate font-medium leading-5 text-[color:var(--text)]">{agent.mention}</span>
-              <span className="truncate text-[12px] leading-4 text-[color:var(--muted)]">{agent.description || agent.name}</span>
+              <span className="truncate text-[12px] leading-4 text-[color:var(--muted)]">{agent.name} · {agent.capability}</span>
             </span>
           </button>
         );
@@ -4704,7 +4716,7 @@ function TestDeployModal(props: {
   clusters: Cluster[];
   changeNodes: IssueChangeNode[];
   sessions: AgentSession[];
-  agents: AgentProfile[];
+  agents: AgentEngineCatalogItem[];
   isPending: boolean;
   canSubmit: boolean;
   error?: Error | null;
@@ -5112,15 +5124,9 @@ export function IssueDetailPage() {
   const workspaceId = auth.workspace?.id || "";
   const serverWorkspaceReady = Boolean(auth.token && workspaceId);
   const runtimeMode = auth.workspace?.kind === "team" ? "team" : "personal";
-  const agentRequiredCapabilities = useMemo(() => ({ codex: true }), []);
-  const agentRuntimeAvailabilityInput = useMemo(
-    () => ({ runtimeMode, requiredCapabilities: agentRequiredCapabilities }),
-    [agentRequiredCapabilities, runtimeMode],
-  );
   const issueQueryKey = queryKeys.workspaceIssue(workspaceId, issueId, auth.token);
   const issuesQueryKey = queryKeys.workspaceIssues(workspaceId, auth.token);
   const inboxQueryKey = queryKeys.workspaceInbox(workspaceId, auth.token);
-  const runtimeAvailabilityQueryKey = queryKeys.runtimeAvailability(workspaceId, auth.token, agentRuntimeAvailabilityInput);
   const labelDefinitionsQueryKey = queryKeys.workspaceIssueLabelDefinitions(workspaceId, auth.token);
   const projectsQueryKey = queryKeys.workspaceProjects(workspaceId, auth.token);
   const agentsQueryKey = queryKeys.agents(workspaceId, auth.token);
@@ -5170,7 +5176,7 @@ export function IssueDetailPage() {
   const [projectFolderPickerError, setProjectFolderPickerError] = useState("");
   const scrolledLinkedSessionTarget = useRef("");
   const [testDeployForm, setTestDeployForm] = useState<StartTestDeployInput>({
-    agentProfile: "codex",
+    agentEngine: "codex",
     clusterId: "",
     exposureMode: "",
     previewDomain: "",
@@ -5212,6 +5218,21 @@ export function IssueDetailPage() {
     enabled: serverWorkspaceReady,
     retry: false,
   });
+  const agents = listOrEmpty(agentsQuery.data);
+  const mentionedAgent = extractAgentMention(composerBody);
+  const mentionedAgentConfig = mentionedAgent ? findAgent(agents, mentionedAgent) : undefined;
+  const editingMentionedAgent = extractAgentMention(editingCommentBody);
+  const editingMentionedAgentConfig = editingMentionedAgent ? findAgent(agents, editingMentionedAgent) : undefined;
+  const readinessAgent = (editingCommentId ? editingMentionedAgentConfig : mentionedAgentConfig) || fallbackAgent("codex");
+  const agentRequiredCapabilities = useMemo(
+    () => requiredCapabilitiesForAgent(readinessAgent),
+    [readinessAgent.id],
+  );
+  const agentRuntimeAvailabilityInput = useMemo(
+    () => ({ runtimeMode, requiredCapabilities: agentRequiredCapabilities }),
+    [agentRequiredCapabilities, runtimeMode],
+  );
+  const runtimeAvailabilityQueryKey = queryKeys.runtimeAvailability(workspaceId, auth.token, agentRuntimeAvailabilityInput);
   const runtimeAvailabilityQuery = useQuery({
     queryKey: runtimeAvailabilityQueryKey,
     queryFn: () => controlPlaneApi.getRuntimeAvailability(auth.token, workspaceId, agentRuntimeAvailabilityInput),
@@ -5244,12 +5265,11 @@ export function IssueDetailPage() {
     },
     enabled: serverWorkspaceReady && runbookOpen && Boolean(detail?.project?.id),
   });
-  const agents = listOrEmpty(agentsQuery.data);
   const skills = listOrEmpty(skillsQuery.data).filter((skill) => skillCatalogSlug(skill) && skill.enabled !== false);
   const clusters = listOrEmpty(clustersQuery.data);
   const projects = listOrEmpty(projectsQuery.data);
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
-  const enabledAgents = agents.filter((agent) => agent.enabled);
+  const enabledAgents = agents;
   const continueAgent = enabledAgents.find((agent) => mentionKey(agent.mention) === "codex") || enabledAgents[0];
   const hasProject = Boolean(detail?.project?.id);
   const projectName = projectDisplayName(detail?.project);
@@ -5261,8 +5281,6 @@ export function IssueDetailPage() {
   const completedChildIssueCount = childIssues.filter((task) => isClosedIssueStatus(task.status)).length;
   const latestSession = detail?.sessions[0];
   const hasActiveSession = latestSession ? ["queued", "running"].includes(latestSession.status) : false;
-  const mentionedAgent = extractAgentMention(composerBody);
-  const mentionedAgentConfig = mentionedAgent ? findAgent(enabledAgents, mentionedAgent) : undefined;
   const isSupportedAgentMention = Boolean(mentionedAgentConfig);
   const isUnsupportedAgentMention = Boolean(mentionedAgent && !mentionedAgentConfig);
   const mentionQuery = composerMentionMatch?.query ?? null;
@@ -5279,8 +5297,6 @@ export function IssueDetailPage() {
       : skills.filter((skill) => skillMatchesQuery(skill, skillQuery));
   const selectedSkillIndex = skillSuggestions.length === 0 ? 0 : Math.min(activeSkillIndex, skillSuggestions.length - 1);
   const skillMenuOpen = composerFocused && !skillMenuDismissed && skillSuggestions.length > 0;
-  const editingMentionedAgent = extractAgentMention(editingCommentBody);
-  const editingMentionedAgentConfig = editingMentionedAgent ? findAgent(enabledAgents, editingMentionedAgent) : undefined;
   const isSupportedEditingAgentMention = Boolean(editingMentionedAgentConfig);
   const isUnsupportedEditingAgentMention = Boolean(editingMentionedAgent && !editingMentionedAgentConfig);
   const editingMentionQuery = editingCommentMentionMatch?.query ?? null;
@@ -5298,7 +5314,7 @@ export function IssueDetailPage() {
   const selectedEditingSkillIndex = editingSkillSuggestions.length === 0 ? 0 : Math.min(activeEditingSkillIndex, editingSkillSuggestions.length - 1);
   const editingSkillMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingSkillMenuDismissed && editingSkillSuggestions.length > 0;
   const runtimeLabel = runtimeMode === "team" ? t("issueDetail.composer.teamWorker") : t("issueDetail.composer.personalWorker");
-  const hasMatchingCodexWorker = runtimeAvailabilityQuery.data?.state === "ready";
+  const hasMatchingAgentWorker = runtimeAvailabilityQuery.data?.state === "ready";
   const composerNeedsProjectForAgent = isSupportedAgentMention && !hasProject;
   const editingNeedsProjectForAgent = isSupportedEditingAgentMention && !hasProject;
   const workerUnavailableText =
@@ -5311,7 +5327,7 @@ export function IssueDetailPage() {
     Boolean(editingCommentBody.trim()) &&
     !isUnsupportedEditingAgentMention &&
     !(isSupportedEditingAgentMention && hasActiveSession) &&
-    !(isSupportedEditingAgentMention && hasProject && runtimeMode === "team" && !hasMatchingCodexWorker);
+    !(isSupportedEditingAgentMention && hasProject && runtimeMode === "team" && !hasMatchingAgentWorker);
   const editHelperText = isSupportedEditingAgentMention
     ? projectAttachFeedback === "edit" && hasProject
       ? t("issueDetail.composer.projectAttachedEditPreserved")
@@ -5319,7 +5335,7 @@ export function IssueDetailPage() {
         ? t("issueDetail.composer.agentAlreadyWorking", { name: editingMentionedAgentConfig?.name })
         : editingNeedsProjectForAgent
           ? t("issueDetail.composer.attachProjectBeforeAgentWithAnalysis")
-          : !hasMatchingCodexWorker
+          : !hasMatchingAgentWorker
             ? workerUnavailableText
             : t("issueDetail.composer.willRunAfterSave", { name: editingMentionedAgentConfig?.name, runtime: runtimeLabel })
     : isUnsupportedEditingAgentMention
@@ -5330,7 +5346,7 @@ export function IssueDetailPage() {
       ? t("issueDetail.composer.agentWorking")
       : editingNeedsProjectForAgent
         ? t("issueDetail.composer.attachProject")
-        : !hasMatchingCodexWorker
+        : !hasMatchingAgentWorker
           ? runtimeMode === "personal"
             ? t("issueDetail.composer.startPersonalWorker")
             : t("issueDetail.composer.connectWorker")
@@ -5341,25 +5357,25 @@ export function IssueDetailPage() {
       ? t("issueDetail.composer.agentAlreadyWorking", { name: mentionedAgentConfig?.name })
       : composerNeedsProjectForAgent
         ? t("issueDetail.composer.attachProjectBeforeAgentWithAnalysis")
-        : !hasMatchingCodexWorker
+        : !hasMatchingAgentWorker
           ? workerUnavailableText
         : t("issueDetail.composer.willRunOnRuntime", { name: mentionedAgentConfig?.name, runtime: runtimeLabel })
     : isUnsupportedAgentMention
       ? t("issueDetail.composer.agentUnavailable", { mention: mentionedAgent })
       : t("issueDetail.composer.commentsStay");
-  const ensureAgentWorkerReady = useCallback(async () => {
+  const ensureAgentWorkerReady = useCallback(async (agent: AgentEngineCatalogItem) => {
     await ensureRuntimeReady({
       token: auth.token,
       workspaceId,
       queryClient,
       runtimeMode,
-      requiredCapabilities: agentRequiredCapabilities,
+      requiredCapabilities: requiredCapabilitiesForAgent(agent),
       unavailableMessage: workerUnavailableText,
       startingMessage: workerStartingText,
       formatUnavailableMessage: (availability) => formatRuntimeAvailabilityReason(availability, workerUnavailableText, t),
       ensurePersonalWorker: window.mspaceDesktop?.ensurePersonalWorker,
     });
-  }, [agentRequiredCapabilities, auth.token, queryClient, runtimeMode, t, workerStartingText, workerUnavailableText, workspaceId]);
+  }, [auth.token, queryClient, runtimeMode, t, workerStartingText, workerUnavailableText, workspaceId]);
   const syncEditingCommentEditorSnapshot = useCallback((editor: Editor) => {
     const match = mentionMatchInEditor(editor);
     const skillMatch = skillCommandMatchInEditor(editor);
@@ -5527,19 +5543,18 @@ export function IssueDetailPage() {
         if (!project?.id) {
           throw new Error(t("issueDetail.composer.attachProjectBeforeAgentWithAnalysis"));
         }
-        await ensureAgentWorkerReady();
+        await ensureAgentWorkerReady(agentConfig);
         const comment = await controlPlaneApi.addComment(auth.token, workspaceId, issueId, commentInput);
         try {
           await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
-            provider: agentConfig.provider,
-            agentProfile: agentConfig.id,
+            agentEngine: agentConfig.id,
             runtimeMode,
             command: trimmedBody,
             triggerCommentId: comment.commentId,
             skillSlugs: skillSlugs.length > 0 ? skillSlugs : undefined,
           });
         } catch (error) {
-          if (isNoActiveCodexWorkerError(error)) {
+          if (isNoActiveAgentWorkerError(error)) {
             throw new Error(workerUnavailableText);
           }
           throw error;
@@ -5567,12 +5582,12 @@ export function IssueDetailPage() {
     !sendComposer.isPending &&
     !isUnsupportedAgentMention &&
     !(isSupportedAgentMention && hasActiveSession) &&
-    !(isSupportedAgentMention && hasProject && runtimeMode === "team" && !hasMatchingCodexWorker);
+    !(isSupportedAgentMention && hasProject && runtimeMode === "team" && !hasMatchingAgentWorker);
   const sendAgentLabel = sendComposer.isPending
     ? t("issueDetail.composer.sending")
     : composerNeedsProjectForAgent
       ? t("issueDetail.composer.attachProject")
-      : isSupportedAgentMention && !hasMatchingCodexWorker
+      : isSupportedAgentMention && !hasMatchingAgentWorker
         ? runtimeMode === "personal"
           ? t("issueDetail.composer.startPersonalWorker")
           : t("issueDetail.composer.connectWorker")
@@ -5583,7 +5598,7 @@ export function IssueDetailPage() {
           : t("issueDetail.composer.comment");
 
   const updateComment = useMutation({
-    mutationFn: async (input: { commentId: string; body: string; agentConfig?: AgentProfile }) => {
+    mutationFn: async (input: { commentId: string; body: string; agentConfig?: AgentEngineCatalogItem }) => {
       const trimmedBody = input.body.trim();
       const skillSlugs = extractSkillSlugsFromComment(trimmedBody, skills);
       const commentInput = {
@@ -5597,21 +5612,20 @@ export function IssueDetailPage() {
         if (!project?.id) {
           throw new Error(t("issueDetail.composer.attachProjectBeforeAgentWithAnalysis"));
         }
-        await ensureAgentWorkerReady();
+        await ensureAgentWorkerReady(input.agentConfig);
       }
       const comment = await controlPlaneApi.updateComment(auth.token, workspaceId, issueId, input.commentId, commentInput);
       if (input.agentConfig) {
         try {
           await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
-            provider: input.agentConfig.provider,
-            agentProfile: input.agentConfig.id,
+            agentEngine: input.agentConfig.id,
             runtimeMode,
             command: trimmedBody,
             triggerCommentId: input.commentId,
             skillSlugs: skillSlugs.length > 0 ? skillSlugs : undefined,
           });
         } catch (error) {
-          if (isNoActiveCodexWorkerError(error)) {
+          if (isNoActiveAgentWorkerError(error)) {
             throw new Error(workerUnavailableText);
           }
           throw error;
@@ -5669,7 +5683,7 @@ export function IssueDetailPage() {
     }
   }
 
-  function selectAgentSuggestion(agent: AgentProfile) {
+  function selectAgentSuggestion(agent: AgentEngineCatalogItem) {
     const mention = agentMentionText(agent);
     const match = composerEditor ? mentionMatchInEditor(composerEditor) || composerMentionMatch : null;
     if (composerEditor) {
@@ -5710,7 +5724,7 @@ export function IssueDetailPage() {
     syncEditingCommentEditorSnapshot(editor);
   }
 
-  function selectEditingAgentSuggestion(agent: AgentProfile) {
+  function selectEditingAgentSuggestion(agent: AgentEngineCatalogItem) {
     const mention = agentMentionText(agent);
     const match = editingCommentEditor ? mentionMatchInEditor(editingCommentEditor) || editingCommentMentionMatch : null;
     if (editingCommentEditor) {
@@ -6030,7 +6044,7 @@ export function IssueDetailPage() {
   });
 
   const cleanupTestEnvironment = useMutation({
-    mutationFn: () => controlPlaneApi.requestTestEnvironmentCleanup(auth.token, workspaceId, issueId, { agentProfile: "codex" }),
+    mutationFn: () => controlPlaneApi.requestTestEnvironmentCleanup(auth.token, workspaceId, issueId, { agentEngine: "codex" }),
     onSuccess: async (data) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: issueQueryKey }),
@@ -6164,9 +6178,10 @@ export function IssueDetailPage() {
     });
   }
 
-  function continueFromFailure(failure: SessionFailure) {
-    if (!continueAgent || hasActiveSession) return;
-    const draft = failureContinueDraft(failure, continueAgent);
+  function continueFromFailure(failure: SessionFailure, session?: AgentSession) {
+	const agent = session ? sessionAgent(session, agents) : continueAgent;
+	if (!agent || hasActiveSession) return;
+	const draft = failureContinueDraft(failure, agent);
     setComposerBody(draft);
     setMentionMenuDismissed(true);
     window.requestAnimationFrame(() => {
@@ -6535,7 +6550,7 @@ export function IssueDetailPage() {
                           failure={item.failure}
                           session={session}
                           canContinue={Boolean(continueAgent) && !hasActiveSession}
-                          onContinue={() => continueFromFailure(item.failure)}
+						  onContinue={() => continueFromFailure(item.failure, session)}
                           canRetry={canRetryFailure}
                           isRetrying={startTestDeploy.isPending}
                           onRetry={() => {
@@ -6619,7 +6634,7 @@ export function IssueDetailPage() {
                       {isSupportedAgentMention ? (
                         <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[color:var(--line)] bg-[color:var(--surface)] px-2 text-[11px] font-medium text-[color:var(--ink)]">
                           <Bot className="size-3.5" />
-                          {hasMatchingCodexWorker ? runtimeLabel : t("issueDetail.composer.noActiveWorker")}
+                          {hasMatchingAgentWorker ? runtimeLabel : t("issueDetail.composer.noActiveWorker")}
                         </span>
                       ) : null}
                       <span className="min-w-[180px] flex-1">{composerHelperText}</span>

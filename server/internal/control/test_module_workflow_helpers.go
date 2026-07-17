@@ -24,7 +24,11 @@ const (
 )
 
 func agentSessionRequiredCapabilities(input CreateAgentSessionInput) (json.RawMessage, error) {
-	required := map[string]bool{"codex": true}
+	capability, err := agentEngineCapability(input.AgentEngine)
+	if err != nil {
+		return nil, err
+	}
+	required := map[string]bool{capability: true}
 	if len(input.RequiredCapabilities) > 0 {
 		var extras map[string]bool
 		if err := json.Unmarshal(input.RequiredCapabilities, &extras); err != nil {
@@ -32,12 +36,24 @@ func agentSessionRequiredCapabilities(input CreateAgentSessionInput) (json.RawMe
 		}
 		for key, value := range extras {
 			key = strings.TrimSpace(key)
+			if value && isAgentEngineCapabilityKey(key) && key != capability {
+				return nil, fmt.Errorf("requiredCapabilities conflicts with agentEngine %s", input.AgentEngine)
+			}
 			if key != "" && value {
 				required[key] = true
 			}
 		}
 	}
 	return json.Marshal(required)
+}
+
+func isAgentEngineCapabilityKey(key string) bool {
+	switch key {
+	case "codex", "claudeCode", "pi":
+		return true
+	default:
+		return false
+	}
 }
 
 func testRunExecutionRequiredCapabilities(cases []TestCase) (json.RawMessage, error) {
@@ -191,14 +207,6 @@ func normalizeReviewNote(value string) string {
 	return value
 }
 
-func normalizeAgentProfile(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "codex"
-	}
-	return value
-}
-
 func normalizeProposalType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "create", "new", "generated":
@@ -330,7 +338,13 @@ func normalizeCreateTestRunInput(input CreateTestRunInput, plan TestPlan) (Creat
 	if input.EnvironmentKind != "" {
 		input.EnvironmentKind = normalizeEnvironmentKind(input.EnvironmentKind)
 	}
-	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
+	engine, err := requireCodexWorkflowAgentEngine(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		return CreateTestRunInput{}, err
+	}
+	input.AgentEngine = engine
+	input.LegacyProvider = ""
+	input.LegacyAgentProfile = ""
 	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
 	input.ResultLocale = normalizeTestResultLocale(input.ResultLocale)
 	if input.BatchSize <= 0 {
@@ -356,7 +370,13 @@ func normalizeCreateAdHocTestRunInput(input CreateAdHocTestRunInput) (CreateAdHo
 	if input.EnvironmentKind != "" {
 		input.EnvironmentKind = normalizeEnvironmentKind(input.EnvironmentKind)
 	}
-	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
+	engine, err := requireCodexWorkflowAgentEngine(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		return CreateAdHocTestRunInput{}, err
+	}
+	input.AgentEngine = engine
+	input.LegacyProvider = ""
+	input.LegacyAgentProfile = ""
 	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
 	input.ResultLocale = normalizeTestResultLocale(input.ResultLocale)
 	if input.BatchSize <= 0 {
@@ -441,12 +461,18 @@ func uniqueTestPlanCaseInputs(values []TestPlanCaseInput) []TestPlanCaseInput {
 	return result
 }
 
-func normalizeRetryTestRunInput(input RetryTestRunInput) RetryTestRunInput {
+func normalizeRetryTestRunInput(input RetryTestRunInput) (RetryTestRunInput, error) {
 	input.ItemIDs = uniqueStrings(input.ItemIDs)
-	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
+	engine, err := requireCodexWorkflowAgentEngine(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		return RetryTestRunInput{}, err
+	}
+	input.AgentEngine = engine
+	input.LegacyProvider = ""
+	input.LegacyAgentProfile = ""
 	input.RuntimeMode = strings.ToLower(strings.TrimSpace(input.RuntimeMode))
 	input.ResultLocale = normalizeTestResultLocale(input.ResultLocale)
-	return input
+	return input, nil
 }
 
 func normalizeTestRunItemStatus(value string) string {

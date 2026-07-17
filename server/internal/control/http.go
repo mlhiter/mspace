@@ -27,7 +27,7 @@ type Server struct {
 	adminLogins map[string]struct{}
 }
 
-const serverProtocolVersion = 1
+const serverProtocolVersion = 2
 const maxIssueAttachmentBytes = 10 << 20
 const maxPasswordAuthBodyBytes = 4 << 10
 const maxProfileBodyBytes = 4 << 10
@@ -156,9 +156,7 @@ func (s *Server) Routes() http.Handler {
 	r.Put("/api/workspaces/{workspaceID}/skills/{skillID}", s.handleUpdateSkill)
 	r.Delete("/api/workspaces/{workspaceID}/skills/{skillID}", s.handleDeleteSkill)
 	r.Post("/api/workspaces/{workspaceID}/skills/{skillID}/duplicate", s.handleDuplicateSkill)
-	r.Get("/api/workspaces/{workspaceID}/agents", s.handleListAgentProfiles)
-	r.Post("/api/workspaces/{workspaceID}/agents", s.handleCreateAgentProfile)
-	r.Put("/api/workspaces/{workspaceID}/agents/{agentID}", s.handleUpdateAgentProfile)
+	r.Get("/api/workspaces/{workspaceID}/agents", s.handleListAgentEngines)
 	r.Get("/api/workspaces/{workspaceID}/environments", s.handleListEnvironments)
 	r.Post("/api/workspaces/{workspaceID}/environments", s.handleCreateEnvironment)
 	r.Put("/api/workspaces/{workspaceID}/environments/{environmentID}", s.handleUpdateEnvironment)
@@ -998,6 +996,12 @@ func (s *Server) handleOptimizeProjectTestCases(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	engine, err := requireCodexWorkflowAgentEngine(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	input.AgentEngine = engine
 	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
 	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
 	cases := []TestCase{}
@@ -1040,11 +1044,10 @@ func (s *Server) handleOptimizeProjectTestCases(w http.ResponseWriter, r *http.R
 		return
 	}
 	session, err := s.store.CreateAgentSession(r.Context(), user.ID, workspaceID, issueID, CreateAgentSessionInput{
-		Provider:     "codex",
-		AgentProfile: normalizeAgentProfile(input.AgentProfile),
-		RuntimeMode:  runtimeMode,
-		Command:      buildTestCaseOptimizationIssueBody(project, cases, input.Prompt),
-		Automation:   testCaseOptimizationAutomation,
+		AgentEngine: agentEngineCodex,
+		RuntimeMode: runtimeMode,
+		Command:     buildTestCaseOptimizationIssueBody(project, cases, input.Prompt),
+		Automation:  testCaseOptimizationAutomation,
 	})
 	if err != nil {
 		writeStoreError(w, err)
@@ -1063,6 +1066,12 @@ func (s *Server) handleGenerateProjectTestCases(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	engine, err := requireCodexWorkflowAgentEngine(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	input.AgentEngine = engine
 	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
 	projectID := strings.TrimSpace(chi.URLParam(r, "projectID"))
 	projects, err := s.store.ListProjects(r.Context(), user.ID, workspaceID)
@@ -1093,11 +1102,10 @@ func (s *Server) handleGenerateProjectTestCases(w http.ResponseWriter, r *http.R
 		return
 	}
 	session, err := s.store.CreateAgentSession(r.Context(), user.ID, workspaceID, issueID, CreateAgentSessionInput{
-		Provider:     "codex",
-		AgentProfile: normalizeAgentProfile(input.AgentProfile),
-		RuntimeMode:  runtimeMode,
-		Command:      body,
-		Automation:   testCaseGenerationAutomation,
+		AgentEngine: agentEngineCodex,
+		RuntimeMode: runtimeMode,
+		Command:     body,
+		Automation:  testCaseGenerationAutomation,
 	})
 	if err != nil {
 		writeStoreError(w, err)
@@ -1821,53 +1829,16 @@ func (s *Server) handleDuplicateSkill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, skill)
 }
 
-func (s *Server) handleListAgentProfiles(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.authenticate(w, r)
+func (s *Server) handleListAgentEngines(w http.ResponseWriter, r *http.Request) {
+	_, workspaces, ok := s.authenticate(w, r)
 	if !ok {
 		return
 	}
-	profiles, err := s.store.ListAgentProfiles(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")))
-	if err != nil {
-		writeStoreError(w, err)
+	if _, found := workspaceByID(workspaces, strings.TrimSpace(chi.URLParam(r, "workspaceID"))); !found {
+		writeStoreError(w, ErrNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, profiles)
-}
-
-func (s *Server) handleCreateAgentProfile(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.authenticate(w, r)
-	if !ok {
-		return
-	}
-	input := AgentProfileInput{}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	profile, err := s.store.CreateAgentProfile(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), input)
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, profile)
-}
-
-func (s *Server) handleUpdateAgentProfile(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.authenticate(w, r)
-	if !ok {
-		return
-	}
-	input := AgentProfileInput{}
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	profile, err := s.store.UpdateAgentProfile(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "agentID")), input)
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, profile)
+	writeJSON(w, http.StatusOK, fixedAgentEngineCatalog())
 }
 
 func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request) {
@@ -2164,6 +2135,10 @@ func (s *Server) handleCreateAgentSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := rejectClientAgentSessionSkillBundles(body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := rejectClientAgentSessionControlFields(body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -2668,6 +2643,10 @@ func (s *Server) handleCreateRuntimeTask(w http.ResponseWriter, r *http.Request)
 	input := CreateRuntimeTaskInput{}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(input.Kind), "agent_session") {
+		writeError(w, http.StatusBadRequest, errors.New("agent_session runtime tasks are server-managed; use the issue session API"))
 		return
 	}
 	if err := rejectClientRuntimeTaskSkillBundles(input.Payload); err != nil {
@@ -3182,6 +3161,40 @@ func rejectClientAgentSessionSkillBundles(raw json.RawMessage) error {
 	return nil
 }
 
+func rejectClientAgentSessionControlFields(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	for _, key := range []string{
+		"automation",
+		"testRunId",
+		"testRunBatchSize",
+		"sourceSessionId",
+		"sourceCommitSha",
+		"requiredCapabilities",
+		"env",
+		"workdir",
+		"issueId",
+		"sessionId",
+		"projectId",
+		"artifactDir",
+		"repository",
+		"sourceCapture",
+		"developerInstructions",
+		"approvalPolicy",
+		"sandbox",
+	} {
+		if _, ok := payload[key]; ok {
+			return fmt.Errorf("agent session field %s is server-managed", key)
+		}
+	}
+	return nil
+}
+
 func redactRuntimeTaskSkillPayload(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {
 		return raw
@@ -3249,7 +3262,7 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		status = http.StatusUnauthorized
 	} else if errors.Is(err, ErrForbidden) {
 		status = http.StatusForbidden
-	} else if errors.Is(err, ErrNoActiveCodexWorker) {
+	} else if errors.Is(err, ErrNoActiveCodexWorker) || errors.Is(err, ErrNoActiveAgentWorker) {
 		status = http.StatusConflict
 	} else if errors.Is(err, ErrConflict) {
 		status = http.StatusConflict

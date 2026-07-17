@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-06-05
+> Status: milestone roadmap, updated 2026-07-17
 
 ## Purpose
 
@@ -25,7 +25,7 @@ Issue intake
 
 The roadmap intentionally keeps fixed worker workflow first. Kubernetes is the manually triggered test target for the MVP, not the first development runtime.
 
-The server control-plane slice now owns local password auth, optional GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, workspace settings, agent profiles, environments, Kubernetes cluster compatibility records, issue test environments, PR handoffs, runtime registration, runtime tasks, worker logs, and runtime results. Team/shared workspace data uses server Postgres; packaged personal desktop mode can use the same server contract on a local SQLite store. Runtime execution happens through registered workers that claim server tasks; workers are decoupled from Environments and operate the selected target through Kubernetes, SSH, or a later provider path. Open registration stays enabled for personal workspaces, while team workspace creation and shared server runner access are gated by server admin creation plus owner/admin invitations.
+The server control-plane slice now owns local password auth, optional GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, workspace settings, the fixed Agent catalog contract, Skills, Environments, Kubernetes cluster compatibility records, issue test environments, PR handoffs, runtime registration, runtime tasks, worker logs, and runtime results. Agent definitions are code-owned Codex, Claude Code, and Pi engines rather than persisted workspace profiles. Team/shared workspace data uses server Postgres; packaged personal desktop mode can use the same server contract on a local SQLite store.
 
 The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, opt-in automatic test deploy after captured source commits, automatic personal worker startup/credential renewal, and bilingual desktop UI support for English and Simplified Chinese. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 
@@ -48,9 +48,9 @@ Build in order:
 - Project import: support existing local folders for personal desktop workspaces, auto-detect GitHub remote metadata, and support direct GitHub repository URLs for team workspaces where workers clone source into their own repo cache.
 - Issue creation: keep creation in the Issues surface, use a document-style note without a project selector, allow workspace-level issues before the repository is known, and attach a project later when agent execution, PR handoff, or test deployment is needed.
 - Issue task lists: treat task rows as child issues, convert creation-time Markdown checklist lines into child rows, and let humans or agents update task status from the parent issue.
-- Agent mention flow: let a user manage agent profiles, write an issue comment with an enabled agent mention, save that comment, and create the server-owned session from the current turn request and selected profile.
+- Agent mention flow: expose only `@codex`, `@claude`, and `@pi`; save the Issue comment and create a server-owned Session with the selected `agentEngine` and exact Worker capability.
 - Inbox realtime updates: move issue/session status changes into the Inbox review feed without relying on slow manual refreshes.
-- Worker agent context: send issue body, comments, project metadata, branch, selected Environment snapshot, and Kubernetes kube context/namespace when relevant into the Codex app-server turn prompt.
+- Worker Agent context: send Issue body, comments, project metadata, branch, and relevant Environment context into the selected engine adapter while keeping worktree, Skills, artifacts, and source capture in shared Worker Core.
 - Progress comments: turn meaningful session lifecycle and status updates into issue activity, not just terminal logs.
 - Issue labels and session stop controls: keep type triage asynchronous, keep priority manual, and allow a human to interrupt queued or running work.
 - Manual test deployment: let the user select a saved Kubernetes Environment and optional exposure overrides before queueing a deploy/test agent turn.
@@ -68,7 +68,7 @@ Goal:
 
 Build in order:
 
-- Harden Server Worker repo/workspace provisioning so the worker can clone or reuse a repository, prepare its own workdir, run Codex, and return artifacts without desktop filesystem coupling.
+- Harden Server Worker repo/workspace provisioning so the worker can clone or reuse a repository, prepare its own workdir, run the selected fixed Agent engine, and return artifacts without desktop filesystem coupling.
 - Harden source-change and artifact adoption from remote workers back into the issue/session model.
 - Runtime provider labels and capabilities for routing tasks to fixed Server Workers or future Kubernetes providers.
 - Kubernetes namespace allocator with labels, TTL, ResourceQuota, LimitRange, and project/session ownership metadata.
@@ -123,7 +123,7 @@ Acceptance:
 - A user can create a personal project from a local folder or GitHub repository URL, create a team project from a GitHub repository URL, attach it to the issue when execution is needed, and adjust runtime settings later.
 - A user can import or create project test cases, review case suggestions, assemble a plan with optional setup steps, and start an issue-backed test run.
 - A user can create and check off issue tasks without duplicating state between Markdown checkboxes and child issue rows.
-- A user can manage agent profiles, mention an enabled agent in an issue comment, and start a worker-backed session from that current turn request.
+- A user can mention Codex, Claude Code, or Pi in an Issue comment and start a Worker-backed Session routed only to that engine capability.
 - A user can label an issue and stop an active session from Issue Detail.
 - The session runs in its own worktree.
 - Inbox reflects issue and session updates without a manual refresh loop.
@@ -143,7 +143,7 @@ Build:
 - Improve branch state display.
 - Improve changed files and diff previews.
 - Improve commit and base-branch comparison display.
-- Preserve compact command evidence, raw command logs, and runtime metadata, including Codex thread and turn ids.
+- Preserve compact command evidence, raw command logs, and runtime metadata, including generic engine session/run refs and historical Codex thread/turn aliases.
 - Attach generated session evidence back to the issue.
 - Make evidence panels readable without opening a separate operations console.
 

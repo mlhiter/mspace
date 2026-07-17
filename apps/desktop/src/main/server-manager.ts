@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 const DEFAULT_SERVER_PORT = 8787;
 const DEFAULT_SERVER_BASE_URL = `http://127.0.0.1:${DEFAULT_SERVER_PORT}`;
 const DEFAULT_START_TIMEOUT_MS = 30_000;
-const EXPECTED_SERVER_PROTOCOL = 1;
+const EXPECTED_SERVER_PROTOCOL = 2;
 const SERVER_CONFIG_FILE = "server-config.json";
 const EXPECTED_SERVER_CAPABILITIES = [
   "workspaceInboxIssueGrouping",

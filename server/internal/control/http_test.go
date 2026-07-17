@@ -1215,18 +1215,6 @@ func TestWorkspaceMembersCannotMutateRuntimeConfiguration(t *testing.T) {
 			body:   `{"autoCreateDraftPr":true}`,
 		},
 		{
-			name:   "create agent profile",
-			method: http.MethodPost,
-			path:   "/api/workspaces/" + workspaceID + "/agents",
-			body:   `{"name":"Ops","mention":"@ops","provider":"codex","instructions":"Handle operational follow-up."}`,
-		},
-		{
-			name:   "update agent profile",
-			method: http.MethodPut,
-			path:   "/api/workspaces/" + workspaceID + "/agents/codex",
-			body:   `{"name":"Codex","mention":"@codex","provider":"codex","instructions":"Changed by member."}`,
-		},
-		{
 			name:   "create cluster",
 			method: http.MethodPost,
 			path:   "/api/workspaces/" + workspaceID + "/clusters",
@@ -1482,7 +1470,7 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 	noWorkerSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/sessions", strings.NewReader(`{"provider":"codex","agentProfile":"codex","runtimeMode":"personal","command":"@codex update the docs","triggerCommentId":"`+commentResult.CommentID+`"}`))
 	noWorkerSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(noWorkerSessionRecorder, noWorkerSessionReq)
-	if noWorkerSessionRecorder.Code != http.StatusConflict || !strings.Contains(noWorkerSessionRecorder.Body.String(), "no active codex worker") {
+	if noWorkerSessionRecorder.Code != http.StatusConflict || !strings.Contains(noWorkerSessionRecorder.Body.String(), "no active agent worker") {
 		t.Fatalf("create agent session without worker status=%d body=%s", noWorkerSessionRecorder.Code, noWorkerSessionRecorder.Body.String())
 	}
 
@@ -1506,7 +1494,7 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 	}
 
 	createSessionRecorder := httptest.NewRecorder()
-	createSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/sessions", strings.NewReader(`{"provider":"codex","agentProfile":"codex","runtimeMode":"personal","command":"@codex update the docs","triggerCommentId":"`+commentResult.CommentID+`"}`))
+	createSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/sessions", strings.NewReader(`{"agentEngine":"codex","runtimeMode":"personal","command":"@codex update the docs","triggerCommentId":"`+commentResult.CommentID+`"}`))
 	createSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(createSessionRecorder, createSessionReq)
 	if createSessionRecorder.Code != http.StatusCreated {
@@ -2758,11 +2746,10 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 		t.Fatalf("create optimization issue: %v", err)
 	}
 	session, err := store.CreateAgentSession(context.Background(), user.ID, workspaceID, issueID, CreateAgentSessionInput{
-		Provider:     "codex",
-		AgentProfile: "codex",
-		RuntimeMode:  "personal",
-		Command:      "Write test-case-proposals.json.",
-		Automation:   testCaseOptimizationAutomation,
+		AgentEngine: agentEngineCodex,
+		RuntimeMode: "personal",
+		Command:     "Write test-case-proposals.json.",
+		Automation:  testCaseOptimizationAutomation,
 	})
 	if err != nil {
 		t.Fatalf("create optimization session: %v", err)
@@ -2848,7 +2835,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 		t.Fatalf("expected plan case order to match selection order, got %+v", plan.Cases)
 	}
 
-	run := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":1,"resultLocale":"zh-CN"}`)
+	run := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentEngine":"codex","batchSize":1,"resultLocale":"zh-CN"}`)
 	if run.Run.Status != "setup_running" || run.Run.SetupStatus != "running" || run.Run.ResultLocale != "zh-CN" || run.Run.SetupIssueID == "" || run.Run.SetupSessionID == "" || run.Run.TotalCount != 2 || run.Run.ParentIssueID == "" || len(run.Items) != 2 {
 		t.Fatalf("unexpected started run: %+v", run)
 	}
@@ -2939,7 +2926,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 		t.Fatalf("unexpected failed item: %+v", failedItem)
 	}
 
-	batchFallbackRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2,"resultLocale":"zh-CN"}`)
+	batchFallbackRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentEngine":"codex","batchSize":2,"resultLocale":"zh-CN"}`)
 	setupBatchFallbackResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testSetup":{"runId":%q,"status":"passed","summary":"Preview is ready.","outputs":{"previewUrl":"https://rc5.example.test"}}}}`, batchFallbackRun.Run.ID)
 	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, batchFallbackRun.Run.SetupSessionID, setupBatchFallbackResult); err != nil {
 		t.Fatalf("complete batch fallback setup task: %v", err)
@@ -2970,7 +2957,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 		t.Fatalf("expected running batch item to be blocked from batch artifact, got %+v", blockedBatchItem)
 	}
 
-	adHocRun := startAdHocProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, fmt.Sprintf(`{"caseIds":[%q],"runtimeMode":"personal","agentProfile":"codex","batchSize":1}`, existingCase.ID))
+	adHocRun := startAdHocProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, fmt.Sprintf(`{"caseIds":[%q],"runtimeMode":"personal","agentEngine":"codex","batchSize":1}`, existingCase.ID))
 	if adHocRun.Run.Status != "running" || adHocRun.Run.Source != "ad_hoc" || adHocRun.Run.PlanID != "" || adHocRun.Plan != nil || adHocRun.Run.TotalCount != 1 || len(adHocRun.Items) != 1 {
 		t.Fatalf("unexpected direct started run: %+v", adHocRun)
 	}
@@ -3016,7 +3003,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 	if acceptedRun.Status != "accepted" || acceptedRun.AcceptanceStatus != "accepted" || acceptedRun.AcceptanceNote != "Accepted with known follow-up." {
 		t.Fatalf("unexpected accepted run: %+v", acceptedRun)
 	}
-	failingSetupRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	failingSetupRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentEngine":"codex","batchSize":2}`)
 	if failingSetupRun.Run.Status != "setup_running" || failingSetupRun.Run.SetupSessionID == "" {
 		t.Fatalf("expected second plan run to wait on setup, got %+v", failingSetupRun.Run)
 	}
@@ -3033,7 +3020,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 			t.Fatalf("setup failure should not start case execution, got %+v", item)
 		}
 	}
-	failedTaskRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	failedTaskRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentEngine":"codex","batchSize":2}`)
 	failedTaskResult := fmt.Sprintf(`{"status":"failed","error":"SSH command failed","result":{"exitCode":1,"testSetup":{"runId":%q,"status":"passed","summary":"Stale artifact should not pass."}}}`, failedTaskRun.Run.ID)
 	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, failedTaskRun.Run.SetupSessionID, failedTaskResult); err != nil {
 		t.Fatalf("fail setup task: %v", err)
@@ -3047,7 +3034,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 			t.Fatalf("failed setup task should not start case execution, got %+v", item)
 		}
 	}
-	cancelSetupRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	cancelSetupRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentEngine":"codex","batchSize":2}`)
 	cancelledSetupRun := cancelProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, cancelSetupRun.Run.ID, "User stopped setup.")
 	if cancelledSetupRun.Run.Status != "cancelled" || cancelledSetupRun.Run.SetupStatus != "cancelled" || cancelledSetupRun.Run.CompletedAt == "" {
 		t.Fatalf("expected setup run cancellation, got %+v", cancelledSetupRun.Run)
@@ -3074,7 +3061,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 		t.Fatalf("late setup artifact should not revive cancelled run, got %+v", cancelledSetupRun.Run)
 	}
 
-	cancelExecutionRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	cancelExecutionRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentEngine":"codex","batchSize":2}`)
 	cancelExecutionSetupResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testSetup":{"runId":%q,"status":"passed","summary":"Ready before cancellation.","outputs":{}}}}`, cancelExecutionRun.Run.ID)
 	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, cancelExecutionRun.Run.SetupSessionID, cancelExecutionSetupResult); err != nil {
 		t.Fatalf("complete cancel-execution setup task: %v", err)
@@ -3110,7 +3097,7 @@ func TestProjectTestModuleWorkflowHTTPFlow(t *testing.T) {
 			t.Fatalf("late execution artifact should not overwrite cancelled item, got %+v", item)
 		}
 	}
-	blockedRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":2}`)
+	blockedRun := startProjectTestRunViaHTTP(t, router, sessionToken, workspaceID, project.ID, plan.Plan.ID, `{"runtimeMode":"personal","agentEngine":"codex","batchSize":2}`)
 	blockedSetupResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"testSetup":{"runId":%q,"status":"passed","summary":"Ready for blocked review.","outputs":{}}}}`, blockedRun.Run.ID)
 	if _, err := completeSessionTaskInMemoryStore(t, store, worker.ID, blockedRun.Run.SetupSessionID, blockedSetupResult); err != nil {
 		t.Fatalf("complete blocked-run setup task: %v", err)
@@ -3185,7 +3172,7 @@ func TestWorkspaceTestPlanCanSpanProjects(t *testing.T) {
 		t.Fatalf("project compatibility plan lists should include shared plan, first=%+v second=%+v", firstProjectPlans, secondProjectPlans)
 	}
 
-	run := startWorkspaceTestRunViaHTTP(t, router, sessionToken, workspaceID, plan.Plan.ID, `{"runtimeMode":"personal","agentProfile":"codex","batchSize":1}`)
+	run := startWorkspaceTestRunViaHTTP(t, router, sessionToken, workspaceID, plan.Plan.ID, `{"runtimeMode":"personal","agentEngine":"codex","batchSize":1}`)
 	if run.Run.TotalCount != 2 || len(run.Items) != 2 || run.Run.ProjectID != firstProject.ID {
 		t.Fatalf("unexpected workspace run: %+v", run)
 	}
@@ -3641,8 +3628,7 @@ func TestCreateAgentSessionAcceptsBuiltInSkillSlugs(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
-		"provider":"codex",
-		"agentProfile":"codex",
+		"agentEngine":"codex",
 		"runtimeMode":"personal",
 		"command":"@codex #think produce a plan",
 		"skillSlugs":["think","think"]
@@ -3730,8 +3716,7 @@ func TestCreateAgentSessionAcceptsWorkspaceCustomSkillSlugs(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
-		"provider":"codex",
-		"agentProfile":"codex",
+		"agentEngine":"codex",
 		"runtimeMode":"personal",
 		"command":"@codex #repo-map inspect first",
 		"skillSlugs":["repo-map"]
@@ -3801,8 +3786,7 @@ func TestCreateAgentSessionRejectsUnknownSkillSlug(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
-		"provider":"codex",
-		"agentProfile":"codex",
+		"agentEngine":"codex",
 		"runtimeMode":"personal",
 		"command":"@codex #missing-skill try this",
 		"skillSlugs":["missing-skill"]
@@ -3858,8 +3842,7 @@ func TestCreateAgentSessionRejectsDisabledWorkspaceSkillSlug(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
-		"provider":"codex",
-		"agentProfile":"codex",
+		"agentEngine":"codex",
 		"runtimeMode":"personal",
 		"command":"@codex #disabled-skill try this",
 		"skillSlugs":["disabled-skill"]
@@ -4123,6 +4106,72 @@ func TestCreateRuntimeTaskRejectsClientSkillBundles(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "skill bundles are server-managed") {
 		t.Fatalf("expected server-managed skill bundle error, got %s", recorder.Body.String())
+	}
+}
+
+func TestCreateRuntimeTaskRejectsRawAgentSession(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "raw-agent-session-user",
+		Login:          "raw-agent-session-user",
+		Name:           "Raw Agent Session User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaces[0].ID+"/runtime-tasks", strings.NewReader(`{
+		"kind":"agent_session",
+		"runtimeMode":"personal",
+		"requiredCapabilities":{"pi":true},
+		"payload":{"agentEngine":"pi","automation":"test_run_execution","workdir":"/tmp/attacker-controlled","env":{"DATABASE_URL":"exfiltrate"}}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+sessionToken)
+	server.Routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("create raw agent session status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "agent_session runtime tasks are server-managed") {
+		t.Fatalf("expected server-managed agent session error, got %s", recorder.Body.String())
+	}
+}
+
+func TestCreateAgentSessionRejectsServerOwnedControlFields(t *testing.T) {
+	store := NewMemoryStore()
+	user, workspaces, err := store.UpsertIdentity(context.Background(), IdentityProfile{
+		Provider:       "github",
+		ProviderUserID: "session-control-field-user",
+		Login:          "session-control-field-user",
+		Name:           "Session Control Field User",
+	})
+	if err != nil {
+		t.Fatalf("upsert identity: %v", err)
+	}
+	sessionToken, _, err := store.CreateAuthSession(context.Background(), user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	server := NewServer(Config{}, store, fakeGitHubClient{})
+	for _, field := range []string{"automation", "testRunId", "sourceSessionId", "env", "workdir", "sandbox"} {
+		t.Run(field, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			body := fmt.Sprintf(`{"agentEngine":"pi","command":"@pi inspect","%s":"attacker-controlled"}`, field)
+			req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaces[0].ID+"/issues/issue-does-not-matter/sessions", strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+sessionToken)
+			server.Routes().ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("create session with %s status=%d body=%s", field, recorder.Code, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), "is server-managed") {
+				t.Fatalf("expected server-managed field error for %s, got %s", field, recorder.Body.String())
+			}
+		})
 	}
 }
 
@@ -4606,7 +4655,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	router := server.Routes()
 
 	personalTaskRecorder := httptest.NewRecorder()
-	personalTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"agent_session","runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
+	personalTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"noop","runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
 	personalTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(personalTaskRecorder, personalTaskReq)
 	if personalTaskRecorder.Code != http.StatusForbidden {
@@ -4614,7 +4663,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	}
 
 	personalModeTaskRecorder := httptest.NewRecorder()
-	personalModeTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"agent_session","runtimeMode":"personal","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
+	personalModeTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"noop","runtimeMode":"personal","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
 	personalModeTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(personalModeTaskRecorder, personalModeTaskReq)
 	if personalModeTaskRecorder.Code != http.StatusCreated {
@@ -4654,7 +4703,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	}
 
 	rejectPersonalTaskRecorder := httptest.NewRecorder()
-	rejectPersonalTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"agent_session","runtimeMode":"personal","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
+	rejectPersonalTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"kind":"noop","runtimeMode":"personal","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
 	rejectPersonalTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(rejectPersonalTaskRecorder, rejectPersonalTaskReq)
 	if rejectPersonalTaskRecorder.Code != http.StatusForbidden {
@@ -4662,7 +4711,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	}
 
 	createTaskRecorder := httptest.NewRecorder()
-	createTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-1","sessionId":"session-1","projectId":"project-1","kind":"agent_session","priority":5,"runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
+	createTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-1","sessionId":"session-1","projectId":"project-1","kind":"noop","priority":5,"runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"fix it"}}`))
 	createTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(createTaskRecorder, createTaskReq)
 	if createTaskRecorder.Code != http.StatusCreated {
@@ -4672,7 +4721,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	if err := json.Unmarshal(createTaskRecorder.Body.Bytes(), &task); err != nil {
 		t.Fatalf("parse runtime task: %v", err)
 	}
-	if task.ID == "" || task.WorkspaceID != workspaceID || task.Status != "queued" || task.Kind != "agent_session" || task.RuntimeMode != "team" {
+	if task.ID == "" || task.WorkspaceID != workspaceID || task.Status != "queued" || task.Kind != "noop" || task.RuntimeMode != "team" {
 		t.Fatalf("unexpected created task: %+v", task)
 	}
 
@@ -4826,7 +4875,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	}
 
 	createTask2Recorder := httptest.NewRecorder()
-	createTask2Req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-2","sessionId":"session-2","projectId":"project-1","kind":"agent_session","priority":5,"runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"finish it"}}`))
+	createTask2Req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-2","sessionId":"session-2","projectId":"project-1","kind":"noop","priority":5,"runtimeMode":"team","requiredCapabilities":{"codex":true},"payload":{"prompt":"finish it"}}`))
 	createTask2Req.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(createTask2Recorder, createTask2Req)
 	if createTask2Recorder.Code != http.StatusCreated {
@@ -4911,7 +4960,7 @@ func TestRuntimeTaskQueueClaimFlow(t *testing.T) {
 	}
 
 	unmatchedTaskRecorder := httptest.NewRecorder()
-	unmatchedTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-2","kind":"agent_session","runtimeMode":"team","requiredCapabilities":{"kubectl":true},"payload":{"prompt":"deploy it"}}`))
+	unmatchedTaskReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(`{"issueId":"issue-2","kind":"noop","runtimeMode":"team","requiredCapabilities":{"kubectl":true},"payload":{"prompt":"deploy it"}}`))
 	unmatchedTaskReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(unmatchedTaskRecorder, unmatchedTaskReq)
 	if unmatchedTaskRecorder.Code != http.StatusCreated {
@@ -4958,7 +5007,7 @@ func TestRuntimeTaskListPagination(t *testing.T) {
 	createdIDs := make([]string, 0, 12)
 	for index := 0; index < 12; index++ {
 		createRecorder := httptest.NewRecorder()
-		body := fmt.Sprintf(`{"issueId":"issue-%02d","kind":"agent_session","priority":%d,"runtimeMode":"personal","requiredCapabilities":{"codex":true},"payload":{"prompt":"task %02d"}}`, index, index, index)
+		body := fmt.Sprintf(`{"issueId":"issue-%02d","kind":"noop","priority":%d,"runtimeMode":"personal","requiredCapabilities":{"protocolSmoke":true},"payload":{"prompt":"task %02d"}}`, index, index, index)
 		createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/runtime-tasks", strings.NewReader(body))
 		createReq.Header.Set("Authorization", "Bearer "+sessionToken)
 		router.ServeHTTP(createRecorder, createReq)
@@ -5095,7 +5144,7 @@ func TestAutoDeployTestEnvironmentQueuesAfterSourceSession(t *testing.T) {
 	}
 
 	createSessionRecorder := httptest.NewRecorder()
-	createSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{"provider":"codex","agentProfile":"codex","command":"Fix the source bug."}`))
+	createSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{"agentEngine":"codex","command":"Fix the source bug."}`))
 	createSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(createSessionRecorder, createSessionReq)
 	if createSessionRecorder.Code != http.StatusCreated {
@@ -5270,9 +5319,8 @@ func TestManualTestDeploySessionDoesNotTriggerAutomaticDeploy(t *testing.T) {
 	tokenResult, worker := registerTestRuntimeWorker(t, router, sessionToken, workspaceID)
 
 	sourceSession, err := store.CreateAgentSession(context.Background(), user.ID, workspaceID, issueID, CreateAgentSessionInput{
-		Provider:     "codex",
-		AgentProfile: "codex",
-		Command:      "Produce a source commit.",
+		AgentEngine: agentEngineCodex,
+		Command:     "Produce a source commit.",
 	})
 	if err != nil {
 		t.Fatalf("create source session: %v", err)

@@ -793,7 +793,7 @@ func (s *PostgresStore) StartAdHocWorkspaceTestRun(ctx Context, user User, works
 		Environment:     normalized.Environment,
 		EnvironmentID:   normalized.EnvironmentID,
 		EnvironmentKind: normalized.EnvironmentKind,
-		AgentProfile:    normalized.AgentProfile,
+		AgentEngine:     normalized.AgentEngine,
 		RuntimeMode:     normalized.RuntimeMode,
 		BatchSize:       normalized.BatchSize,
 		ResultLocale:    normalized.ResultLocale,
@@ -1122,7 +1122,10 @@ func (s *PostgresStore) RetryWorkspaceTestRun(ctx Context, user User, workspaceI
 	if err != nil {
 		return TestRunDetail{}, err
 	}
-	normalized := normalizeRetryTestRunInput(input)
+	normalized, err := normalizeRetryTestRunInput(input)
+	if err != nil {
+		return TestRunDetail{}, err
+	}
 	if normalized.RuntimeMode == "" {
 		normalized.RuntimeMode = workspace.Kind
 	}
@@ -1154,7 +1157,7 @@ func (s *PostgresStore) RetryWorkspaceTestRun(ctx Context, user User, workspaceI
 		return TestRunDetail{}, err
 	}
 	run.ResultLocale = normalized.ResultLocale
-	if err := s.startPostgresTestRunExecutionSessions(ctx, user.ID, run, CreateTestRunInput{AgentProfile: normalized.AgentProfile, RuntimeMode: normalized.RuntimeMode, BatchSize: defaultTestRunBatchSize, ResultLocale: normalized.ResultLocale}); err != nil {
+	if err := s.startPostgresTestRunExecutionSessions(ctx, user.ID, run, CreateTestRunInput{AgentEngine: normalized.AgentEngine, RuntimeMode: normalized.RuntimeMode, BatchSize: defaultTestRunBatchSize, ResultLocale: normalized.ResultLocale}); err != nil {
 		return TestRunDetail{}, err
 	}
 	return s.GetWorkspaceTestRun(ctx, user.ID, workspaceID, runID)
@@ -2757,7 +2760,11 @@ func (s *PostgresStore) startPostgresTestRunExecutionSessionsWithQueryer(ctx con
 	if input.BatchSize > maxTestRunBatchSize {
 		input.BatchSize = maxTestRunBatchSize
 	}
-	input.AgentProfile = normalizeAgentProfile(input.AgentProfile)
+	engine, err := requireCodexWorkflowAgentEngine(input.AgentEngine, input.LegacyProvider, input.LegacyAgentProfile)
+	if err != nil {
+		return err
+	}
+	input.AgentEngine = engine
 	if strings.TrimSpace(input.RuntimeMode) == "" {
 		input.RuntimeMode = "team"
 	}
@@ -2814,8 +2821,7 @@ func (s *PostgresStore) startPostgresTestRunExecutionSessionsWithQueryer(ctx con
 				return err
 			}
 			session, err := createTestRunAgentSessionTask(ctx, q, userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
-				Provider:             "codex",
-				AgentProfile:         input.AgentProfile,
+				AgentEngine:          input.AgentEngine,
 				RuntimeMode:          input.RuntimeMode,
 				Command:              body,
 				Automation:           testRunExecutionAutomation,
@@ -2895,8 +2901,7 @@ func (s *PostgresStore) startPostgresTestRunSetupSession(ctx Context, userID str
 		return err
 	}
 	session, err := s.CreateAgentSession(ctx, userID, run.WorkspaceID, child.ID, CreateAgentSessionInput{
-		Provider:         "codex",
-		AgentProfile:     input.AgentProfile,
+		AgentEngine:      input.AgentEngine,
 		RuntimeMode:      input.RuntimeMode,
 		Command:          body,
 		Automation:       testRunSetupAutomation,
@@ -2961,7 +2966,10 @@ func createTestRunChildIssue(ctx context.Context, q queryer, userID string, run 
 }
 
 func createTestRunAgentSessionTask(ctx context.Context, q queryer, userID, workspaceID, issueID string, input CreateAgentSessionInput) (AgentSession, error) {
-	normalized := normalizeCreateAgentSessionInput(input)
+	normalized, err := normalizeCreateAgentSessionInput(input)
+	if err != nil {
+		return AgentSession{}, err
+	}
 	if normalized.Command == "" {
 		return AgentSession{}, errors.New("command is required")
 	}

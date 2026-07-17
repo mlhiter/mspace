@@ -1,6 +1,6 @@
 # mspace Design System
 
-> Status: design system baseline, updated 2026-06-03
+> Status: design system baseline, updated 2026-07-17
 
 ## Visual Thesis
 
@@ -159,7 +159,7 @@ The default desktop shape is a sidebar plus document workspace.
 - Sidebar width: about `252px`.
 - Main content: centered page frame with a max width near `1280px`.
 - Page padding: generous enough for reading, tight enough for operations.
-- Default routes in the app shell: Inbox, Issues, Tests, Agents, Clusters, and Projects. Issue, Test Case, Test Plan, Test Run, and Session details are reached from objects.
+- Default routes in the app shell: Inbox, Issues, Tests, Agents, Environments, and Projects. Issue, Test Case, Test Plan, Test Run, and Session details are reached from objects.
 - Object list pages must not use a left-list/right-detail split. Clicking a row opens a dedicated detail page with its own route and breadcrumbs. Inline list pages may use filters, batch actions, and creation/import panels, but not persistent side-by-side detail panes.
 
 Screen priorities:
@@ -168,7 +168,7 @@ Screen priorities:
 - Issue Detail: document body first, then activity, session, and evidence. Keep the right metadata sidebar on Overview only; Commits, Sessions, and Evidence use the full page width so diffs, paths, command output, and Kubernetes evidence have room.
 - Tests: project-level cases, case suggestions, plans, and runs. Creation/import can use focused modals; row details should open dedicated pages rather than a persistent list/detail split.
 - Session Detail: logs, worktree state, branch comparison, evidence.
-- Agents: managed Codex-backed profiles, mentions, enabled state, and instructions.
+- Agents: read-only availability for the fixed Codex, Claude Code, and Pi catalog, plus a separate Skills management tab. Do not add Agent profile forms, prompt instructions, enabled toggles, arbitrary commands, model selectors, or MCP settings.
 - Clusters: reusable kubeconfig, registry, and preview exposure defaults.
 - Projects: repository and runtime policy, not a daily conversation feed.
 
@@ -196,7 +196,7 @@ Screen priorities:
 - Use cards for repeated objects, panels, and modal-like grouped content.
 - Do not use cards as generic page sections.
 - Cards should have a real job: issue row, evidence block, session summary, project row, or config panel.
-- Render completed Codex replies as plain timeline content beneath the actor row, without an outer card or decorative completion mark. While a session is active, show at most the latest Codex-authored process message in one fixed-height row and replace it with restrained motion; never translate command, reasoning, plan, tool, file, or status logs into product-authored progress copy. Keep failed, cancelled, and missing-summary feedback explicit, and leave raw execution detail to Session Detail.
+- Render completed Agent replies as plain timeline content beneath the actor row, without an outer card or decorative completion mark. While a Session is active, show at most the latest normalized Agent message in one fixed-height row and replace it with restrained motion; never translate command, reasoning, plan, tool, file, status, or diagnostic logs into product-authored progress copy. Keep Codex, Claude Code, and Pi identities distinct, keep failed/cancelled/missing-summary feedback explicit, and leave raw execution detail to Session Detail.
 
 ### Badges And Status
 

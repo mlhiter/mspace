@@ -6,26 +6,6 @@ CREATE TABLE IF NOT EXISTS workspace_settings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS agent_profiles (
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  id TEXT NOT NULL CHECK (id <> ''),
-  name TEXT NOT NULL CHECK (name <> ''),
-  mention TEXT NOT NULL CHECK (mention <> ''),
-  provider TEXT NOT NULL DEFAULT 'codex' CHECK (provider = 'codex'),
-  description TEXT NOT NULL DEFAULT '',
-  instructions TEXT NOT NULL DEFAULT '',
-  enabled BOOLEAN NOT NULL DEFAULT TRUE,
-  built_in BOOLEAN NOT NULL DEFAULT FALSE,
-  sort_order INTEGER NOT NULL DEFAULT 100,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (workspace_id, id),
-  UNIQUE (workspace_id, mention)
-);
-
-CREATE INDEX IF NOT EXISTS idx_agent_profiles_workspace_enabled
-  ON agent_profiles(workspace_id, enabled, sort_order);
-
 CREATE TABLE IF NOT EXISTS clusters (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

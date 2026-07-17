@@ -1,5 +1,22 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+type PersonalWorkerCapabilityRequirements = {
+  codex?: boolean;
+  claudeCode?: boolean;
+  pi?: boolean;
+  browser?: boolean;
+  chrome_cdp?: boolean;
+  [capability: string]: boolean | undefined;
+};
+
+type PersonalWorkerCapabilities = PersonalWorkerCapabilityRequirements & {
+  protocolSmoke: boolean;
+  codex: boolean;
+  claudeCode: boolean;
+  pi: boolean;
+  dryRun: boolean;
+};
+
 function readArgument(name: string): string | undefined {
   const prefix = `--${name}=`;
   return process.argv.find((arg) => arg.startsWith(prefix))?.slice(prefix.length);
@@ -60,11 +77,12 @@ const desktopAPI = {
     authToken: string;
     workspaceId: string;
     serverUrl?: string;
-    requiredCapabilities?: Record<string, boolean>;
+    requiredCapabilities?: PersonalWorkerCapabilityRequirements;
   }) => ipcRenderer.invoke("mspace:ensure-personal-worker", input) as Promise<{
     ok: boolean;
     status: string;
     workerName: string;
+    capabilities?: PersonalWorkerCapabilities;
   }>,
   stopPersonalWorker: () => ipcRenderer.invoke("mspace:stop-personal-worker") as Promise<{
     ok: boolean;

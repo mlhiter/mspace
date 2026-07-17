@@ -1,6 +1,6 @@
 # mspace API Integration Guide
 
-> Status: server-owned local MVP API guide, updated 2026-07-07
+> Status: server-owned local MVP API guide, updated 2026-07-17
 
 This guide covers the current server control-plane API used by the desktop and workers. The control plane normally runs on `http://127.0.0.1:8787`.
 
@@ -21,7 +21,7 @@ The desktop chooses its server in this order:
 2. A saved Team server URL from Electron user data.
 3. The local bundled/dev server on `127.0.0.1:8787`.
 
-Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 1`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceInvitationPreview`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, `runtimeAvailability`, and `runtimeTaskQueue`. `capabilities.githubAuth` and `capabilities.githubApp` are optional behavior metadata. GitHub login is shown only when the desktop is using an explicitly configured team server, from either `MSPACE_SERVER_URL` or a saved Team server URL, and that server reports `capabilities.githubAuth: true`. GitHub App automation status is shown separately for team workspaces and must not be inferred from GitHub OAuth. The default local personal server stays local-account-only and starts on account creation.
+Before saving a Team server URL, the desktop checks `/health`. Compatible servers must return `ok: true`, `serverProtocol: 2`, and these capabilities set to `true`: `workspaceInboxIssueGrouping`, `teamWorkspaceCreation`, `workspaceInvitations`, `workspaceInvitationPreview`, `workspaceKinds`, `workspaceCollaboration`, `runtimeWorkerRegistration`, `runtimeAvailability`, and `runtimeTaskQueue`. Protocol 2 is the fixed Agent Engine contract; a protocol-1 Desktop or Server is rejected during health checking instead of entering a mixed-version state that can misroute Agent Sessions. `capabilities.githubAuth` and `capabilities.githubApp` are optional behavior metadata. GitHub login is shown only when the desktop is using an explicitly configured team server, from either `MSPACE_SERVER_URL` or a saved Team server URL, and that server reports `capabilities.githubAuth: true`. GitHub App automation status is shown separately for team workspaces and must not be inferred from GitHub OAuth. The default local personal server stays local-account-only and starts on account creation.
 
 Workspace endpoints require:
 
@@ -42,10 +42,10 @@ The server control plane owns:
 - local password auth, optional GitHub auth, and mspace `msp_...` sessions;
 - users, workspaces, members, invitations, and identity;
 - projects, project runbooks, project test cases, test case revisions, test case suggestions, test plans, test runs, issues, child tasks, comments, reactions, labels, Inbox events, and per-user receipts;
-- workspace settings, agent profiles, built-in and workspace custom workflow skill catalog/revisions/settings, environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
+- workspace settings, the fixed Agent catalog contract, built-in and workspace custom Workflow Skill catalog/revisions/settings, Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
 - runtime worker registration, worker heartbeat/capability state, runtime task queue state, task events, task logs, cancellation, and task results.
 
-The desktop owns native shell behavior, local UI state, file pickers, and opening browser auth flows. Workers own execution: repository cache, per-session workdir, Codex app-server lifecycle, command execution, source capture, artifacts, and logs while running. The server never starts Codex and never requires Codex credentials; it only queues Codex-capable runtime tasks, attaches any required server-owned skill bundles, and reconciles worker results.
+The desktop owns native shell behavior, local UI state, file pickers, and opening browser auth flows. Workers own execution: repository cache, per-Session workdir, Codex/Claude Code/Pi adapters, source capture, artifacts, and logs. The server never starts Agent CLIs or requires their credentials; it freezes `agentEngine`, queues one exact capability, attaches server-owned Skill bundles, and reconciles Worker results.
 
 ## Auth And Workspace APIs
 
@@ -449,15 +449,13 @@ Use `status:"failed"` plus `failureSummary` when setup cannot safely complete. T
 | --- | --- | --- |
 | `GET` | `/api/workspaces/{workspaceID}/workspace/settings` | Read workspace automation settings. |
 | `PUT` | `/api/workspaces/{workspaceID}/workspace/settings` | Update workspace automation settings. |
-| `GET` | `/api/workspaces/{workspaceID}/agents` | List mentionable agent profiles. |
+| `GET` | `/api/workspaces/{workspaceID}/agents` | Return the fixed read-only Agent catalog: Codex, Claude Code, and Pi. |
 | `GET` | `/api/workspaces/{workspaceID}/skills` | List built-in and workspace custom workflow skill metadata. |
 | `POST` | `/api/workspaces/{workspaceID}/skills` | Create a workspace custom workflow skill. |
 | `GET` | `/api/workspaces/{workspaceID}/skills/{skillID}` | Read owner/admin skill detail and files for management. |
 | `PUT` | `/api/workspaces/{workspaceID}/skills/{skillID}` | Update a custom skill revision or built-in workspace invocation settings. |
 | `DELETE` | `/api/workspaces/{workspaceID}/skills/{skillID}` | Delete a workspace custom skill. |
 | `POST` | `/api/workspaces/{workspaceID}/skills/{skillID}/duplicate` | Copy a built-in or custom skill into a workspace custom skill. |
-| `POST` | `/api/workspaces/{workspaceID}/agents` | Create an agent profile. |
-| `PUT` | `/api/workspaces/{workspaceID}/agents/{agentID}` | Update an agent profile. |
 | `GET` | `/api/workspaces/{workspaceID}/environments` | List Kubernetes and virtual machine Environments. Kubernetes rows are projected from cluster compatibility records. |
 | `POST` | `/api/workspaces/{workspaceID}/environments` | Create an Environment. Use `kind:"kubernetes"` or `kind:"virtual_machine"`. |
 | `PUT` | `/api/workspaces/{workspaceID}/environments/{environmentID}` | Update an Environment. |
@@ -470,7 +468,7 @@ Use `status:"failed"` plus `failureSummary` when setup cannot safely complete. T
 | `DELETE` | `/api/workspaces/{workspaceID}/clusters/{clusterID}` | Compatibility API for deleting an unused Kubernetes cluster record. |
 | `GET` | `/api/workspaces/{workspaceID}/clusters/discover-defaults` | Discover kubeconfig candidates and contexts under `~/.kube`. |
 | `POST` | `/api/workspaces/{workspaceID}/clusters/import` | Import selected kubeconfig files. |
-| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/sessions` | Queue an `agent_session` runtime task after a supported agent mention, attached project, and active matching Codex worker. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/sessions` | Queue an `agent_session` after a fixed Agent mention, attached project, and active Worker with the exact engine capability. |
 | `GET` | `/api/workspaces/{workspaceID}/sessions/{sessionID}` | Load session detail derived from the runtime task and worker logs. |
 | `POST` | `/api/workspaces/{workspaceID}/sessions/{sessionID}/cancel` | Request cancellation for the session's runtime task. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-deploy` | Queue a test deployment session. |
@@ -481,6 +479,16 @@ Use `status:"failed"` plus `failureSummary` when setup cannot safely complete. T
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Store or update the issue source handoff from selected source evidence. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the issue handoff record. |
 | `GET` | `/api/workspaces/{workspaceID}/github-app` | Read server-owned GitHub App installation status for this workspace. |
+
+`GET /agents` always returns this code-owned shape; write methods on `/agents` are not available:
+
+```json
+[
+  {"id":"codex","name":"Codex","mention":"@codex","capability":"codex"},
+  {"id":"claude_code","name":"Claude Code","mention":"@claude","capability":"claudeCode"},
+  {"id":"pi","name":"Pi","mention":"@pi","capability":"pi"}
+]
+```
 
 Workspace settings currently include:
 
@@ -557,9 +565,9 @@ Kubernetes Environments currently use the existing `clusters` storage and remain
 
 ## Server Agent Sessions
 
-The desktop shell proactively ensures a personal Codex worker after auth and workspace selection. In personal desktop mode, Electron main is the authority for the bundled worker process; the server availability API is a heartbeat/capability snapshot used to confirm liveness after Electron has been asked to ensure the worker. Issue Detail still starts a worker turn only after an action-level worker preflight:
+The desktop shell proactively ensures one generic personal Worker after auth and workspace selection. Electron detects installed `codex`, `claude`, and `pi` executables without launching them and advertises `codex`, `claudeCode`, and `pi` respectively. Issue Detail starts a turn only after engine-specific preflight:
 
-1. Call `GET /api/workspaces/{workspaceID}/runtime/availability?runtimeMode=<personal|team>&requiredCapabilities={"codex":true}` and require `state:"ready"` before queueing.
+1. Map `@codex`, `@claude`, or `@pi` to `{"codex":true}`, `{"claudeCode":true}`, or `{"pi":true}` and require `state:"ready"` from `GET /api/workspaces/{workspaceID}/runtime/availability`.
 2. In personal desktop mode, ask Electron to ensure the host-local personal worker, then wait briefly for the availability response to show a ready worker. Do not skip the Electron ensure step only because the server still has a fresh heartbeat snapshot; that snapshot can survive an app restart for a short window. Team workspaces do not auto-start a worker; the user must connect a matching team worker.
 3. Write the human comment through `POST /api/workspaces/{workspaceID}/issues/{issueID}/comments`.
 4. Call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions` with the comment id as `triggerCommentId`.
@@ -568,10 +576,9 @@ Personal workspaces use `runtimeMode: "personal"`; team workspaces use `runtimeM
 
 ```json
 {
-  "provider": "codex",
-  "agentProfile": "codex",
+  "agentEngine": "claude_code",
   "runtimeMode": "team",
-  "command": "@codex #think implement the fix",
+  "command": "@claude #think implement the fix",
   "triggerCommentId": "<server-comment-id>",
   "skillSlugs": ["think"]
 }
@@ -579,9 +586,9 @@ Personal workspaces use `runtimeMode: "personal"`; team workspaces use `runtimeM
 
 Issue comments can reference enabled server-managed workflow skills with `/slug` or `#slug`. Desktop clients should derive `skillSlugs` from the final submitted comment body and send only those slugs. The server accepts built-in or workspace custom skill slugs, de-duplicates them, rejects unknown, disabled, or malformed slugs with HTTP `400`, and rejects client-provided `requiredSkills`, `skills`, `skillBundles`, or skill file content on issue-session creation. Full skill bundles remain server-owned and are included in the worker runtime task payload; workspace user APIs return compact skill references except for owner/admin skill management detail endpoints.
 
-The server validates that the issue has an attached project, that `runtimeMode` matches the workspace kind, and that a matching active Codex worker exists before it creates `agent_sessions` or `runtime_tasks`. If no worker is online, the server returns HTTP `409` with `{"error":"no active codex worker"}`. Clients should keep project attachment and worker preflight before the trigger comment so unsupported `@codex` turns do not leave a human comment waiting for missing repository context or a worker that cannot claim the task.
+The server validates `agentEngine`, project attachment, workspace/runtime mode, and an active Worker with the exact capability before it creates the runtime task. If no Worker matches, it returns HTTP `409` with `{"error":"no active agent worker"}`. New clients send only `agentEngine`; known legacy `provider`/`agentProfile` inputs map to Codex, while explicit unknown engines fail closed.
 
-When accepted, the server snapshots issue/project/runbook/comment/child issue/label context into the runtime task payload and returns the server `AgentSession`. The worker prepares its own repo cache and workdir, appends logs to `runtime_task_logs`, and reports Codex thread/turn ids plus source branch and commit metadata in `runtime_tasks.result`. Server Issue Detail includes matching sessions by mapping `runtime_tasks` with `kind="agent_session"` back into its `sessions` field, and the Commits tab derives change nodes from task results.
+When accepted, the server snapshots Issue/project/runbook/comment/child/label context into the runtime task payload and returns `AgentSession`. The Worker prepares its own repo cache/workdir and reports `agentEngine`, `engineSessionRef`, `engineRunRef`, source branch, and commit metadata. Codex also returns legacy thread/turn aliases. Claude Code completion requires a terminal stream-JSON `result`; Pi uses official RPC and requires `agent_end`, sends `abort` on cancellation, and never exposes `sessionFile` paths.
 
 New project-backed issues may also create an automatic `agent_session` with payload `automation:"issue_analysis"` when a matching Codex worker is online. Attaching a project to a projectless top-level issue also tries the same analysis queueing path. That payload is queued before type triage when created with a project, includes `sandbox:"read-only"`, `sourceCapture:false`, and the pinned server-owned `think` skill bundle in `requiredSkills`; workers materialize the skill under the session artifact directory and expose `MSPACE_SESSION_SKILLS_DIR` to Codex. Issue creation and project attachment do not fail when the analysis cannot be queued, and server reconciliation ignores source/test/deploy/review artifacts from this automation.
 
@@ -623,7 +630,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers and heartbeat state. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime/availability` | Return structured readiness for a runtime mode and required capability set. Use this for product action preflight instead of reimplementing heartbeat TTLs in clients. |
-| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a runtime task manually for API-level smoke/debug tooling. Product UI flows normally create tasks through issue triage, agent session, or test deploy routes. |
+| `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Queue a non-product runtime task manually for API-level smoke/debug tooling, such as `protocol_smoke` or `noop`. Raw `agent_session` payloads are rejected; use the Issue Session API so engine, repository, environment, and automation fields remain server-owned. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks?limit=10&offset=0` | List runtime tasks with pagination metadata and status counts. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/logs` | List worker-appended logs for one runtime task. |
@@ -673,7 +680,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/worker-installat
 
 The response includes `installCommand`, `runtimeMode`, `workerName`, `credentialPrefix`, and `expiresAt`. Product UI should show the install command and hide the raw bootstrap credential. The worker host needs Docker plus Codex `auth.json` and `config.toml`; after running the command, the worker appears in `/runtime-workers` after its first heartbeat.
 
-For Kubernetes-hosted fixed workers managed by the Helm chart, use `bootstrap.teamWorkspace.enabled=true` instead of the UI install command. Helm creates or reuses a release Secret entry named `MSPACE_RUNTIME_TOKEN`, passes it to the server as `MSPACE_BOOTSTRAP_RUNTIME_TOKEN`, and mounts the same value into the worker as its runtime registration credential. The operator still creates the worker Codex home Secret separately; that Secret must include `auth.json` plus `config.toml` and is mounted only by the worker.
+For Kubernetes-hosted fixed workers managed by the Helm chart, use `bootstrap.teamWorkspace.enabled=true` instead of the UI install command. Helm creates or reuses a release Secret entry named `MSPACE_RUNTIME_TOKEN`, passes it to the server as `MSPACE_BOOTSTRAP_RUNTIME_TOKEN`, and injects only that key into the Worker as its runtime registration credential; the Worker does not receive the Server's database, GitHub, OAuth, or bootstrap credentials. The operator still creates the Worker Codex home Secret separately; that Secret must include `auth.json` plus `config.toml` and is mounted only by the Worker. Agent subprocesses also strip inherited control-plane and Worker-registration variables before the server-owned session environment is appended.
 
 Queue a protocol smoke task from API/debug tooling:
 
@@ -686,7 +693,7 @@ curl -X POST "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/runtime-tasks" \
 
 The server rejects runtime worker registration and runtime task creation when the submitted mode does not match the workspace kind. An install command or token minted in a personal workspace can only register a personal worker, and one minted in a team workspace can only register a team worker. Manual runtime task requests follow the same rule: `runtimeMode:"personal"` for personal workspaces and `runtimeMode:"team"` for team workspaces.
 
-Desktop personal workers use the same token endpoints, but the user normally never sees the raw credential. Electron creates a 12-hour personal worker credential, writes it to an Electron user-data token file, renews it before expiry, and revokes the replaced credential after a short grace period. The worker supports `MSPACE_RUNTIME_TOKEN_FILE` and rereads that file for runtime API calls, so token renewal is designed to be invisible to personal users. Ordinary startup creates only the Codex-capable base Worker. When server-provided `requiredCapabilities` asks for `browser` or `chrome_cdp`, Electron starts a separately named browser companion Worker against the same credential file; clients wait for runtime availability to report that capability instead of replacing or stopping the base Worker.
+Desktop personal workers use the same token endpoints, but the user normally never sees the raw credential. Electron creates a 12-hour personal worker credential, writes it to an Electron user-data token file, renews it before expiry, and revokes the replaced credential after a short grace period. The worker supports `MSPACE_RUNTIME_TOKEN_FILE` and rereads that file for runtime API calls, so token renewal is designed to be invisible to personal users. Ordinary startup creates one generic base Worker that advertises whichever of Codex, Claude Code, and Pi were discovered without launching those CLIs. When server-provided `requiredCapabilities` asks for `browser` or `chrome_cdp`, Electron starts a separately named browser companion Worker against the same credential file; clients wait for runtime availability to report that capability instead of replacing or stopping the base Worker.
 
 Workspace Settings lists runtime tasks as an operations surface: task purpose, linked Issue title when available, status, worker, update time, and detail/cancel actions. Agent-session task links include `sessionId` so Issue Detail can scroll to the relevant session card. Pure protocol tasks such as `issue_type_triage` may only open the Issue page because they do not have a session card. Protocol payloads remain in expanded details instead of the primary row, but server-provided skill bundles are redacted to compact references on workspace user APIs; full bundled files are returned only through worker claim/get endpoints.
 

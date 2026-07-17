@@ -448,9 +448,9 @@ func TestSQLiteStorePersistsTestModuleWorkflowSnapshot(t *testing.T) {
 		t.Fatalf("create test plan: %v", err)
 	}
 	run, err := store.StartProjectTestRun(ctx, user, workspaceID, project.ID, plan.Plan.ID, CreateTestRunInput{
-		RuntimeMode:  "personal",
-		AgentProfile: "codex",
-		BatchSize:    2,
+		RuntimeMode: "personal",
+		AgentEngine: agentEngineCodex,
+		BatchSize:   2,
 	})
 	if err != nil {
 		t.Fatalf("start test run: %v", err)
@@ -482,10 +482,10 @@ func TestSQLiteStorePersistsTestModuleWorkflowSnapshot(t *testing.T) {
 		t.Fatalf("expected setup result to persist on run, got %+v", run.Run)
 	}
 	adHocRun, err := store.StartAdHocProjectTestRun(ctx, user, workspaceID, project.ID, CreateAdHocTestRunInput{
-		CaseIDs:      []string{sourceCase.ID},
-		RuntimeMode:  "personal",
-		AgentProfile: "codex",
-		BatchSize:    1,
+		CaseIDs:     []string{sourceCase.ID},
+		RuntimeMode: "personal",
+		AgentEngine: agentEngineCodex,
+		BatchSize:   1,
 	})
 	if err != nil {
 		t.Fatalf("start direct test run: %v", err)

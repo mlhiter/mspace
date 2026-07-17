@@ -265,7 +265,7 @@ func (s *PostgresStore) reconcileTestSetupArtifact(ctx context.Context, q querye
 	run.RunContext = runContext
 	userID, _ := runtimeTaskCreator(ctx, q, task.WorkspaceID, task.ID)
 	return s.startPostgresTestRunExecutionSessionsWithQueryer(ctx, q, userID, run, CreateTestRunInput{
-		AgentProfile: runtimeTaskAgentProfile(task),
+		AgentEngine:  runtimeTaskAgentEngine(task),
 		RuntimeMode:  task.RuntimeMode,
 		BatchSize:    runtimeTaskTestRunBatchSize(task),
 		ResultLocale: run.ResultLocale,
@@ -442,12 +442,18 @@ func normalizeTestSetupStatus(value string) string {
 	}
 }
 
-func runtimeTaskAgentProfile(task RuntimeTask) string {
+func runtimeTaskAgentEngine(task RuntimeTask) string {
 	var payload struct {
-		AgentProfile string `json:"agentProfile"`
+		AgentEngine    string `json:"agentEngine"`
+		LegacyProfile  string `json:"agentProfile"`
+		LegacyProvider string `json:"provider"`
 	}
 	_ = json.Unmarshal(task.Payload, &payload)
-	return normalizeAgentProfile(payload.AgentProfile)
+	engine, err := agentEngineFromHistoricalPayload(payload.AgentEngine, payload.LegacyProvider, payload.LegacyProfile)
+	if err != nil {
+		return ""
+	}
+	return engine
 }
 
 func runtimeTaskTestRunBatchSize(task RuntimeTask) int {
@@ -692,7 +698,7 @@ func (s *MemoryStore) reconcileTestSetupArtifactLocked(task RuntimeTask, artifac
 	run.SetupStatus = "passed"
 	s.testRuns[run.ID] = run
 	input := CreateTestRunInput{
-		AgentProfile: runtimeTaskAgentProfile(task),
+		AgentEngine:  runtimeTaskAgentEngine(task),
 		RuntimeMode:  task.RuntimeMode,
 		BatchSize:    runtimeTaskTestRunBatchSize(task),
 		ResultLocale: run.ResultLocale,

@@ -544,12 +544,12 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 	workspaceID = strings.TrimSpace(workspaceID)
 	userID = strings.TrimSpace(userID)
 	issueID = strings.TrimSpace(issueID)
-	normalized := normalizeCreateAgentSessionInput(input)
+	normalized, err := normalizeCreateAgentSessionInput(input)
+	if err != nil {
+		return AgentSession{}, err
+	}
 	if normalized.Command == "" {
 		return AgentSession{}, errors.New("command is required")
-	}
-	if normalized.Provider != "codex" {
-		return AgentSession{}, errors.New("provider must be codex")
 	}
 	workspace, err := loadWorkspaceForUser(dbctx, s.pool, workspaceID, userID)
 	if err != nil {
@@ -576,7 +576,7 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 		return AgentSession{}, err
 	}
 	if !hasActiveWorker {
-		return AgentSession{}, ErrNoActiveCodexWorker
+		return AgentSession{}, ErrNoActiveAgentWorker
 	}
 	issue, err := loadIssue(dbctx, s.pool, workspaceID, issueID)
 	if err != nil {
@@ -1612,8 +1612,9 @@ func scanRuntimeTaskAgentSessionRow(row scanner) (RuntimeTask, error) {
 func runtimeTaskToAgentSession(task RuntimeTask) (AgentSession, error) {
 	var payload struct {
 		Prompt           string                       `json:"prompt"`
-		AgentProfile     string                       `json:"agentProfile"`
-		Provider         string                       `json:"provider"`
+		AgentEngine      string                       `json:"agentEngine"`
+		LegacyProfile    string                       `json:"agentProfile"`
+		LegacyProvider   string                       `json:"provider"`
 		Branch           string                       `json:"branch"`
 		SourceSessionID  string                       `json:"sourceSessionId"`
 		SourceCommitSHA  string                       `json:"sourceCommitSha"`
@@ -1627,23 +1628,32 @@ func runtimeTaskToAgentSession(task RuntimeTask) (AgentSession, error) {
 	_ = json.Unmarshal(task.Payload, &payload)
 
 	var result struct {
-		ThreadID    string `json:"threadId"`
-		TurnID      string `json:"turnId"`
-		Workdir     string `json:"workdir"`
-		ArtifactDir string `json:"artifactDir"`
-		Source      struct {
+		AgentEngine      string `json:"agentEngine"`
+		EngineSessionRef string `json:"engineSessionRef"`
+		EngineRunRef     string `json:"engineRunRef"`
+		ThreadID         string `json:"threadId"`
+		TurnID           string `json:"turnId"`
+		Workdir          string `json:"workdir"`
+		ArtifactDir      string `json:"artifactDir"`
+		Source           struct {
 			CommitSHA string `json:"commitSha"`
 			Branch    string `json:"branch"`
 		} `json:"source"`
 	}
 	_ = json.Unmarshal(task.Result, &result)
+	agentEngine, err := agentEngineFromHistoricalPayload(payload.AgentEngine, payload.LegacyProvider, payload.LegacyProfile)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if result.AgentEngine != "" && result.AgentEngine != agentEngine {
+		return AgentSession{}, errors.New("runtime task result agentEngine does not match the requested engine")
+	}
 
 	sessionStatus, agentStatus := runtimeTaskSessionStatus(task.Status, task.Error, task.RuntimeMode)
 	return AgentSession{
 		ID:               firstNonEmpty(task.SessionID, task.ID),
 		IssueID:          task.IssueID,
-		Provider:         firstNonEmpty(payload.Provider, "codex"),
-		AgentProfile:     firstNonEmpty(payload.AgentProfile, "codex"),
+		AgentEngine:      agentEngine,
 		RuntimeMode:      firstNonEmpty(task.RuntimeMode, "team"),
 		RuntimeTaskID:    task.ID,
 		Command:          strings.TrimSpace(payload.Prompt),
@@ -1652,6 +1662,8 @@ func runtimeTaskToAgentSession(task RuntimeTask) (AgentSession, error) {
 		Workdir:          result.Workdir,
 		CodexThreadID:    result.ThreadID,
 		CodexTurnID:      result.TurnID,
+		EngineSessionRef: firstNonEmpty(result.EngineSessionRef, result.ThreadID),
+		EngineRunRef:     firstNonEmpty(result.EngineRunRef, result.TurnID),
 		AgentStatus:      agentStatus,
 		ArtifactDir:      firstNonEmpty(result.ArtifactDir, payload.ArtifactDir),
 		SourceSessionID:  payload.SourceSessionID,
@@ -1721,7 +1733,7 @@ func runtimeTaskSessionStatus(status, errorText, runtimeMode string) (string, st
 func buildAgentSessionPayload(sessionID string, issue Issue, project Project, runbook ProjectRunbook, comments []Comment, labels []IssueLabel, childIssues []IssueListItem, input CreateAgentSessionInput) map[string]any {
 	payload := map[string]any{
 		"workdir":               "",
-		"provider":              input.Provider,
+		"agentEngine":           input.AgentEngine,
 		"prompt":                input.Command,
 		"developerInstructions": defaultAgentSessionDeveloperInstructions(input.RuntimeMode),
 		"approvalPolicy":        "never",
@@ -1730,7 +1742,7 @@ func buildAgentSessionPayload(sessionID string, issue Issue, project Project, ru
 			"MSPACE_API_BASE_URL":      "",
 			"MSPACE_ISSUE_ID":          issue.ID,
 			"MSPACE_SESSION_ID":        sessionID,
-			"MSPACE_AGENT_PROFILE":     input.AgentProfile,
+			"MSPACE_AGENT_ENGINE":      input.AgentEngine,
 			"MSPACE_SESSION_BRANCH":    input.Branch,
 			"MSPACE_SOURCE_SESSION_ID": input.SourceSessionID,
 			"MSPACE_SOURCE_COMMIT_SHA": input.SourceCommitSHA,
@@ -1738,7 +1750,6 @@ func buildAgentSessionPayload(sessionID string, issue Issue, project Project, ru
 		"issueId":          issue.ID,
 		"sessionId":        sessionID,
 		"projectId":        project.ID,
-		"agentProfile":     input.AgentProfile,
 		"branch":           input.Branch,
 		"sourceSessionId":  input.SourceSessionID,
 		"sourceCommitSha":  input.SourceCommitSHA,
@@ -1783,7 +1794,7 @@ func defaultAgentSessionDeveloperInstructions(runtimeMode string) string {
 		mode = "personal runtime worker"
 	}
 	return strings.TrimSpace(`
-You are running as a Codex coding agent inside an mspace ` + mode + `.
+You are running as a coding agent inside an mspace ` + mode + `.
 
 Follow these mspace rules:
 - Work in the provided workdir for this task.
