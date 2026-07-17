@@ -281,7 +281,7 @@ export function AgentsPage() {
     updateSkill.reset();
   }
 
-  const pageAction =
+  const tabAction =
     activeTab === "skills" ? (
       canManageWorkspace ? (
         <Button variant="secondary" onClick={openCreateSkillModal}>
@@ -300,11 +300,13 @@ export function AgentsPage() {
     <PageFrame
       title={t("agents.title")}
       subtitle={t("agents.subtitle")}
-      actions={pageAction}
     >
       {!workspaceReady ? <Notice>{t("workspace.signInRequired")}</Notice> : null}
       <div className="space-y-5">
-        <AgentsTabs activeTab={activeTab} onChange={setActiveTab} />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <AgentsTabs activeTab={activeTab} onChange={setActiveTab} />
+          {tabAction}
+        </div>
 
         {activeTab === "agents" ? (
           <AgentsPanel
