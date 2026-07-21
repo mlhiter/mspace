@@ -61,6 +61,52 @@ func TestNormalizeAgentEngineDiagnostics(t *testing.T) {
 	}
 }
 
+func TestNormalizeAgentEngineDiagnosticsPreservesPiModelReasons(t *testing.T) {
+	for _, test := range []struct {
+		status string
+		reason string
+	}{
+		{status: "unverified", reason: "model_available"},
+		{status: "needs_setup", reason: "model_unavailable"},
+	} {
+		t.Run(test.reason, func(t *testing.T) {
+			payload := json.RawMessage(`{"pi":{"status":"` + test.status + `","reasonCode":"` + test.reason + `"}}`)
+			normalized, err := normalizeAgentEngineDiagnostics(payload)
+			if err != nil {
+				t.Fatalf("normalize diagnostics: %v", err)
+			}
+			var diagnostics map[string]map[string]string
+			if err := json.Unmarshal(normalized, &diagnostics); err != nil {
+				t.Fatalf("decode diagnostics: %v", err)
+			}
+			if diagnostics["pi"]["status"] != test.status || diagnostics["pi"]["reasonCode"] != test.reason {
+				t.Fatalf("Pi reason was not preserved: %s", normalized)
+			}
+		})
+	}
+}
+
+func TestNormalizeAgentEngineDiagnosticsRejectsInvalidModelReasonTuples(t *testing.T) {
+	payload := json.RawMessage(`{
+		"codex":{"status":"unverified","reasonCode":"model_available"},
+		"claude_code":{"status":"needs_setup","reasonCode":"model_unavailable"},
+		"pi":{"status":"ready","reasonCode":"model_available"}
+	}`)
+	normalized, err := normalizeAgentEngineDiagnostics(payload)
+	if err != nil {
+		t.Fatalf("normalize diagnostics: %v", err)
+	}
+	var diagnostics map[string]map[string]string
+	if err := json.Unmarshal(normalized, &diagnostics); err != nil {
+		t.Fatalf("decode diagnostics: %v", err)
+	}
+	for engine, diagnostic := range diagnostics {
+		if reasonCode := diagnostic["reasonCode"]; reasonCode != "" {
+			t.Fatalf("invalid %s model reason was preserved: %s", engine, normalized)
+		}
+	}
+}
+
 func TestDiagnosticVersionRejectsUnsafeValues(t *testing.T) {
 	for _, value := range []string{
 		"/usr/local/bin/codex",

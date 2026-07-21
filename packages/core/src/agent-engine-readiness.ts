@@ -20,7 +20,7 @@ const diagnosticStatuses = new Set<AgentEngineDiagnosticStatus>([
 ]);
 
 export type AgentEngineReadinessStatus = AgentEngineDiagnosticStatus | "not_reported";
-export type AgentEngineDiagnosticDisplayState = AgentEngineReadinessStatus | "disabled";
+export type AgentEngineDiagnosticDisplayState = AgentEngineReadinessStatus | "configured" | "disabled";
 export type RuntimeWorkerLiveness = "online" | "draining" | "offline" | "stale";
 
 export interface ResolvedAgentEngineDiagnostic {
@@ -84,11 +84,12 @@ export function runtimeWorkerLiveness(
 }
 
 export function agentEngineDiagnosticDisplayState(
+  engine: AgentEngine,
   diagnostic: Pick<ResolvedAgentEngineDiagnostic, "status" | "reasonCode">,
 ): AgentEngineDiagnosticDisplayState {
-  return diagnostic.status === "unverified" && diagnostic.reasonCode === "disabled_by_configuration"
-    ? "disabled"
-    : diagnostic.status;
+  if (diagnostic.status === "unverified" && diagnostic.reasonCode === "disabled_by_configuration") return "disabled";
+  if (engine === "pi" && diagnostic.status === "unverified" && diagnostic.reasonCode === "model_available") return "configured";
+  return diagnostic.status;
 }
 
 export function runtimeWorkerLabel(worker: Pick<RuntimeWorker, "labels">, key: string) {

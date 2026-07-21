@@ -125,8 +125,24 @@ func TestBuildAgentEngineEnvKeepsOnlySelectedEngineAuthentication(t *testing.T) 
 		"OPENAI_API_KEY=openai-secret",
 		"CLAUDE_CODE_OAUTH_TOKEN=claude-oauth",
 		"ANTHROPIC_API_KEY=anthropic-secret",
+		"ANTHROPIC_OAUTH_TOKEN=anthropic-oauth",
+		"AI_GATEWAY_API_KEY=gateway-secret",
+		"CEREBRAS_API_KEY=cerebras-secret",
+		"OPENCODE_API_KEY=opencode-secret",
+		"HF_TOKEN=huggingface-secret",
+		"KIMI_API_KEY=kimi-secret",
+		"MINIMAX_API_KEY=minimax-secret",
+		"MINIMAX_CN_API_KEY=minimax-cn-secret",
+		"ZAI_API_KEY=zai-secret",
+		"COPILOT_GITHUB_TOKEN=copilot-secret",
+		"GOOGLE_CLOUD_PROJECT=google-project",
+		"GOOGLE_CLOUD_LOCATION=us-central1",
 		"AWS_ACCESS_KEY_ID=bedrock-key",
 		"AWS_SECRET_ACCESS_KEY=bedrock-secret",
+		"AWS_BEARER_TOKEN_BEDROCK=bedrock-bearer",
+		"AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/aws/token",
+		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI=/v2/credentials/worker",
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN=container-secret",
 		"SLACK_TOKEN=unrelated-secret",
 	}
 	claude := "\n" + strings.Join(buildAgentEngineEnvForEngine(agentEngineClaudeCode, parent, nil), "\n") + "\n"
@@ -138,6 +154,34 @@ func TestBuildAgentEngineEnvKeepsOnlySelectedEngineAuthentication(t *testing.T) 
 	for _, forbidden := range []string{"CODEX_HOME=", "OPENAI_API_KEY=", "SLACK_TOKEN="} {
 		if strings.Contains(claude, "\n"+forbidden) {
 			t.Fatalf("Claude environment inherited %s: %s", forbidden, claude)
+		}
+	}
+	pi := "\n" + strings.Join(buildAgentEngineEnvForEngine(agentEnginePi, parent, nil), "\n") + "\n"
+	for _, required := range []string{
+		"ANTHROPIC_OAUTH_TOKEN=anthropic-oauth",
+		"AI_GATEWAY_API_KEY=gateway-secret",
+		"CEREBRAS_API_KEY=cerebras-secret",
+		"OPENCODE_API_KEY=opencode-secret",
+		"HF_TOKEN=huggingface-secret",
+		"KIMI_API_KEY=kimi-secret",
+		"MINIMAX_API_KEY=minimax-secret",
+		"MINIMAX_CN_API_KEY=minimax-cn-secret",
+		"ZAI_API_KEY=zai-secret",
+		"COPILOT_GITHUB_TOKEN=copilot-secret",
+		"GOOGLE_CLOUD_PROJECT=google-project",
+		"GOOGLE_CLOUD_LOCATION=us-central1",
+		"AWS_BEARER_TOKEN_BEDROCK=bedrock-bearer",
+		"AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/aws/token",
+		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI=/v2/credentials/worker",
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN=container-secret",
+	} {
+		if !strings.Contains(pi, "\n"+required+"\n") {
+			t.Fatalf("Pi environment lost %s: %s", required, pi)
+		}
+	}
+	for _, forbidden := range []string{"CODEX_HOME=", "CLAUDE_CODE_OAUTH_TOKEN=", "SLACK_TOKEN="} {
+		if strings.Contains(pi, "\n"+forbidden) {
+			t.Fatalf("Pi environment inherited %s: %s", forbidden, pi)
 		}
 	}
 }

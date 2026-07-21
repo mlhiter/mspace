@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestCommandAgentEngineDiagnoserReportsReadyAndSanitizesEnvironment(t *testing.T) {
+func TestCommandAgentEngineDiagnoserReportsReadinessAndSanitizesEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	writeFakeEngine(t, dir, "codex", `
 case "$*" in
@@ -27,8 +27,12 @@ case "$*" in
 esac`)
 	writeFakeEngine(t, dir, "pi", `
 case "$*" in
-  "--version") printf 'pi 7.8.9\n' ;;
-  *) exit 9 ;;
+	"--version") printf 'pi 7.8.9\n' ;;
+	"--offline --no-extensions --list-models")
+		case "${PWD##*/}" in mspace-pi-probe-*) ;; *) exit 98 ;; esac
+		printf 'provider  model         context  max-out  thinking  images\nopenai    secret-model  128K     16K      yes       no\n'
+		;;
+	*) exit 9 ;;
 esac`)
 	t.Setenv("PATH", dir)
 	t.Setenv("MSPACE_RUNTIME_TOKEN", "msw_secret")
@@ -46,14 +50,14 @@ esac`)
 
 	assertEngineDiagnostic(t, diagnostics[agentEngineCodex], agentEngineDiagnosticReady, "auth_ok", "codex-cli 1.2.3", checkedAt)
 	assertEngineDiagnostic(t, diagnostics[agentEngineClaudeCode], agentEngineDiagnosticReady, "auth_ok", "claude 4.5.6", checkedAt)
-	assertEngineDiagnostic(t, diagnostics[agentEnginePi], agentEngineDiagnosticUnverified, "probe_unsupported", "pi 7.8.9", checkedAt)
+	assertEngineDiagnostic(t, diagnostics[agentEnginePi], agentEngineDiagnosticUnverified, "model_available", "pi 7.8.9", checkedAt)
 
 	encoded, err := json.Marshal(diagnostics)
 	if err != nil {
 		t.Fatalf("marshal diagnostics: %v", err)
 	}
 	text := string(encoded)
-	for _, forbidden := range []string{"account", "authMethod", "msw_secret", "/private/worker-token", "postgres://", "github-secret", dir} {
+	for _, forbidden := range []string{"account", "authMethod", "secret-model", "msw_secret", "/private/worker-token", "postgres://", "github-secret", dir} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("diagnostics leaked %q: %s", forbidden, text)
 		}
@@ -72,6 +76,11 @@ case "$*" in
   "--version") printf 'claude 2\n' ;;
   "auth status --json") printf '{"logged_in":false}\n'; exit 1 ;;
 esac`)
+	writeFakeEngine(t, dir, "pi", `
+case "$*" in
+	"--version") printf '0.55.4\n' ;;
+	"--offline --no-extensions --list-models") printf 'No models available. Set API keys in environment variables.\n' ;;
+esac`)
 	t.Setenv("PATH", dir)
 
 	diagnoser := newCommandAgentEngineDiagnoser(json.RawMessage(`{"codex":true,"claudeCode":true,"pi":true}`))
@@ -83,8 +92,102 @@ esac`)
 	if diagnostics[agentEngineClaudeCode].Status != agentEngineDiagnosticNeedsSetup || diagnostics[agentEngineClaudeCode].ReasonCode != "auth_required" {
 		t.Fatalf("unexpected Claude diagnostic: %+v", diagnostics[agentEngineClaudeCode])
 	}
-	if diagnostics[agentEnginePi].Status != agentEngineDiagnosticMissing || diagnostics[agentEnginePi].ReasonCode != "executable_not_found" {
+	if diagnostics[agentEnginePi].Status != agentEngineDiagnosticNeedsSetup || diagnostics[agentEnginePi].ReasonCode != "model_unavailable" {
 		t.Fatalf("unexpected Pi diagnostic: %+v", diagnostics[agentEnginePi])
+	}
+}
+
+func TestParsePiModelList(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		output     string
+		available  bool
+		recognized bool
+	}{
+		{name: "no models", output: "No models available. Set API keys in environment variables.\n", recognized: true},
+		{name: "configured model", output: "provider  model  context  max-out  thinking  images\nopenai  gpt-5  128K  16K  yes  no\n", available: true, recognized: true},
+		{name: "configured model with CRLF", output: "provider  model  context  max-out  thinking  images\r\nanthropic  claude-sonnet  200K  64K  yes  yes\r\n", available: true, recognized: true},
+		{name: "header only", output: "provider  model  context  max-out  thinking  images\n"},
+		{name: "warning after header", output: "provider  model  context  max-out  thinking  images\nWarning: credentials unavailable\n"},
+		{name: "invalid model flags", output: "provider  model  context  max-out  thinking  images\nopenai  gpt-5  128K  16K  maybe  no\n"},
+		{name: "unknown output", output: "Pi configuration status is unavailable\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			available, recognized := parsePiModelList([]byte(test.output))
+			if available != test.available || recognized != test.recognized {
+				t.Fatalf("parsePiModelList() = (%v, %v), want (%v, %v)", available, recognized, test.available, test.recognized)
+			}
+		})
+	}
+}
+
+func TestCommandAgentEngineDiagnoserPreservesPiProbeCompatibility(t *testing.T) {
+	t.Run("Pi before safe offline probe support skips model probe", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFakeEngine(t, dir, "pi", `
+case "$*" in
+	"--version") printf '0.55.0\n' ;;
+			*) exit 97 ;;
+esac`)
+		t.Setenv("PATH", dir)
+
+		diagnoser := newCommandAgentEngineDiagnoser(json.RawMessage(`{"pi":true}`))
+		diagnoser.commandTimeout = 5 * time.Second
+		diagnostic := diagnoser.Diagnose(context.Background())[agentEnginePi]
+		if diagnostic.Status != agentEngineDiagnosticUnverified || diagnostic.ReasonCode != "probe_unsupported" {
+			t.Fatalf("unexpected old Pi diagnostic: %+v", diagnostic)
+		}
+	})
+
+	t.Run("known supported Pi fails closed on unknown successful output", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFakeEngine(t, dir, "pi", `
+case "$*" in
+	"--version") printf '0.55.4\n' ;;
+	"--offline --no-extensions --list-models") printf 'unknown future format\n' ;;
+esac`)
+		t.Setenv("PATH", dir)
+
+		diagnoser := newCommandAgentEngineDiagnoser(json.RawMessage(`{"pi":true}`))
+		diagnoser.commandTimeout = 5 * time.Second
+		diagnostic := diagnoser.Diagnose(context.Background())[agentEnginePi]
+		if diagnostic.Status != agentEngineDiagnosticProbeError || diagnostic.ReasonCode != "probe_malformed" {
+			t.Fatalf("unexpected unknown Pi diagnostic: %+v", diagnostic)
+		}
+	})
+
+	t.Run("unparseable version skips model probe", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFakeEngine(t, dir, "pi", `
+case "$*" in
+	"--version") printf 'Pi development build\n' ;;
+	*) exit 97 ;;
+esac`)
+		t.Setenv("PATH", dir)
+
+		diagnoser := newCommandAgentEngineDiagnoser(json.RawMessage(`{"pi":true}`))
+		diagnoser.commandTimeout = 5 * time.Second
+		diagnostic := diagnoser.Diagnose(context.Background())[agentEnginePi]
+		if diagnostic.Status != agentEngineDiagnosticUnverified || diagnostic.ReasonCode != "probe_unsupported" {
+			t.Fatalf("unexpected development Pi diagnostic: %+v", diagnostic)
+		}
+	})
+}
+
+func TestPiModelListProbeSupportedRequiresSafeOfflineVersion(t *testing.T) {
+	for _, test := range []struct {
+		version   string
+		supported bool
+	}{
+		{version: "0.55.0"},
+		{version: "0.55.1", supported: true},
+		{version: "pi 0.55.4", supported: true},
+		{version: "1.0.0", supported: true},
+		{version: "Pi development build"},
+	} {
+		if actual := piModelListProbeSupported(test.version); actual != test.supported {
+			t.Fatalf("piModelListProbeSupported(%q) = %v, want %v", test.version, actual, test.supported)
+		}
 	}
 }
 
@@ -93,16 +196,34 @@ func TestCommandAgentEngineDiagnoserReportsProbeFailures(t *testing.T) {
 		dir := t.TempDir()
 		writeFakeEngine(t, dir, "codex", `/bin/sleep 1 & wait`)
 		writeFakeEngine(t, dir, "claude", `/bin/sleep 1 & wait`)
+		writeFakeEngine(t, dir, "pi", `/bin/sleep 1 & wait`)
 		t.Setenv("PATH", dir)
 
-		diagnoser := newCommandAgentEngineDiagnoser(json.RawMessage(`{"codex":true,"claudeCode":true,"pi":false}`))
+		diagnoser := newCommandAgentEngineDiagnoser(json.RawMessage(`{"codex":true,"claudeCode":true,"pi":true}`))
 		diagnoser.commandTimeout = 20 * time.Millisecond
 		diagnostics := diagnoser.Diagnose(context.Background())
-		for _, engine := range []string{agentEngineCodex, agentEngineClaudeCode} {
+		for _, engine := range []string{agentEngineCodex, agentEngineClaudeCode, agentEnginePi} {
 			diagnostic := diagnostics[engine]
 			if diagnostic.Status != agentEngineDiagnosticProbeError || diagnostic.ReasonCode != "probe_timeout" {
 				t.Fatalf("unexpected %s timeout diagnostic: %+v", engine, diagnostic)
 			}
+		}
+	})
+
+	t.Run("Pi model probe exits nonzero", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFakeEngine(t, dir, "pi", `
+case "$*" in
+	"--version") printf '0.55.4\n' ;;
+	"--offline --no-extensions --list-models") exit 7 ;;
+esac`)
+		t.Setenv("PATH", dir)
+
+		diagnoser := newCommandAgentEngineDiagnoser(json.RawMessage(`{"pi":true}`))
+		diagnoser.commandTimeout = 5 * time.Second
+		diagnostic := diagnoser.Diagnose(context.Background())[agentEnginePi]
+		if diagnostic.Status != agentEngineDiagnosticProbeError || diagnostic.ReasonCode != "probe_malformed" {
+			t.Fatalf("unexpected Pi probe diagnostic: %+v", diagnostic)
 		}
 	})
 
@@ -202,7 +323,27 @@ func TestBuildAgentEngineProbeEnvUsesMinimalEngineSpecificAllowlist(t *testing.T
 		"CLAUDE_CODE_OAUTH_TOKEN=claude-oauth",
 		"ANTHROPIC_API_KEY=anthropic-secret",
 		"ANTHROPIC_AUTH_TOKEN=anthropic-token",
+		"ANTHROPIC_OAUTH_TOKEN=anthropic-oauth",
+		"AI_GATEWAY_API_KEY=gateway-secret",
+		"OPENCODE_API_KEY=opencode-secret",
+		"HF_TOKEN=huggingface-secret",
+		"AZURE_OPENAI_BASE_URL=https://azure.invalid",
+		"AZURE_OPENAI_RESOURCE_NAME=azure-resource",
+		"AZURE_OPENAI_API_VERSION=2026-01-01",
+		"AZURE_OPENAI_DEPLOYMENT_NAME_MAP=model=deployment",
+		"CEREBRAS_API_KEY=cerebras-secret",
+		"KIMI_API_KEY=kimi-secret",
+		"MINIMAX_API_KEY=minimax-secret",
+		"MINIMAX_CN_API_KEY=minimax-cn-secret",
+		"ZAI_API_KEY=zai-secret",
+		"COPILOT_GITHUB_TOKEN=copilot-secret",
+		"GOOGLE_CLOUD_PROJECT=google-project",
+		"GOOGLE_CLOUD_LOCATION=us-central1",
 		"NODE_OPTIONS=--require=/tmp/injected.js",
+		"AWS_BEARER_TOKEN_BEDROCK=bedrock-secret",
+		"AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/aws/token",
+		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI=/v2/credentials/worker",
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN=container-secret",
 		"AWS_SECRET_ACCESS_KEY=cloud-secret",
 		"RANDOM_SECRET=random-secret",
 		"MSPACE_RUNTIME_TOKEN=msw_secret",
@@ -234,9 +375,21 @@ func TestBuildAgentEngineProbeEnvUsesMinimalEngineSpecificAllowlist(t *testing.T
 		[]string{"PATH", "HOME", "TMPDIR", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_SECRET_ACCESS_KEY"},
 		append(commonForbidden, "CODEX_HOME", "OPENAI_API_KEY"),
 	)
+	assertProbeEnvironment(t, agentEnginePi, true,
+		[]string{
+			"PATH", "HOME", "TMPDIR", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN",
+			"AI_GATEWAY_API_KEY", "OPENCODE_API_KEY", "HF_TOKEN", "AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_RESOURCE_NAME",
+			"AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "CEREBRAS_API_KEY", "KIMI_API_KEY",
+			"MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "ZAI_API_KEY", "COPILOT_GITHUB_TOKEN", "GOOGLE_CLOUD_PROJECT",
+			"GOOGLE_CLOUD_LOCATION", "AWS_BEARER_TOKEN_BEDROCK", "AWS_WEB_IDENTITY_TOKEN_FILE",
+			"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_AUTHORIZATION_TOKEN", "AWS_SECRET_ACCESS_KEY",
+			"PI_OFFLINE", "PI_SKIP_VERSION_CHECK",
+		},
+		append(commonForbidden, "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"),
+	)
 	assertProbeEnvironment(t, agentEnginePi, false,
 		[]string{"PATH", "HOME", "TMPDIR"},
-		append(commonForbidden, "CODEX_HOME", "OPENAI_API_KEY", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_SECRET_ACCESS_KEY"),
+		append(commonForbidden, "CODEX_HOME", "OPENAI_API_KEY", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_SECRET_ACCESS_KEY", "PI_OFFLINE", "PI_SKIP_VERSION_CHECK"),
 	)
 	assertProbeEnvironment(t, agentEngineCodex, false,
 		[]string{"PATH", "HOME", "TMPDIR"},
@@ -274,11 +427,11 @@ func TestAgentEngineDiagnosticStateMasksDisabledEngineResults(t *testing.T) {
 }
 
 func TestReconcileAgentEngineCapabilitiesPreservesUnrelatedCapabilities(t *testing.T) {
-	base := json.RawMessage(`{"protocolSmoke":true,"browser":true,"codex":true,"claudeCode":true,"pi":false,"custom":"keep"}`)
+	base := json.RawMessage(`{"protocolSmoke":true,"browser":true,"codex":true,"claudeCode":true,"pi":true,"custom":"keep"}`)
 	diagnostics := agentEngineDiagnostics{
 		agentEngineCodex:      {Status: agentEngineDiagnosticNeedsSetup},
 		agentEngineClaudeCode: {Status: agentEngineDiagnosticReady},
-		agentEnginePi:         {Status: agentEngineDiagnosticUnverified},
+		agentEnginePi:         {Status: agentEngineDiagnosticNeedsSetup, ReasonCode: "model_unavailable"},
 	}
 	reconciled := reconcileAgentEngineCapabilities(base, diagnostics)
 	var values map[string]any
@@ -303,6 +456,14 @@ func TestReconcileAgentEngineCapabilitiesPreservesUnrelatedCapabilities(t *testi
 	reconciled = reconcileAgentEngineCapabilities(base, diagnostics)
 	if capabilityEnabled(reconciled, "claudeCode") || capabilityEnabled(reconciled, "pi") {
 		t.Fatalf("known probe failures must disable capabilities: %s", reconciled)
+	}
+
+	configuredPi := reconcileAgentEngineCapabilities(
+		json.RawMessage(`{"pi":true}`),
+		agentEngineDiagnostics{agentEnginePi: {Status: agentEngineDiagnosticUnverified, ReasonCode: "model_available"}},
+	)
+	if !capabilityEnabled(configuredPi, "pi") {
+		t.Fatalf("configured but unverified Pi must preserve its allowed capability: %s", configuredPi)
 	}
 
 	readyDiagnostics := agentEngineDiagnostics{

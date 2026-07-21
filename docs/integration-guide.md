@@ -677,12 +677,12 @@ Current Workers may send the following optional diagnostic object during registe
   "agentEngineDiagnostics": {
     "codex": { "status": "ready", "reasonCode": "auth_ok", "version": "codex-cli 1.2.3", "checkedAt": "2026-07-17T08:00:00Z" },
     "claude_code": { "status": "needs_setup", "reasonCode": "auth_required", "version": "claude 2.1.89", "checkedAt": "2026-07-17T08:00:00Z" },
-    "pi": { "status": "unverified", "reasonCode": "probe_unsupported", "version": "pi 0.35.0", "checkedAt": "2026-07-17T08:00:00Z" }
+    "pi": { "status": "needs_setup", "reasonCode": "model_unavailable", "version": "pi 0.55.4", "checkedAt": "2026-07-21T08:00:00Z" }
   }
 }
 ```
 
-Statuses are `ready`, `needs_setup`, `unverified`, `missing`, or `probe_error`. The Server discards unknown engines and invalid diagnostic fields, rejects an oversized object, and uses a diagnostic only to turn a previously allowed engine capability off. Heartbeats that omit `agentEngineDiagnostics` preserve the stored snapshot; an explicit empty object clears it. Probe output, credentials, executable paths, and Pi session paths are never part of this API.
+Statuses are `ready`, `needs_setup`, `unverified`, `missing`, or `probe_error`. Pi 0.55.1 or newer runs its model-list probe offline, without extensions, and from an isolated temporary directory. An empty model list reports `needs_setup/model_unavailable` and downgrades the `pi` capability; at least one local model configuration reports `unverified/model_available`, keeps the capability, and is presented as configured without claiming a successful request. Malformed output from a known supported version reports `probe_error/probe_malformed` and downgrades the capability; older and unparseable versions retain `unverified/probe_unsupported` without running the model probe. Extension-registered models are intentionally outside this diagnostic. The Server accepts the model-specific reasons only for their canonical Pi status tuples, discards unknown engines and invalid diagnostic fields, rejects an oversized object, and uses a diagnostic only to turn a previously allowed engine capability off. Heartbeats that omit `agentEngineDiagnostics` preserve the stored snapshot; an explicit empty object clears it. Probe output, model names, credentials, executable paths, and Pi session paths are never part of this API.
 
 Create a worker install command:
 

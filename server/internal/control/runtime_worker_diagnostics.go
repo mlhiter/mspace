@@ -25,6 +25,8 @@ var supportedAgentEngineDiagnosticReasonCodes = map[string]struct{}{
 	"disabled_by_configuration":    {},
 	"executable_not_found":         {},
 	"executable_resolution_failed": {},
+	"model_available":              {},
+	"model_unavailable":            {},
 	"probe_launch_failed":          {},
 	"probe_malformed":              {},
 	"probe_timeout":                {},
@@ -81,7 +83,9 @@ func normalizeAgentEngineDiagnostics(payload json.RawMessage) (json.RawMessage, 
 			continue
 		}
 		diagnostic := agentEngineDiagnostic{Status: status}
-		diagnostic.ReasonCode, _ = diagnosticReasonCode(fields["reasonCode"])
+		if reasonCode, ok := diagnosticReasonCode(fields["reasonCode"]); ok && diagnosticReasonMatchesEngineStatus(engine, status, reasonCode) {
+			diagnostic.ReasonCode = reasonCode
+		}
 		diagnostic.Version, _ = diagnosticVersion(fields["version"])
 		diagnostic.CheckedAt, _ = diagnosticCheckedAt(fields["checkedAt"])
 		sanitized[engine] = diagnostic
@@ -92,6 +96,17 @@ func normalizeAgentEngineDiagnostics(payload json.RawMessage) (json.RawMessage, 
 		return nil, err
 	}
 	return json.RawMessage(encoded), nil
+}
+
+func diagnosticReasonMatchesEngineStatus(engine, status, reasonCode string) bool {
+	switch reasonCode {
+	case "model_available":
+		return engine == agentEnginePi && status == "unverified"
+	case "model_unavailable":
+		return engine == agentEnginePi && status == "needs_setup"
+	default:
+		return true
+	}
 }
 
 func diagnosticString(raw json.RawMessage, maxRunes int) (string, bool) {

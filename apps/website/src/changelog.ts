@@ -15,6 +15,7 @@ export const changelog: ChangelogEntry[] = [
       "Replaced fixed-width readiness tables with responsive Agent rows and two-level Connected Worker rows that stay within the page width.",
       "Bundled official Claude and Pi SVG marks locally and reused them across Agents, Issue mentions, timelines, and assignee surfaces.",
       "Kept human avatars cropped naturally while preserving each Agent mark's aspect ratio across compact avatar sizes.",
+      "Distinguishes an installed but unconfigured Pi from a configured Pi by probing its offline model list without exposing model names or claiming a live credential check.",
     ],
   },
   {

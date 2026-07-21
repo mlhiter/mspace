@@ -300,6 +300,7 @@ const resources = {
           missing: "Not installed",
           probe_error: "Probe failed",
           not_reported: "Not reported",
+          configured: "Configured",
           disabled: "Disabled",
           legacyUnverified: "Unverified",
           version: "Version {{version}}",
@@ -314,6 +315,8 @@ const resources = {
           not_reported: "This Worker did not report engine diagnostics.",
           disabled_by_configuration: "Installed on this Worker, but disabled by its runtime configuration.",
           legacy_capability: "This older Worker advertises the capability, but its setup was not verified.",
+          model_available: "At least one configured model is available, but no request was sent to verify the connection or credentials.",
+          model_unavailable: "No configured model is available. Configure a provider credential or model for Pi.",
         },
         engineDescriptions: {
           codex: "Use Codex for coding, review, testing, and other issue work in the attached project.",
@@ -2219,6 +2222,7 @@ const resources = {
           missing: "未安装",
           probe_error: "探测失败",
           not_reported: "未上报",
+          configured: "已配置",
           disabled: "已禁用",
           legacyUnverified: "未验证",
           version: "版本 {{version}}",
@@ -2233,6 +2237,8 @@ const resources = {
           not_reported: "此 Worker 尚未上报智能体诊断信息。",
           disabled_by_configuration: "此 Worker 已安装该智能体，但运行时配置已将其禁用。",
           legacy_capability: "旧版 Worker 声明了此能力，但尚未验证配置。",
+          model_available: "已找到至少一个可用模型配置，但未发起请求验证连接或凭证。",
+          model_unavailable: "未找到可用模型配置，请为 Pi 配置 Provider 凭证或模型。",
         },
         engineDescriptions: {
           codex: "使用 Codex 在关联项目中完成编码、审查、测试和其他问题工作。",

@@ -505,7 +505,7 @@ function AgentReadinessRow(props: {
           <span className="text-[12px] text-[color:var(--muted)]">{t("agents.runtimeChecking")}</span>
         ) : props.localPrimaryWorker && localDiagnostic && localLiveness ? (
           <div className="flex min-w-0 flex-col items-start gap-1.5">
-            <EngineDiagnosticPill diagnostic={localDiagnostic} />
+            <EngineDiagnosticPill engine={props.agent.id} diagnostic={localDiagnostic} />
             <span className="truncate text-[11px] leading-4 text-[color:var(--faint)]">
               {t(`agents.workerStates.${localLiveness}`)}
             </span>
@@ -641,32 +641,38 @@ function EngineDiagnosticCell(props: { engine: AgentEngine; worker: RuntimeWorke
       data-qa-state={diagnostic.status}
       data-qa-legacy-capability={diagnostic.legacyCapability ? "true" : undefined}
     >
-      <EngineDiagnosticPill diagnostic={diagnostic} />
+      <EngineDiagnosticPill engine={props.engine} diagnostic={diagnostic} />
       {diagnostic.version ? <div className="mt-1 truncate font-mono text-[10px] leading-4 text-[color:var(--faint)]">{diagnostic.version}</div> : null}
     </div>
   );
 }
 
-function EngineDiagnosticPill(props: { diagnostic: ResolvedAgentEngineDiagnostic }) {
+function EngineDiagnosticPill(props: { engine: AgentEngine; diagnostic: ResolvedAgentEngineDiagnostic }) {
   const { t } = useMspaceTranslation();
   const { diagnostic } = props;
-  const displayState = agentEngineDiagnosticDisplayState(diagnostic);
+  const displayState = agentEngineDiagnosticDisplayState(props.engine, diagnostic);
   const label = displayState === "disabled"
     ? t("agents.diagnostics.disabled")
-    : diagnostic.status === "not_reported" && diagnostic.legacyCapability
-      ? t("agents.diagnostics.legacyUnverified")
-      : t(`agents.diagnostics.${diagnostic.status}`);
+    : displayState === "configured"
+      ? t("agents.diagnostics.configured")
+      : diagnostic.status === "not_reported" && diagnostic.legacyCapability
+        ? t("agents.diagnostics.legacyUnverified")
+        : t(`agents.diagnostics.${diagnostic.status}`);
   const hintKey = displayState === "disabled"
     ? "disabled_by_configuration"
     : diagnostic.status === "not_reported" && diagnostic.legacyCapability
       ? "legacy_capability"
-      : diagnostic.status;
+      : displayState === "configured"
+        ? "model_available"
+        : diagnostic.status === "needs_setup" && diagnostic.reasonCode === "model_unavailable"
+          ? "model_unavailable"
+          : diagnostic.status;
   const titleParts = [
     t(`agents.diagnosticHints.${hintKey}`),
     diagnostic.version ? t("agents.diagnostics.version", { version: diagnostic.version }) : "",
     diagnostic.checkedAt ? t("agents.diagnostics.checkedAt", { time: formatAbsoluteTime(diagnostic.checkedAt) }) : "",
   ].filter(Boolean);
-  const tone = diagnosticTone(diagnostic.status);
+  const tone = diagnosticTone(displayState);
   const Icon = diagnostic.status === "ready"
     ? CheckCircle2
     : displayState === "disabled"
@@ -705,8 +711,9 @@ function WorkerLivenessPill(props: { status: RuntimeWorkerLiveness }) {
   );
 }
 
-function diagnosticTone(status: AgentEngineReadinessStatus) {
+function diagnosticTone(status: AgentEngineReadinessStatus | "configured" | "disabled") {
   if (status === "ready") return "bg-[color:var(--success-soft)] text-[color:var(--success)]";
+  if (status === "configured") return "bg-[color:var(--blue-soft)] text-[color:var(--accent-blue)]";
   if (status === "needs_setup") return "bg-[color:var(--warning-soft)] text-[color:var(--warning)]";
   if (status === "probe_error") return "bg-[color:var(--danger-soft)] text-[color:var(--danger)]";
   return "bg-[color:var(--block)] text-[color:var(--muted-strong)]";

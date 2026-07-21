@@ -534,7 +534,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 
 The task's `runtimeMode` and `requiredCapabilities` must match a ready Worker heartbeat. New `agent_session` tasks are normalized so exactly one engine capability is true; conflicting raw debug payloads are rejected. Missing `agentEngine` is treated as Codex only for legacy payload compatibility.
 
-The Agents page separates these signals. The top rows show This Mac's diagnostic and the Server's `claimableWorkerCount`; the lower matrix shows every current-mode Worker. `ready` means the safe authentication probe passed, `needs_setup` means authentication/configuration is required, `missing` means the executable was not found, `probe_error` means the bounded probe failed, and `unverified` means readiness cannot safely be proven. Pi normally reports `unverified/probe_unsupported`. `unverified/disabled_by_configuration` means an installed engine was excluded from the Worker's execution allowlist. A legacy Worker with no diagnostic remains visible as not reported and may still claim work by its historical capability; upgrade/restart it to get a current diagnostic. A stale heartbeat is a separate Worker-liveness problem.
+The Agents page separates these signals. The top rows show This Mac's diagnostic and the Server's `claimableWorkerCount`; the lower matrix shows every current-mode Worker. `ready` means the safe authentication probe passed, `needs_setup` means authentication/configuration is required, `missing` means the executable was not found, `probe_error` means the bounded probe failed, and `unverified` means readiness cannot safely be proven. Pi 0.55.1 or newer uses an offline, extension-disabled model-list probe from an isolated temporary directory: `needs_setup/model_unavailable` means no configured model is available and removes Pi from the Worker's claimable capabilities; `unverified/model_available` is displayed as configured but does not claim that credentials or connectivity were tested. Malformed output from a known supported version reports `probe_error/probe_malformed` and also removes the capability; older and unparseable versions retain `unverified/probe_unsupported` without running the model probe. `unverified/disabled_by_configuration` means an installed engine was excluded from the Worker's execution allowlist. A legacy Worker with no diagnostic remains visible as not reported and may still claim work by its historical capability; upgrade/restart it to get a current diagnostic. A stale heartbeat is a separate Worker-liveness problem.
 
 Probe the same installation manually only after checking the Worker row and without sharing command output that may contain private configuration:
 
@@ -542,7 +542,10 @@ Probe the same installation manually only after checking the Worker row and with
 codex login status
 claude auth status --json
 command -v pi && pi --version
+pi --offline --no-extensions --list-models
 ```
+
+The Pi probe intentionally disables extension discovery. Models registered only by global or project-local `.pi` extensions can be usable for a Session while remaining undiscoverable from the Agents page; verify those from the target project directory when diagnosing that edge case.
 
 The personal Worker and Agent CLI run under the same OS user. The launch environment excludes Worker/control-plane secrets, but an Agent with broad filesystem access could still scan the Electron user-data credential path. Use a separate OS account, container, credential broker, or filesystem deny-path sandbox where that threat matters.
 

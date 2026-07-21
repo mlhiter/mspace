@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -365,13 +366,137 @@ func (d commandAgentEngineDiagnoser) diagnoseClaudeCode(ctx context.Context, pat
 }
 
 func (d commandAgentEngineDiagnoser) diagnosePi(ctx context.Context, path string) agentEngineDiagnostic {
-	return d.diagnostic(agentEngineDiagnosticUnverified, "probe_unsupported", d.probeVersion(ctx, agentEnginePi, path))
+	version, versionResult := d.probeVersionCommand(ctx, agentEnginePi, path)
+	switch {
+	case versionResult.timedOut:
+		return d.diagnostic(agentEngineDiagnosticProbeError, "probe_timeout", version)
+	case versionResult.err != nil:
+		var exitError *exec.ExitError
+		if errors.As(versionResult.err, &exitError) {
+			return d.diagnostic(agentEngineDiagnosticProbeError, "probe_malformed", version)
+		}
+		return d.diagnostic(agentEngineDiagnosticProbeError, "probe_launch_failed", version)
+	}
+	if !piModelListProbeSupported(version) {
+		return d.diagnostic(agentEngineDiagnosticUnverified, "probe_unsupported", version)
+	}
+	probeDirectory, err := os.MkdirTemp("", "mspace-pi-probe-")
+	if err != nil {
+		return d.diagnostic(agentEngineDiagnosticProbeError, "probe_launch_failed", version)
+	}
+	defer os.RemoveAll(probeDirectory)
+
+	result := d.runCommandInDirectory(
+		ctx,
+		agentEnginePi,
+		true,
+		probeDirectory,
+		path,
+		"--offline",
+		"--no-extensions",
+		"--list-models",
+	)
+	switch {
+	case result.timedOut:
+		return d.diagnostic(agentEngineDiagnosticProbeError, "probe_timeout", version)
+	case result.err != nil:
+		var exitError *exec.ExitError
+		if errors.As(result.err, &exitError) {
+			return d.diagnostic(agentEngineDiagnosticProbeError, "probe_malformed", version)
+		}
+		return d.diagnostic(agentEngineDiagnosticProbeError, "probe_launch_failed", version)
+	}
+	modelsAvailable, recognized := parsePiModelList(result.stdout)
+	if !recognized {
+		return d.diagnostic(agentEngineDiagnosticProbeError, "probe_malformed", version)
+	}
+	if !modelsAvailable {
+		return d.diagnostic(agentEngineDiagnosticNeedsSetup, "model_unavailable", version)
+	}
+	return d.diagnostic(agentEngineDiagnosticUnverified, "model_available", version)
+}
+
+func piModelListProbeSupported(version string) bool {
+	parsed, ok := firstSemanticVersion(version)
+	if !ok {
+		return false
+	}
+	minimum := [3]int{0, 55, 1}
+	for index := range parsed {
+		if parsed[index] != minimum[index] {
+			return parsed[index] > minimum[index]
+		}
+	}
+	return true
+}
+
+func firstSemanticVersion(value string) ([3]int, bool) {
+	for _, candidate := range strings.FieldsFunc(value, func(character rune) bool {
+		return !unicode.IsDigit(character) && character != '.'
+	}) {
+		parts := strings.Split(candidate, ".")
+		if len(parts) < 3 {
+			continue
+		}
+		var parsed [3]int
+		valid := true
+		for index := range parsed {
+			number, err := strconv.Atoi(parts[index])
+			if err != nil {
+				valid = false
+				break
+			}
+			parsed[index] = number
+		}
+		if valid {
+			return parsed, true
+		}
+	}
+	return [3]int{}, false
+}
+
+func parsePiModelList(raw []byte) (modelsAvailable, recognized bool) {
+	foundHeader := false
+	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(line), "no models available") {
+			return false, true
+		}
+		fields := strings.Fields(line)
+		if !foundHeader {
+			foundHeader = len(fields) >= 6 &&
+				strings.EqualFold(fields[0], "provider") &&
+				strings.EqualFold(fields[1], "model") &&
+				strings.EqualFold(fields[2], "context") &&
+				strings.EqualFold(fields[3], "max-out") &&
+				strings.EqualFold(fields[4], "thinking") &&
+				strings.EqualFold(fields[5], "images")
+			continue
+		}
+		if len(fields) >= 6 && isPiModelListBoolean(fields[4]) && isPiModelListBoolean(fields[5]) {
+			return true, true
+		}
+		return false, false
+	}
+	return false, false
+}
+
+func isPiModelListBoolean(value string) bool {
+	return strings.EqualFold(value, "yes") || strings.EqualFold(value, "no")
 }
 
 func (d commandAgentEngineDiagnoser) probeVersion(ctx context.Context, engine, path string) string {
+	version, _ := d.probeVersionCommand(ctx, engine, path)
+	return version
+}
+
+func (d commandAgentEngineDiagnoser) probeVersionCommand(ctx context.Context, engine, path string) (string, engineDiagnosticCommandResult) {
 	result := d.runCommand(ctx, engine, false, path, "--version")
 	if result.err != nil || result.timedOut {
-		return ""
+		return "", result
 	}
 	value := strings.TrimSpace(firstNonEmpty(string(result.stdout), string(result.stderr)))
 	if index := strings.IndexAny(value, "\r\n"); index >= 0 {
@@ -384,10 +509,21 @@ func (d commandAgentEngineDiagnoser) probeVersion(ctx context.Context, engine, p
 		return -1
 	}, value)
 	value = strings.Join(strings.Fields(value), " ")
-	return truncate(value, maxEngineDiagnosticVersionLength)
+	return truncate(value, maxEngineDiagnosticVersionLength), result
 }
 
 func (d commandAgentEngineDiagnoser) runCommand(ctx context.Context, engine string, includeAuth bool, path string, args ...string) engineDiagnosticCommandResult {
+	return d.runCommandInDirectory(ctx, engine, includeAuth, "", path, args...)
+}
+
+func (d commandAgentEngineDiagnoser) runCommandInDirectory(
+	ctx context.Context,
+	engine string,
+	includeAuth bool,
+	workingDirectory string,
+	path string,
+	args ...string,
+) engineDiagnosticCommandResult {
 	timeout := d.commandTimeout
 	if timeout <= 0 {
 		timeout = defaultEngineDiagnosticTimeout
@@ -397,6 +533,9 @@ func (d commandAgentEngineDiagnoser) runCommand(ctx context.Context, engine stri
 	cmd, err := newAgentEngineCommandContext(commandCtx, path, args...)
 	if err != nil {
 		return engineDiagnosticCommandResult{err: err}
+	}
+	if workingDirectory != "" {
+		cmd.Dir = workingDirectory
 	}
 	environment := d.versionProbeEnvironment[engine]
 	if includeAuth {
@@ -468,7 +607,16 @@ func buildAgentEngineProbeEnv(parent []string, engine string, includeAuth bool) 
 		"XDG_CONFIG_HOME": true,
 		"XDG_DATA_HOME":   true,
 	}
-	filtered := buildAgentEngineEnvForEngine(engine, parent, nil)
+	extra := map[string]string(nil)
+	if engine == agentEnginePi && includeAuth {
+		allowed["PI_OFFLINE"] = true
+		allowed["PI_SKIP_VERSION_CHECK"] = true
+		extra = map[string]string{
+			"PI_OFFLINE":            "1",
+			"PI_SKIP_VERSION_CHECK": "1",
+		}
+	}
+	filtered := buildAgentEngineEnvForEngine(engine, parent, extra)
 	result := make([]string, 0, len(filtered))
 	for _, entry := range filtered {
 		key, _, _ := strings.Cut(entry, "=")

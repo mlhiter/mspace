@@ -76,8 +76,32 @@ test("presents a configured-off installed engine as disabled without changing it
   }), "pi");
 
   assert.equal(disabled.status, "unverified");
-  assert.equal(agentEngineDiagnosticDisplayState(disabled), "disabled");
-  assert.equal(agentEngineDiagnosticDisplayState(probeUnavailable), "unverified");
+  assert.equal(agentEngineDiagnosticDisplayState("pi", disabled), "disabled");
+  assert.equal(agentEngineDiagnosticDisplayState("pi", probeUnavailable), "unverified");
+});
+
+test("presents locally configured Pi models without claiming connection verification", () => {
+  const configured = resolveAgentEngineDiagnostic(worker({
+    capabilities: { pi: true },
+    agentEngineDiagnostics: {
+      pi: { status: "unverified", reasonCode: "model_available", version: "0.55.4" },
+    },
+  }), "pi");
+
+  assert.equal(configured.status, "unverified");
+  assert.equal(agentEngineDiagnosticDisplayState("pi", configured), "configured");
+  assert.equal(agentEngineDiagnosticDisplayState("codex", configured), "unverified");
+
+  const needsSetup = resolveAgentEngineDiagnostic(worker({
+    capabilities: { pi: false },
+    agentEngineDiagnostics: {
+      pi: { status: "needs_setup", reasonCode: "model_unavailable", version: "0.55.4" },
+    },
+  }), "pi");
+  assert.equal(agentEngineDiagnosticDisplayState("pi", needsSetup), "needs_setup");
+
+  const inconsistent = { ...configured, status: "ready" };
+  assert.equal(agentEngineDiagnosticDisplayState("pi", inconsistent), "ready");
 });
 
 test("requires trusted personal-mode host identity before labeling This Mac", () => {
