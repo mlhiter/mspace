@@ -1,2 +1,22 @@
+import type { AgentEngine } from "@mspace/core";
+
+const claudeAvatarUrl = new URL("./assets/claude.svg", import.meta.url).href;
+const piAvatarUrl = new URL("./assets/pi.svg", import.meta.url).href;
+
+export function agentAvatarUrl(engine: AgentEngine) {
+  switch (engine) {
+    case "codex":
+      return codexAvatarDataUrl;
+    case "claude_code":
+      return claudeAvatarUrl;
+    case "pi":
+      return piAvatarUrl;
+    default: {
+      const exhaustiveEngine: never = engine;
+      return exhaustiveEngine;
+    }
+  }
+}
+
 export const codexAvatarDataUrl =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACQAAAAkCAYAAADhAJiYAAAATmVYSWZNTQAqAAAACAAEARoABQAAAAEAAAA+ARsABQAAAAEAAABGASgAAwAAAAEAAgAAAhMAAwAAAAEAAQAAAAAAAAAAAJAAAAABAAAAkAAAAAElr9YpAAACt0lEQVRYCdWXzWpUQRCFxx9QFM1GBV14caEoGHe6dPIA6kQlj5C9O10JLnSbjS+gjyAGwbW6DaIuFSOIGDAbMTEGf84Xp0LRt293z9yZQQ8curq6qrrmdnd1T6fzj2FXi3wOyveEeEjcFDfEiWOfZrwhLok/xd+OLyXfEkl0IpjRLMuiTyImf5ZNTzwtXhArsc1KyL2Oa1L9EGMJlOhW5ftQnBZbgyDrYsnEORuWeUHcLQ6N5/LMTTTo+KJiDpXU3BiSseT5UsVgmV6I5jyOluUr2lNs4FHtmdwPYaMnMaPRNqcpl0A4zulrLAkUvVSdoRjey9iEE5b0K8WMggrcFGBNY1aBT0oe5ZJSPKPgC6QS2u+87iRsm2I06anoNfDrw7spDHDXee2V/E4MbYbp91zcbZEsc8G4zVkuwxUJOZ+Sce4+2w4Wu3O2MPiTbY+/wuNCv1xiN4O4nQMDBL7knC8O4JdKiqfLFnb2269qX/XlVPNdg2+cQeXkNuI5OU+FAXhcpX4FY7edE3XrQ4FPLqaN104bG4sNZgZh+1ZjnC4DRTK0adOvJcREs4lJ/N45JTtOnU9gRf2ueDjCI9JdFimw3sdkSg77uIam478aWD5V34JZez+wiXUfRfzwpyhHcV5am8C3v6TnRIF50Y+Z/Fr62sbEoY+jaj+JZu9brq0t7DCh31Zq3wc66xKAgMdMEWm/Sfcxomee4+KeyBgH44zIctbAU+CL6LMfp8xTp1vLIlA8mFBCvBiuBnNHu9PS5i7atl/tmebguirGgizbTtrkf704C2fIX5TFMSTFlxkaJMWXGtXysWcGWqamzNlT/DugODYtQ07PaSrawLIrBiWhEnkDU9F7YurusySXZdcVJwIuZB5XvGcsAVqWeUmkAvMqKEZYqYsdI4ZT0nE9AKo1b6z/H38AJjijHMuz2AYAAAAASUVORK5CYII=";

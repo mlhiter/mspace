@@ -168,7 +168,7 @@ Screen priorities:
 - Issue Detail: document body first, then activity, session, and evidence. Keep the right metadata sidebar on Overview only; Commits, Sessions, and Evidence use the full page width so diffs, paths, command output, and Kubernetes evidence have room.
 - Tests: project-level cases, case suggestions, plans, and runs. Creation/import can use focused modals; row details should open dedicated pages rather than a persistent list/detail split.
 - Session Detail: logs, worktree state, branch comparison, evidence.
-- Agents: use a compact top matrix for fixed Codex, Claude Code, and Pi readiness on This Mac plus server-derived workspace coverage, followed by a horizontally scrollable Connected Workers matrix with liveness, per-engine diagnostic text, load, and last heartbeat. `This Mac` may appear only for an exact trusted Electron host-id match, never from a name heuristic. Legacy, disabled, missing, and not-reported states need readable text and cannot rely on color alone. Keep Skills in a separate management tab. Do not add Agent profile forms, prompt instructions, enabled toggles, arbitrary commands, model selectors, or MCP settings.
+- Agents: use a compact responsive readiness list for fixed Codex, Claude Code, and Pi state on This Mac plus server-derived workspace coverage. Connected Workers use two-level responsive rows: Worker identity, liveness, load, and last heartbeat first, followed by a wrapping three-engine diagnostic subgrid. Narrow windows stack or wrap these fields inside the page width; do not require page-level horizontal scrolling. `This Mac` may appear only for an exact trusted Electron host-id match, never from a name heuristic. Legacy, disabled, missing, and not-reported states need readable text and cannot rely on color alone. Keep Skills in a separate management tab. Do not add Agent profile forms, prompt instructions, enabled toggles, arbitrary commands, model selectors, or MCP settings.
 - Clusters: reusable kubeconfig, registry, and preview exposure defaults.
 - Projects: repository and runtime policy, not a daily conversation feed.
 
@@ -220,6 +220,7 @@ Use `lucide-react` for normal product UI. File-type chips and file-change rows u
 - Keep icon stroke consistent with the global `svg` rule.
 - Do not add manual `size-*` classes inside shadcn buttons unless the component requires it.
 - Prefer concrete icons: Inbox, Folder, Terminal, Git branch, Logs, Check, Alert, Clock.
+- Agent identity is a brand-asset exception to the normal lucide rule. Resolve Codex, Claude Code, and Pi through `packages/views/src/agent-avatar.ts`, bundle remote marks locally, preserve their aspect ratio with `object-contain`, and do not use letter placeholders.
 - Keep Material Icon Theme scoped to file surfaces through `packages/views/src/file-type-icon.tsx`; do not reintroduce MUI or Emotion just for file icons.
 - Hide directory-only placeholder entries from changed-file lists; show the concrete files inside those directories instead.
 - Avoid abstract sparkle or AI icons except where the runtime worker or agent identity needs a quiet hint.

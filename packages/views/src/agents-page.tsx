@@ -60,7 +60,7 @@ import {
   Textarea,
   cn,
 } from "@mspace/ui";
-import { codexAvatarDataUrl } from "./agent-avatar";
+import { agentAvatarUrl } from "./agent-avatar";
 import { useMspaceAuth } from "./auth-context";
 import { formatAbsoluteTime, RelativeTime } from "./time";
 
@@ -411,30 +411,26 @@ function AgentsPanel(props: {
           <h2 id="agent-readiness-heading" className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">{t("agents.readiness.title")}</h2>
           <p className="text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.readiness.description")}</p>
         </div>
-        <div className="overflow-hidden rounded-[8px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+        <div className="min-w-0 overflow-hidden rounded-[8px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
           {props.error ? <div className="border-b border-[color:var(--line)] px-4 py-3"><Notice tone="danger">{props.error.message}</Notice></div> : null}
-          <div className="overflow-x-auto">
-            <div className="min-w-[780px]">
-              <div className="grid grid-cols-[minmax(300px,1.35fr)_minmax(220px,1fr)_minmax(180px,0.8fr)] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
-                <span>{t("agents.agent")}</span>
-                <span>{t("agents.readiness.thisMac")}</span>
-                <span>{t("agents.readiness.workspaceCoverage")}</span>
-              </div>
-              <div className="divide-y divide-[color:var(--line)]">
-                {props.agents.map((agent, index) => (
-                  <AgentReadinessRow
-                    key={agent.id}
-                    agent={agent}
-                    availability={props.availability[index]}
-                    availabilityPending={props.availabilityPending[index]}
-                    localPrimaryWorker={localPrimaryWorker}
-                    workersPending={props.workersPending}
-                    localIdentityPending={props.localIdentityPending}
-                    activeWorkerMaxAgeMs={activeWorkerMaxAgeMs}
-                  />
-                ))}
-              </div>
-            </div>
+          <div className="hidden grid-cols-[minmax(0,1.4fr)_minmax(0,0.72fr)_minmax(0,0.85fr)] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)] md:grid">
+            <span>{t("agents.agent")}</span>
+            <span>{t("agents.readiness.thisMac")}</span>
+            <span>{t("agents.readiness.workspaceCoverage")}</span>
+          </div>
+          <div className="divide-y divide-[color:var(--line)]">
+            {props.agents.map((agent, index) => (
+              <AgentReadinessRow
+                key={agent.id}
+                agent={agent}
+                availability={props.availability[index]}
+                availabilityPending={props.availabilityPending[index]}
+                localPrimaryWorker={localPrimaryWorker}
+                workersPending={props.workersPending}
+                localIdentityPending={props.localIdentityPending}
+                activeWorkerMaxAgeMs={activeWorkerMaxAgeMs}
+              />
+            ))}
           </div>
         </div>
       </section>
@@ -444,41 +440,28 @@ function AgentsPanel(props: {
           <h2 id="connected-workers-heading" className="text-[14px] font-semibold leading-6 text-[color:var(--text)]">{t("agents.workers.title")}</h2>
           <p className="text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.workers.description")}</p>
         </div>
-        <div className="overflow-hidden rounded-[8px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
-          <div className="overflow-x-auto">
-            <div className="min-w-[1120px]">
-              <div className="grid grid-cols-[minmax(240px,1.35fr)_125px_150px_150px_150px_70px_120px] gap-4 border-b border-[color:var(--line)] px-4 py-2.5 text-[12px] font-medium text-[color:var(--muted)]">
-                <span>{t("agents.workers.worker")}</span>
-                <span>{t("agents.status")}</span>
-                <span>Codex</span>
-                <span>Claude Code</span>
-                <span>Pi</span>
-                <span>{t("agents.workers.load")}</span>
-                <span>{t("agents.workers.lastSeen")}</span>
-              </div>
-              {props.workersPending && workers.length === 0 ? (
-                <div className="px-4 py-8 text-center text-[13px] text-[color:var(--muted)]">{t("agents.workers.loading")}</div>
-              ) : workers.length === 0 ? (
-                <div className="px-4 py-8 text-center">
-                  <ServerCog className="mx-auto size-5 text-[color:var(--faint)]" />
-                  <p className="mt-2 text-[13px] font-medium text-[color:var(--text)]">{t("agents.workers.emptyTitle")}</p>
-                  <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.workers.emptyBody")}</p>
-                </div>
-              ) : (
-                <div className="divide-y divide-[color:var(--line)]">
-                  {workers.map((worker) => (
-                    <WorkerReadinessRow
-                      key={worker.id}
-                      worker={worker}
-                      activeWorkerMaxAgeMs={activeWorkerMaxAgeMs}
-                      runtimeMode={props.runtimeMode}
-                      currentHostId={props.currentHostId}
-                    />
-                  ))}
-                </div>
-              )}
+        <div className="min-w-0 overflow-hidden rounded-[8px] bg-[color:var(--surface)] shadow-[inset_0_0_0_1px_var(--line)]">
+          {props.workersPending && workers.length === 0 ? (
+            <div className="px-4 py-8 text-center text-[13px] text-[color:var(--muted)]">{t("agents.workers.loading")}</div>
+          ) : workers.length === 0 ? (
+            <div className="px-4 py-8 text-center">
+              <ServerCog className="mx-auto size-5 text-[color:var(--faint)]" />
+              <p className="mt-2 text-[13px] font-medium text-[color:var(--text)]">{t("agents.workers.emptyTitle")}</p>
+              <p className="mt-1 text-[12px] leading-5 text-[color:var(--muted)]">{t("agents.workers.emptyBody")}</p>
             </div>
-          </div>
+          ) : (
+            <div className="divide-y divide-[color:var(--line)]">
+              {workers.map((worker) => (
+                <WorkerReadinessRow
+                  key={worker.id}
+                  worker={worker}
+                  activeWorkerMaxAgeMs={activeWorkerMaxAgeMs}
+                  runtimeMode={props.runtimeMode}
+                  currentHostId={props.currentHostId}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </section>
     </div>
@@ -509,7 +492,7 @@ function AgentReadinessRow(props: {
 
   return (
     <article
-      className="grid grid-cols-[minmax(300px,1.35fr)_minmax(220px,1fr)_minmax(180px,0.8fr)] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]"
+      className="grid min-w-0 grid-cols-1 gap-3 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)] md:grid-cols-[minmax(0,1.4fr)_minmax(0,0.72fr)_minmax(0,0.85fr)] md:items-center md:gap-4"
       data-testid="agents.summary.item"
       data-qa-resource-type="agent-engine"
       data-qa-resource-id={props.agent.id}
@@ -517,6 +500,7 @@ function AgentReadinessRow(props: {
     >
       <AgentIdentity agent={props.agent} />
       <div className="min-w-0">
+        <div className="mb-1 text-[10px] font-medium leading-4 text-[color:var(--faint)] md:hidden">{t("agents.readiness.thisMac")}</div>
         {(props.workersPending || props.localIdentityPending) && !props.localPrimaryWorker ? (
           <span className="text-[12px] text-[color:var(--muted)]">{t("agents.runtimeChecking")}</span>
         ) : props.localPrimaryWorker && localDiagnostic && localLiveness ? (
@@ -531,6 +515,7 @@ function AgentReadinessRow(props: {
         )}
       </div>
       <div className="min-w-0">
+        <div className="mb-1 text-[10px] font-medium leading-4 text-[color:var(--faint)] md:hidden">{t("agents.readiness.workspaceCoverage")}</div>
         {props.availabilityPending ? (
           <span className="text-[12px] text-[color:var(--muted)]">{t("agents.runtimeChecking")}</span>
         ) : claimableCount === undefined ? (
@@ -550,15 +535,14 @@ function AgentReadinessRow(props: {
 
 function AgentIdentity(props: { agent: AgentEngineCatalogItem }) {
   const { t } = useMspaceTranslation();
-  const isCodex = props.agent.id === "codex";
-  const initial = props.agent.id === "claude_code" ? "C" : props.agent.id === "pi" ? "P" : "C";
+  const avatarUrl = agentAvatarUrl(props.agent.id);
   return (
     <div className="flex min-w-0 items-start gap-2.5">
-      <span className="mt-0.5 grid size-9 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-[color:var(--paper)] text-[12px] font-semibold text-[color:var(--muted-strong)] shadow-[inset_0_0_0_1px_var(--line)]">
-        {isCodex ? <img src={codexAvatarDataUrl} alt="" className="size-full p-1" /> : initial}
+      <span className="mt-0.5 grid size-9 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-[color:var(--paper)] shadow-[inset_0_0_0_1px_var(--line)]">
+        <img src={avatarUrl} alt="" className="size-full object-contain p-1.5" />
       </span>
       <div className="min-w-0">
-        <div className="flex min-w-0 items-baseline gap-2">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <h3 className="truncate text-[14px] font-semibold leading-5 text-[color:var(--text)]">{props.agent.name}</h3>
           <span className="shrink-0 font-mono text-[11px] leading-4 text-[color:var(--muted)]">{props.agent.mention}</span>
         </div>
@@ -593,32 +577,58 @@ function WorkerReadinessRow(props: {
 
   return (
     <article
-      className="grid grid-cols-[minmax(240px,1.35fr)_125px_150px_150px_150px_70px_120px] items-center gap-4 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]"
+      className="grid min-w-0 gap-3 px-4 py-3 transition-[background-color] duration-150 ease-out hover:bg-[color:var(--hover)]"
       data-testid="agents.workers.item"
       data-qa-resource-type="runtime-worker"
       data-qa-resource-id={props.worker.id}
       data-qa-state={liveness}
     >
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span className="grid size-8 shrink-0 place-items-center rounded-[7px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
-          <ServerCog className="size-4" />
-        </span>
-        <div className="min-w-0">
-          <div className="truncate text-[13px] font-medium leading-5 text-[color:var(--text)]">{isThisMac ? t("agents.workers.thisMac") : props.worker.name}</div>
-          <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{meta || props.worker.mode}</div>
+      <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="grid size-8 shrink-0 place-items-center rounded-[7px] bg-[color:var(--paper)] text-[color:var(--muted)] shadow-[inset_0_0_0_1px_var(--line)]">
+            <ServerCog className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate text-[13px] font-medium leading-5 text-[color:var(--text)]">{isThisMac ? t("agents.workers.thisMac") : props.worker.name}</div>
+            <div className="truncate text-[11px] leading-4 text-[color:var(--muted)]">{meta || props.worker.mode}</div>
+          </div>
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 md:justify-end">
+          <div className="min-w-0">
+            <WorkerLivenessPill status={liveness} />
+            <div className="mt-1 truncate text-[11px] leading-4 text-[color:var(--faint)]">{props.worker.mode}</div>
+          </div>
+          <WorkerFact label={t("agents.workers.load")} value={String(props.worker.currentLoad)} mono />
+          <WorkerFact label={t("agents.workers.lastSeen")} value={<RelativeTime value={props.worker.lastSeenAt} />} />
         </div>
       </div>
-      <div className="min-w-0">
-        <WorkerLivenessPill status={liveness} />
-        <div className="mt-1 truncate text-[11px] leading-4 text-[color:var(--faint)]">{props.worker.mode}</div>
+      <div className="grid min-w-0 grid-cols-1 gap-3 border-t border-[color:var(--line)] pt-3 lg:grid-cols-3">
+        {(["codex", "claude_code", "pi"] as const).map((engine) => (
+          <div key={engine} className="min-w-0">
+            <div className="mb-1 text-[10px] font-medium leading-4 text-[color:var(--faint)]">{agentEngineName(engine)}</div>
+            <EngineDiagnosticCell engine={engine} worker={props.worker} />
+          </div>
+        ))}
       </div>
-      {(["codex", "claude_code", "pi"] as const).map((engine) => (
-        <EngineDiagnosticCell key={engine} engine={engine} worker={props.worker} />
-      ))}
-      <span className="font-mono text-[12px] tabular-nums text-[color:var(--muted)]">{props.worker.currentLoad}</span>
-      <span className="text-[12px] leading-5 text-[color:var(--muted)]"><RelativeTime value={props.worker.lastSeenAt} /></span>
     </article>
   );
+}
+
+function WorkerFact(props: { label: string; value: ReactNode; mono?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] font-medium leading-4 text-[color:var(--faint)]">{props.label}</div>
+      <div className={cn("truncate text-[12px] leading-5 text-[color:var(--muted)]", props.mono && "font-mono tabular-nums")}>
+        {props.value}
+      </div>
+    </div>
+  );
+}
+
+function agentEngineName(engine: AgentEngine) {
+  if (engine === "claude_code") return "Claude Code";
+  if (engine === "pi") return "Pi";
+  return "Codex";
 }
 
 function EngineDiagnosticCell(props: { engine: AgentEngine; worker: RuntimeWorker }) {

@@ -7,6 +7,17 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-21",
+    title: "Responsive Agent readiness and real engine identities",
+    summary:
+      "mspace made Agent and Worker readiness fit narrow desktop windows while giving Claude Code and Pi their own recognizable identities.",
+    items: [
+      "Replaced fixed-width readiness tables with responsive Agent rows and two-level Connected Worker rows that stay within the page width.",
+      "Bundled official Claude and Pi SVG marks locally and reused them across Agents, Issue mentions, timelines, and assignee surfaces.",
+      "Kept human avatars cropped naturally while preserving each Agent mark's aspect ratio across compact avatar sizes.",
+    ],
+  },
+  {
     date: "2026-07-17",
     title: "Fixed Agents and Worker readiness",
     summary:

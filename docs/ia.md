@@ -73,7 +73,7 @@ The ownership model should be clear:
 
 ## Agents
 
-Agents is an operational readiness surface, not an Agent builder. Its default tab shows the three fixed execution engines, each engine's installation/configuration state on This Mac, and the server-derived number of current-workspace Workers that can claim that engine. A Connected Workers matrix below separates Worker liveness from per-engine readiness and includes remote and legacy Workers. In personal desktop mode, `This Mac` comes only from an exact trusted host-id match; team mode does not invent a local Worker. The Skills tab remains the separate place to inspect and manage server-owned Workflow Skills.
+Agents is an operational readiness surface, not an Agent builder. Its default tab shows the three fixed execution engines, each engine's installation/configuration state on This Mac, and the server-derived number of current-workspace Workers that can claim that engine. A responsive Connected Workers list below presents Worker identity, liveness, load, and heartbeat first, then separates Codex, Claude Code, and Pi readiness in a wrapping diagnostic subgrid; remote and legacy Workers remain visible without forcing page-level horizontal scrolling. In personal desktop mode, `This Mac` comes only from an exact trusted host-id match; team mode does not invent a local Worker. The Skills tab remains the separate place to inspect and manage server-owned Workflow Skills.
 
 ## Screen Map
 

@@ -18,7 +18,7 @@ import {
   StatusBadge,
 } from "@mspace/ui";
 import { CreateIssueModal } from "./create-issue-modal";
-import { codexAvatarDataUrl } from "./agent-avatar";
+import { agentAvatarUrl } from "./agent-avatar";
 import { useMspaceAuth } from "./auth-context";
 import {
   issueLabelMatchesDimension,
@@ -61,7 +61,7 @@ function IssueAssigneeMeta(props: { issue: IssueListItem }) {
   const stored = getStoredAuthIdentity();
   const name = issueAssigneeName(props.issue);
   const assigneeEngine = props.issue.assigneeType === "agent" ? parseAgentEngine(props.issue.assignee) || "codex" : undefined;
-  const avatarUrl = assigneeEngine === "codex" ? codexAvatarDataUrl : props.issue.assigneeType === "agent" ? "" : stored.avatarUrl || "";
+  const avatarUrl = assigneeEngine ? agentAvatarUrl(assigneeEngine) : stored.avatarUrl || "";
 
   useEffect(() => {
     setFailed(false);
@@ -71,7 +71,12 @@ function IssueAssigneeMeta(props: { issue: IssueListItem }) {
     <div className="flex min-w-0 items-center gap-1.5 text-[12px] leading-5 text-[color:var(--muted)]">
       <span className="grid size-5 shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--paper)] text-[10px] font-semibold text-[color:var(--muted-strong)] shadow-[0_0_0_1px_var(--line)]">
         {avatarUrl && !failed ? (
-          <img src={avatarUrl} alt="" className="size-full object-cover" onError={() => setFailed(true)} />
+          <img
+            src={avatarUrl}
+            alt=""
+            className={assigneeEngine ? "size-full object-contain p-0.5" : "size-full object-cover"}
+            onError={() => setFailed(true)}
+          />
         ) : (
           <span>{name.slice(0, 1).toUpperCase() || "M"}</span>
         )}

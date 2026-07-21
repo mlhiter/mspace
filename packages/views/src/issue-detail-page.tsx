@@ -104,7 +104,7 @@ import { t as translate, useMspaceTranslation } from "@mspace/i18n";
 import { FileTypeIcon } from "./file-type-icon";
 import { IssueDocumentEditor } from "./issue-document-editor";
 import { useResolvedIssueImageSrc } from "./attachment-image";
-import { codexAvatarDataUrl } from "./agent-avatar";
+import { agentAvatarUrl } from "./agent-avatar";
 import { useMspaceAuth } from "./auth-context";
 import { ensureRuntimeReady } from "./runtime-worker-readiness";
 import {
@@ -738,15 +738,14 @@ function plainText(value: React.ReactNode): string {
 }
 
 function AgentMentionPill(props: { agent: AgentEngineCatalogItem; label: string }) {
-  const isCodex = props.agent.id === "codex";
-  const fallbackInitial = props.agent.id === "claude_code" ? "C" : "P";
+  const avatarUrl = agentAvatarUrl(props.agent.id);
   return (
     <span
       title={props.agent.name}
       className="mx-0.5 inline-flex h-6 max-w-full items-center gap-1.5 rounded-full bg-[color:var(--block)] px-1.5 pr-2 align-middle text-[12px] font-semibold leading-none text-[color:var(--text)]"
     >
       <span className="grid size-4 shrink-0 place-items-center overflow-hidden rounded-full bg-[color:var(--paper)] text-[color:var(--accent-blue)] shadow-[inset_0_0_0_1px_var(--line)]">
-        {isCodex ? <img src={codexAvatarDataUrl} alt="" className="size-full p-0.5" /> : <span>{fallbackInitial}</span>}
+        <img src={avatarUrl} alt="" className="size-full object-contain p-0.5" />
       </span>
       <span className="truncate">{props.label}</span>
     </span>
@@ -2860,7 +2859,7 @@ function agentActor(value: unknown, name?: string): ActorIdentity {
     kind: "agent",
     agentEngine,
     name: name || agentEngineDisplayName(agentEngine),
-    avatarUrl: agentEngine === "codex" ? codexAvatarDataUrl : "",
+    avatarUrl: agentAvatarUrl(agentEngine),
   };
 }
 
@@ -2912,7 +2911,12 @@ function ActorMark(props: { actor: ActorIdentity; size?: "sm" | "md" }) {
       )}
     >
       {imageUrl && !failed ? (
-        <img src={imageUrl} alt="" className={cn("size-full object-cover", props.actor.kind === "agent" && props.actor.agentEngine === "codex" && "p-1")} onError={() => setFailed(true)} />
+        <img
+          src={imageUrl}
+          alt=""
+          className={props.actor.kind === "agent" ? "size-full object-contain p-1" : "size-full object-cover"}
+          onError={() => setFailed(true)}
+        />
       ) : props.actor.kind === "human" ? (
         <span>{actorInitial(props.actor)}</span>
       ) : (

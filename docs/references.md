@@ -1,6 +1,6 @@
 # Reference Notes
 
-> Status: public reference scan and implementation notes, updated 2026-07-17
+> Status: public reference scan and implementation notes, updated 2026-07-21
 
 ## Multica
 
@@ -83,6 +83,16 @@ What not to copy directly:
 mspace interpretation:
 
 Notion is the visual and interaction reference for calm document work. mspace should use that tone to make Inbox, Issues, Sessions, and Kubernetes evidence feel readable and steady, while keeping the product centered on coding-agent work and namespace-scoped validation.
+
+## Agent Brand Assets
+
+Sources reviewed 2026-07-21:
+
+- Claude product site: https://claude.ai/
+- Claude official SVG favicon asset: https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/cd02a42d9-Vq_H3mgS.svg
+- Pi official logo asset: https://pi.dev/logo-auto.svg
+
+mspace bundles the reviewed marks as `packages/views/src/assets/claude.svg` and `packages/views/src/assets/pi.svg`. Runtime UI resolves them through `packages/views/src/agent-avatar.ts`, so Agent identity remains available offline and does not depend on a remote image request. Source comments stay in the SVG files for file-level provenance.
 
 ## Core Differentiation
 
