@@ -56,6 +56,9 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	var payload struct {
 		OK             bool            `json:"ok"`
 		Service        string          `json:"service"`
+		Version        string          `json:"version"`
+		CommitSHA      string          `json:"commitSha"`
+		BuildTime      string          `json:"buildTime"`
 		ServerProtocol int             `json:"serverProtocol"`
 		Capabilities   map[string]bool `json:"capabilities"`
 	}
@@ -64,6 +67,12 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	}
 	if !payload.OK || payload.Service != "mspace-server" || payload.ServerProtocol != serverProtocolVersion {
 		t.Fatalf("unexpected health payload: %+v", payload)
+	}
+	if payload.Version != "dev" || payload.CommitSHA != "unknown" || payload.BuildTime != "unknown" {
+		t.Fatalf("unexpected default build identity: %+v", payload)
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("expected Cache-Control no-store, got %q", got)
 	}
 	if payload.Capabilities["workspaceInboxIssueGrouping"] != true {
 		t.Fatalf("expected workspace inbox grouping capability, got %+v", payload.Capabilities)
@@ -103,6 +112,32 @@ func TestHealthAdvertisesServerProtocol(t *testing.T) {
 	}
 	if payload.Capabilities["testCaseWorkflow"] != true {
 		t.Fatalf("expected test case workflow capability, got %+v", payload.Capabilities)
+	}
+}
+
+func TestHealthReportsCompileTimeBuildIdentity(t *testing.T) {
+	originalVersion, originalCommitSHA, originalBuildTime := version, commitSHA, buildTime
+	version = "1.2.3"
+	commitSHA = "0123456789abcdef"
+	buildTime = "2026-07-27T09:30:00Z"
+	defer func() {
+		version, commitSHA, buildTime = originalVersion, originalCommitSHA, originalBuildTime
+	}()
+
+	server := NewServer(Config{}, NewMemoryStore(), fakeGitHubClient{})
+	recorder := httptest.NewRecorder()
+	server.Routes().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	var payload struct {
+		Version   string `json:"version"`
+		CommitSHA string `json:"commitSha"`
+		BuildTime string `json:"buildTime"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("parse health response: %v", err)
+	}
+	if payload.Version != version || payload.CommitSHA != commitSHA || payload.BuildTime != buildTime {
+		t.Fatalf("unexpected injected build identity: %+v", payload)
 	}
 }
 

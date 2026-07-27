@@ -4,19 +4,34 @@ FROM node:22-bookworm AS node-runtime
 
 FROM golang:1.24-bookworm AS builder
 
+ARG BUILD_VERSION=dev
+ARG BUILD_COMMIT_SHA=unknown
+ARG BUILD_TIME=unknown
+
 WORKDIR /src/worker
 
 COPY worker/go.mod ./
 RUN go mod download
 
 COPY worker ./
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mspace-worker .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+  -ldflags="-s -w -X main.workerVersion=${BUILD_VERSION}" \
+  -o /out/mspace-worker .
 
 FROM golang:1.24-bookworm
 
 ARG CODEX_CLI_VERSION=0.130.0
 ARG KUBECTL_VERSION=v1.34.2
 ARG BUILDKIT_VERSION=v0.24.0
+ARG BUILD_VERSION=dev
+ARG BUILD_COMMIT_SHA=unknown
+ARG BUILD_TIME=unknown
+ARG BUILD_SOURCE=https://github.com/mlhiter/mspace
+
+LABEL org.opencontainers.image.version="${BUILD_VERSION}" \
+  org.opencontainers.image.revision="${BUILD_COMMIT_SHA}" \
+  org.opencontainers.image.created="${BUILD_TIME}" \
+  org.opencontainers.image.source="${BUILD_SOURCE}"
 
 COPY --from=node-runtime /usr/local /usr/local
 

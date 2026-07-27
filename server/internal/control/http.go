@@ -37,6 +37,12 @@ const maxTestCaseListLimit = 200
 const defaultRuntimeTaskListLimit = 10
 const maxRuntimeTaskListLimit = 100
 
+var (
+	version   = "dev"
+	commitSHA = "unknown"
+	buildTime = "unknown"
+)
+
 func NewServer(config Config, store Store, github GitHubClient) *Server {
 	config = config.withDefaults()
 	return &Server{
@@ -266,10 +272,13 @@ func (s *Server) githubAuthConfigured() bool {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":             true,
 		"service":        "mspace-server",
-		"version":        "0.1.0",
+		"version":        version,
+		"commitSha":      commitSHA,
+		"buildTime":      buildTime,
 		"serverProtocol": serverProtocolVersion,
 		"capabilities": map[string]bool{
 			"workspaceInboxIssueGrouping": true,

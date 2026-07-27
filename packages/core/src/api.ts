@@ -59,6 +59,7 @@ import type {
   RuntimeTaskListResult,
   RuntimeTaskLog,
   RuntimeWorker,
+  ServerHealth,
   SessionDetail,
   SkillCatalogItem,
   SkillDetail,
@@ -114,6 +115,7 @@ export interface StoredAuthIdentity {
 }
 
 export const queryKeys = {
+  serverHealth: () => ["server-health"] as const,
   agents: (workspaceId: string, token: string) => ["agents", workspaceId, token] as const,
   skills: (workspaceId: string, token: string) => ["skills", workspaceId, token] as const,
   authMe: (token: string) => ["auth-me", token] as const,
@@ -318,6 +320,7 @@ function normalizeRuntimeTaskListResult(payload: RuntimeTaskListResult | Runtime
 }
 
 export const controlPlaneApi = {
+  getHealth: () => requestControlPlane<ServerHealth>("/health"),
   startGitHubLogin: () =>
     requestControlPlane<AuthStartResult>("/api/auth/github/start"),
   pollGitHubLogin: (state: string) =>

@@ -29,7 +29,8 @@ bootstrap:
 server:
   image:
     repository: crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-server
-    tag: replace-me
+    tag: ""
+    digest: sha256:replace-with-pushed-server-digest
   ingress:
     enabled: true
     className: nginx
@@ -44,7 +45,8 @@ worker:
   enabled: true
   image:
     repository: crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-worker-codex
-    tag: replace-me
+    tag: ""
+    digest: sha256:replace-with-pushed-worker-digest
 
 codexHome:
   # kubectl -n mspace-system create secret generic mspace-codex-home \

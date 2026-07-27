@@ -29,7 +29,6 @@ import (
 	"time"
 )
 
-const workerVersion = "0.1.0"
 const codexProtocolLineLimit = 16 * 1024 * 1024
 const branchNameArtifactName = "branch-name.json"
 const testEnvironmentArtifactName = "test-environment.json"
@@ -39,6 +38,8 @@ const testSetupResultArtifactName = "test-setup-result.json"
 const testResultArtifactName = "test-result.json"
 const maxTestResultScreenshotBytes = 2 * 1024 * 1024
 const testArtifactCompletionSettleTimeout = 10 * time.Second
+
+var workerVersion = "dev"
 
 type testArtifactReadiness int
 
@@ -56,7 +57,6 @@ type config struct {
 	TokenFile         string
 	Name              string
 	Mode              string
-	Version           string
 	Capabilities      json.RawMessage
 	Labels            json.RawMessage
 	WorkRoot          string
@@ -568,7 +568,6 @@ func configFromArgs(args []string) (config, error) {
 	fs.StringVar(&cfg.TokenFile, "token-file", envFirst("MSPACE_RUNTIME_TOKEN_FILE"), "path to a file containing the runtime registration token")
 	fs.StringVar(&cfg.Name, "name", defaultName, "worker name")
 	fs.StringVar(&cfg.Mode, "mode", envDefault("MSPACE_WORKER_MODE", "team"), "worker runtime mode: personal or team")
-	fs.StringVar(&cfg.Version, "version", envDefault("MSPACE_WORKER_VERSION", workerVersion), "worker version")
 	fs.StringVar(&cfg.WorkRoot, "work-root", defaultWorkRoot, "root directory for worker-managed repos, workdirs, and artifacts")
 	fs.StringVar(&capabilitiesText, "capabilities", defaultCapabilities, "worker capability JSON object")
 	fs.StringVar(&labelsText, "labels", defaultLabels, "worker label JSON object")
@@ -597,7 +596,6 @@ func normalizeConfig(cfg config) (config, error) {
 	cfg.TokenFile = strings.TrimSpace(cfg.TokenFile)
 	cfg.Name = strings.TrimSpace(cfg.Name)
 	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
-	cfg.Version = strings.TrimSpace(cfg.Version)
 	cfg.WorkRoot = strings.TrimSpace(cfg.WorkRoot)
 	if cfg.ServerURL == "" {
 		return config{}, errors.New("server URL is required")
@@ -625,9 +623,6 @@ func normalizeConfig(cfg config) (config, error) {
 	}
 	if cfg.Mode != "personal" && cfg.Mode != "team" {
 		return config{}, errors.New("worker mode must be personal or team")
-	}
-	if cfg.Version == "" {
-		cfg.Version = workerVersion
 	}
 	if cfg.WorkRoot == "" {
 		return config{}, errors.New("worker work root is required")
@@ -794,7 +789,7 @@ func executeProtocolTask(cfg config, task runtimeTask) (json.RawMessage, error) 
 	result := map[string]any{
 		"workerName":    cfg.Name,
 		"workerMode":    cfg.Mode,
-		"workerVersion": cfg.Version,
+		"workerVersion": workerVersion,
 		"taskID":        task.ID,
 		"kind":          task.Kind,
 		"completedAt":   now,
@@ -888,7 +883,7 @@ func runCodexIssueTypeTriage(ctx context.Context, runtimeClient *runtimeClient, 
 		"clientInfo": map[string]any{
 			"name":    "mspace-worker-triage",
 			"title":   "mspace worker triage",
-			"version": cfg.Version,
+			"version": workerVersion,
 		},
 		"capabilities": map[string]any{
 			"experimentalApi": true,
@@ -1042,7 +1037,7 @@ func runCodexImportMapping(ctx context.Context, runtimeClient *runtimeClient, cf
 		"clientInfo": map[string]any{
 			"name":    "mspace-worker-import-mapping",
 			"title":   "mspace worker import mapping",
-			"version": cfg.Version,
+			"version": workerVersion,
 		},
 		"capabilities": map[string]any{
 			"experimentalApi": true,
@@ -1338,7 +1333,7 @@ func runCodexEngineProtocol(ctx context.Context, runtimeClient *runtimeClient, c
 		"clientInfo": map[string]any{
 			"name":    "mspace-worker",
 			"title":   "mspace worker",
-			"version": cfg.Version,
+			"version": workerVersion,
 		},
 		"capabilities": map[string]any{
 			"experimentalApi": true,
@@ -3738,7 +3733,7 @@ func (cfg config) workerInput(status string, currentLoad int, includeCapabilitie
 		Name:        cfg.Name,
 		Mode:        cfg.Mode,
 		Status:      status,
-		Version:     cfg.Version,
+		Version:     workerVersion,
 		CurrentLoad: currentLoad,
 	}
 	capabilities, diagnostics := cfg.engineDiagnostics.snapshot()

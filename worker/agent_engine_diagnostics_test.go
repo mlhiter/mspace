@@ -504,7 +504,7 @@ func TestWorkerInputReportsSafeCachedDiagnosticsOnEveryHeartbeat(t *testing.T) {
 		agentEngineDiagnoserFunc(func(context.Context) agentEngineDiagnostics { return diagnostics }),
 	)
 	state.refresh(context.Background())
-	cfg := config{Name: "worker", Mode: "team", Version: workerVersion, engineDiagnostics: state}
+	cfg := config{Name: "worker", Mode: "team", engineDiagnostics: state}
 
 	for _, includeCapabilities := range []bool{true, false} {
 		input := cfg.workerInput("online", 1, includeCapabilities)

@@ -74,7 +74,8 @@ server:
   replicaCount: 1
   image:
     repository: crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-server
-    tag: dev
+    tag: ""
+    digest: ""
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -103,7 +104,8 @@ worker:
   replicaCount: 1
   image:
     repository: crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter/mspace-worker-codex
-    tag: dev
+    tag: ""
+    digest: ""
     pullPolicy: IfNotPresent
   mode: team
   name: k8s-fixed-worker

@@ -9,6 +9,7 @@ import {
 	CheckCircle2,
 	Circle,
 	Copy,
+	Monitor,
 	Edit3,
 	Download,
 	GitCommit,
@@ -30,7 +31,9 @@ import {
 } from "lucide-react";
 import {
 	agentEngineMention,
+	buildInformation,
 	controlPlaneApi,
+	formatBuildDiagnostics,
 	getControlPlaneBaseUrl,
 	queryKeys,
 	type CreateWorkerInstallationInput,
@@ -166,6 +169,12 @@ export function WorkspaceSettingsPage() {
 		enabled: runtimeEnabled,
 		refetchInterval: runtimeEnabled ? 5_000 : false,
 	});
+	const serverHealthQuery = useQuery({
+		queryKey: queryKeys.serverHealth(),
+		queryFn: () => controlPlaneApi.getHealth(),
+		enabled: runtimeEnabled,
+		refetchOnWindowFocus: false,
+	});
 	const tasksQuery = useQuery({
 		queryKey: queryKeys.runtimeTasks(workspaceID, auth.token, RUNTIME_TASKS_PAGE_SIZE, runtimeTasksOffset),
 		queryFn: () => controlPlaneApi.listRuntimeTasks(auth.token, workspaceID, { limit: RUNTIME_TASKS_PAGE_SIZE, offset: runtimeTasksOffset }),
@@ -190,6 +199,7 @@ export function WorkspaceSettingsPage() {
 	const [workerInstallationForm, setWorkerInstallationForm] = useState<CreateWorkerInstallationInput>(defaultWorkerInstallationForm);
 	const [createdWorkerInstallation, setCreatedWorkerInstallation] = useState<WorkerInstallationResult | null>(null);
 	const [copyState, setCopyState] = useState("");
+	const [diagnosticsCopyState, setDiagnosticsCopyState] = useState("");
 
 	useEffect(() => {
 		if (!settingsQuery.data) return;
@@ -297,6 +307,11 @@ export function WorkspaceSettingsPage() {
 	);
 	const workspaceDefaultIcon = trimmedWorkspaceName.slice(0, 1).toUpperCase() || "m";
 	const workers = workersQuery.data || [];
+	const versions = buildInformation({
+		desktopVersion: window.mspaceDesktop?.appVersion,
+		serverHealth: serverHealthQuery.data,
+		workers,
+	});
 	const tokens = tokensQuery.data || [];
 	const tasksPage = tasksQuery.data || emptyRuntimeTaskListResult(RUNTIME_TASKS_PAGE_SIZE, runtimeTasksOffset);
 	const tasks = tasksPage.tasks || [];
@@ -364,6 +379,19 @@ export function WorkspaceSettingsPage() {
 			setCopyState(t("workspaceSettings.copied"));
 		} catch {
 			setCopyState(t("workspaceSettings.copyFailed"));
+		}
+	}
+
+	async function copyDiagnostics() {
+		try {
+			await navigator.clipboard.writeText(formatBuildDiagnostics({
+				desktopVersion: window.mspaceDesktop?.appVersion,
+				serverHealth: serverHealthQuery.data,
+				workers,
+			}));
+			setDiagnosticsCopyState(t("workspaceSettings.diagnosticsCopied"));
+		} catch {
+			setDiagnosticsCopyState(t("workspaceSettings.copyFailed"));
 		}
 	}
 
@@ -518,9 +546,24 @@ export function WorkspaceSettingsPage() {
 							/>
 						}
 					/>
-				</SettingsSection>
+					</SettingsSection>
 
-				{isTeamWorkspace ? (
+					<SettingsSection
+						title={t("workspaceSettings.section.buildInformation")}
+						description={t("workspaceSettings.section.buildInformationDescription")}
+						actions={
+							<Button type="button" variant="secondary" size="sm" onClick={copyDiagnostics}>
+								<Copy data-icon />
+								{diagnosticsCopyState || t("workspaceSettings.section.copyDiagnostics")}
+							</Button>
+						}
+					>
+						<SettingsRow icon={Monitor} title={t("workspaceSettings.section.desktopBuild")} description={t("workspaceSettings.section.desktopBuildDescription")} control={<StatusPill>{versions.desktopVersion}</StatusPill>} />
+						<SettingsRow icon={ServerCog} title={t("workspaceSettings.section.serverBuild")} description={t("workspaceSettings.section.serverBuildDescription")} control={<StatusPill>{versions.serverVersion}</StatusPill>} />
+						<SettingsRow icon={SquareTerminal} title={t("workspaceSettings.section.workerBuild")} description={t("workspaceSettings.section.workerBuildDescription")} control={<StatusPill>{versions.workerVersions.join(", ") || t("workspaceSettings.section.notReported")}</StatusPill>} />
+					</SettingsSection>
+
+					{isTeamWorkspace ? (
 					<>
 						<SettingsSection
 							title={t("workspaceSettings.section.teamAccess")}

@@ -1253,7 +1253,6 @@ func TestConfigRequiresRuntimeToken(t *testing.T) {
 		Token:             "msp_wrong",
 		Name:              "worker",
 		Mode:              "team",
-		Version:           workerVersion,
 		Capabilities:      json.RawMessage(`{}`),
 		Labels:            json.RawMessage(`{}`),
 		PollInterval:      time.Second,
@@ -1261,6 +1260,36 @@ func TestConfigRequiresRuntimeToken(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "msw_") {
 		t.Fatalf("expected msw token validation error, got %v", err)
+	}
+}
+
+func TestWorkerVersionCannotBeOverriddenByEnvironmentOrCLI(t *testing.T) {
+	originalVersion := workerVersion
+	workerVersion = "1.2.3"
+	defer func() { workerVersion = originalVersion }()
+
+	t.Setenv("MSPACE_WORKER_VERSION", "spoofed-env-version")
+	cfg, err := configFromArgs([]string{
+		"--token", "msw_test",
+		"--name", "worker",
+		"--mode", "team",
+		"--work-root", t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("parse worker config: %v", err)
+	}
+	if got := cfg.workerInput("online", 0, true).Version; got != workerVersion {
+		t.Fatalf("environment must not override build version: got %q want %q", got, workerVersion)
+	}
+
+	if _, err := configFromArgs([]string{
+		"--token", "msw_test",
+		"--name", "worker",
+		"--mode", "team",
+		"--work-root", t.TempDir(),
+		"--version", "spoofed-cli-version",
+	}); err == nil {
+		t.Fatal("expected --version override to be rejected")
 	}
 }
 
@@ -1274,7 +1303,6 @@ func TestRuntimeClientReadsUpdatedTokenFile(t *testing.T) {
 		TokenFile:         tokenPath,
 		Name:              "worker",
 		Mode:              "personal",
-		Version:           workerVersion,
 		Capabilities:      json.RawMessage(`{}`),
 		Labels:            json.RawMessage(`{}`),
 		WorkRoot:          t.TempDir(),
@@ -1342,7 +1370,6 @@ func testConfig(serverURL string) config {
 		Token:             "msw_test",
 		Name:              "worker-test",
 		Mode:              "team",
-		Version:           workerVersion,
 		Capabilities:      json.RawMessage(`{"protocolSmoke":true,"codex":false,"dryRun":true}`),
 		Labels:            json.RawMessage(`{"test":true}`),
 		WorkRoot:          filepath.Join(os.TempDir(), "mspace-worker-test"),

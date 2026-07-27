@@ -153,6 +153,8 @@ deploy/scripts/build-images.sh
 helm upgrade --install mspace deploy/helm/mspace -n mspace-system -f /tmp/mspace-values.yaml
 ```
 
+The image script defaults to `linux/amd64`, injects the root version, full checkout HEAD SHA, and one UTC RFC3339 build time into the Server binary and OCI labels, and injects the authoritative version into the Worker binary. It validates and prints `SERVER_DIGEST` and `WORKER_DIGEST` after a push. Prefer those values as `server.image.digest` and `worker.image.digest`; when a digest is empty, the chart uses the configured tag or `Chart.appVersion`. Desktop release packaging uses the same identity for every Server slice and the same version for every Worker slice. The release validate build uses those ldflags too and fails unless the checked-out tag is exactly `v<root package.json version>`.
+
 See `docs/kubernetes-deployment.md` for the customer install shape. The default fixed-worker path now sets `bootstrap.teamWorkspace.enabled=true` so Helm installs the server and worker together: the chart creates or preserves one `MSPACE_RUNTIME_TOKEN`, server startup registers it against the admin-owned default team workspace, and the worker registers with that same token. Before installing, create `mspace-codex-home` with a worker-scoped `auth.json` and `deploy/codex/worker-config.toml` or an untracked private-provider variant.
 
 ## Website

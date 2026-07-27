@@ -1574,6 +1574,16 @@ export interface AuthMeResult {
   identity: AuthIdentityInfo;
 }
 
+export interface ServerHealth {
+  ok: boolean;
+  service?: string;
+  version?: string;
+  commitSha?: string;
+  buildTime?: string;
+  serverProtocol: number;
+  capabilities: Record<string, boolean | undefined>;
+}
+
 export interface MspaceDesktopAPI {
   serverBaseUrl: string;
   serverBaseUrlSource?: "environment" | "user" | "default";

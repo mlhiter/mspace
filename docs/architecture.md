@@ -181,6 +181,10 @@ The store boundary stays inside `server/`.
 
 Do not add a renderer-owned product database or local sidecar API. The local SQLite path is still the server control plane, just using a file-backed personal store.
 
+### Build identity
+
+Server and Worker provenance is compile-time identity, not runtime configuration. Server builds inject the root repository version, checkout HEAD full SHA, and one RFC3339 build time through Go ldflags. Worker builds inject the authoritative version through `main.workerVersion`; their image labels still carry the same repository revision and creation time. Container builds mirror provenance into OCI `version`, `revision`, `created`, and `source` labels. The release workflow validates and builds from a checked-out tag exactly equal to `v<package.json version>`. Helm `appVersion` follows the root version and server/worker images may use immutable SHA-256 digests.
+
 ## Data Model Summary
 
 Main server-owned state groups:

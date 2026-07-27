@@ -143,6 +143,8 @@ scripts/run-server-worker-codex-dev.sh
 
 For customer Kubernetes deployment, use the Helm chart and runbook under `deploy/helm/mspace` and `docs/kubernetes-deployment.md`. The fixed-worker path expects the operator to create the worker Codex home Secret first, using a worker-scoped `auth.json` plus the repository-owned `deploy/codex/worker-config.toml` or an untracked private-provider variant.
 
+Container and desktop release builds use the root `package.json` version, checkout HEAD as a full Git SHA, and one explicit RFC3339 build time. Server binaries receive all three values through Go ldflags; Worker binaries receive the authoritative compile-time version, while Worker image OCI labels carry the shared revision and creation time. `deploy/scripts/build-images.sh` validates and reports pushed digests, and Helm accepts `server.image.digest` and `worker.image.digest` for immutable image references.
+
 Build desktop packages for internal dogfood:
 
 ```bash

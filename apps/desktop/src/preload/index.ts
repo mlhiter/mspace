@@ -35,7 +35,7 @@ const desktopAPI = {
   serverBaseUrl,
   serverBaseUrlSource,
   serverBaseUrlLocked,
-  appVersion: process.env.npm_package_version || "0.2.0-rc.1",
+  appVersion: readArgument("mspace-app-version") || "dev",
   setServerBaseUrl: (serverUrl: string) =>
     ipcRenderer.invoke("mspace:set-server-base-url", serverUrl) as Promise<{
       baseUrl: string;

@@ -415,7 +415,7 @@ func newAgentEngineTestContext(t *testing.T) (agentEngineExecutionContext, func(
 	}
 	return agentEngineExecutionContext{
 		RuntimeClient: client,
-		Config:        config{Name: "worker-test", Version: workerVersion},
+		Config:        config{Name: "worker-test"},
 		WorkerID:      "worker-engine-test",
 		TaskID:        "task-engine-test",
 	}, getLogs, server.Close

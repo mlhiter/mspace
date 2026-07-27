@@ -42,6 +42,7 @@ import {
   setControlPlaneBaseUrl,
   setStoredAuthIdentity,
   type AuthMeResult,
+  type ServerHealth,
   type CreateWorkspaceInput,
   type IssueListItem,
   type TestPlan,
@@ -162,12 +163,6 @@ const expectedServerCapabilities = [
   "testCaseWorkflow",
 ] as const;
 
-type ServerHealthPayload = {
-  ok?: unknown;
-  serverProtocol?: unknown;
-  capabilities?: unknown;
-};
-
 type ServerBaseUrlSource = "environment" | "user" | "default";
 type PasswordAuthMode = "login" | "register";
 
@@ -175,14 +170,14 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasExpectedServerHealth(payload: ServerHealthPayload): boolean {
+function hasExpectedServerHealth(payload: ServerHealth): boolean {
   if (payload.ok !== true || payload.serverProtocol !== 2) return false;
   const capabilities = payload.capabilities;
   if (!isObjectRecord(capabilities)) return false;
   return expectedServerCapabilities.every((capability) => capabilities[capability] === true);
 }
 
-function serverSupportsGitHubAuth(payload: ServerHealthPayload | undefined): boolean {
+function serverSupportsGitHubAuth(payload: ServerHealth | undefined): boolean {
   const capabilities = payload?.capabilities;
   return isObjectRecord(capabilities) && capabilities.githubAuth === true;
 }
@@ -484,9 +479,7 @@ function RootShell() {
   const serverHealthQuery = useQuery({
     queryKey: ["server-health", serverBaseUrl],
     queryFn: async () => {
-      const response = await fetch(new URL("/health", serverBaseUrl).toString());
-      if (!response.ok) throw new Error(t("auth.serverHealthFailed"));
-      const payload = (await response.json()) as ServerHealthPayload;
+      const payload = await controlPlaneApi.getHealth();
       if (!hasExpectedServerHealth(payload)) {
         throw new Error(t("auth.serverHealthInvalid"));
       }
@@ -626,7 +619,7 @@ function RootShell() {
     const baseUrl = normalizeServerInput(url);
     const response = await fetch(new URL("/health", baseUrl).toString());
     if (!response.ok) throw new Error(t("auth.serverHealthFailed"));
-    const payload = (await response.json()) as ServerHealthPayload;
+    const payload = (await response.json()) as ServerHealth;
     if (!hasExpectedServerHealth(payload)) {
       throw new Error(t("auth.serverHealthInvalid"));
     }

@@ -20,6 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      commit_sha: ${{ steps.identity.outputs.commit_sha }}
+      build_time: ${{ steps.identity.outputs.build_time }}
     steps:
       - name: Check out tagged commit
         uses: actions/checkout@v6
@@ -27,13 +31,18 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
-      - name: Verify tag supports packaged desktop
+      - name: Resolve and verify release identity
+        id: identity
         shell: bash
         run: |
           if [ ! -f apps/desktop/scripts/prepare-release.mjs ]; then
             echo "::error::${RELEASE_TAG} predates packaged desktop support. Create a patched point release instead of attaching non-working installers to this tag."
             exit 1
           fi
+          node scripts/resolve-release-identity.mjs \
+            --tag="${RELEASE_TAG}" \
+            --github-output="${GITHUB_OUTPUT}" \
+            --github-env="${GITHUB_ENV}"
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -71,16 +80,19 @@ jobs:
 
       - name: Build server
         working-directory: server
-        run: go build ./cmd/server
+        run: |
+          go build -trimpath \
+            -ldflags="-s -w -X github.com/mlhiter/mspace/server/internal/control.version=${MSPACE_BUILD_VERSION} -X github.com/mlhiter/mspace/server/internal/control.commitSHA=${MSPACE_BUILD_COMMIT_SHA} -X github.com/mlhiter/mspace/server/internal/control.buildTime=${MSPACE_BUILD_TIME}" \
+            ./cmd/server
 
       - name: Test worker
         run: |
           if [ -d worker ]; then
             (cd worker && go test ./...)
-            (cd worker && go build ./...)
+            (cd worker && go build -trimpath -ldflags="-s -w -X main.workerVersion=${MSPACE_BUILD_VERSION}" ./...)
           elif [ -d runner ]; then
             (cd runner && go test ./...)
-            (cd runner && go build ./...)
+            (cd runner && go build -trimpath -ldflags="-s -w -X main.workerVersion=${MSPACE_BUILD_VERSION}" ./...)
           else
             echo "No worker/ or runner/ runtime directory found." >&2
             exit 1
@@ -171,6 +183,9 @@ jobs:
             upload-globs: apps/desktop/dist/*.AppImage apps/desktop/dist/*.deb apps/desktop/dist/*.rpm
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      MSPACE_BUILD_VERSION: ${{ needs.validate.outputs.version }}
+      MSPACE_BUILD_COMMIT_SHA: ${{ needs.validate.outputs.commit_sha }}
+      MSPACE_BUILD_TIME: ${{ needs.validate.outputs.build_time }}
     steps:
       - name: Check out tagged commit
         uses: actions/checkout@v6
@@ -178,21 +193,14 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
-      - name: Verify tag supports packaged desktop
+      - name: Verify packaged checkout identity
         shell: bash
         run: |
           if [ ! -f apps/desktop/scripts/prepare-release.mjs ]; then
             echo "::error::${RELEASE_TAG} predates packaged desktop support. Create a patched point release instead of attaching non-working installers to this tag."
             exit 1
           fi
-
-      - name: Backfill current release packaging tools
-        if: github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: |
-          git checkout "${GITHUB_SHA}" -- \
-            apps/desktop/electron-builder.yml \
-            apps/desktop/scripts/prepare-release.mjs
+          node scripts/resolve-release-identity.mjs --tag="${RELEASE_TAG}"
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4

@@ -107,11 +107,25 @@ MSPACE_RUNTIME_TOKEN
 {{- end -}}
 
 {{- define "mspace.serverImage" -}}
-{{- printf "%s:%s" .Values.server.image.repository .Values.server.image.tag -}}
+{{- include "mspace.imageReference" (dict "name" "server" "image" .Values.server.image "appVersion" .Chart.AppVersion) -}}
 {{- end -}}
 
 {{- define "mspace.workerImage" -}}
-{{- printf "%s:%s" .Values.worker.image.repository .Values.worker.image.tag -}}
+{{- include "mspace.imageReference" (dict "name" "worker" "image" .Values.worker.image "appVersion" .Chart.AppVersion) -}}
+{{- end -}}
+
+{{- define "mspace.imageReference" -}}
+{{- $repository := required (printf "%s.image.repository is required" .name) .image.repository -}}
+{{- $digest := trim (default "" .image.digest) -}}
+{{- if $digest -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $digest) -}}
+{{- fail (printf "%s.image.digest must be a sha256 digest" .name) -}}
+{{- end -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- else -}}
+{{- $tag := default .appVersion .image.tag -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "mspace.workerCapabilities" -}}

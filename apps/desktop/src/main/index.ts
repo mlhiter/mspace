@@ -1100,6 +1100,7 @@ function createWindow(iconPath = resolveBrandIconPath()): void {
         `--mspace-server-url=${serverConfig.baseUrl}`,
         `--mspace-server-url-source=${serverConfig.source}`,
         `--mspace-server-url-locked=${serverConfig.locked ? "1" : "0"}`,
+        `--mspace-app-version=${app.isPackaged ? app.getVersion() : "dev"}`,
       ],
       sandbox: false,
     },
