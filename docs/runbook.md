@@ -157,6 +157,65 @@ The image script defaults to `linux/amd64`, injects the root version, full check
 
 Before a container build, the script requires `BUILD_VERSION` to match the root package version, `BUILD_COMMIT_SHA` to match checkout `HEAD`, and every file that can affect the Server or Worker image to be clean and committed. After a push, verify the registry manifest is `linux/amd64`, the OCI `revision` equals that commit, the deployed Pod `imageID` equals the pushed digest, and the live `/health.commitSha` equals the same commit. A generic readiness or preview status is not provenance evidence.
 
+### Verify deployed build provenance
+
+Set the values from the selected source commit, pushed Server image receipt, target release, and live endpoint, then run the checks from an authenticated operator shell with Docker, `jq`, `kubectl`, and `curl` available:
+
+```bash
+SOURCE_COMMIT='<full-lowercase-source-commit-sha>'
+SERVER_IMAGE='<registry>/<repository>/mspace-server'
+SERVER_DIGEST='sha256:<pushed-server-manifest-digest>'
+KUBECONFIG='<path-to-kubeconfig>'
+KUBE_CONTEXT='<context-name>'
+NAMESPACE='<namespace>'
+SERVER_SELECTOR='app.kubernetes.io/instance=<release-name>,app.kubernetes.io/component=server'
+SERVER_CONTAINER='server'
+HEALTH_URL='https://<server-host>/health'
+EXPECTED_SERVER_PROTOCOL='<server-protocol-number>'
+IMAGE_REF="${SERVER_IMAGE}@${SERVER_DIGEST}"
+
+MANIFEST_PLATFORMS="$(docker manifest inspect --verbose "${IMAGE_REF}" | jq -r \
+  '[if type == "array" then .[] else . end
+    | .Platform
+    | select(. != null)
+    | "\(.os)/\(.architecture)\(if .variant then "/" + .variant else "" end)"]
+   | unique | sort | join(",")')"
+test "${MANIFEST_PLATFORMS}" = 'linux/amd64'
+
+docker pull --platform linux/amd64 "${IMAGE_REF}" >/dev/null
+OCI_REVISION="$(docker image inspect "${IMAGE_REF}" \
+  --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+test "${OCI_REVISION}" = "${SOURCE_COMMIT}"
+
+DEPLOYED_DIGESTS="$(kubectl --kubeconfig "${KUBECONFIG}" --context "${KUBE_CONTEXT}" \
+  -n "${NAMESPACE}" get pods -l "${SERVER_SELECTOR}" -o json | jq -r \
+  --arg container "${SERVER_CONTAINER}" \
+  '[.items[].status.containerStatuses[]?
+    | select(.name == $container)
+    | .imageID
+    | sub("^.*@"; "")]
+   | unique | sort | join(",")')"
+test "${DEPLOYED_DIGESTS}" = "${SERVER_DIGEST}"
+
+HEALTH_BODY="$(mktemp)"
+trap 'rm -f "${HEALTH_BODY}"' EXIT
+HTTP_STATUS="$(curl --request GET --silent --show-error --output "${HEALTH_BODY}" \
+  --write-out '%{http_code}' "${HEALTH_URL}")"
+test "${HTTP_STATUS}" = '200'
+jq -e --arg commit "${SOURCE_COMMIT}" \
+  --argjson protocol "${EXPECTED_SERVER_PROTOCOL}" \
+  '.ok == true
+   and .service == "mspace-server"
+   and .serverProtocol == $protocol
+   and .commitSha == $commit' "${HEALTH_BODY}" >/dev/null
+
+HEALTH_COMMIT="$(jq -r '.commitSha' "${HEALTH_BODY}")"
+printf 'commit: %s = %s = %s\n' "${SOURCE_COMMIT}" "${OCI_REVISION}" "${HEALTH_COMMIT}"
+printf 'digest: %s = %s\n' "${SERVER_DIGEST}" "${DEPLOYED_DIGESTS}"
+```
+
+The required receipt is `SOURCE_COMMIT = OCI_REVISION = /health.commitSha`, `SERVER_DIGEST = every deployed Server Pod imageID digest`, one manifest platform exactly equal to `linux/amd64`, and `/health` HTTP `200` with `ok=true`, `service=mspace-server`, and the expected `serverProtocol`.
+
 See `docs/kubernetes-deployment.md` for the customer install shape. The default fixed-worker path now sets `bootstrap.teamWorkspace.enabled=true` so Helm installs the server and worker together: the chart creates or preserves one `MSPACE_RUNTIME_TOKEN`, server startup registers it against the admin-owned default team workspace, and the worker registers with that same token. Before installing, create `mspace-codex-home` with a worker-scoped `auth.json` and `deploy/codex/worker-config.toml` or an untracked private-provider variant.
 
 ## Website
