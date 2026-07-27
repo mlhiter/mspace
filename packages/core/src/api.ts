@@ -115,7 +115,7 @@ export interface StoredAuthIdentity {
 }
 
 export const queryKeys = {
-  serverHealth: () => ["server-health"] as const,
+	serverHealth: (baseUrl: string) => ["server-health", baseUrl] as const,
   agents: (workspaceId: string, token: string) => ["agents", workspaceId, token] as const,
   skills: (workspaceId: string, token: string) => ["skills", workspaceId, token] as const,
   authMe: (token: string) => ["auth-me", token] as const,

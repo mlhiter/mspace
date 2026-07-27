@@ -39,6 +39,11 @@ jobs:
             echo "::error::${RELEASE_TAG} predates packaged desktop support. Create a patched point release instead of attaching non-working installers to this tag."
             exit 1
           fi
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            git checkout "${GITHUB_SHA}" -- \
+              scripts/resolve-release-identity.mjs \
+              apps/desktop/scripts/prepare-release.mjs
+          fi
           node scripts/resolve-release-identity.mjs \
             --tag="${RELEASE_TAG}" \
             --github-output="${GITHUB_OUTPUT}" \
@@ -136,6 +141,7 @@ jobs:
           else
             gh release create "${RELEASE_TAG}" \
               --draft \
+              --verify-tag \
               ${prerelease_flag} \
               --generate-notes \
               --title "${RELEASE_TAG}" \
@@ -199,6 +205,11 @@ jobs:
           if [ ! -f apps/desktop/scripts/prepare-release.mjs ]; then
             echo "::error::${RELEASE_TAG} predates packaged desktop support. Create a patched point release instead of attaching non-working installers to this tag."
             exit 1
+          fi
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            git checkout "${GITHUB_SHA}" -- \
+              scripts/resolve-release-identity.mjs \
+              apps/desktop/scripts/prepare-release.mjs
           fi
           node scripts/resolve-release-identity.mjs --tag="${RELEASE_TAG}"
 

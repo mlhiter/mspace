@@ -17,9 +17,20 @@ export const diagnosticCapabilityKeys = [
   "runtimeTaskQueue",
 ] as const;
 
+export const diagnosticWorkerCapabilityKeys = [
+  "protocolSmoke",
+  "codex",
+  "claudeCode",
+  "pi",
+  "browser",
+  "chrome_cdp",
+  "dryRun",
+] as const;
+
 const MAX_VERSION_LENGTH = 64;
 const MAX_WORKER_VERSIONS = 8;
-const SAFE_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.+_-]*$/;
+const MAX_DIAGNOSTIC_WORKERS = 1_000;
+const SAFE_VERSION_PATTERN = /^(?:dev|unknown|v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$/;
 const TOKEN_PREFIX_PATTERN = /^(?:msp|msw|msi|msh)_/i;
 const COMMIT_SHA_PATTERN = /^[0-9a-f]{7,64}$/i;
 const RFC3339_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -70,15 +81,21 @@ function normalizeProtocol(value: unknown): number | undefined {
     : undefined;
 }
 
-function normalizeWorkerVersions(value: unknown): string[] {
+function normalizeWorkers(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) return [];
+  return value.flatMap((worker) => {
+    const record = objectRecord(worker);
+    return record ? [record] : [];
+  }).slice(0, MAX_DIAGNOSTIC_WORKERS);
+}
+
+function normalizeWorkerVersions(workers: Array<Record<string, unknown>>): string[] {
   const versions = new Set<string>();
-  for (const worker of value) {
-    const version = normalizeBuildVersion(objectRecord(worker)?.version);
+  for (const worker of workers) {
+    const version = normalizeBuildVersion(worker.version);
     if (version) versions.add(version);
-    if (versions.size >= MAX_WORKER_VERSIONS) break;
   }
-  return [...versions].sort();
+  return [...versions].sort().slice(0, MAX_WORKER_VERSIONS);
 }
 
 export function formatBuildDiagnostics(input: BuildDiagnosticsInput): string {
@@ -88,19 +105,24 @@ export function formatBuildDiagnostics(input: BuildDiagnosticsInput): string {
     "mspace diagnostics",
     `desktop.version=${normalizeBuildVersion(input.desktopVersion) || "unknown"}`,
     `server.version=${normalizeBuildVersion(server?.version) || "unknown"}`,
+    `server.commitSha=${normalizeCommitSha(server?.commitSha) || "unknown"}`,
+    `server.buildTime=${normalizeBuildTime(server?.buildTime) || "unknown"}`,
+    `server.protocol=${normalizeProtocol(server?.serverProtocol) ?? "unknown"}`,
   ];
-  const commitSha = normalizeCommitSha(server?.commitSha);
-  const buildTime = normalizeBuildTime(server?.buildTime);
-  const protocol = normalizeProtocol(server?.serverProtocol);
-  if (commitSha) lines.push(`server.commitSha=${commitSha}`);
-  if (buildTime) lines.push(`server.buildTime=${buildTime}`);
-  if (protocol !== undefined) lines.push(`server.protocol=${protocol}`);
   for (const key of diagnosticCapabilityKeys) {
     const enabled = capabilities?.[key];
-    if (typeof enabled === "boolean") lines.push(`server.capability.${key}=${enabled}`);
+    lines.push(`server.capability.${key}=${typeof enabled === "boolean" ? enabled : "unknown"}`);
   }
-  const workerVersions = normalizeWorkerVersions(input.workers);
+  const workers = normalizeWorkers(input.workers);
+  const workerVersions = normalizeWorkerVersions(workers);
+  lines.push(`workers.count=${workers.length}`);
   lines.push(`worker.versions=${workerVersions.length > 0 ? workerVersions.join(",") : "unknown"}`);
+  for (const key of diagnosticWorkerCapabilityKeys) {
+    const enabledCount = workers.reduce((count, worker) => {
+      return objectRecord(worker.capabilities)?.[key] === true ? count + 1 : count;
+    }, 0);
+    lines.push(`worker.capability.${key}.enabled=${enabledCount}`);
+  }
   return lines.join("\n");
 }
 
@@ -108,10 +130,13 @@ export function buildInformation(input: {
   desktopVersion?: unknown;
   serverHealth?: ServerHealth;
   workers?: RuntimeWorker[];
-}): { desktopVersion: string; serverVersion: string; workerVersions: string[] } {
+}): { desktopVersion: string; serverVersion: string; serverCommitSha: string; serverBuildTime: string; workerVersions: string[] } {
+  const workers = normalizeWorkers(input.workers);
   return {
     desktopVersion: normalizeBuildVersion(input.desktopVersion) || "unknown",
     serverVersion: normalizeBuildVersion(input.serverHealth?.version) || "unknown",
-    workerVersions: normalizeWorkerVersions(input.workers),
+    serverCommitSha: normalizeCommitSha(input.serverHealth?.commitSha) || "unknown",
+    serverBuildTime: normalizeBuildTime(input.serverHealth?.buildTime) || "unknown",
+    workerVersions: normalizeWorkerVersions(workers),
   };
 }

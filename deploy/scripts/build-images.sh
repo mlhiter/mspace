@@ -3,8 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REGISTRY="${REGISTRY:-crpi-7jr40k6elhldekqp.cn-hangzhou.personal.cr.aliyuncs.com/mlhiter}"
-BUILD_VERSION="${BUILD_VERSION:-$(node -p "require('${ROOT}/package.json').version")}"
-BUILD_COMMIT_SHA="${BUILD_COMMIT_SHA:-$(git -C "${ROOT}" rev-parse HEAD)}"
+REPOSITORY_VERSION="$(node -p "require('${ROOT}/package.json').version")"
+SOURCE_COMMIT_SHA="$(git -C "${ROOT}" rev-parse HEAD)"
+BUILD_VERSION="${BUILD_VERSION:-${REPOSITORY_VERSION}}"
+BUILD_COMMIT_SHA="${BUILD_COMMIT_SHA:-${SOURCE_COMMIT_SHA}}"
 BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 BUILD_SOURCE="${BUILD_SOURCE:-https://github.com/mlhiter/mspace}"
 TAG="${TAG:-v${BUILD_VERSION}-${BUILD_COMMIT_SHA:0:12}}"
@@ -19,8 +21,30 @@ if [[ ! "${BUILD_VERSION}" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$ ]]; then
   echo "Invalid BUILD_VERSION: ${BUILD_VERSION}" >&2
   exit 1
 fi
+if [[ "${BUILD_VERSION}" != "${REPOSITORY_VERSION}" ]]; then
+  echo "BUILD_VERSION must match package.json (${REPOSITORY_VERSION})" >&2
+  exit 1
+fi
 if [[ ! "${BUILD_COMMIT_SHA}" =~ ^[0-9a-f]{40,64}$ ]]; then
   echo "BUILD_COMMIT_SHA must be a full lowercase Git SHA" >&2
+  exit 1
+fi
+if [[ "${BUILD_COMMIT_SHA}" != "${SOURCE_COMMIT_SHA}" ]]; then
+  echo "BUILD_COMMIT_SHA must match checkout HEAD (${SOURCE_COMMIT_SHA})" >&2
+  exit 1
+fi
+build_inputs=(
+  package.json
+  .dockerignore
+  server
+  worker
+  deploy/docker
+  deploy/scripts/build-images.sh
+)
+dirty_build_inputs="$(git -C "${ROOT}" status --porcelain --untracked-files=all -- "${build_inputs[@]}")"
+if [[ -n "${dirty_build_inputs}" ]]; then
+  echo "Container build inputs must be clean and committed:" >&2
+  echo "${dirty_build_inputs}" >&2
   exit 1
 fi
 node -e '

@@ -169,11 +169,13 @@ export function WorkspaceSettingsPage() {
 		enabled: runtimeEnabled,
 		refetchInterval: runtimeEnabled ? 5_000 : false,
 	});
+	const serverBaseUrl = getControlPlaneBaseUrl();
 	const serverHealthQuery = useQuery({
-		queryKey: queryKeys.serverHealth(),
+		queryKey: queryKeys.serverHealth(serverBaseUrl),
 		queryFn: () => controlPlaneApi.getHealth(),
 		enabled: runtimeEnabled,
-		refetchOnWindowFocus: false,
+		refetchInterval: runtimeEnabled ? 30_000 : false,
+		refetchOnWindowFocus: true,
 	});
 	const tasksQuery = useQuery({
 		queryKey: queryKeys.runtimeTasks(workspaceID, auth.token, RUNTIME_TASKS_PAGE_SIZE, runtimeTasksOffset),
@@ -327,7 +329,7 @@ export function WorkspaceSettingsPage() {
 		: tokensQuery.error || workersQuery.error || tasksQuery.error;
 
 	function refreshRuntime() {
-		const refreshes: Array<Promise<unknown>> = [tokensQuery.refetch(), workersQuery.refetch(), tasksQuery.refetch(), issuesQuery.refetch()];
+		const refreshes: Array<Promise<unknown>> = [tokensQuery.refetch(), workersQuery.refetch(), serverHealthQuery.refetch(), tasksQuery.refetch(), issuesQuery.refetch()];
 		if (isTeamWorkspace) {
 			refreshes.push(membersQuery.refetch(), invitationsQuery.refetch());
 		}
@@ -559,8 +561,30 @@ export function WorkspaceSettingsPage() {
 						}
 					>
 						<SettingsRow icon={Monitor} title={t("workspaceSettings.section.desktopBuild")} description={t("workspaceSettings.section.desktopBuildDescription")} control={<StatusPill>{versions.desktopVersion}</StatusPill>} />
-						<SettingsRow icon={ServerCog} title={t("workspaceSettings.section.serverBuild")} description={t("workspaceSettings.section.serverBuildDescription")} control={<StatusPill>{versions.serverVersion}</StatusPill>} />
-						<SettingsRow icon={SquareTerminal} title={t("workspaceSettings.section.workerBuild")} description={t("workspaceSettings.section.workerBuildDescription")} control={<StatusPill>{versions.workerVersions.join(", ") || t("workspaceSettings.section.notReported")}</StatusPill>} />
+						<SettingsRow
+							icon={ServerCog}
+							title={t("workspaceSettings.section.serverBuild")}
+							description={t("workspaceSettings.section.serverBuildDescription")}
+							control={
+								<div className="flex max-w-[320px] flex-col items-end gap-1 text-right">
+									<StatusPill>{versions.serverVersion}</StatusPill>
+									<span className="break-all font-mono text-[11px] leading-4 text-[color:var(--faint)]">{versions.serverCommitSha === "unknown" ? "unknown" : versions.serverCommitSha.slice(0, 12)}</span>
+									<span className="break-words text-[11px] leading-4 text-[color:var(--faint)]">{versions.serverBuildTime}</span>
+								</div>
+							}
+						/>
+						<SettingsRow
+							icon={SquareTerminal}
+							title={t("workspaceSettings.section.workerBuild")}
+							description={t("workspaceSettings.section.workerBuildDescription")}
+							control={
+								<div className="flex max-w-[320px] flex-wrap justify-end gap-1">
+									{versions.workerVersions.length > 0
+										? versions.workerVersions.map((version) => <StatusPill key={version}>{version}</StatusPill>)
+										: <StatusPill>{t("workspaceSettings.section.notReported")}</StatusPill>}
+								</div>
+							}
+						/>
 					</SettingsSection>
 
 					{isTeamWorkspace ? (

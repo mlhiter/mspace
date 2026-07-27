@@ -34,7 +34,9 @@ if (requestedTag !== expectedTag) {
   throw new Error(`Release tag ${requestedTag} must equal ${expectedTag} from package.json`);
 }
 const commitSha = await capture("git", ["rev-parse", "HEAD"]);
-const tagCommitSha = await capture("git", ["rev-parse", `${requestedTag}^{commit}`]);
+const tagRef = `refs/tags/${requestedTag}`;
+await capture("git", ["rev-parse", "--verify", tagRef]);
+const tagCommitSha = await capture("git", ["rev-parse", `${tagRef}^{commit}`]);
 const buildTime = (process.env.MSPACE_BUILD_TIME || new Date().toISOString()).trim();
 if (tagCommitSha !== commitSha) {
   throw new Error(`Checked-out HEAD ${commitSha} does not match ${requestedTag} (${tagCommitSha})`);
