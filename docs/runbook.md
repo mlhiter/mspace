@@ -155,7 +155,7 @@ helm upgrade --install mspace deploy/helm/mspace -n mspace-system -f /tmp/mspace
 
 The image script defaults to `linux/amd64`, injects the root version, full checkout HEAD SHA, and one UTC RFC3339 build time into the Server binary and OCI labels, and injects the authoritative version into the Worker binary. It validates and prints `SERVER_DIGEST` and `WORKER_DIGEST` after a push. Prefer those values as `server.image.digest` and `worker.image.digest`; when a digest is empty, the chart uses the configured tag or `Chart.appVersion`. Desktop release packaging uses the same identity for every Server slice and the same version for every Worker slice. The release validate build uses those ldflags too and fails unless the checked-out tag is exactly `v<root package.json version>`, the checkout is clean, and all packaging tools come from that tagged tree. Manual `workflow_dispatch` reruns never overlay current-branch scripts onto an old tag; create a patched point release when the old tree lacks the complete identity contract.
 
-Before a container build, the script requires `BUILD_VERSION` to match the root package version, `BUILD_COMMIT_SHA` to match checkout `HEAD`, and every file that can affect the Server or Worker image to be clean and committed. After a push, verify the registry manifest is `linux/amd64`, the OCI `revision` equals that commit, the deployed Pod `imageID` equals the pushed digest, and the live `/health.commitSha` equals the same commit. A generic readiness or preview status is not provenance evidence.
+Before a container build, the script requires `BUILD_VERSION` to match the root package version, `BUILD_COMMIT_SHA` to match checkout `HEAD`, and every file that can affect the Server or Worker image to be clean and committed. After a push, verify the registry index has exactly one non-attestation runtime manifest and it is `linux/amd64`, the OCI `revision` equals that commit, the deployed Pod `imageID` equals the pushed digest, and the live `/health.commitSha` equals the same commit. BuildKit provenance attestations may appear as separate `unknown/unknown` manifests and must not be counted as runnable platforms. A generic readiness or preview status is not provenance evidence.
 
 Before local desktop packaging, `apps/desktop/scripts/prepare-release.mjs` applies the same version/SHA checks and rejects dirty desktop, shared-package, Server, or Worker inputs before it deletes or regenerates bundled binaries. A mismatch error means the caller supplied stale identity variables; a dirty-input error means the source must be committed or intentionally moved to a clean release checkout before retrying.
 
@@ -176,12 +176,12 @@ HEALTH_URL='https://<server-host>/health'
 EXPECTED_SERVER_PROTOCOL='<server-protocol-number>'
 IMAGE_REF="${SERVER_IMAGE}@${SERVER_DIGEST}"
 
-MANIFEST_PLATFORMS="$(docker manifest inspect --verbose "${IMAGE_REF}" | jq -r \
-  '[if type == "array" then .[] else . end
-    | .Platform
-    | select(. != null)
+MANIFEST_PLATFORMS="$(docker buildx imagetools inspect --raw "${IMAGE_REF}" | jq -r \
+  '[.manifests[]
+    | select((.annotations // {})["vnd.docker.reference.type"] != "attestation-manifest")
+    | .platform
     | "\(.os)/\(.architecture)\(if .variant then "/" + .variant else "" end)"]
-   | unique | sort | join(",")')"
+   | sort | join(",")')"
 test "${MANIFEST_PLATFORMS}" = 'linux/amd64'
 
 docker pull --platform linux/amd64 "${IMAGE_REF}" >/dev/null
@@ -216,7 +216,7 @@ printf 'commit: %s = %s = %s\n' "${SOURCE_COMMIT}" "${OCI_REVISION}" "${HEALTH_C
 printf 'digest: %s = %s\n' "${SERVER_DIGEST}" "${DEPLOYED_DIGESTS}"
 ```
 
-The required receipt is `SOURCE_COMMIT = OCI_REVISION = /health.commitSha`, `SERVER_DIGEST = every deployed Server Pod imageID digest`, one manifest platform exactly equal to `linux/amd64`, and `/health` HTTP `200` with `ok=true`, `service=mspace-server`, and the expected `serverProtocol`.
+The required receipt is `SOURCE_COMMIT = OCI_REVISION = /health.commitSha`, `SERVER_DIGEST = every deployed Server Pod imageID digest`, exactly one non-attestation runtime manifest whose platform is `linux/amd64`, and `/health` HTTP `200` with `ok=true`, `service=mspace-server`, and the expected `serverProtocol`.
 
 See `docs/kubernetes-deployment.md` for the customer install shape. The default fixed-worker path now sets `bootstrap.teamWorkspace.enabled=true` so Helm installs the server and worker together: the chart creates or preserves one `MSPACE_RUNTIME_TOKEN`, server startup registers it against the admin-owned default team workspace, and the worker registers with that same token. Before installing, create `mspace-codex-home` with a worker-scoped `auth.json` and `deploy/codex/worker-config.toml` or an untracked private-provider variant.
 
