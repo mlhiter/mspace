@@ -37,9 +37,13 @@ const commitSha = await capture("git", ["rev-parse", "HEAD"]);
 const tagRef = `refs/tags/${requestedTag}`;
 await capture("git", ["rev-parse", "--verify", tagRef]);
 const tagCommitSha = await capture("git", ["rev-parse", `${tagRef}^{commit}`]);
+const dirtyCheckout = await capture("git", ["status", "--porcelain", "--untracked-files=all"]);
 const buildTime = (process.env.MSPACE_BUILD_TIME || new Date().toISOString()).trim();
 if (tagCommitSha !== commitSha) {
   throw new Error(`Checked-out HEAD ${commitSha} does not match ${requestedTag} (${tagCommitSha})`);
+}
+if (dirtyCheckout) {
+  throw new Error("Release checkout must be clean so packaged source matches the tagged commit");
 }
 if (!/^[0-9a-f]{40,64}$/.test(commitSha)) {
   throw new Error("Checked-out HEAD is not a full lowercase Git SHA");

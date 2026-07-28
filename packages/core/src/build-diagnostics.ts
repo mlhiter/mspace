@@ -81,21 +81,29 @@ function normalizeProtocol(value: unknown): number | undefined {
     : undefined;
 }
 
-function normalizeWorkers(value: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((worker) => {
+function normalizeWorkers(value: unknown): { workers: Array<Record<string, unknown>>; truncated: boolean } {
+  if (!Array.isArray(value)) return { workers: [], truncated: false };
+  const workers: Array<Record<string, unknown>> = [];
+  for (const worker of value) {
     const record = objectRecord(worker);
-    return record ? [record] : [];
-  }).slice(0, MAX_DIAGNOSTIC_WORKERS);
+    if (!record) continue;
+    if (workers.length === MAX_DIAGNOSTIC_WORKERS) return { workers, truncated: true };
+    workers.push(record);
+  }
+  return { workers, truncated: false };
 }
 
-function normalizeWorkerVersions(workers: Array<Record<string, unknown>>): string[] {
+function normalizeWorkerVersions(workers: Array<Record<string, unknown>>): { versions: string[]; truncated: boolean } {
   const versions = new Set<string>();
   for (const worker of workers) {
     const version = normalizeBuildVersion(worker.version);
     if (version) versions.add(version);
   }
-  return [...versions].sort().slice(0, MAX_WORKER_VERSIONS);
+  const sortedVersions = [...versions].sort();
+  return {
+    versions: sortedVersions.slice(0, MAX_WORKER_VERSIONS),
+    truncated: sortedVersions.length > MAX_WORKER_VERSIONS,
+  };
 }
 
 export function formatBuildDiagnostics(input: BuildDiagnosticsInput): string {
@@ -113,10 +121,13 @@ export function formatBuildDiagnostics(input: BuildDiagnosticsInput): string {
     const enabled = capabilities?.[key];
     lines.push(`server.capability.${key}=${typeof enabled === "boolean" ? enabled : "unknown"}`);
   }
-  const workers = normalizeWorkers(input.workers);
+  const normalizedWorkers = normalizeWorkers(input.workers);
+  const workers = normalizedWorkers.workers;
   const workerVersions = normalizeWorkerVersions(workers);
   lines.push(`workers.count=${workers.length}`);
-  lines.push(`worker.versions=${workerVersions.length > 0 ? workerVersions.join(",") : "unknown"}`);
+  lines.push(`workers.truncated=${normalizedWorkers.truncated}`);
+  lines.push(`worker.versions=${workerVersions.versions.length > 0 ? workerVersions.versions.join(",") : "unknown"}`);
+  lines.push(`worker.versions.truncated=${workerVersions.truncated}`);
   for (const key of diagnosticWorkerCapabilityKeys) {
     const enabledCount = workers.reduce((count, worker) => {
       return objectRecord(worker.capabilities)?.[key] === true ? count + 1 : count;
@@ -131,12 +142,12 @@ export function buildInformation(input: {
   serverHealth?: ServerHealth;
   workers?: RuntimeWorker[];
 }): { desktopVersion: string; serverVersion: string; serverCommitSha: string; serverBuildTime: string; workerVersions: string[] } {
-  const workers = normalizeWorkers(input.workers);
+  const workers = normalizeWorkers(input.workers).workers;
   return {
     desktopVersion: normalizeBuildVersion(input.desktopVersion) || "unknown",
     serverVersion: normalizeBuildVersion(input.serverHealth?.version) || "unknown",
     serverCommitSha: normalizeCommitSha(input.serverHealth?.commitSha) || "unknown",
     serverBuildTime: normalizeBuildTime(input.serverHealth?.buildTime) || "unknown",
-    workerVersions: normalizeWorkerVersions(workers),
+    workerVersions: normalizeWorkerVersions(workers).versions,
   };
 }

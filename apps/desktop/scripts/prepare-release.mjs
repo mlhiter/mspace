@@ -31,8 +31,10 @@ const runtimeBinaryName = targetPlatform === "win32" ? `${runtimeName}.exe` : ru
 const serverOut = resolve(resourcesBinDir, serverBinaryName);
 const runtimeOut = resolve(resourcesBinDir, runtimeBinaryName);
 const rootPackage = JSON.parse(await readFile(resolve(repoRoot, "package.json"), "utf8"));
-const buildVersion = (process.env.MSPACE_BUILD_VERSION || rootPackage.version || "").trim();
-const buildCommitSha = (process.env.MSPACE_BUILD_COMMIT_SHA || (await capture("git", ["rev-parse", "HEAD"]))).trim();
+const repositoryVersion = String(rootPackage.version || "").trim();
+const sourceCommitSha = (await capture("git", ["rev-parse", "HEAD"])).trim();
+const buildVersion = (process.env.MSPACE_BUILD_VERSION || repositoryVersion).trim();
+const buildCommitSha = (process.env.MSPACE_BUILD_COMMIT_SHA || sourceCommitSha).trim();
 const buildTime = (process.env.MSPACE_BUILD_TIME || new Date().toISOString()).trim();
 const serverLdflags = `-s -w -X github.com/mlhiter/mspace/server/internal/control.version=${buildVersion} -X github.com/mlhiter/mspace/server/internal/control.commitSHA=${buildCommitSha} -X github.com/mlhiter/mspace/server/internal/control.buildTime=${buildTime}`;
 const runtimeLdflags = `-s -w -X main.workerVersion=${buildVersion}`;
@@ -81,11 +83,32 @@ if (!hasWorkerRuntime && !hasRunnerRuntime) {
 if (!/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/.test(buildVersion)) {
   throw new Error("Invalid release build version");
 }
+if (buildVersion !== repositoryVersion) {
+  throw new Error(`Release build version must match package.json (${repositoryVersion})`);
+}
 if (!/^[0-9a-f]{40,64}$/.test(buildCommitSha)) {
   throw new Error("Release build commit must be checkout HEAD as a full lowercase Git SHA");
 }
+if (buildCommitSha !== sourceCommitSha) {
+  throw new Error(`Release build commit must match checkout HEAD (${sourceCommitSha})`);
+}
 if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(buildTime) || Number.isNaN(Date.parse(buildTime))) {
   throw new Error("Release build time must be an explicit RFC3339 timestamp");
+}
+const releaseInputs = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "turbo.json",
+  "tsconfig.base.json",
+  "apps/desktop",
+  "packages",
+  "server",
+  hasWorkerRuntime ? "worker" : "runner",
+];
+const dirtyReleaseInputs = await capture("git", ["status", "--porcelain", "--untracked-files=all", "--", ...releaseInputs]);
+if (dirtyReleaseInputs) {
+  throw new Error(`Desktop release build inputs must be clean and committed:\n${dirtyReleaseInputs}`);
 }
 
 await rm(resourcesBinDir, { recursive: true, force: true });

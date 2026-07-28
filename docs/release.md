@@ -51,7 +51,9 @@ git tag -a v0.1.0 <commit> -m "v0.1.0"
 git push origin v0.1.0
 ```
 
-After the tag is pushed, GitHub Actions creates or updates a draft GitHub Release, attaches the release verification summary, and uploads macOS, Windows, and Linux desktop artifacts. The same workflow also has a manual `workflow_dispatch` input named `tag` for backfilling desktop artifacts on an existing tag that already supports packaged desktop builds.
+After the tag is pushed, GitHub Actions creates or updates a draft GitHub Release, attaches the release verification summary, and uploads macOS, Windows, and Linux desktop artifacts. The same workflow also has a manual `workflow_dispatch` input named `tag` for rerunning desktop packaging on an existing tag that already contains the complete trustworthy packaging contract.
+
+The tagged tree is the only release source. The workflow verifies `refs/tags/<tag>`, requires the tag commit to equal checkout `HEAD`, requires a clean checkout, and requires `v<package.json version>`. It never copies resolver, prepare, builder, or other packaging files from the workflow commit into older tagged source. If a tag lacks the current packaging contract, create a patched point release from a commit that contains the complete toolchain.
 
 ## Validation
 
@@ -100,9 +102,11 @@ pnpm dist:desktop:win
 pnpm dist:desktop:linux
 ```
 
+Local packaging binds `MSPACE_BUILD_VERSION` to the root package version and `MSPACE_BUILD_COMMIT_SHA` to checkout `HEAD`, then rejects dirty desktop, shared-package, Server, or Worker build inputs before replacing bundled binaries. Commit the intended source first; do not use identity environment variables to label uncommitted or different source as a release build.
+
 Unsigned artifacts are acceptable for internal dogfood. Public customer downloads should add Apple Developer ID signing and notarization before being marked ready.
 
-Tags earlier than packaged desktop support, including `v0.1.0`, should not be backfilled by attaching newly generated installers to the old release. Create a patched point release from a commit that contains packaged desktop support instead.
+Tags earlier than trustworthy packaged build identity, including `v0.1.0` and tags whose Worker version cannot be injected, should not be backfilled by attaching newly generated installers to the old release. Create a patched point release from a commit that contains the complete packaging and identity support instead.
 
 ## Release Channels
 

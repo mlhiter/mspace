@@ -308,10 +308,11 @@ export function WorkspaceSettingsPage() {
 				trimmedWorkspaceDescription !== (auth.workspace.description || "")),
 	);
 	const workspaceDefaultIcon = trimmedWorkspaceName.slice(0, 1).toUpperCase() || "m";
-	const workers = workersQuery.data || [];
+	const workers = workersQuery.isError ? [] : workersQuery.data || [];
+	const currentServerHealth = serverHealthQuery.isError ? undefined : serverHealthQuery.data;
 	const versions = buildInformation({
 		desktopVersion: window.mspaceDesktop?.appVersion,
-		serverHealth: serverHealthQuery.data,
+		serverHealth: currentServerHealth,
 		workers,
 	});
 	const tokens = tokensQuery.data || [];
@@ -324,9 +325,9 @@ export function WorkspaceSettingsPage() {
 	const canConnectWorker = runtimeEnabled && canManageWorkspace;
 	const onlineWorkerCount = workers.filter((worker) => workerDisplayStatus(worker) === "online").length;
 	const queuedTaskCount = tasksPage.statusCounts?.queued || 0;
-	const runtimeError = isTeamWorkspace
+	const runtimeError = serverHealthQuery.error || (isTeamWorkspace
 		? membersQuery.error || invitationsQuery.error || tokensQuery.error || workersQuery.error || tasksQuery.error
-		: tokensQuery.error || workersQuery.error || tasksQuery.error;
+		: tokensQuery.error || workersQuery.error || tasksQuery.error);
 
 	function refreshRuntime() {
 		const refreshes: Array<Promise<unknown>> = [tokensQuery.refetch(), workersQuery.refetch(), serverHealthQuery.refetch(), tasksQuery.refetch(), issuesQuery.refetch()];
@@ -388,7 +389,7 @@ export function WorkspaceSettingsPage() {
 		try {
 			await navigator.clipboard.writeText(formatBuildDiagnostics({
 				desktopVersion: window.mspaceDesktop?.appVersion,
-				serverHealth: serverHealthQuery.data,
+				serverHealth: currentServerHealth,
 				workers,
 			}));
 			setDiagnosticsCopyState(t("workspaceSettings.diagnosticsCopied"));

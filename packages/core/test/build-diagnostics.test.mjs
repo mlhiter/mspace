@@ -26,7 +26,9 @@ test("formats only normalized build identity and fixed capabilities", () => {
   assert.match(output, /server\.protocol=2/);
   assert.match(output, /server\.capability\.githubAuth=true/);
   assert.match(output, /workers\.count=3/);
+  assert.match(output, /workers\.truncated=false/);
   assert.match(output, /worker\.versions=0\.2\.0,dev/);
+  assert.match(output, /worker\.versions\.truncated=false/);
   assert.match(output, /worker\.capability\.codex\.enabled=2/);
   assert.match(output, /worker\.capability\.claudeCode\.enabled=1/);
   assert.doesNotMatch(output, /arbitrary/);
@@ -85,6 +87,20 @@ test("keeps a stable unknown structure for old Servers and local development", (
   assert.match(output, /server\.protocol=unknown/);
   assert.match(output, /server\.capability\.runtimeTaskQueue=unknown/);
   assert.match(output, /workers\.count=0/);
+});
+
+test("marks bounded Worker diagnostics as truncated", () => {
+  const workers = Array.from({ length: 1_002 }, (_, index) => ({
+    version: `1.0.${index % 10}`,
+    capabilities: { codex: true },
+  }));
+  const output = formatBuildDiagnostics({ workers });
+
+  assert.match(output, /workers\.count=1000/);
+  assert.match(output, /workers\.truncated=true/);
+  assert.match(output, /worker\.versions=1\.0\.0,1\.0\.1,1\.0\.2,1\.0\.3,1\.0\.4,1\.0\.5,1\.0\.6,1\.0\.7/);
+  assert.match(output, /worker\.versions\.truncated=true/);
+  assert.match(output, /worker\.capability\.codex\.enabled=1000/);
 });
 
 test("shows normalized Server provenance in Build information", () => {
