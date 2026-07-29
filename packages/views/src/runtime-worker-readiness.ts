@@ -1,5 +1,12 @@
 import type { QueryClient } from "@tanstack/react-query";
-import { controlPlaneApi, getControlPlaneBaseUrl, queryKeys, type RuntimeAvailability, type RuntimeAvailabilityInput } from "@mspace/core";
+import {
+  controlPlaneApi,
+  getControlPlaneBaseUrl,
+  isIssueWorkingCopyAvailabilityBlocker,
+  queryKeys,
+  type RuntimeAvailability,
+  type RuntimeAvailabilityInput,
+} from "@mspace/core";
 
 type EnsurePersonalWorker = NonNullable<NonNullable<Window["mspaceDesktop"]>["ensurePersonalWorker"]>;
 type EnsurePersonalWorkerResult = Awaited<ReturnType<EnsurePersonalWorker>>;
@@ -26,6 +33,7 @@ async function fetchRuntimeAvailability(input: RuntimeReadyInput) {
   const availabilityInput: RuntimeAvailabilityInput = {
     runtimeMode: input.runtimeMode,
     requiredCapabilities: input.requiredCapabilities,
+    issueId: input.issueId,
   };
   return input.queryClient.fetchQuery({
     queryKey: queryKeys.runtimeAvailability(input.workspaceId, input.token, availabilityInput),
@@ -68,6 +76,9 @@ function availabilityReadyAfterPersonalEnsure(
 
 export async function ensureRuntimeReady(input: RuntimeReadyInput) {
   const first = await fetchRuntimeAvailability(input);
+  if (isIssueWorkingCopyAvailabilityBlocker(first.reasonCode)) {
+    throw readinessError(input, first);
+  }
   const ensureResult = await ensurePersonalWorkerProcess(input);
   if (ensureResult && !ensureResult.ok) throw new Error(input.unavailableMessage);
   if (!ensureResult && first.state === "ready") return first;

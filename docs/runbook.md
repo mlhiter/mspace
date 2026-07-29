@@ -1,6 +1,6 @@
 # mspace Runbook
 
-> Status: server-owned local MVP operations guide, updated 2026-07-17
+> Status: server-owned local MVP operations guide, updated 2026-07-29
 
 ## Local Data
 
@@ -12,10 +12,13 @@ The product and runtime state for signed-in workspaces lives in the server store
 | `<Electron userData>/server-config.json` | Saved Team server URL for this device. `MSPACE_SERVER_URL` overrides it for the launch. |
 | `<Electron userData>/worker/host-identity.json` | Anonymous stable `msh_...` id used to distinguish this Mac's personal Workers. Created with owner-only permissions. |
 | `<Electron userData>/worker/tokens/<workspace-id>.token` | Short-lived personal Worker credential file managed by Electron. Agent environments do not inherit it, but same-user filesystem access remains a residual risk. |
+| `<worker-root>/.mspace/storage-id` | Owner-only opaque `msws_...` Worker storage identity used for Issue working-copy affinity. It is not a credential and contains no filesystem path. |
 | `~/.mspace/codex-worker-home` | Host-side Codex home copy used by the Docker Codex worker. |
 | `/var/lib/mspace-worker/repos/<cache-key>` | Repository cache inside Docker-backed workers. |
-| `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>` | Per-session git worktree root inside Docker-backed workers. When a personal local project points at a git subdirectory, Codex runs from the matching subdirectory inside this worktree. |
-| `<worker-root>/workdirs/<project-id>/<session-id>/<project-subdir>/.mspace/session` | Session artifact directory. `<project-subdir>` is omitted when the project path is the repository root. |
+| `/var/lib/mspace-worker/workdirs/<project-id>/<issue-id>` | Reusable source worktree for one Issue. Human source Sessions serialize on its stable Server-owned branch and the directory stays bound to one Worker storage identity. |
+| `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>` | Detached worktree for analysis, deploy, Tests, cleanup, and explicit source-Commit Agent Sessions. Non-Agent tasks such as import mapping use their own temporary execution path. |
+| `<worker-root>/artifacts/<project-id>/<issue-id>/<session-id>` | Isolated artifacts for one human source Session, outside the reusable Issue worktree so they cannot dirty source state. |
+| `<detached-worktree>/.mspace/session` | Artifact directory for a detached automation Session. |
 | `<artifact-dir>/skills/` | Session-scoped server-provided workflow skill bundles. Workers recreate this directory from task payloads and set `MSPACE_SESSION_SKILLS_DIR`. |
 | `<artifact-dir>/skills/manifest.json` | Manifest of materialized skill bundle names, revisions, hashes, and files for the current session. |
 | `<artifact-dir>/test-environment.json` | Optional deploy/test artifact with preview values. |
@@ -23,12 +26,12 @@ The product and runtime state for signed-in workspaces lives in the server store
 | `<artifact-dir>/test-case-proposals.json` | Optional Codex case suggestion artifact reconciled into project Case suggestions. |
 | `<artifact-dir>/test-setup-result.json` | Required completion checkpoint for Tests setup automation in plan-based runs that have setup steps. A passing setup stores `setupResult`, copies `outputs` into the run context, and only then starts case execution sessions. A failed, cancelled, or missing setup artifact marks the run `setup_failed` and leaves run items queued. User-facing setup summaries should follow the run's stored `resultLocale`. |
 | `<artifact-dir>/test-result.json` | Required completion checkpoint for Tests execution automation, reconciled into test run items and run review state. Prefer `{"runId":"...","items":[...]}`; the worker also accepts a top-level array of result items when each item carries `runId`. If evidence references screenshot files inside the artifact directory, the worker waits briefly for those files to become readable, embeds small image data URLs for transfer, and only then treats the result artifact as complete. The server persists supported screenshots as `test_artifacts` and rewrites evidence to authenticated artifact refs. User-facing `actualResult` and `failureSummary` text should follow the run's stored `resultLocale`. |
-| `<artifact-dir>/branch-name.json` | Optional agent-proposed source branch name. |
+| `<artifact-dir>/branch-name.json` | Optional branch proposal only for a detached Agent Session whose server-owned payload enables source capture. Issue working-copy Sessions and detached automation without source capture ignore it. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-learned project runbook artifact. |
 
-For Tests setup and execution sessions, `test-setup-result.json` and `test-result.json` are runtime completion checkpoints. If a Codex turn writes the matching artifact but the app-server turn never reports final completion, the worker should still complete the runtime task from the artifact. If the Codex turn completes without the matching artifact, the worker should fail the runtime task with a missing-artifact error so the run cannot appear successful without evidence. If a `test-result.json` references local screenshot paths, the completion checkpoint is not ready until those screenshots can be read and embedded for server persistence. If the worker is restarted with the same worker name, it may reclaim its own stale `running` task, reuse the existing session workdir, wait for referenced screenshots when needed, and submit the artifact-backed final result so the server can reconcile the run.
+For Tests setup and execution sessions, `test-setup-result.json` and `test-result.json` are runtime completion checkpoints. If a Codex turn writes the matching artifact but the app-server turn never reports final completion, the worker should still complete the runtime task from the artifact. If the Codex turn completes without the matching artifact, the worker should fail the runtime task with a missing-artifact error so the run cannot appear successful without evidence. If a `test-result.json` references local screenshot paths, the completion checkpoint is not ready until those screenshots can be read and embedded for server persistence. A restarted Worker may reclaim its own stale `running` task only when it also has the same persistent `MSPACE_WORKER_WORK_ROOT` or Docker volume; matching the Worker name without the original storage cannot recover the existing detached Session workdir or its artifacts.
 
-The server store records users, local password credentials, GitHub identities, workspaces, memberships, OAuth state/results, mspace auth sessions, projects, runbooks, Tests state, issues, comments, reactions, labels, Inbox receipts, workspace Skills and revisions, Environments, issue test environments, handoffs, GitHub App state, Agent Sessions, runtime credentials, Workers, tasks, events, and logs. The fixed Codex/Claude Code/Pi Agent catalog is code-owned and is not stored in Postgres or SQLite. Migration `030_fixed_agent_engines.sql` drops the obsolete `agent_profiles` table, and migration `031_runtime_worker_agent_engine_diagnostics.sql` adds the sanitized Worker diagnostic snapshot. Let the server run these in its normal migration sequence; do not apply them manually to production as part of local verification.
+The server store records users, local password credentials, GitHub identities, workspaces, memberships, OAuth state/results, mspace auth sessions, projects, runbooks, Tests state, issues, Issue working copies, comments, reactions, labels, Inbox receipts, workspace Skills and revisions, Environments, issue test environments, handoffs, GitHub App state, Agent Sessions, runtime credentials, Workers, tasks, events, and logs. The fixed Codex/Claude Code/Pi Agent catalog is code-owned and is not stored in Postgres or SQLite. Migration `030_fixed_agent_engines.sql` drops the obsolete `agent_profiles` table, migration `031_runtime_worker_agent_engine_diagnostics.sql` adds the sanitized Worker diagnostic snapshot, and migration `032_issue_working_copies.sql` adds Issue source state, Worker storage identity, task affinity, and cancellation requests. Let the Server run these in its normal migration sequence; do not apply them manually to production as part of local verification.
 
 Docker-backed workers store target project source under the worker root volume, not in the host checkout. The dry-run worker defaults to the `mspace-worker-dev-root` Docker volume, and the Codex-capable worker defaults to `mspace-worker-codex-dev-root`; both mount that volume at `/var/lib/mspace-worker`.
 
@@ -86,7 +89,11 @@ export MSPACE_RUNTIME_TOKEN="msw_..."
 pnpm worker
 ```
 
-The Worker registers with the server, sends heartbeat state, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, and keeps system Workflows such as `issue_type_triage` on Codex. User `agent_session` tasks select the exact `codex`, `claudeCode`, or `pi` capability. Shared Worker Core prepares the repository cache and session worktree under `MSPACE_WORKER_WORK_ROOT`, materializes server-owned Skills, handles artifacts and source capture, and assembles the common result; the Codex, Claude Code, and Pi adapters own their CLI protocols, cancellation, terminal evidence, and opaque refs. If an `agent_session` payload carries `requiredSkills`, the Worker verifies file paths and hashes, writes the Skill bundle under `<artifact-dir>/skills/`, and injects `MSPACE_SESSION_SKILLS_DIR` plus `MSPACE_SESSION_SKILL_MANIFEST` without changing global engine configuration. Agent subprocesses do not inherit Worker registration or control-plane credentials. Workspace Settings shows these tasks as issue-linked operational rows and keeps protocol payloads, results, events, and logs in expandable details.
+The Worker registers with the Server, sends heartbeat state and its opaque storage id, claims matching runtime tasks, completes `protocol_smoke` / `noop` tasks, and keeps system Workflows such as `issue_type_triage` on Codex. User `agent_session` tasks select the exact `codex`, `claudeCode`, or `pi` capability. Shared Worker Core prepares the repository cache plus either the reusable Issue source worktree or a detached automation workdir under `MSPACE_WORKER_WORK_ROOT`, materializes server-owned Skills, handles artifacts and source capture, and assembles the common result; the Codex, Claude Code, and Pi adapters own their CLI protocols, cancellation, terminal evidence, and opaque refs. If an `agent_session` payload carries `requiredSkills`, the Worker verifies file paths and hashes, writes the Skill bundle under `<artifact-dir>/skills/`, and injects `MSPACE_SESSION_SKILLS_DIR` plus `MSPACE_SESSION_SKILL_MANIFEST` without changing global engine configuration. Agent subprocesses do not inherit Worker registration or control-plane credentials. Workspace Settings shows these tasks as Issue-linked operational rows and keeps protocol payloads, results, events, and logs in expandable details.
+
+For a source Session, verify the Working Copy state before retrying: `dirty` means the owning Worker preserved uncommitted changes and a follow-up Session will continue there; `recovery_required` means the Server will not queue another writer until the underlying worktree/branch/head problem is repaired. `working_copy_storage_unavailable` means no online Worker currently owns the bound `msws_...` storage. Never bypass these states by changing task affinity or recreating the branch on another Worker. A queued cancellation clears the writer reservation immediately; a claimed/running cancellation stays requested until the owning Worker stops the Agent and reports the final working-copy envelope.
+
+Existing pre-V1 test Issues have no working-copy row. Their next human source Session starts a fresh V1 branch from the project default ref; old per-Session branches and workdirs remain historical test artifacts and are not reconciled into the new source line.
 
 Codex configuration and authentication belong to worker runtimes. The server control plane queues work and applies runtime results, but it does not install Codex or mount Codex credentials.
 
@@ -131,7 +138,7 @@ scripts/run-server-worker-codex-dev.sh
 
 Worker-issued Codex sessions should not start or keep development servers running by default. Prefer non-interactive validation such as lint, tests, typecheck, build, or short internal probes. If a temporary server is needed, stop it before the session finishes and do not present container-local `localhost` or `127.0.0.1` as a user-facing preview.
 
-Cancellation is cooperative. Stopping a worker-backed session requests cancellation on the server task; the worker polls its claimed task and interrupts Codex app-server when it sees `cancelled`.
+Cancellation is cooperative. A queued task becomes `cancelled` immediately. Stopping a claimed or running Issue-working-copy Session sets `cancelRequested` and leaves the task claimed/running with its writer reservation intact. The Worker polls that flag, interrupts the selected Agent, inspects the final source state, and then acknowledges terminal `cancelled` with a working-copy envelope; a late `completed` result must not override the cancellation request.
 
 ## Workspace Automation
 
@@ -318,7 +325,7 @@ If preview succeeds but returns `accepted`, `revoked`, or `expired`, the route i
 | `MSPACE_WORKER_LABELS` | Worker | worker-dependent | JSON object for placement or inventory labels. Generated self-host install commands default to `{"provider":"self-host","environment":"docker"}`. |
 | `MSPACE_WORKER_POLL_INTERVAL` | Worker | `5s` | How often the worker polls the runtime task queue. |
 | `MSPACE_WORKER_HEARTBEAT_INTERVAL` | Worker | `10s` | How often the worker reports liveness and load. |
-| `MSPACE_WORKER_WORK_ROOT` | Worker | `/tmp/mspace-worker` or `/var/lib/mspace-worker` in Docker | Root directory for worker-managed repository caches, session worktrees, and artifacts. |
+| `MSPACE_WORKER_WORK_ROOT` | Worker | `/tmp/mspace-worker` or `/var/lib/mspace-worker` in Docker | Root directory for repository caches, the stable Worker storage identity, reusable Issue worktrees, detached automation workdirs, and artifacts. |
 | `MSPACE_WORKER_VOLUME` | Docker worker scripts | `mspace-worker-${MSPACE_WORKER_NAME}` in install commands | Docker volume mounted at `/var/lib/mspace-worker`. Dev helper scripts may use their own fixed dev volume names. |
 | `MSPACE_WORKER_CODEX_HOME_SOURCE` | Docker Codex worker script | `${CODEX_HOME:-~/.codex}` | Source Codex home copied into a dedicated worker Codex home before container startup. |
 | `MSPACE_WORKER_CODEX_HOME_DIR` | Docker Codex worker script | `~/.mspace/codex-worker-home` | Host directory mounted into the Codex-capable dev worker as `CODEX_HOME`. |
@@ -352,12 +359,12 @@ Session metadata is passed into the selected Agent process environment as:
 | `MSPACE_SESSION_ID` | Current session id. |
 | `MSPACE_AGENT_TOKEN` | Scoped bearer token for agent writes. |
 | `MSPACE_AGENT_ENGINE` | Selected fixed engine id: `codex`, `claude_code`, or `pi`. |
-| `MSPACE_SESSION_BRANCH` | Planned session branch. |
+| `MSPACE_SESSION_BRANCH` | Server-owned stable Issue branch for source Sessions, or the detached task branch when applicable. |
 | `MSPACE_SESSION_WORKDIR` | Prepared agent working directory. For local project subdirectories, this is the subdirectory inside the worker-created git worktree. |
 | `MSPACE_SOURCE_SESSION_ID` | Selected source session for a deploy/test continuation, when present. |
 | `MSPACE_SOURCE_COMMIT_SHA` | Selected source commit for a deploy/test continuation, when present. |
 | `MSPACE_SESSION_CONTEXT` | Markdown context file written by the worker. |
-| `MSPACE_SESSION_ARTIFACT_DIR` | Session artifact directory under the prepared worktree. |
+| `MSPACE_SESSION_ARTIFACT_DIR` | Session artifact directory. Source Sessions use the external Worker artifact root; detached tasks retain their per-worktree artifact layout. |
 | `MSPACE_REPOSITORY_URL` | Resolved repository URL or local git root used by the worker cache. |
 | `MSPACE_PROJECT_REPOSITORY_PATH` | Original configured local project path, when it differs from the resolved git root. |
 | `MSPACE_PROJECT_SUBDIR` | Project path relative to the git root, when a local project points inside a repository. |
@@ -584,13 +591,14 @@ Agent mentions are rejected before queueing when no active Worker exposes the se
 curl -G http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime/availability \
   -H "Authorization: Bearer <msp-token>" \
   --data-urlencode 'runtimeMode=personal' \
-  --data-urlencode 'requiredCapabilities={"codex":true}'
+  --data-urlencode 'requiredCapabilities={"codex":true}' \
+  --data-urlencode 'issueId=<issue-id>'
 
 curl -H "Authorization: Bearer <msp-token>" \
   http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-workers
 ```
 
-`reasonCode` values such as `no_worker`, `missing_capability`, `stale_heartbeat`, `worker_draining`, `worker_offline`, and `wrong_runtime_mode` explain why the product should not queue yet. If a task is already queued or running, inspect runtime tasks too:
+`reasonCode` values such as `no_worker`, `missing_capability`, `stale_heartbeat`, `worker_draining`, `worker_offline`, `wrong_runtime_mode`, `working_copy_busy`, `working_copy_storage_unavailable`, and `working_copy_recovery_required` explain why the product should not queue yet. The latter three are Issue-specific and must not be bypassed by starting a different local Worker. If a task is already queued or running, inspect runtime tasks too:
 
 ```bash
 curl -H "Authorization: Bearer <msp-token>" \
@@ -625,7 +633,7 @@ curl -H "Authorization: Bearer <msp-token>" \
   "http://127.0.0.1:8787/api/workspaces/<workspace-id>/runtime-tasks?limit=20&offset=0"
 ```
 
-The fixed path is to restart the same worker process so it registers with the same stable worker name. The server allows that worker to reclaim its own stale `running` task before new queued work, and the worker should recover the existing session workdir, attach the artifact, and complete the task through the normal runtime status API. Do not edit the SQLite or Postgres run rows directly unless a user explicitly asks for database repair.
+The fixed path is to restart the same Worker process with the same stable Worker name and the same persistent `MSPACE_WORKER_WORK_ROOT` or Docker volume. The Server allows that Worker to reclaim its own stale `running` task before new queued work, and the Worker should recover the existing Session workdir, attach the artifact, and complete the task through the normal runtime status API. A matching name with a new storage root is not equivalent. Do not edit the SQLite or Postgres run rows directly unless a user explicitly asks for database repair.
 
 ### VM Environment stays unreachable
 

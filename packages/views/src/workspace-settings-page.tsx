@@ -1341,6 +1341,7 @@ function TaskList(props: {
 					const worker = task.claimedByWorkerId ? workerByID.get(task.claimedByWorkerId) : undefined;
 					const selected = props.selectedTaskID === task.id;
 					const cancellable = ["queued", "claimed", "running"].includes(task.status);
+					const cancellationPending = cancellable && (task.cancelRequested || props.cancellingTaskID === task.id);
 					const display = runtimeTaskDisplay(task, issueTitleByID.get(task.issueId) || "");
 					return (
 						<div key={task.id}>
@@ -1363,13 +1364,13 @@ function TaskList(props: {
 									</div>
 								</button>
 								<RuntimeTaskIssueLink task={task} display={display} />
-								<RuntimeStatusPill status={task.status} />
+								<RuntimeStatusPill status={cancellable && task.cancelRequested ? "cancel_requested" : task.status} />
 								<span className="truncate text-[12px] leading-5 text-[color:var(--muted)]">{worker?.name || task.claimedByWorkerId || t("workspaceSettings.list.unclaimed")}</span>
 								<span className="text-[12px] leading-5 text-[color:var(--muted)]"><RelativeTime value={task.updatedAt} /></span>
 								{cancellable ? (
-									<Button type="button" variant="ghost" size="sm" disabled={props.cancellingTaskID === task.id} onClick={() => props.onCancelTask(task.id)}>
+									<Button type="button" variant="ghost" size="sm" disabled={cancellationPending} onClick={() => props.onCancelTask(task.id)}>
 										<X data-icon />
-										{props.cancellingTaskID === task.id ? t("workspaceSettings.list.cancelling") : t("workspaceSettings.list.cancel")}
+										{cancellationPending ? t("workspaceSettings.list.cancelling") : t("workspaceSettings.list.cancel")}
 									</Button>
 								) : (
 									<Button type="button" variant="ghost" size="sm" onClick={() => props.onSelectTask(selected ? "" : task.id)}>

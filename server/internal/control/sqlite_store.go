@@ -66,6 +66,7 @@ type memoryStoreSnapshot struct {
 	ReviewEvidence       map[string]SessionReviewEvidence             `json:"reviewEvidence"`
 	SessionFailures      map[string]SessionFailure                    `json:"sessionFailures"`
 	Handoffs             map[string]IssueHandoff                      `json:"handoffs"`
+	IssueWorkingCopies   map[string]IssueWorkingCopy                  `json:"issueWorkingCopies"`
 	SessionHash          map[string]memorySession                     `json:"sessionHash"`
 	RuntimeTokens        map[string]memoryRuntimeRegistrationToken    `json:"runtimeTokens"`
 	RuntimeWorkers       map[string]RuntimeWorker                     `json:"runtimeWorkers"`
@@ -217,6 +218,7 @@ func (s *MemoryStore) snapshotJSON() ([]byte, error) {
 		ReviewEvidence:       copyMap(s.reviewEvidence),
 		SessionFailures:      copyMap(s.sessionFailures),
 		Handoffs:             copyMap(s.handoffs),
+		IssueWorkingCopies:   copyMap(s.issueWorkingCopies),
 		SessionHash:          copyMap(s.sessionHash),
 		RuntimeTokens:        copyMap(s.runtimeTokens),
 		RuntimeWorkers:       copyMap(s.runtimeWorkers),
@@ -278,6 +280,7 @@ func (s *MemoryStore) restoreSnapshot(snapshot memoryStoreSnapshot) {
 	s.reviewEvidence = ensureMap(snapshot.ReviewEvidence)
 	s.sessionFailures = ensureMap(snapshot.SessionFailures)
 	s.handoffs = ensureMap(snapshot.Handoffs)
+	s.issueWorkingCopies = ensureMap(snapshot.IssueWorkingCopies)
 	s.sessionHash = ensureMap(snapshot.SessionHash)
 	s.runtimeTokens = ensureMap(snapshot.RuntimeTokens)
 	s.runtimeWorkers = ensureMap(snapshot.RuntimeWorkers)

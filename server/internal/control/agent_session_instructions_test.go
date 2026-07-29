@@ -6,7 +6,7 @@ import (
 )
 
 func TestDefaultAgentSessionDeveloperInstructionsAvoidDevServerPreviewURLs(t *testing.T) {
-	instructions := defaultAgentSessionDeveloperInstructions("team")
+	instructions := defaultAgentSessionDeveloperInstructions("team", true)
 	required := []string{
 		"team runtime worker",
 		"Do not start or keep a development server running unless the user explicitly asks",
@@ -22,6 +22,13 @@ func TestDefaultAgentSessionDeveloperInstructionsAvoidDevServerPreviewURLs(t *te
 		if !strings.Contains(instructions, text) {
 			t.Fatalf("expected default instructions to contain %q, got:\n%s", text, instructions)
 		}
+	}
+}
+
+func TestIssueWorkingCopyDeveloperInstructionsDoNotRequestBranchRename(t *testing.T) {
+	instructions := defaultAgentSessionDeveloperInstructions("personal", false)
+	if strings.Contains(instructions, "branch-name.json") || strings.Contains(instructions, "fix/short-semantic-name") {
+		t.Fatalf("server-owned Issue branch must not receive a branch proposal instruction:\n%s", instructions)
 	}
 }
 

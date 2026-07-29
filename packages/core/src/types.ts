@@ -626,6 +626,7 @@ export interface RuntimeWorker {
 	id: string;
 	workspaceId: string;
 	name: string;
+	storageId?: string;
 	mode: string;
 	status: string;
 	version: string;
@@ -641,6 +642,7 @@ export interface RuntimeWorker {
 export interface RuntimeAvailabilityInput {
 	runtimeMode?: string;
 	requiredCapabilities?: Record<string, boolean>;
+	issueId?: string;
 }
 
 export interface RuntimeAvailability {
@@ -672,10 +674,13 @@ export interface RuntimeTask {
 	requiredCapabilities: Record<string, unknown>;
 	payload: Record<string, unknown>;
 	result: Record<string, unknown>;
+	storageAffinityId?: string;
 	claimedByWorkerId: string;
 	claimedAt: string;
 	startedAt: string;
 	finishedAt: string;
+	cancelRequestedAt?: string;
+	cancelRequested?: boolean;
 	error: string;
 	createdAt: string;
 	updatedAt: string;
@@ -1235,6 +1240,7 @@ export interface KubernetesEventResource {
 export interface IssueDetail {
   issue: Issue;
   project?: Project | null;
+  workingCopy?: IssueWorkingCopy | null;
   testEnvironment: IssueTestEnvironment | null;
   childIssues: IssueListItem[];
   labels: IssueLabel[];
@@ -1245,6 +1251,32 @@ export interface IssueDetail {
   changeNodes: IssueChangeNode[];
   reviewEvidence: SessionReviewEvidence[];
   handoffs: IssueHandoff[];
+}
+
+export type IssueWorkingCopyContentState = "uninitialized" | "clean" | "dirty" | "recovery_required";
+
+export type IssueWorkingCopyRecoveryReason =
+  | ""
+  | "worktree_missing"
+  | "branch_mismatch"
+  | "head_mismatch"
+  | "metadata_missing"
+  | "workspace_probe_failed";
+
+export interface IssueWorkingCopy {
+  issueId: string;
+  projectId: string;
+  branch: string;
+  baseCommitSha: string;
+  headCommitSha: string;
+  storageId: string;
+  lastWorkerId: string;
+  contentState: IssueWorkingCopyContentState;
+  recoveryReason: IssueWorkingCopyRecoveryReason;
+  activeSessionId: string;
+  generation: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SessionDetail {
@@ -1339,15 +1371,7 @@ export interface UpdateCommentInput {
 
 export interface CreateAgentSessionInput {
   agentEngine: AgentEngine | string;
-  /** @deprecated Compatibility alias for older clients. */
-  provider?: string;
-  /** @deprecated Compatibility alias for older clients. */
-  agentProfile?: string;
-  runtimeMode?: "personal" | "team" | string;
   command?: string;
-  branch?: string;
-  sourceSessionId?: string;
-  sourceCommitSha?: string;
   triggerCommentId?: string;
   skillSlugs?: string[];
 }

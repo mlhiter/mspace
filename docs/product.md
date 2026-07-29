@@ -1,6 +1,6 @@
 # mspace Product Brief
 
-> Status: local MVP implementation snapshot, updated 2026-07-17
+> Status: local MVP implementation snapshot, updated 2026-07-29
 
 ## One-Line Definition
 
@@ -25,16 +25,16 @@ The repository now has a runnable local desktop MVP:
 - open document-style issue detail pages with Markdown-backed rich comments, image attachment thumbnails, lightweight reactions, and linked sessions;
 - mention `@codex`, `@claude`, or `@pi` from Issue Detail only when a Worker exposes the exact engine capability, then queue a server-owned `agent_session` for the corresponding adapter;
 - edit the latest unconsumed human comment, then stop and retry a session when a bad prompt has already been consumed;
-- stop a queued or running session from Issue Detail or Session Detail without cancelling the whole issue;
-- run sessions in worker-managed git workdirs under the configured worker root;
-- preserve completed or cancelled worker session metadata, logs, source evidence, and artifacts in server-owned records;
+- stop a queued or running Session from Issue Detail or Session Detail without cancelling the whole Issue; queued work stops immediately, while claimed/running source work waits for the Worker to report whether the reusable copy is clean, dirty, or `recovery_required`;
+- run human source Sessions serially in one reusable Issue working copy, run Agent Session automation in detached per-Session workdirs, and keep non-Agent Workflow tasks outside the mutable Issue copy;
+- preserve completed or cancelled Worker Session metadata, logs, source evidence, and supported artifact metadata or transferred evidence in Server-owned records while Worker-local artifact files remain runtime storage;
 - cache imported GitHub repositories inside worker-managed repository roots;
 - show a project runbook in Projects, open it from the Issue Detail sidebar as a read-only TipTap modal, and update it either from direct Markdown edits or from successful agent session artifacts;
 - manage project-level test cases and case suggestions plus workspace-level test plans and issue-backed test runs that start from plans in the Tests route, including modal create/import flows, preview-before-confirm Markdown/text/CSV/Excel `.xlsx` import, field-level case revision summaries, readiness scoring, retry for failed run items, and lightweight human review records for run outcomes;
 - keep signed-in workspace product and runtime state in the server store, including sessions, logs, evidence, environments, Kubernetes cluster compatibility records, issue test environments, handoffs, and execution metadata;
 - keep the server control plane free of Agent runtime dependencies: no Codex, Claude Code, or Pi CLI, credentials, or in-process client in the server;
 - keep workflow skills server-owned and worker-materialized per task, including built-in skills and workspace custom skill revisions, so workers can use the same pinned revision without depending on local global skill installs;
-- inspect session worktree status, changed files, diff previews, commits, and comparison against the project default branch;
+- inspect the Issue source working-copy state, stable branch, changed files, Session Commit evidence, diff previews, and comparison against the project default branch;
 - manage workspace automation policy, keeping source commit capture always on while recording branch / PR handoff state from captured source commits;
 - optionally queue an automatic issue test-environment deployment after a successful source session captures a commit, using the same source commit and deploy/test path as manual deployment;
 - manage reusable Environments from the Environments route: Kubernetes environments can be imported from kubeconfig files, and virtual machine environments store SSH target metadata plus server-owned SSH credentials;
@@ -88,7 +88,7 @@ mspace is not a general agent platform. It is a collaborative issue workspace fo
 Project
   -> Issue
   -> Agent Session
-  -> Worker code change
+  -> Reusable Issue source working copy
   -> Inbox review updates
   -> Branch / PR handoff or manual test deploy
   -> Selected Environment
@@ -170,6 +170,7 @@ An Issue should hold:
 - comments, lightweight reactions, and progress updates;
 - assignee and subscriber list;
 - linked branch, PR, and environment evidence;
+- one stable source branch, canonical head, and explicit Worker-storage/recovery state after source execution begins;
 - concise failure states when a session, deployment, preview check, interruption, or cleanup needs attention;
 - inline task rows backed by child issues, not Markdown checkbox state;
 - one or more attached agent sessions;
@@ -180,13 +181,17 @@ An Issue should hold:
 A user creates a Session by writing an Issue comment that mentions one fixed Agent: `@codex`, `@claude`, or `@pi`. In the MVP path, mspace saves the comment first, queues a server-owned runtime task, and then:
 
 - uses a registered runtime worker that claims server tasks;
-- prepares a git worktree for the repository;
+- reserves and prepares the Issue's reusable source worktree, or an isolated detached worktree for Agent Session automation;
 - freezes `agentEngine` as `codex`, `claude_code`, or `pi` and requires the exact `codex`, `claudeCode`, or `pi` Worker capability;
 - starts the selected engine adapter inside the Worker-prepared worktree while shared Worker Core retains Skill materialization, artifact handling, source capture, and cancellation;
 - streams agent messages, command execution items, status changes, and diagnostics;
 - passes the selected Environment plus environment-specific Kubernetes context, issue namespace, image registry, and exposure settings into the app-server process and turn prompt for deploy/test sessions.
 
-Before the trigger comment is written, mspace resolves the Issue's project attachment and checks that an active Worker exposes the mentioned Agent's exact capability. Personal desktop workspaces proactively keep one generic host-local Worker ready and discover installed Agent CLIs without launching them; team workspaces require a connected team Worker. The server enforces the same engine, project, runtime-mode, and Worker checks and returns a visible conflict instead of creating an unclaimable Session.
+Before the trigger comment is written, mspace resolves the Issue's project attachment and asks the Server for availability using the Issue id and mentioned Agent capability. Personal desktop workspaces proactively keep one generic host-local Worker ready and discover installed Agent CLIs without launching them; team workspaces require a connected team Worker. The Server enforces the same engine, project, runtime-mode, working-copy writer, recovery, and Worker-storage affinity checks and returns a visible conflict instead of creating an unclaimable Session.
+
+The first human source Session creates one stable `mspace/<issue-id>` branch and reusable Issue worktree. Later human Sessions serialize on that same source line and continue from its canonical head; Session logs, artifacts, engine references, Commit evidence, failures, and cancellation remain separate audit records. The Working Copy stays bound to the opaque storage identity of the Worker that owns its Git objects until durable source transfer exists. Once a V1 working copy is initialized, a missing worktree, wrong branch/head, or untrusted terminal result becomes an explicit recovery state instead of silently rebuilding from the project default branch. Existing pre-V1 test Issues initialize a fresh copy rather than importing legacy Session branches.
+
+Server-owned Agent Session Workflows and explicit source-Commit tasks are detached. Issue analysis, deploy, Tests, and cleanup keep their own per-Session workdir and cannot acquire or move the Issue source branch. Type triage and import mapping are separate runtime task kinds that execute independently outside the Issue working copy.
 
 Agent, Skill, Workflow, Worker, and Environment are separate product concepts. Agents are fixed execution engines. Skills are server-managed versioned instruction bundles. Workflows are mspace-owned automations; issue analysis, triage, Tests, import mapping, deploy, and cleanup remain Codex-backed in this release. Workers execute tasks, and Environments are operated targets.
 
@@ -215,7 +220,7 @@ A completed session should leave:
 - compact command evidence for the current review packet plus raw session logs for debugging;
 - test, build, deployment, risk, follow-up, and cleanup evidence;
 - runtime evidence such as pod status and logs;
-- cleanup state: retained or cleaned for worker-managed workdirs, plus issue namespace retain/cleanup decisions.
+- reusable Issue working-copy state after source execution, plus Issue namespace retain/cleanup decisions; detached Session workdirs remain Worker-managed runtime storage rather than a user-facing cleanup choice.
 
 ## MVP Scope
 
@@ -232,17 +237,16 @@ MVP features:
 - type and priority labels, with worker-backed asynchronous type triage and manual priority selection from Issue Detail;
 - choose Codex, Claude Code, or Pi from the fixed Agent catalog and create a Worker-backed Session from its Issue mention;
 - edit the latest human comment before it has triggered a session;
-- cancel queued or running sessions while keeping the issue retryable;
+- cancel queued or running Sessions while preserving whether the Issue working copy is clean, dirty, or requires recovery before another source turn;
 - fixed Server Worker development runtime;
-- git worktree isolation per session;
-- manual session worktree cleanup controls;
+- one reusable source worktree and stable branch per Issue, with serialized Sessions, storage affinity, dirty/recovery state, and detached automation isolation;
 - reusable Environments route for Kubernetes kubeconfig discovery/import, registry/exposure defaults, and virtual machine SSH metadata;
 - project default Environment selection, currently backed by the Kubernetes compatibility default for issue deploys;
 - opt-in automatic test deploy after captured source commits;
 - read-only workspace GitHub App installation status for team branch/PR automation readiness;
 - terminal/progress stream;
-- session workspace inspection;
-- branch comparison against project default branch;
+- Issue working-copy inspection and Session evidence review;
+- stable Issue branch comparison against the project default branch;
 - issue-summary draft generation from session output;
 - inline task lists backed by child issues, with status toggles, task creation, and task deletion from Issue Detail.
 
@@ -255,7 +259,7 @@ Still outside the current implemented MVP:
 - server-owned GitHub App token minting, branch publishing, and PR automation;
 - automated namespace cleanup policy beyond the current manual cleanup/retain decision.
 
-The product architecture uses the server control plane as the product and runtime truth for every signed-in workspace. Users, local password credentials, workspaces, membership, optional GitHub identity, auth sessions, projects, runbooks, issues, comments, reactions, labels, Inbox receipts, Skills, Environments, Kubernetes cluster compatibility records, issue test environments, handoffs, audit, runtime tasks, worker logs, and GitHub App installation state live in the server. The fixed Agent catalog lives in code and is returned read-only; it is not workspace data.
+The product architecture uses the Server control plane as the product and runtime truth for every signed-in workspace. Users, local password credentials, workspaces, membership, optional GitHub identity, auth sessions, projects, runbooks, issues, Issue working-copy state, comments, reactions, labels, Inbox receipts, Skills, Environments, Kubernetes cluster compatibility records, issue test environments, handoffs, audit, runtime tasks, Worker logs, and GitHub App installation state live in the Server. The physical Git worktree and objects stay Worker-owned. The fixed Agent catalog lives in code and is returned read-only; it is not workspace data.
 
 Display name/avatar fields are snapshots for rendering only. They should not become a second account system; shared issue ownership, comments, and permissions belong behind the control plane.
 
@@ -289,7 +293,7 @@ But the runtime should feel closer to Optio:
 - each issue/session can later gain its own long-lived or temporary Kubernetes-hosted runtime when the product grows into that model;
 - self-hosting on a team's own Kubernetes cluster or VM fleet is a first-class deployment model.
 
-The current implementation borrows Optio's git worktree isolation through worker-managed workdirs and leaves Kubernetes-hosted runtime as future work.
+The current implementation borrows Optio's Git worktree isolation through one Worker-managed source worktree per Issue plus detached automation workdirs, and leaves Kubernetes-hosted runtime as future work.
 
 The 2026-05-07 desktop UI direction borrows Notion's quiet document workspace feel: a left sidebar, paper-like pages, compact rows, inline metadata, and subdued panels. This is a product style reference, not a dependency on Notion behavior or branding.
 
@@ -309,4 +313,4 @@ The test is successful if a developer can:
 4. let Codex operate only the assigned repository and scoped test namespace;
 5. deploy or inspect the project through `kubectl`;
 6. open a PR or leave a branch with runtime evidence attached to the issue;
-7. retain or clean up the worker session workdir and choose whether to retain or clean the issue test namespace from mspace.
+7. continue the Issue source working copy across Sessions and choose whether to retain or clean the Issue test namespace from mspace.

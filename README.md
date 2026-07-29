@@ -65,7 +65,7 @@ Production deployment uses the root `vercel.json`:
 - Bilingual desktop UI support for English and Simplified Chinese through `@mspace/i18n`.
 - Document-style issue creation and comments with TipTap Markdown editing, plain-text Issue and child-task titles derived from formatted notes, non-blocking background title refinement, inline child issues from checklist rows, image rendering for stable attachment URLs, and lightweight comment reactions.
 - Fixed Agent mentions from issue comments: `@codex`, `@claude`, and `@pi`, with `/` and `#` workflow Skill tokens, server-side Session records, exact capability routing, trigger-comment tracking, worker logs, status updates, and Issue timeline updates.
-- Per-session worker-managed git worktrees, changed file lists, diff previews, commits, and comparison against the project default branch.
+- One Server-owned working-copy record per Issue, backed by one reusable Worker-owned source worktree: human Agent Sessions serialize on the stable `mspace/<issue-id>` branch, while changed-file lists, diffs, commits, logs, and engine references remain Session-scoped. Analysis, deploy, and Tests automation stays isolated in detached per-Session worktrees.
 - Tests workspace with project-level Cases and Case suggestions plus workspace-level Plans and Runs, dedicated detail pages, modal create/import flows, preview-before-confirm Markdown/text/CSV/Excel `.xlsx` import, readiness scoring, case-detail run history, field-level case revision summaries, and human review before Codex suggestions update canonical cases.
 - Issue-backed test run workflow where workspace plans create issue-linked run items; plans can run one setup session first for real preconditions such as updating a Deployment image, SSHing into a VM, logging into a platform, or preparing a preview; workers execute through the existing agent-session path, `test-setup-result.json` and `test-result.json` are reconciled into run state, supported screenshot evidence is persisted as server-owned artifacts, and humans can retry failed items or record a lightweight review decision.
 - Reusable environments for Kubernetes clusters and virtual machines. Kubernetes environments can be imported from kubeconfig files with read-only reachability checks, image registry prefix, preview routing defaults, and optional Kubernetes context; virtual machine environments store SSH target metadata plus server-owned SSH credentials for later worker access, while Environment responses expose only credential configuration state and readiness from password/private-key SSH login validation.
@@ -90,7 +90,7 @@ mspace separates collaboration, execution, and validation:
 | Control plane | Users, workspaces, product data, membership, local password credentials, GitHub identity, explicit auth identity display, mspace auth sessions, agents, built-in workflow skills, environments, Kubernetes cluster compatibility records, test environments, GitHub App installation state, PR handoffs, agent sessions, runtime task/log/result state | Go server in `server/`, chi, Postgres for team/shared deployments, local SQLite for packaged personal desktop mode |
 | Desktop workspace | Inbox, issues, comments, projects, agents, sessions, evidence review, language preference | Electron, React, TanStack Router, React Query, shared `@mspace/ui` and `@mspace/i18n` |
 | Runtime worker | Personal or team-owned fixed machine, VM, DevBox, or Docker dev worker that claims server tasks | Go daemon in `worker/`, registered with `msw_...`, worker-managed repo cache and workdir |
-| Agent runtime | One issue-bound turn in an isolated working directory | Worker-managed git workdir under the selected runtime mode; personal local projects may point at a git subdirectory, which the worker resolves to the git root for cache/worktree preparation while running the agent from the selected subdirectory |
+| Agent runtime | A source turn continuing the Issue working copy, or an isolated automation turn | Worker-managed git workdir under the selected runtime mode; human source turns reuse the Issue worktree and stable branch, while automation uses detached per-Session worktrees. Personal local projects may point at a git subdirectory, which the worker resolves to the git root before running the agent from the matching subdirectory |
 | Environment / validation target | Reusable Kubernetes or virtual machine targets that decoupled workers can operate; current issue deploys build, deploy, inspect, preview, and cleanup Kubernetes issue test environments | Environment records in the server store; namespace-scoped Kubernetes workflow triggered from Issue Detail |
 
 The desktop process uses `MSPACE_SERVER_URL` first, then a saved Team server URL, then starts the local bundled/dev server on `127.0.0.1:8787` when no configured server is active. Execution happens through registered workers, not through a desktop-owned local product store.
@@ -217,8 +217,8 @@ Runtime variables:
 | `MSPACE_WORKER_CONTAINER` | `MSPACE_WORKER_NAME` | Docker container name used by generated self-host worker install commands. |
 | `MSPACE_WORKER_CAPABILITIES` | worker-dependent | Worker capability JSON used by server-side task matching. The plain worker default is `{"protocolSmoke":true,"codex":false,"dryRun":true}`; generated self-host install commands default to Codex/Docker/Kubectl-capable JSON with `dryRun:false`. |
 | `MSPACE_WORKER_LABELS` | worker-dependent | Worker placement/inventory labels. Generated self-host install commands default to `{"provider":"self-host","environment":"docker"}`. |
-| `MSPACE_WORKER_VOLUME` | `mspace-worker-${MSPACE_WORKER_NAME}` in install commands | Docker volume mounted at `/var/lib/mspace-worker` for worker-managed repo caches, session worktrees, and artifacts. |
-| `MSPACE_WORKER_WORK_ROOT` | `/var/lib/mspace-worker` in Docker | Runtime worker root for `repos/<cache-key>` and `workdirs/<project-id>/<session-id>`. |
+| `MSPACE_WORKER_VOLUME` | `mspace-worker-${MSPACE_WORKER_NAME}` in install commands | Docker volume mounted at `/var/lib/mspace-worker` for worker-managed repo caches, reusable Issue source worktrees, detached automation workdirs, and artifacts. |
+| `MSPACE_WORKER_WORK_ROOT` | `/var/lib/mspace-worker` in Docker | Runtime Worker root for `repos/<cache-key>`, reusable `workdirs/<project-id>/<issue-id>`, detached `workdirs/<project-id>/<session-id>`, and source Session artifacts. |
 | `MSPACE_WORKER_CODEX_HOME_SOURCE` | `${CODEX_HOME:-~/.codex}` | Source Codex home copied into the generated self-host worker Codex home before container startup. |
 | `MSPACE_WORKER_CODEX_HOME_DIR` | `~/.mspace/codex-worker-home` | Host Codex home copy mounted by the Docker Codex dev worker. |
 | `MSPACE_WORKER_CODEX_CLI_VERSION` | `0.130.0` | Codex CLI version installed by the Docker Codex dev worker image. |
@@ -232,10 +232,13 @@ Local data paths:
 | `<Electron userData>/worker/` | Host-local personal worker root for desktop-managed repo caches, workdirs, and artifacts. |
 | `<Electron userData>/worker/browser-companion/` | Isolated repo cache, workdirs, and artifacts for the on-demand browser-capable companion Worker. |
 | `<Electron userData>/worker/tokens/<workspace-id>.token` | Short-lived personal worker credential file written by Electron and reread by the worker. |
+| `<worker-root>/.mspace/storage-id` | Opaque stable `msws_...` identity for one Worker storage root, used for Issue working-copy affinity. |
 | `~/.mspace/codex-worker-home` | Host-side Codex home copy for Docker Codex workers. |
 | `/var/lib/mspace-worker/repos/<cache-key>` | Repository cache inside Docker-backed workers. |
-| `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>` | Per-session worker workdir inside Docker-backed workers. |
-| `<worker-root>/workdirs/<project-id>/<session-id>/.mspace/session` | Session artifact directory. |
+| `/var/lib/mspace-worker/workdirs/<project-id>/<issue-id>` | Reusable Issue source worktree inside Docker-backed workers. It contains the stable Issue branch and is bound to one Worker storage identity. |
+| `/var/lib/mspace-worker/workdirs/<project-id>/<session-id>` | Detached per-Session worktree for analysis, deploy, Tests, and other automation. |
+| `<worker-root>/artifacts/<project-id>/<issue-id>/<session-id>` | Isolated artifact directory for one source Session, kept outside the reusable Issue worktree so artifact files cannot dirty source state. |
+| `<detached-worktree>/.mspace/session` | Artifact directory for a detached automation Session. |
 | `<artifact-dir>/skills/` | Worker-materialized server skill bundles for the current task. |
 | `<artifact-dir>/skills/manifest.json` | Per-session manifest of materialized skill names, revisions, directories, bundle hashes, and file hashes. |
 | `<artifact-dir>/test-environment.json` | Optional agent-written deployment result. |
@@ -243,7 +246,7 @@ Local data paths:
 | `<artifact-dir>/test-case-proposals.json` | Optional Codex-written test case suggestion artifact reconciled into Case suggestions. |
 | `<artifact-dir>/test-setup-result.json` | Required completion checkpoint for Tests setup automation. Passing setup stores `setupResult`, passes `outputs` into the run context, and starts case execution; failed/cancelled/missing setup marks the run `setup_failed`. |
 | `<artifact-dir>/test-result.json` | Required completion checkpoint for Tests execution automation, reconciled into run items and review state. Supported screenshot evidence is transferred from the worker artifact directory, persisted as server-owned test artifacts, and shown from Case Detail / Run Detail. |
-| `<artifact-dir>/branch-name.json` | Optional agent-written source branch proposal such as `{ "branch": "fix/pr-source-branch-selection" }`. |
+| `<artifact-dir>/branch-name.json` | Optional branch proposal for detached legacy/source-capture flows. Issue working-copy Sessions ignore it because the Server owns the stable branch. |
 | `<artifact-dir>/project-runbook.md` | Optional agent-written project runbook update. |
 
 ## Verification

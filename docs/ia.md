@@ -473,10 +473,10 @@ This page is for deep execution inspection. It should not replace Issue Detail a
 Current implementation:
 
 - shows Session metadata, Agent engine, generic engine Session/run refs, historical Codex thread/turn fallbacks, branch, workdir, status, Issue, and project;
-- exposes manual worktree cleanup for retained, non-active sessions;
+- shows the reusable Issue source worktree for human source Sessions and the detached per-Session workdir used by automation;
 - shows session-scoped logs and evidence;
-- inspects the session worktree with `git status`, changed files, and diff preview;
-- compares the session branch against the project default branch through merge-base, ahead/behind count, commits, changed files, and diff preview;
+- inspects the source working copy or detached workdir with `git status`, changed files, and diff preview;
+- compares the Issue's stable source branch against the project default branch through merge-base, ahead/behind count, commits, changed files, and diff preview;
 - keeps changed-file lists file-focused by hiding directory-only placeholder entries and using IDE-style file type icons for visible file rows;
 - generates an issue-summary draft from the session and can post it back to the issue.
 
@@ -581,7 +581,7 @@ Implemented as of 2026-06-03:
 6. Session detail with logs, workspace snapshot, branch comparison, and issue summary draft.
 7. Server control plane, runtime worker registration, and git worktree isolation.
 8. Tailwind CSS 4 monorepo source detection for desktop UI packages.
-9. Issue labels, stop controls for active sessions, and manual worktree cleanup.
+9. Issue labels, stop controls for active sessions, and source working-copy recovery.
 10. Environments route with desktop file picker import for Kubernetes kubeconfigs, first-run `~/.kube` discovery, context listing, reachability status, registry/preview exposure defaults, and virtual machine SSH metadata.
 11. Issue test environment records plus manual deploy/cleanup/retain actions.
 12. Server-backed mspace sign-in: default local personal mode starts on account creation and hides GitHub, while explicitly configured team servers can offer login plus optional GitHub OAuth when `/health` reports `capabilities.githubAuth: true`.

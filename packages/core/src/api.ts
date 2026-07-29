@@ -126,7 +126,7 @@ export const queryKeys = {
 	runtimeRegistrationTokens: (workspaceId: string, token: string) => ["runtime-registration-tokens", workspaceId, token] as const,
 	runtimeWorkers: (workspaceId: string, token: string) => ["runtime-workers", workspaceId, token] as const,
 	runtimeAvailability: (workspaceId: string, token: string, input: RuntimeAvailabilityInput = {}) =>
-		["runtime-availability", workspaceId, token, input.runtimeMode || "", input.requiredCapabilities || {}] as const,
+		["runtime-availability", workspaceId, token, input.runtimeMode || "", input.requiredCapabilities || {}, input.issueId || ""] as const,
 	runtimeTasks: (workspaceId: string, token: string, limit = 10, offset = 0) => ["runtime-tasks", workspaceId, token, limit, offset] as const,
   runtimeTaskEvents: (workspaceId: string, taskId: string, token: string) => ["runtime-task-events", workspaceId, taskId, token] as const,
   runtimeTaskLogs: (workspaceId: string, taskId: string, token: string) => ["runtime-task-logs", workspaceId, taskId, token] as const,
@@ -438,6 +438,7 @@ export const controlPlaneApi = {
 		const params = new URLSearchParams();
 		if (input.runtimeMode) params.set("runtimeMode", input.runtimeMode);
 		if (input.requiredCapabilities) params.set("requiredCapabilities", JSON.stringify(input.requiredCapabilities));
+		if (input.issueId) params.set("issueId", input.issueId);
 		const query = params.toString();
 		return requestControlPlane<RuntimeAvailability>(`/api/workspaces/${workspaceId}/runtime/availability${query ? `?${query}` : ""}`, {
 			headers: authHeaders(token),

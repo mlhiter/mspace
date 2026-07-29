@@ -45,7 +45,7 @@ The server control plane owns:
 - workspace settings, the fixed Agent catalog contract, built-in and workspace custom Workflow Skill catalog/revisions/settings, Environments, Kubernetes cluster compatibility records, issue test environments, issue handoffs, failures, review evidence, and source change nodes;
 - runtime worker registration, worker heartbeat/capability state, runtime task queue state, task events, task logs, cancellation, and task results.
 
-The desktop owns native shell behavior, local UI state, file pickers, and opening browser auth flows. Workers own execution: repository cache, per-Session workdir, Codex/Claude Code/Pi adapters, source capture, artifacts, and logs. The server never starts Agent CLIs or requires their credentials; it freezes `agentEngine`, queues one exact capability, attaches server-owned Skill bundles, and reconciles Worker results.
+The desktop owns native shell behavior, local UI state, file pickers, and opening browser auth flows. Workers own execution: repository cache, reusable Issue source worktrees, detached per-Session automation workdirs, Codex/Claude Code/Pi adapters, source capture, artifacts, and logs. The Server owns the logical Issue working copy, stable branch, writer reservation, generation, and Worker storage affinity, but never starts Agent CLIs or requires their credentials; it freezes `agentEngine`, queues one exact capability, attaches server-owned Skill bundles, and reconciles Worker results.
 
 ## Auth And Workspace APIs
 
@@ -567,17 +567,16 @@ Kubernetes Environments currently use the existing `clusters` storage and remain
 
 The desktop shell proactively ensures one generic personal Worker after auth and workspace selection. Electron detects installed `codex`, `claude`, and `pi` executables without launching them and advertises `codex`, `claudeCode`, and `pi` respectively. Issue Detail starts a turn only after engine-specific preflight:
 
-1. Map `@codex`, `@claude`, or `@pi` to `{"codex":true}`, `{"claudeCode":true}`, or `{"pi":true}` and require `state:"ready"` from `GET /api/workspaces/{workspaceID}/runtime/availability`.
+1. Map `@codex`, `@claude`, or `@pi` to `{"codex":true}`, `{"claudeCode":true}`, or `{"pi":true}` and require `state:"ready"` from `GET /api/workspaces/{workspaceID}/runtime/availability?issueId=<issue-id>`. The Issue id lets the Server apply writer, recovery, and Worker-storage affinity constraints using the same scheduler contract as claim.
 2. In personal desktop mode, ask Electron to ensure the host-local personal worker, then wait briefly for the availability response to show a ready worker. Do not skip the Electron ensure step only because the server still has a fresh heartbeat snapshot; that snapshot can survive an app restart for a short window. Team workspaces do not auto-start a worker; the user must connect a matching team worker.
 3. Write the human comment through `POST /api/workspaces/{workspaceID}/issues/{issueID}/comments`.
 4. Call `POST /api/workspaces/{workspaceID}/issues/{issueID}/sessions` with the comment id as `triggerCommentId`.
 
-Personal workspaces use `runtimeMode: "personal"`; team workspaces use `runtimeMode: "team"`. Both modes share the same server tables, worker claim protocol, task logs, cancellation, and result shape.
+The Server derives `runtimeMode` from the workspace kind: personal workspaces use `"personal"`, while team workspaces use `"team"`. Clients must not send `runtimeMode` when creating an Issue Session. Both modes share the same server tables, worker claim protocol, task logs, cancellation, and result shape.
 
 ```json
 {
   "agentEngine": "claude_code",
-  "runtimeMode": "team",
   "command": "@claude #think implement the fix",
   "triggerCommentId": "<server-comment-id>",
   "skillSlugs": ["think"]
@@ -586,11 +585,11 @@ Personal workspaces use `runtimeMode: "personal"`; team workspaces use `runtimeM
 
 Issue comments can reference enabled server-managed workflow skills with `/slug` or `#slug`. Desktop clients should derive `skillSlugs` from the final submitted comment body and send only those slugs. The server accepts built-in or workspace custom skill slugs, de-duplicates them, rejects unknown, disabled, or malformed slugs with HTTP `400`, and rejects client-provided `requiredSkills`, `skills`, `skillBundles`, or skill file content on issue-session creation. Full skill bundles remain server-owned and are included in the worker runtime task payload; workspace user APIs return compact skill references except for owner/admin skill management detail endpoints.
 
-The server validates `agentEngine`, project attachment, workspace/runtime mode, and an active Worker with the exact capability before it creates the runtime task. If no Worker matches, it returns HTTP `409` with `{"error":"no active agent worker"}`. New clients send only `agentEngine`; known legacy `provider`/`agentProfile` inputs map to Codex, while explicit unknown engines fail closed.
+The Server validates `agentEngine`, project attachment, workspace/runtime mode, Issue working-copy state, and an active Worker with the exact capability before it creates the runtime task. A human source Session requires `issueWorkingCopyV1:true`, reserves the Issue's sole writer atomically, and uses the owning storage id once initialized. If no Worker matches or the working copy is busy/unavailable/recovery-required, it returns HTTP `409` with a stable readiness reason. New clients may send only `agentEngine`, `command`, `triggerCommentId`, and `skillSlugs`. All other control fields, including runtime mode, branch, source Session or Commit, automation, capability requirements, execution mode, workdir, artifact paths, repository details, and working-copy state, are Server-owned and rejected.
 
-When accepted, the server snapshots Issue/project/runbook/comment/child/label context into the runtime task payload and returns `AgentSession`. The Worker prepares its own repo cache/workdir and reports `agentEngine`, `engineSessionRef`, `engineRunRef`, source branch, and commit metadata. Codex also returns legacy thread/turn aliases. Claude Code completion requires a terminal stream-JSON `result`; Pi uses official RPC and requires `agent_end`, sends `abort` on cancellation, and never exposes `sessionFile` paths.
+When accepted, the Server snapshots Issue/project/runbook/comment/child/label context into the runtime task payload and returns `AgentSession`. Human source turns use `executionMode:"issue_working_copy"`, the stable `mspace/<safe-full-issue-id>` branch, an expected head, and a generation; later turns reuse the same Worker worktree and continue the canonical head. Session artifacts stay isolated under `artifacts/<project>/<issue>/<session>` outside the Git worktree. The Worker reports `agentEngine`, `engineSessionRef`, `engineRunRef`, source metadata, and a sanitized working-copy envelope on completed, failed, and cancelled outcomes. Codex also returns legacy thread/turn aliases. Claude Code completion requires a terminal stream-JSON `result`; Pi uses official RPC and requires `agent_end`, sends `abort` on cancellation, and never exposes `sessionFile` paths.
 
-New project-backed issues may also create an automatic `agent_session` with payload `automation:"issue_analysis"` when a matching Codex worker is online. Attaching a project to a projectless top-level issue also tries the same analysis queueing path. That payload is queued before type triage when created with a project, includes `sandbox:"read-only"`, `sourceCapture:false`, and the pinned server-owned `think` skill bundle in `requiredSkills`; workers materialize the skill under the session artifact directory and expose `MSPACE_SESSION_SKILLS_DIR` to Codex. Issue creation and project attachment do not fail when the analysis cannot be queued, and server reconciliation ignores source/test/deploy/review artifacts from this automation.
+New project-backed issues may also create an automatic `agent_session` with payload `automation:"issue_analysis"` when a matching Codex worker is online. Attaching a project to a projectless top-level issue also tries the same analysis queueing path. That payload uses `executionMode:"detached"`, is queued before type triage when created with a project, includes `sandbox:"read-only"`, `sourceCapture:false`, and the pinned server-owned `think` skill bundle in `requiredSkills`; Workers materialize the Skill under the Session artifact directory and expose `MSPACE_SESSION_SKILLS_DIR` to Codex. Issue creation and project attachment do not fail when the analysis cannot be queued, and Server reconciliation ignores source/test/deploy/review artifacts from this automation. Deploy, Tests, cleanup, and any Agent Session pinned to an explicit source Commit are detached for the same isolation reason. Import mapping is a separate runtime task kind and executes independently outside the Issue working copy.
 
 ## Test Environment Flow
 
@@ -629,7 +628,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration token metadata without raw token values. |
 | `DELETE` | `/api/workspaces/{workspaceID}/runtime-registration-tokens/{tokenID}` | Revoke a worker registration token. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-workers` | List registered runtime workers, heartbeat state, labels, capabilities, and sanitized Agent-engine diagnostics. |
-| `GET` | `/api/workspaces/{workspaceID}/runtime/availability` | Return structured readiness plus server-derived `claimableWorkerCount` for a runtime mode and required capability set. Use this for product action preflight instead of reimplementing heartbeat TTLs or matching in clients. |
+| `GET` | `/api/workspaces/{workspaceID}/runtime/availability` | Return structured readiness plus server-derived `claimableWorkerCount` for a runtime mode and required capability set. Pass `issueId` for source-turn preflight so the Server also applies V1 capability, writer, recovery, and storage-affinity rules. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-tasks` | Owner/admin-only creation of unbound `protocol_smoke` or `noop` diagnostics. Raw payloads cannot bind product records or include Agent, Skill, automation, repository, workdir, environment, or other server-owned fields. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks?limit=10&offset=0` | List runtime tasks with pagination metadata and status counts. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/events` | List audit events for one runtime task. |
@@ -637,7 +636,7 @@ curl -H "Authorization: Bearer <msp-token>" \
 | `POST` | `/api/workspaces/{workspaceID}/runtime-tasks/{taskID}/cancel` | Request cancellation for a queued, claimed, or running task. |
 | `POST` | `/api/runtime/workers/register` | Register or refresh a worker using `Authorization: Bearer msw_...`. |
 | `POST` | `/api/runtime/workers/{workerID}/heartbeat` | Update worker liveness, status, load, optional capability metadata, and optional sanitized `agentEngineDiagnostics`. |
-| `POST` | `/api/runtime/workers/{workerID}/tasks/claim` | Claim the next queued task that matches the worker mode and required capabilities. |
+| `POST` | `/api/runtime/workers/{workerID}/tasks/claim` | Claim the next queued task that matches Worker mode, required capabilities, and optional storage affinity; first Issue-working-copy claim binds its storage id. |
 | `GET` | `/api/runtime/workers/{workerID}/tasks/{taskID}` | Let the claiming worker inspect task state while executing. |
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/logs` | Append a log line to a claimed/running task. |
 | `POST` | `/api/runtime/workers/{workerID}/tasks/{taskID}/status` | Move a claimed task to `running`, `completed`, `failed`, or `cancelled`. |
@@ -648,7 +647,8 @@ Check action readiness for a Codex-backed turn:
 curl -G "$MSPACE_SERVER_BASE/api/workspaces/<workspace-id>/runtime/availability" \
   -H "Authorization: Bearer <msp-token>" \
   --data-urlencode 'runtimeMode=personal' \
-  --data-urlencode 'requiredCapabilities={"codex":true}'
+  --data-urlencode 'requiredCapabilities={"codex":true}' \
+  --data-urlencode 'issueId=<issue-id>'
 ```
 
 The response is HTTP `200` even for unavailable states so clients can branch on structured diagnostics:
@@ -668,7 +668,9 @@ The response is HTTP `200` even for unavailable states so clients can branch on 
 }
 ```
 
-`reasonCode` may be `ready`, `no_worker`, `missing_capability`, `stale_heartbeat`, `worker_draining`, `worker_offline`, or `wrong_runtime_mode`. `claimableWorkerCount` is computed with the server's workspace-mode, liveness, heartbeat TTL, load, and exact-capability rules. Clients connected to an older Server that omits the field should show an unknown count rather than recomputing it. Personal desktop clients should ask Electron main to idempotently ensure the host-local worker before trusting a ready heartbeat, then poll availability again when the worker is starting. Team clients must treat unavailable states as a Connect Environment problem.
+`reasonCode` may be `ready`, `no_worker`, `missing_capability`, `stale_heartbeat`, `worker_draining`, `worker_offline`, `wrong_runtime_mode`, `working_copy_busy`, `working_copy_storage_unavailable`, or `working_copy_recovery_required`. `claimableWorkerCount` is computed with the Server's workspace-mode, liveness, heartbeat TTL, load, exact-capability, and optional Issue affinity rules. Clients connected to an older Server that omits the field should show an unknown count rather than recomputing it. Personal desktop clients may ask Electron main to idempotently ensure the host-local Worker for ordinary Worker availability, but must not auto-start past a working-copy blocker. Team clients must treat unavailable states as a Connect Environment or working-copy recovery problem according to the reason.
+
+Queued cancellation moves a task directly to terminal `cancelled`. For a claimed or running Issue-working-copy task, cancellation sets `cancelRequested:true` and `cancelRequestedAt` while preserving the active status and Issue writer reservation. The claiming Worker observes the request through `GET /tasks/{taskID}`, interrupts the Agent, then posts terminal `cancelled` with its final `workingCopy` envelope. Once cancellation is requested, a Worker `completed` update is not a valid terminal outcome; only the trusted `cancelled` acknowledgement reconciles the final working-copy state and releases the writer reservation.
 
 Current Workers may send the following optional diagnostic object during register and heartbeat:
 
@@ -729,9 +731,9 @@ Runtime task kinds used by the current product path:
 
 Workers may improve the session result by writing JSON or Markdown files under `${MSPACE_SESSION_ARTIFACT_DIR}`:
 
-- `branch-name.json`: proposed source branch, for example `{ "branch": "fix/pr-source-branch-selection" }`.
+- `branch-name.json`: optional branch proposal only for a detached Agent Session whose server-owned payload enables source capture. Issue working-copy Sessions and detached automation without source capture ignore it.
 - `review-evidence.json`: command evidence, tests, build/deploy result, summary, risks, and follow-ups.
 - `test-environment.json`: deploy/test result, including `previewUrl` when available.
 - `project-runbook.md`: learned project runbook update after a successful session.
 
-Branch names should use Conventional Commit-style prefixes: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `perf`, `build`, `ci`, `style`, or `revert`.
+Detached source-capture `branch-name.json` proposals should use Conventional Commit-style prefixes: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `perf`, `build`, `ci`, `style`, or `revert`. Issue-working-copy branches are fixed by the Server and ignore this artifact.

@@ -149,6 +149,53 @@ func evaluateRuntimeAvailability(workspaceID, workspaceKind, runtimeMode string,
 	return result
 }
 
+func evaluateRuntimeAvailabilityForWorkingCopy(workspaceID, workspaceKind, runtimeMode string, requiredCapabilities json.RawMessage, workers []RuntimeWorker, workingCopy *IssueWorkingCopy, now time.Time) RuntimeAvailability {
+	if workingCopy == nil {
+		return evaluateRuntimeAvailability(workspaceID, workspaceKind, runtimeMode, requiredCapabilities, workers, now)
+	}
+	matchingStorage := workers
+	if workingCopy.StorageID != "" {
+		matchingStorage = make([]RuntimeWorker, 0, len(workers))
+		for _, worker := range workers {
+			if worker.StorageID == workingCopy.StorageID {
+				matchingStorage = append(matchingStorage, worker)
+			}
+		}
+	}
+	if workingCopy.ActiveSessionID != "" {
+		result := evaluateRuntimeAvailability(workspaceID, workspaceKind, runtimeMode, requiredCapabilities, matchingStorage, now)
+		result.State = "unavailable"
+		if workingCopy.StorageID != "" && result.ReasonCode != "ready" {
+			result.ReasonCode = "working_copy_storage_unavailable"
+		} else {
+			result.ReasonCode = "working_copy_busy"
+		}
+		result.CanQueue = false
+		result.CanAutoStart = false
+		result.ClaimableWorkerCount = 0
+		return result
+	}
+	if workingCopy.ContentState == workingCopyStateRecoveryRequired {
+		result := evaluateRuntimeAvailability(workspaceID, workspaceKind, runtimeMode, requiredCapabilities, matchingStorage, now)
+		result.State = "unavailable"
+		result.ReasonCode = "working_copy_recovery_required"
+		result.CanQueue = false
+		result.CanAutoStart = false
+		result.ClaimableWorkerCount = 0
+		return result
+	}
+	if workingCopy.StorageID == "" {
+		return evaluateRuntimeAvailability(workspaceID, workspaceKind, runtimeMode, requiredCapabilities, workers, now)
+	}
+	result := evaluateRuntimeAvailability(workspaceID, workspaceKind, runtimeMode, requiredCapabilities, matchingStorage, now)
+	if result.State != "ready" {
+		result.ReasonCode = "working_copy_storage_unavailable"
+		result.CanQueue = false
+		result.CanAutoStart = false
+	}
+	return result
+}
+
 func parseRuntimeWorkerLastSeen(value string) (time.Time, bool) {
 	lastSeenAt, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {

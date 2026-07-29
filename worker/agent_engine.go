@@ -86,8 +86,10 @@ func runAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg conf
 	if err != nil {
 		return agentSessionResult{}, err
 	}
-	payload = prepared
+	return runPreparedAgentSession(ctx, runtimeClient, cfg, workerID, taskID, prepared)
+}
 
+func runPreparedAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg config, workerID, taskID string, payload agentSessionPayload) (agentSessionResult, error) {
 	if testArtifactsReady(payload) {
 		return completeAgentSessionFromArtifacts(ctx, runtimeClient, workerID, taskID, payload, agentEngineExecution{AgentEngine: payload.AgentEngine})
 	}
@@ -107,7 +109,13 @@ func runAgentSession(ctx context.Context, runtimeClient *runtimeClient, cfg conf
 		if testArtifactsReady(payload) {
 			return completeAgentSessionFromArtifacts(context.WithoutCancel(ctx), runtimeClient, workerID, taskID, payload, execution)
 		}
-		return agentSessionResult{}, err
+		result := newAgentSessionResult(payload, execution)
+		result.Status = "failed"
+		if errors.Is(err, context.Canceled) {
+			result.Status = "cancelled"
+		}
+		result.WorkingCopy = inspectIssueWorkingCopy(context.WithoutCancel(ctx), payload, issueWorkingCopyRecoveryReason(err))
+		return result, err
 	}
 	if artifactCompleted {
 		return completeAgentSessionFromArtifacts(context.WithoutCancel(ctx), runtimeClient, workerID, taskID, payload, execution)
@@ -235,13 +243,21 @@ func completeAgentSession(ctx context.Context, runtimeClient *runtimeClient, wor
 	if sourceCaptureEnabled(payload) {
 		source, err := captureAgentSessionSource(ctx, runtimeClient, workerID, taskID, payload)
 		if err != nil {
-			return agentSessionResult{}, err
+			result.WorkingCopy = inspectIssueWorkingCopy(context.WithoutCancel(ctx), payload, issueWorkingCopyRecoveryReason(err))
+			return result, err
 		}
 		result.Source = source
 	} else {
 		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Source capture disabled for this agent session."})
 	}
 	result.attachArtifacts(payload)
+	result.WorkingCopy = inspectIssueWorkingCopy(context.WithoutCancel(ctx), payload, "")
+	if result.WorkingCopy != nil && result.WorkingCopy.ContentState == "recovery_required" {
+		return result, errors.New("issue working copy could not be verified after source capture")
+	}
+	if result.WorkingCopy != nil && result.WorkingCopy.ContentState == "dirty" {
+		return result, errors.New("issue working copy remains dirty after source capture")
+	}
 	return result, nil
 }
 
@@ -261,6 +277,7 @@ func completeAgentSessionFromArtifacts(ctx context.Context, runtimeClient *runti
 		_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Source capture disabled for this agent session."})
 	}
 	_ = runtimeClient.appendTaskLog(context.WithoutCancel(ctx), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Completing task from session artifacts after the agent engine ended without terminal completion."})
+	result.WorkingCopy = inspectIssueWorkingCopy(context.WithoutCancel(ctx), payload, "")
 	return result, nil
 }
 

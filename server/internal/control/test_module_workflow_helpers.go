@@ -44,6 +44,9 @@ func agentSessionRequiredCapabilities(input CreateAgentSessionInput) (json.RawMe
 			}
 		}
 	}
+	if agentSessionExecutionMode(input) == agentSessionExecutionModeWorkingCopy {
+		required["issueWorkingCopyV1"] = true
+	}
 	return json.Marshal(required)
 }
 

@@ -31,6 +31,16 @@ def emit(payload):
 
 
 mode = os.environ.get("MSPACE_FAKE_CLAUDE_MODE", "success")
+expected_skill = os.environ.get("MSPACE_FAKE_CLAUDE_EXPECT_SKILL")
+if expected_skill:
+    skills_root = os.environ.get("MSPACE_SESSION_SKILLS_DIR")
+    if not skills_root:
+        print("missing MSPACE_SESSION_SKILLS_DIR", file=sys.stderr)
+        sys.exit(89)
+    expected_skill_path = os.path.join(skills_root, *expected_skill.split("/"))
+    if not os.path.isfile(expected_skill_path):
+        print("missing materialized skill: " + expected_skill_path, file=sys.stderr)
+        sys.exit(89)
 emit({"type": "system", "subtype": "init", "session_id": "claude-session-opaque"})
 if mode == "success":
     emit({"type": "assistant", "session_id": "claude-session-opaque", "message": {"content": [{"type": "text", "text": "fake Claude completed"}]}})

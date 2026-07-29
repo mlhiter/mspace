@@ -55,6 +55,7 @@ type MemoryStore struct {
 	reviewEvidence       map[string]SessionReviewEvidence
 	sessionFailures      map[string]SessionFailure
 	handoffs             map[string]IssueHandoff
+	issueWorkingCopies   map[string]IssueWorkingCopy
 	sessionHash          map[string]memorySession
 	runtimeTokens        map[string]memoryRuntimeRegistrationToken
 	runtimeWorkers       map[string]RuntimeWorker
@@ -144,6 +145,7 @@ func NewMemoryStore() *MemoryStore {
 		reviewEvidence:       map[string]SessionReviewEvidence{},
 		sessionFailures:      map[string]SessionFailure{},
 		handoffs:             map[string]IssueHandoff{},
+		issueWorkingCopies:   map[string]IssueWorkingCopy{},
 		sessionHash:          map[string]memorySession{},
 		runtimeTokens:        map[string]memoryRuntimeRegistrationToken{},
 		runtimeWorkers:       map[string]RuntimeWorker{},
@@ -1147,6 +1149,7 @@ func (s *MemoryStore) RegisterRuntimeWorker(_ Context, registration RuntimeRegis
 		worker.CreatedAt = now
 	}
 	worker.Mode = normalized.Mode
+	worker.StorageID = normalized.StorageID
 	worker.Status = normalized.Status
 	worker.Version = normalized.Version
 	worker.CurrentLoad = normalized.CurrentLoad
@@ -1188,6 +1191,9 @@ func (s *MemoryStore) UpdateRuntimeWorkerHeartbeat(_ Context, registration Runti
 		if normalized.Version != "" {
 			worker.Version = normalized.Version
 		}
+		if normalized.StorageID != "" {
+			worker.StorageID = normalized.StorageID
+		}
 		worker.CurrentLoad = normalized.CurrentLoad
 		capabilities := worker.Capabilities
 		if string(normalized.Capabilities) != "{}" {
@@ -1198,6 +1204,9 @@ func (s *MemoryStore) UpdateRuntimeWorkerHeartbeat(_ Context, registration Runti
 			diagnostics = normalized.AgentEngineDiagnostics
 		}
 		worker.Capabilities = downgradeUnavailableAgentEngineCapabilities(capabilities, diagnostics)
+		if jsonObjectContains(worker.Capabilities, json.RawMessage(`{"issueWorkingCopyV1":true}`)) && worker.StorageID == "" {
+			return RuntimeWorker{}, errors.New("storageId is required for issueWorkingCopyV1")
+		}
 		if string(normalized.Labels) != "{}" {
 			worker.Labels = copyRawMessage(normalized.Labels)
 		}
@@ -1271,6 +1280,7 @@ func (s *MemoryStore) createRuntimeTaskLocked(userID, workspaceID string, input 
 		RequiredCapabilities: copyRawMessage(normalized.RequiredCapabilities),
 		Payload:              copyRawMessage(normalized.Payload),
 		Result:               json.RawMessage(`{}`),
+		StorageAffinityID:    normalized.StorageAffinityID,
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}
@@ -3749,6 +3759,7 @@ func (s *MemoryStore) getIssueLocked(userID, workspaceID, issueID string) (Issue
 		ChangeNodes:     s.issueChangeNodesLocked(workspaceID, issueID),
 		ReviewEvidence:  s.issueReviewEvidenceLocked(workspaceID, issueID),
 		Handoffs:        s.issueHandoffsLocked(workspaceID, issueID),
+		WorkingCopy:     s.issueWorkingCopyPointerLocked(workspaceID, issueID),
 	}, nil
 }
 
@@ -3801,16 +3812,39 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 	if normalized.RuntimeMode != workspace.Kind {
 		return AgentSession{}, ErrForbidden
 	}
+	executionMode := agentSessionExecutionMode(normalized)
 	requiredCapabilities, err := agentSessionRequiredCapabilities(normalized)
 	if err != nil {
 		return AgentSession{}, err
 	}
-	if !s.hasActiveWorkerWithCapabilitiesLocked(workspaceID, normalized.RuntimeMode, requiredCapabilities, time.Now().UTC()) {
-		return AgentSession{}, ErrNoActiveAgentWorker
-	}
 	sessionID, err := newAgentSessionID()
 	if err != nil {
 		return AgentSession{}, err
+	}
+	var workingCopy IssueWorkingCopy
+	if executionMode == agentSessionExecutionModeWorkingCopy {
+		key := issueWorkingCopyKey(workspaceID, issueID)
+		workingCopy = s.issueWorkingCopies[key]
+		if workingCopy.IssueID == "" {
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			workingCopy = IssueWorkingCopy{
+				IssueID: issueID, ProjectID: project.ID, Branch: defaultIssueWorkingCopyBranch(issueID),
+				ContentState: workingCopyStateUninitialized, CreatedAt: now, UpdatedAt: now,
+			}
+		}
+		if workingCopy.ProjectID != project.ID || workingCopy.ActiveSessionID != "" || workingCopy.ContentState == workingCopyStateRecoveryRequired {
+			return AgentSession{}, ErrConflict
+		}
+		if !s.hasActiveWorkerForWorkingCopyLocked(workspaceID, normalized.RuntimeMode, requiredCapabilities, workingCopy.StorageID, time.Now().UTC()) {
+			return AgentSession{}, ErrNoActiveAgentWorker
+		}
+		normalized.Branch = workingCopy.Branch
+		workingCopy.ActiveSessionID = sessionID
+		workingCopy.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	} else {
+		if !s.hasActiveWorkerWithCapabilitiesLocked(workspaceID, normalized.RuntimeMode, requiredCapabilities, time.Now().UTC()) {
+			return AgentSession{}, ErrNoActiveAgentWorker
+		}
 	}
 	if normalized.Branch == "" {
 		normalized.Branch = defaultAgentSessionBranch(issueID, sessionID)
@@ -3831,7 +3865,11 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 		}
 	}
 	runbook := s.projectRunbooks[project.ID]
-	payload, err := json.Marshal(buildAgentSessionPayload(sessionID, issue, project, runbook, comments, s.issueLabels[issueID], childIssues, normalized))
+	payloadObject := buildAgentSessionPayload(sessionID, issue, project, runbook, comments, s.issueLabels[issueID], childIssues, normalized)
+	if executionMode == agentSessionExecutionModeWorkingCopy {
+		applyIssueWorkingCopyTaskPayload(payloadObject, workingCopy)
+	}
+	payload, err := json.Marshal(payloadObject)
 	if err != nil {
 		return AgentSession{}, err
 	}
@@ -3850,10 +3888,14 @@ func (s *MemoryStore) createAgentSessionLocked(userID, workspaceID, issueID stri
 		RequiredCapabilities: requiredCapabilities,
 		Payload:              json.RawMessage(payload),
 		Result:               json.RawMessage(`{}`),
+		StorageAffinityID:    workingCopy.StorageID,
 		CreatedAt:            now,
 		UpdatedAt:            now,
 	}
 	s.runtimeTasks[task.ID] = task
+	if executionMode == agentSessionExecutionModeWorkingCopy {
+		s.issueWorkingCopies[issueWorkingCopyKey(workspaceID, issueID)] = workingCopy
+	}
 	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, "", userID, "created", json.RawMessage(fmt.Sprintf(`{"kind":%q,"runtimeMode":%q,"status":%q}`, task.Kind, task.RuntimeMode, task.Status)))
 	return runtimeTaskToAgentSession(task)
 }
@@ -3980,6 +4022,7 @@ func (s *MemoryStore) RequestIssueTestEnvironmentCleanup(_ Context, userID, work
 	session, err := s.createAgentSessionLocked(userID, workspaceID, issueID, CreateAgentSessionInput{
 		AgentEngine: engine,
 		Command:     buildIssueTestCleanupPrompt(detail, environment),
+		Automation:  testEnvironmentCleanupAutomation,
 	})
 	if err != nil {
 		return TestEnvironmentSessionResult{}, err
@@ -4575,10 +4618,12 @@ func (s *MemoryStore) UpdateIssue(_ Context, userID, workspaceID, issueID string
 			if err != nil {
 				return Issue{}, err
 			}
-			issue.ProjectID = project.ID
-		} else {
-			issue.ProjectID = ""
+			projectID = project.ID
 		}
+		if workingCopy, ok := s.issueWorkingCopies[issueWorkingCopyKey(issue.WorkspaceID, issue.ID)]; ok && workingCopy.ProjectID != projectID {
+			return Issue{}, ErrConflict
+		}
+		issue.ProjectID = projectID
 	}
 	if input.Title != nil {
 		title := plainIssueTitleFromText(*input.Title)
@@ -5198,6 +5243,15 @@ func (s *MemoryStore) CancelRuntimeTask(_ Context, userID, workspaceID, taskID s
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	reason := normalizeRuntimeTaskCancelReason(input.Reason)
+	if runtimeTaskExecutionMode(task) == agentSessionExecutionModeWorkingCopy && task.Status != "queued" {
+		task.CancelRequestedAt = now
+		task.CancelRequested = true
+		task.Error = reason
+		task.UpdatedAt = now
+		s.runtimeTasks[task.ID] = task
+		s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, "", userID, "cancel_requested", json.RawMessage(fmt.Sprintf(`{"status":%q,"reason":%q}`, task.Status, reason)))
+		return task, nil
+	}
 	task.Status = "cancelled"
 	if task.StartedAt == "" && (task.ClaimedAt != "" || task.ClaimedByWorkerID != "") {
 		task.StartedAt = now
@@ -5206,6 +5260,9 @@ func (s *MemoryStore) CancelRuntimeTask(_ Context, userID, workspaceID, taskID s
 	task.Error = reason
 	task.UpdatedAt = now
 	s.runtimeTasks[task.ID] = task
+	if runtimeTaskExecutionMode(task) == agentSessionExecutionModeWorkingCopy {
+		s.releaseQueuedIssueWorkingCopyLocked(task)
+	}
 	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, "", userID, "cancel_requested", json.RawMessage(fmt.Sprintf(`{"status":%q,"reason":%q}`, task.Status, reason)))
 	return task, nil
 }
@@ -5265,12 +5322,19 @@ func (s *MemoryStore) ClaimRuntimeTask(_ Context, registration RuntimeRegistrati
 	candidates := []RuntimeTask{}
 	nowTime := time.Now().UTC()
 	for _, task := range s.runtimeTasks {
-		if task.WorkspaceID == registration.WorkspaceID &&
-			task.ClaimedByWorkerID == worker.ID &&
-			task.Status == "running" &&
-			task.RuntimeMode == worker.Mode &&
-			jsonObjectContains(worker.Capabilities, task.RequiredCapabilities) &&
-			runtimeTaskUpdatedBefore(task, nowTime.Add(-staleRunningTaskReclaimAge)) {
+		if task.WorkspaceID != registration.WorkspaceID ||
+			task.RuntimeMode != worker.Mode ||
+			!jsonObjectContains(worker.Capabilities, task.RequiredCapabilities) ||
+			!runtimeTaskUpdatedBefore(task, nowTime.Add(-staleRunningTaskReclaimAge)) {
+			continue
+		}
+		if runtimeTaskExecutionMode(task) == agentSessionExecutionModeWorkingCopy {
+			if (task.Status == "claimed" || task.Status == "running") && s.runtimeTaskMatchesWorkingCopyStorageLocked(task, worker) {
+				candidates = append(candidates, task)
+			}
+			continue
+		}
+		if task.Status == "running" && task.ClaimedByWorkerID == worker.ID {
 			candidates = append(candidates, task)
 		}
 	}
@@ -5279,6 +5343,7 @@ func (s *MemoryStore) ClaimRuntimeTask(_ Context, registration RuntimeRegistrati
 			if task.WorkspaceID != registration.WorkspaceID ||
 				task.Status != "queued" ||
 				task.RuntimeMode != worker.Mode ||
+				!s.runtimeTaskMatchesWorkingCopyStorageLocked(task, worker) ||
 				!jsonObjectContains(worker.Capabilities, task.RequiredCapabilities) {
 				continue
 			}
@@ -5311,6 +5376,17 @@ func (s *MemoryStore) ClaimRuntimeTask(_ Context, registration RuntimeRegistrati
 	now := nowTime.Format(time.RFC3339Nano)
 	task.Status = "claimed"
 	task.ClaimedByWorkerID = worker.ID
+	if runtimeTaskExecutionMode(task) == agentSessionExecutionModeWorkingCopy {
+		key := issueWorkingCopyKey(task.WorkspaceID, task.IssueID)
+		workingCopy := s.issueWorkingCopies[key]
+		if workingCopy.StorageID == "" {
+			workingCopy.StorageID = worker.StorageID
+		}
+		workingCopy.LastWorkerID = worker.ID
+		workingCopy.UpdatedAt = now
+		s.issueWorkingCopies[key] = workingCopy
+		task.StorageAffinityID = worker.StorageID
+	}
 	if task.ClaimedAt == "" {
 		task.ClaimedAt = now
 	}
@@ -5417,10 +5493,15 @@ func (s *MemoryStore) UpdateRuntimeTaskStatus(_ Context, registration RuntimeReg
 		return RuntimeTask{}, err
 	}
 	task, ok := s.runtimeTasks[taskID]
+	if ok && task.CancelRequested && normalized.Status == "completed" {
+		normalized.Status = "cancelled"
+		normalized.Error = firstNonEmpty(task.Error, normalized.Error)
+	}
 	if !ok ||
 		task.WorkspaceID != registration.WorkspaceID ||
 		task.ClaimedByWorkerID != worker.ID ||
-		(task.Status != "claimed" && task.Status != "running") {
+		(task.Status != "claimed" && task.Status != "running") ||
+		(task.CancelRequested && normalized.Status != "cancelled") {
 		return RuntimeTask{}, ErrNotFound
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -5439,6 +5520,11 @@ func (s *MemoryStore) UpdateRuntimeTaskStatus(_ Context, registration RuntimeReg
 	s.runtimeTasks[task.ID] = task
 	s.appendRuntimeTaskEventLocked(task.WorkspaceID, task.ID, worker.ID, "", "status_changed", json.RawMessage(fmt.Sprintf(`{"status":%q,"error":%q}`, task.Status, task.Error)))
 	if isFinalRuntimeTaskStatus(task.Status) && task.Kind == "agent_session" {
+		workingCopyApplied := s.reconcileIssueWorkingCopyTerminalLocked(task)
+		if !workingCopyApplied || (task.CancelRequested && task.Status == "cancelled") {
+			task.Result = runtimeTaskResultWithoutSource(task.Result)
+			s.runtimeTasks[task.ID] = task
+		}
 		s.reconcileAgentSessionRuntimeResultLocked(task)
 	}
 	if isFinalRuntimeTaskStatus(task.Status) && task.Kind == "issue_type_triage" {

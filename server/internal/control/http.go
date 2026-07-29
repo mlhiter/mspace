@@ -2633,12 +2633,27 @@ func (s *Server) handleRuntimeAvailability(w http.ResponseWriter, r *http.Reques
 		writeStoreError(w, err)
 		return
 	}
-	availability := evaluateRuntimeAvailability(
+	var workingCopy *IssueWorkingCopy
+	if issueID := strings.TrimSpace(r.URL.Query().Get("issueId")); issueID != "" {
+		detail, err := s.store.GetIssue(r.Context(), user.ID, workspaceID, issueID)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		workingCopy = detail.WorkingCopy
+		requiredCapabilities, err = addIssueWorkingCopyCapability(requiredCapabilities)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	availability := evaluateRuntimeAvailabilityForWorkingCopy(
 		workspaceID,
 		workspace.Kind,
 		r.URL.Query().Get("runtimeMode"),
 		requiredCapabilities,
 		workers,
+		workingCopy,
 		time.Now().UTC(),
 	)
 	writeJSON(w, http.StatusOK, availability)
@@ -3180,6 +3195,10 @@ func rejectClientAgentSessionControlFields(raw json.RawMessage) error {
 		return nil
 	}
 	for _, key := range []string{
+		"runtimeMode",
+		"provider",
+		"agentProfile",
+		"branch",
 		"automation",
 		"testRunId",
 		"testRunBatchSize",
@@ -3194,6 +3213,13 @@ func rejectClientAgentSessionControlFields(raw json.RawMessage) error {
 		"artifactDir",
 		"repository",
 		"sourceCapture",
+		"executionMode",
+		"workingCopy",
+		"workingCopyGeneration",
+		"expectedHeadSha",
+		"initialize",
+		"storageId",
+		"storageAffinityId",
 		"developerInstructions",
 		"approvalPolicy",
 		"sandbox",

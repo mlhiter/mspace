@@ -1264,10 +1264,11 @@ func (s *PostgresStore) RegisterRuntimeWorker(ctx Context, registration RuntimeR
 		return RuntimeWorker{}, err
 	}
 	row := tx.QueryRow(dbctx, `
-		INSERT INTO runtime_workers (workspace_id, registration_token_id, name, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now(), now())
+		INSERT INTO runtime_workers (workspace_id, registration_token_id, name, storage_id, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), now())
 		ON CONFLICT (workspace_id, name) DO UPDATE SET
 			registration_token_id = EXCLUDED.registration_token_id,
+			storage_id = EXCLUDED.storage_id,
 			mode = EXCLUDED.mode,
 			status = EXCLUDED.status,
 			version = EXCLUDED.version,
@@ -1277,8 +1278,8 @@ func (s *PostgresStore) RegisterRuntimeWorker(ctx Context, registration RuntimeR
 			agent_engine_diagnostics = EXCLUDED.agent_engine_diagnostics,
 			last_seen_at = now(),
 			updated_at = now()
-		RETURNING id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, created_at, updated_at
-	`, registration.WorkspaceID, registration.TokenID, normalized.Name, normalized.Mode, normalized.Status, normalized.Version, normalized.CurrentLoad, normalized.Capabilities, normalized.Labels, normalized.AgentEngineDiagnostics)
+		RETURNING id::text, workspace_id::text, name, storage_id, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, created_at, updated_at
+	`, registration.WorkspaceID, registration.TokenID, normalized.Name, normalized.StorageID, normalized.Mode, normalized.Status, normalized.Version, normalized.CurrentLoad, normalized.Capabilities, normalized.Labels, normalized.AgentEngineDiagnostics)
 	worker, err := scanRuntimeWorker(row)
 	if err != nil {
 		return RuntimeWorker{}, err
@@ -1314,13 +1315,14 @@ func (s *PostgresStore) UpdateRuntimeWorkerHeartbeat(ctx Context, registration R
 	`, registration.TokenID, registration.WorkspaceID); err != nil {
 		return RuntimeWorker{}, err
 	}
+	var storedStorageID string
 	var storedCapabilities, storedDiagnostics []byte
 	if err := tx.QueryRow(dbctx, `
-		SELECT capabilities, agent_engine_diagnostics
+		SELECT storage_id, capabilities, agent_engine_diagnostics
 		FROM runtime_workers
 		WHERE id = $1 AND workspace_id = $2
 		FOR UPDATE
-	`, workerID, registration.WorkspaceID).Scan(&storedCapabilities, &storedDiagnostics); err != nil {
+	`, workerID, registration.WorkspaceID).Scan(&storedStorageID, &storedCapabilities, &storedDiagnostics); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return RuntimeWorker{}, ErrNotFound
 		}
@@ -1335,20 +1337,28 @@ func (s *PostgresStore) UpdateRuntimeWorkerHeartbeat(ctx Context, registration R
 		diagnostics = normalized.AgentEngineDiagnostics
 	}
 	capabilities = downgradeUnavailableAgentEngineCapabilities(capabilities, diagnostics)
+	storageID := firstNonEmpty(normalized.StorageID, storedStorageID)
+	if jsonObjectContains(capabilities, json.RawMessage(`{"issueWorkingCopyV1":true}`)) && storageID == "" {
+		return RuntimeWorker{}, errors.New("storageId is required for issueWorkingCopyV1")
+	}
 	row := tx.QueryRow(dbctx, `
 		UPDATE runtime_workers
 		SET
-			status = $1,
-			version = CASE WHEN $2 <> '' THEN $2 ELSE version END,
-			current_load = $3,
-			capabilities = $4::jsonb,
-			labels = CASE WHEN $5::jsonb <> '{}'::jsonb THEN $5::jsonb ELSE labels END,
-			agent_engine_diagnostics = $6::jsonb,
+			status = CASE
+				WHEN cancel_requested_at IS NOT NULL AND $1 = 'completed' THEN 'cancelled'
+				ELSE $1
+			END,
+			storage_id = $2,
+			version = CASE WHEN $3 <> '' THEN $3 ELSE version END,
+			current_load = $4,
+			capabilities = $5::jsonb,
+			labels = CASE WHEN $6::jsonb <> '{}'::jsonb THEN $6::jsonb ELSE labels END,
+			agent_engine_diagnostics = $7::jsonb,
 			last_seen_at = now(),
 			updated_at = now()
-		WHERE id = $7 AND workspace_id = $8
-		RETURNING id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, created_at, updated_at
-	`, normalized.Status, normalized.Version, normalized.CurrentLoad, capabilities, normalized.Labels, diagnostics, workerID, registration.WorkspaceID)
+		WHERE id = $8 AND workspace_id = $9
+		RETURNING id::text, workspace_id::text, name, storage_id, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, created_at, updated_at
+	`, normalized.Status, storageID, normalized.Version, normalized.CurrentLoad, capabilities, normalized.Labels, diagnostics, workerID, registration.WorkspaceID)
 	worker, err := scanRuntimeWorker(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RuntimeWorker{}, ErrNotFound
@@ -1368,7 +1378,7 @@ func (s *PostgresStore) ListRuntimeWorkers(ctx Context, userID, workspaceID stri
 		return nil, err
 	}
 	rows, err := s.pool.Query(dbctx, `
-		SELECT id::text, workspace_id::text, name, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, created_at, updated_at
+		SELECT id::text, workspace_id::text, name, storage_id, mode, status, version, current_load, capabilities, labels, agent_engine_diagnostics, last_seen_at, created_at, updated_at
 		FROM runtime_workers
 		WHERE workspace_id = $1
 		ORDER BY last_seen_at DESC, created_at DESC
@@ -1484,9 +1494,10 @@ func insertRuntimeTaskRecord(ctx context.Context, q queryer, workspaceID, userID
 			runtime_mode,
 			required_capabilities,
 			payload,
+			storage_affinity_id,
 			created_by_user_id
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING
 			id::text,
 			workspace_id::text,
@@ -1500,14 +1511,16 @@ func insertRuntimeTaskRecord(ctx context.Context, q queryer, workspaceID, userID
 			required_capabilities,
 			payload,
 			result,
+			storage_affinity_id,
 			COALESCE(claimed_by_worker_id::text, ''),
 			claimed_at,
 			started_at,
 			finished_at,
+			cancel_requested_at,
 			error,
 			created_at,
 			updated_at
-	`, workspaceID, normalized.IssueID, normalized.SessionID, normalized.ProjectID, normalized.Kind, normalized.Priority, normalized.RuntimeMode, normalized.RequiredCapabilities, normalized.Payload, userID)
+	`, workspaceID, normalized.IssueID, normalized.SessionID, normalized.ProjectID, normalized.Kind, normalized.Priority, normalized.RuntimeMode, normalized.RequiredCapabilities, normalized.Payload, normalized.StorageAffinityID, userID)
 	task, err := scanRuntimeTask(row)
 	if err != nil {
 		return RuntimeTask{}, err
@@ -1579,10 +1592,12 @@ func (s *PostgresStore) ListRuntimeTasksPage(ctx Context, userID, workspaceID st
 			required_capabilities,
 			payload,
 			result,
+			storage_affinity_id,
 			COALESCE(claimed_by_worker_id::text, ''),
 			claimed_at,
 			started_at,
 			finished_at,
+			cancel_requested_at,
 			error,
 			created_at,
 			updated_at
@@ -1743,12 +1758,23 @@ func (s *PostgresStore) CancelRuntimeTask(ctx Context, userID, workspaceID, task
 	row := tx.QueryRow(dbctx, `
 		UPDATE runtime_tasks
 		SET
-			status = 'cancelled',
+			status = CASE
+				WHEN COALESCE(payload->>'executionMode', 'detached') = 'issue_working_copy'
+					AND status IN ('claimed', 'running') THEN status
+				ELSE 'cancelled'
+			END,
 			started_at = CASE
-				WHEN status IN ('claimed', 'running') THEN COALESCE(started_at, now())
+				WHEN status IN ('claimed', 'running')
+					AND COALESCE(payload->>'executionMode', 'detached') <> 'issue_working_copy'
+					THEN COALESCE(started_at, now())
 				ELSE started_at
 			END,
-			finished_at = now(),
+			finished_at = CASE
+				WHEN COALESCE(payload->>'executionMode', 'detached') = 'issue_working_copy'
+					AND status IN ('claimed', 'running') THEN finished_at
+				ELSE now()
+			END,
+			cancel_requested_at = now(),
 			error = $1,
 			updated_at = now()
 		WHERE id = $2
@@ -1767,10 +1793,12 @@ func (s *PostgresStore) CancelRuntimeTask(ctx Context, userID, workspaceID, task
 			required_capabilities,
 			payload,
 			result,
+			storage_affinity_id,
 			COALESCE(claimed_by_worker_id::text, ''),
 			claimed_at,
 			started_at,
 			finished_at,
+			cancel_requested_at,
 			error,
 			created_at,
 			updated_at
@@ -1781,6 +1809,11 @@ func (s *PostgresStore) CancelRuntimeTask(ctx Context, userID, workspaceID, task
 	}
 	if err != nil {
 		return RuntimeTask{}, err
+	}
+	if task.Status == "cancelled" && runtimeTaskExecutionMode(task) == agentSessionExecutionModeWorkingCopy {
+		if err := releaseQueuedIssueWorkingCopyPostgres(dbctx, tx, task); err != nil {
+			return RuntimeTask{}, err
+		}
 	}
 	if err := insertRuntimeTaskEvent(dbctx, tx, task.WorkspaceID, task.ID, "", userID, "cancel_requested", map[string]any{
 		"status": task.Status,
@@ -1834,6 +1867,12 @@ func (s *PostgresStore) ClaimRuntimeTask(ctx Context, registration RuntimeRegist
 	if err != nil {
 		return nil, err
 	}
+	if runtimeTaskExecutionMode(task) == agentSessionExecutionModeWorkingCopy {
+		task, err = bindClaimedIssueWorkingCopy(dbctx, tx, task, workerID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := insertRuntimeTaskEvent(dbctx, tx, task.WorkspaceID, task.ID, workerID, "", "claimed", map[string]any{
 		"status": task.Status,
 	}); err != nil {
@@ -1850,9 +1889,13 @@ func claimPostgresRuntimeTask(ctx context.Context, q queryer, workerID, workspac
 	orderBy := "t.priority DESC, t.created_at ASC, t.id ASC"
 	claimedBy := ""
 	if resumeRunning {
-		whereStatus = "t.status = 'running'"
+		whereStatus = `(
+			(COALESCE(t.payload->>'executionMode', 'detached') = 'issue_working_copy' AND t.status IN ('claimed', 'running'))
+			OR
+			(COALESCE(t.payload->>'executionMode', 'detached') <> 'issue_working_copy' AND t.status = 'running' AND t.claimed_by_worker_id = w.id)
+		)`
 		orderBy = "t.updated_at ASC, t.created_at ASC, t.id ASC"
-		claimedBy = fmt.Sprintf("AND t.claimed_by_worker_id = w.id AND t.updated_at < now() - interval '%d seconds'", int(staleRunningTaskReclaimAge.Seconds()))
+		claimedBy = fmt.Sprintf("AND t.updated_at < now() - interval '%d seconds'", int(staleRunningTaskReclaimAge.Seconds()))
 	}
 	row := q.QueryRow(ctx, `
 		WITH next_task AS (
@@ -1865,6 +1908,20 @@ func claimPostgresRuntimeTask(ctx context.Context, q queryer, workerID, workspac
 				AND t.runtime_mode = w.mode
 				AND w.status = 'online'
 				AND w.capabilities @> t.required_capabilities
+				AND (t.storage_affinity_id = '' OR t.storage_affinity_id = w.storage_id)
+				AND (
+					COALESCE(t.payload->>'executionMode', 'detached') <> 'issue_working_copy'
+					OR (
+						w.storage_id <> ''
+						AND EXISTS (
+							SELECT 1 FROM issue_working_copies iwc
+							WHERE iwc.workspace_id = t.workspace_id AND iwc.issue_id::text = t.issue_id
+								AND iwc.project_id::text = t.project_id
+								AND iwc.active_session_id = t.session_id
+								AND (iwc.storage_id = '' OR iwc.storage_id = w.storage_id)
+						)
+					)
+				)
 			ORDER BY `+orderBy+`
 			FOR UPDATE OF t SKIP LOCKED
 			LIMIT 1
@@ -1890,10 +1947,12 @@ func claimPostgresRuntimeTask(ctx context.Context, q queryer, workerID, workspac
 			t.required_capabilities,
 			t.payload,
 			t.result,
+			t.storage_affinity_id,
 			COALESCE(t.claimed_by_worker_id::text, ''),
 			t.claimed_at,
 			t.started_at,
 			t.finished_at,
+			t.cancel_requested_at,
 			t.error,
 			t.created_at,
 			t.updated_at
@@ -1922,10 +1981,12 @@ func (s *PostgresStore) GetRuntimeTaskForWorker(ctx Context, registration Runtim
 			t.required_capabilities,
 			t.payload,
 			t.result,
+			t.storage_affinity_id,
 			COALESCE(t.claimed_by_worker_id::text, ''),
 			t.claimed_at,
 			t.started_at,
 			t.finished_at,
+			t.cancel_requested_at,
 			t.error,
 			t.created_at,
 			t.updated_at
@@ -2002,7 +2063,10 @@ func (s *PostgresStore) UpdateRuntimeTaskStatus(ctx Context, registration Runtim
 	row := tx.QueryRow(dbctx, `
 		UPDATE runtime_tasks
 		SET
-			status = $1,
+			status = CASE
+				WHEN cancel_requested_at IS NOT NULL AND $1 = 'completed' THEN 'cancelled'
+				ELSE $1
+			END,
 			started_at = CASE
 				WHEN $1 IN ('running', 'completed', 'failed', 'cancelled') THEN COALESCE(started_at, now())
 				ELSE started_at
@@ -2015,12 +2079,16 @@ func (s *PostgresStore) UpdateRuntimeTaskStatus(ctx Context, registration Runtim
 				WHEN $2::jsonb IS NULL THEN result
 				ELSE $2::jsonb
 			END,
-			error = $3,
+			error = CASE
+				WHEN cancel_requested_at IS NOT NULL AND $1 IN ('completed', 'cancelled') AND error <> '' THEN error
+				ELSE $3
+			END,
 			updated_at = now()
 		WHERE id = $4
 			AND workspace_id = $5
 			AND claimed_by_worker_id = $6
 			AND status IN ('claimed', 'running')
+			AND (cancel_requested_at IS NULL OR $1 IN ('completed', 'cancelled'))
 		RETURNING
 			id::text,
 			workspace_id::text,
@@ -2034,10 +2102,12 @@ func (s *PostgresStore) UpdateRuntimeTaskStatus(ctx Context, registration Runtim
 			required_capabilities,
 			payload,
 			result,
+			storage_affinity_id,
 			COALESCE(claimed_by_worker_id::text, ''),
 			claimed_at,
 			started_at,
 			finished_at,
+			cancel_requested_at,
 			error,
 			created_at,
 			updated_at
@@ -2056,6 +2126,16 @@ func (s *PostgresStore) UpdateRuntimeTaskStatus(ctx Context, registration Runtim
 		return RuntimeTask{}, err
 	}
 	if isFinalRuntimeTaskStatus(task.Status) && task.Kind == "agent_session" {
+		workingCopyApplied, err := s.reconcileIssueWorkingCopyTerminal(dbctx, tx, task)
+		if err != nil {
+			return RuntimeTask{}, err
+		}
+		if !workingCopyApplied || (task.CancelRequested && task.Status == "cancelled") {
+			task.Result = runtimeTaskResultWithoutSource(task.Result)
+			if _, err := tx.Exec(dbctx, `UPDATE runtime_tasks SET result = $1::jsonb WHERE workspace_id = $2 AND id = $3`, task.Result, task.WorkspaceID, task.ID); err != nil {
+				return RuntimeTask{}, err
+			}
+		}
 		if err := s.reconcileAgentSessionRuntimeResult(dbctx, tx, task); err != nil {
 			return RuntimeTask{}, err
 		}
@@ -2444,6 +2524,7 @@ func scanRuntimeWorker(row scanner) (RuntimeWorker, error) {
 		&worker.ID,
 		&worker.WorkspaceID,
 		&worker.Name,
+		&worker.StorageID,
 		&worker.Mode,
 		&worker.Status,
 		&worker.Version,
@@ -2469,7 +2550,7 @@ func scanRuntimeWorker(row scanner) (RuntimeWorker, error) {
 func scanRuntimeTask(row scanner) (RuntimeTask, error) {
 	var task RuntimeTask
 	var requiredCapabilities, payload, result []byte
-	var claimedAt, startedAt, finishedAt sql.NullTime
+	var claimedAt, startedAt, finishedAt, cancelRequestedAt sql.NullTime
 	var createdAt, updatedAt time.Time
 	if err := row.Scan(
 		&task.ID,
@@ -2484,10 +2565,12 @@ func scanRuntimeTask(row scanner) (RuntimeTask, error) {
 		&requiredCapabilities,
 		&payload,
 		&result,
+		&task.StorageAffinityID,
 		&task.ClaimedByWorkerID,
 		&claimedAt,
 		&startedAt,
 		&finishedAt,
+		&cancelRequestedAt,
 		&task.Error,
 		&createdAt,
 		&updatedAt,
@@ -2505,6 +2588,10 @@ func scanRuntimeTask(row scanner) (RuntimeTask, error) {
 	}
 	if finishedAt.Valid {
 		task.FinishedAt = finishedAt.Time.UTC().Format(time.RFC3339)
+	}
+	if cancelRequestedAt.Valid {
+		task.CancelRequestedAt = cancelRequestedAt.Time.UTC().Format(time.RFC3339)
+		task.CancelRequested = true
 	}
 	task.CreatedAt = createdAt.UTC().Format(time.RFC3339)
 	task.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
@@ -2567,6 +2654,10 @@ func normalizeRuntimeWorkerInput(input RuntimeWorkerInput) (RuntimeWorkerInput, 
 	if input.Name == "" {
 		return RuntimeWorkerInput{}, errors.New("worker name is required")
 	}
+	input.StorageID = strings.TrimSpace(input.StorageID)
+	if err := validateRuntimeStorageID(input.StorageID, false); err != nil {
+		return RuntimeWorkerInput{}, err
+	}
 	input.Mode = strings.ToLower(strings.TrimSpace(input.Mode))
 	if input.Mode == "" {
 		input.Mode = "team"
@@ -2603,6 +2694,9 @@ func normalizeRuntimeWorkerInput(input RuntimeWorkerInput) (RuntimeWorkerInput, 
 	input.Labels = labels
 	input.AgentEngineDiagnostics = agentEngineDiagnostics
 	input.Capabilities = downgradeUnavailableAgentEngineCapabilities(input.Capabilities, input.AgentEngineDiagnostics)
+	if jsonObjectContains(input.Capabilities, json.RawMessage(`{"issueWorkingCopyV1":true}`)) && input.StorageID == "" {
+		return RuntimeWorkerInput{}, errors.New("storageId is required for issueWorkingCopyV1")
+	}
 	return input, nil
 }
 
@@ -2610,6 +2704,10 @@ func normalizeCreateRuntimeTaskInput(input CreateRuntimeTaskInput) (CreateRuntim
 	input.IssueID = strings.TrimSpace(input.IssueID)
 	input.SessionID = strings.TrimSpace(input.SessionID)
 	input.ProjectID = strings.TrimSpace(input.ProjectID)
+	input.StorageAffinityID = strings.TrimSpace(input.StorageAffinityID)
+	if err := validateRuntimeStorageID(input.StorageAffinityID, false); err != nil {
+		return CreateRuntimeTaskInput{}, err
+	}
 	input.Kind = strings.ToLower(strings.TrimSpace(input.Kind))
 	if input.Kind == "" {
 		return CreateRuntimeTaskInput{}, errors.New("task kind is required")
@@ -2895,6 +2993,10 @@ func isFinalRuntimeTaskStatus(status string) bool {
 }
 
 func normalizeRuntimeHeartbeatInput(input RuntimeWorkerInput) (RuntimeWorkerInput, error) {
+	input.StorageID = strings.TrimSpace(input.StorageID)
+	if err := validateRuntimeStorageID(input.StorageID, false); err != nil {
+		return RuntimeWorkerInput{}, err
+	}
 	input.Status = strings.ToLower(strings.TrimSpace(input.Status))
 	if input.Status == "" {
 		input.Status = "online"

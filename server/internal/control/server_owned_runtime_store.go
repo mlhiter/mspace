@@ -28,6 +28,7 @@ const defaultImportedClusterImageRegistryPrefix = "crpi-7jr40k6elhldekqp.cn-hang
 const (
 	testDeployAutomation                = "test_deploy"
 	autoDeployTestEnvironmentAutomation = "auto_test_deploy"
+	testEnvironmentCleanupAutomation    = "test_environment_cleanup"
 )
 
 func (s *PostgresStore) GetWorkspaceSettings(ctx Context, userID, workspaceID string) (WorkspaceSettings, error) {
@@ -1187,6 +1188,7 @@ func (s *PostgresStore) RequestIssueTestEnvironmentCleanup(ctx Context, userID, 
 	session, err := s.CreateAgentSession(ctx, userID, workspaceID, issueID, CreateAgentSessionInput{
 		AgentEngine: engine,
 		Command:     buildIssueTestCleanupPrompt(detail, environment),
+		Automation:  testEnvironmentCleanupAutomation,
 	})
 	if err != nil {
 		return TestEnvironmentSessionResult{}, err

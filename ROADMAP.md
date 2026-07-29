@@ -1,6 +1,6 @@
 # mspace Roadmap
 
-> Status: milestone roadmap, updated 2026-07-17
+> Status: milestone roadmap, updated 2026-07-29
 
 ## Purpose
 
@@ -17,7 +17,7 @@ Issue intake
   -> Optional Project attachment
   -> Server-owned Agent Session
   -> Inbox review updates
-  -> Worker worktree and evidence review
+  -> Reusable Issue source working copy and Session evidence review
   -> Branch / PR handoff record or manual issue test deployment
   -> Issue namespace preview URL and validation evidence
   -> Branch / PR and cleanup
@@ -27,7 +27,7 @@ The roadmap intentionally keeps fixed worker workflow first. Kubernetes is the m
 
 The server control-plane slice now owns local password auth, optional GitHub sign-in, mspace auth sessions, users, workspaces, membership, workspace projects, runbooks, issues, child tasks, comments, reactions, labels, Inbox receipts, workspace settings, the fixed Agent catalog contract, Skills, Environments, Kubernetes cluster compatibility records, issue test environments, PR handoffs, runtime registration, runtime tasks, worker logs, and runtime results. Agent definitions are code-owned Codex, Claude Code, and Pi engines rather than persisted workspace profiles. Team/shared workspace data uses server Postgres; packaged personal desktop mode can use the same server contract on a local SQLite store.
 
-The local MVP now has first versions of commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, opt-in automatic test deploy after captured source commits, automatic personal worker startup/credential renewal, and bilingual desktop UI support for English and Simplified Chinese. The Agents route now exposes This Mac readiness, server-derived claimable Worker coverage, and per-engine status across connected Workers without reintroducing prompt profiles. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
+The local MVP now has first versions of a stable Issue source branch and reusable Worker working copy, commit-backed deploy source selection, issue-level branch / PR handoff records, structured review evidence, continueable failure evidence, opt-in automatic test deploy after captured source commits, automatic personal worker startup/credential renewal, and bilingual desktop UI support for English and Simplified Chinese. Human source Sessions serialize on the Issue working copy, while analysis, deploy, and Tests automation remain outside it; deploy and validation tasks use an explicit source Commit when available. The Agents route exposes This Mac readiness, server-derived claimable Worker coverage, and per-engine status across connected Workers without reintroducing prompt profiles. The next proof point is a real dogfood issue that exercises those surfaces together instead of treating each as a separate feature.
 
 The Tests surface is now part of the local MVP loop: project cases, case suggestions, plans, lightweight plan-level setup, runs, modal create/import with preview-before-confirm, Excel `.xlsx` import, case revisions, and issue-backed test run execution are implemented. The next test-module proof point is dogfooding a real plan through setup-produced `test-setup-result.json`, worker-produced `test-result.json`, failed-item retry, lightweight human review records, and follow-up case suggestions rather than expanding into CDP, SSH scheduling, templates, or multi-worker orchestration first.
 
@@ -56,7 +56,7 @@ Build in order:
 - Manual test deployment: let the user select a saved Kubernetes Environment and optional exposure overrides before queueing a deploy/test agent turn.
 - Issue namespace lifecycle: each issue can reserve one test namespace; the deploy/test agent creates it, deploys resources, mspace validates the preview URL, and writes the result back.
 - Branch and PR output: expose issue-level handoff recording from captured source evidence, with GitHub App-backed PR creation left as a server-owned executor step.
-- Cleanup controls: let the user retain or clean session worktrees now, and record retain/cleanup decisions for issue test namespaces.
+- Cleanup controls: make Issue working-copy recovery explicit, keep detached automation workdirs disposable, and record retain/cleanup decisions for Issue test namespaces.
 
 ### Stage 2: Team Runtime Providers
 
@@ -125,7 +125,7 @@ Acceptance:
 - A user can create and check off issue tasks without duplicating state between Markdown checkboxes and child issue rows.
 - A user can mention Codex, Claude Code, or Pi in an Issue comment and start a Worker-backed Session routed only to that engine capability.
 - A user can label an issue and stop an active session from Issue Detail.
-- The session runs in its own worktree.
+- A human source Session runs serially in the Issue's reusable source worktree; system automation runs in a detached per-Session worktree.
 - Inbox reflects issue and session updates without a manual refresh loop.
 - Logs stream while the session runs.
 - The issue clearly shows linked sessions, status, comments, current-turn agent output, and summary output.
@@ -150,7 +150,7 @@ Build:
 Acceptance:
 
 - A user can open a session and understand what changed.
-- A user can compare the session branch against the project default branch.
+- A user can compare the stable Issue source branch and each captured Session Commit against the project default branch.
 - A user can see commits, changed files, diff previews, logs, and evidence summary in one review path.
 - A user can understand tests, build/deploy result, preview URL, agent summary, risks, follow-ups, and cleanup/retain state without reading raw logs first.
 - Issue Detail remains the primary place to understand the work.
@@ -195,10 +195,10 @@ Goal:
 
 Current implementation:
 
-- Captures source commits and semantic source branch evidence through `issue_change_nodes`.
+- Captures Session commits and change evidence through `issue_change_nodes` while one `issue_working_copies` record owns the stable source branch, current head, Worker storage affinity, writer reservation, and recovery state.
 - Captures issue-level branch / PR delivery state through `issue_handoffs`.
 - Records branch / PR handoff state from Issue Detail using captured source evidence; GitHub App-backed PR creation/refresh remains a server-owned executor gap.
-- Keeps session retain and cleanup controls for worker-managed worktrees.
+- Keeps detached automation workdirs isolated from the reusable Issue source worktree and surfaces working-copy recovery state without silently resetting dirty work.
 - Records issue namespace retain/cleanup decisions.
 - Records failed sessions and failed environment checks as continueable `session_failures`.
 
@@ -211,7 +211,7 @@ Acceptance:
 
 - A user can start from an issue and finish with a branch or PR link.
 - The issue holds the branch or PR, validation evidence, session logs, and summary.
-- A user can decide whether to retain or clean up the session worktree.
+- A user can continue the Issue's source line across Agent Sessions and see when its owning Worker storage is unavailable or needs recovery.
 - One real project can complete the workflow without manual reconstruction.
 
 ## Later

@@ -49,6 +49,7 @@ import {
   controlPlaneApi,
   getStoredAuthIdentity,
   isFixedAgentEngineCatalogItem,
+  isIssueWorkingCopyAvailabilityBlocker,
   isNoActiveAgentWorkerError,
   parseAgentEngine,
   queryKeys,
@@ -492,7 +493,16 @@ function formatRuntimeAvailabilityReason(
   if (availability.reasonCode === "worker_draining") return t("issueDetail.composer.workerDraining");
   if (availability.reasonCode === "worker_offline") return t("issueDetail.composer.workerOffline");
   if (availability.reasonCode === "stale_heartbeat") return t("issueDetail.composer.workerStale");
+  if (availability.reasonCode === "working_copy_busy") return t("issueDetail.composer.workingCopyBusy");
+  if (availability.reasonCode === "working_copy_storage_unavailable") return t("issueDetail.composer.workingCopyStorageUnavailable");
+  if (availability.reasonCode === "working_copy_recovery_required") return t("issueDetail.composer.workingCopyRecoveryRequired");
   return fallback;
+}
+
+function isAgentSessionReadinessError(error: unknown) {
+  if (isNoActiveAgentWorkerError(error)) return true;
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /working[ _-]?copy.*(?:busy|storage|recover)|storage affinity/i.test(message);
 }
 
 function namespaceStatusLabel(status: string) {
@@ -5231,8 +5241,8 @@ export function IssueDetailPage() {
     [readinessAgent.id],
   );
   const agentRuntimeAvailabilityInput = useMemo(
-    () => ({ runtimeMode, requiredCapabilities: agentRequiredCapabilities }),
-    [agentRequiredCapabilities, runtimeMode],
+    () => ({ runtimeMode, requiredCapabilities: agentRequiredCapabilities, issueId }),
+    [agentRequiredCapabilities, issueId, runtimeMode],
   );
   const runtimeAvailabilityQueryKey = queryKeys.runtimeAvailability(workspaceId, auth.token, agentRuntimeAvailabilityInput);
   const runtimeAvailabilityQuery = useQuery({
@@ -5282,7 +5292,10 @@ export function IssueDetailPage() {
   const latestHandoff = handoffs[0];
   const completedChildIssueCount = childIssues.filter((task) => isClosedIssueStatus(task.status)).length;
   const latestSession = detail?.sessions[0];
-  const hasActiveSession = latestSession ? ["queued", "running"].includes(latestSession.status) : false;
+  const hasActiveSession = listOrEmpty(detail?.sessions).some((session) => ["queued", "running"].includes(session.status));
+  const hasActiveSourceSession = Boolean(detail?.workingCopy?.activeSessionId) || listOrEmpty(detail?.sessions).some(
+    (session) => !session.automation && ["queued", "running"].includes(session.status),
+  );
   const isSupportedAgentMention = Boolean(mentionedAgentConfig);
   const isUnsupportedAgentMention = Boolean(mentionedAgent && !mentionedAgentConfig);
   const mentionQuery = composerMentionMatch?.query ?? null;
@@ -5317,37 +5330,52 @@ export function IssueDetailPage() {
   const editingSkillMenuOpen = Boolean(editingCommentId) && editingCommentFocused && !editingSkillMenuDismissed && editingSkillSuggestions.length > 0;
   const runtimeLabel = runtimeMode === "team" ? t("issueDetail.composer.teamWorker") : t("issueDetail.composer.personalWorker");
   const hasMatchingAgentWorker = runtimeAvailabilityQuery.data?.state === "ready";
+  const runtimeAvailabilityReason = runtimeAvailabilityQuery.data?.reasonCode;
+  const workingCopyBlocked = isIssueWorkingCopyAvailabilityBlocker(runtimeAvailabilityReason);
+  const workingCopyDirty = detail?.workingCopy?.contentState === "dirty";
   const composerNeedsProjectForAgent = isSupportedAgentMention && !hasProject;
   const editingNeedsProjectForAgent = isSupportedEditingAgentMention && !hasProject;
-  const workerUnavailableText =
+  const workerUnavailableFallback =
     runtimeMode === "personal"
       ? t("issueDetail.composer.personalWorkerUnavailable")
       : t("issueDetail.composer.teamWorkerUnavailable");
+  const workerUnavailableText = runtimeAvailabilityQuery.data
+    ? formatRuntimeAvailabilityReason(runtimeAvailabilityQuery.data, workerUnavailableFallback, t)
+    : workerUnavailableFallback;
   const workerStartingText = t("issueDetail.composer.personalWorkerStarting");
   const canSaveEditingComment =
     Boolean(editingCommentId) &&
     Boolean(editingCommentBody.trim()) &&
     !isUnsupportedEditingAgentMention &&
-    !(isSupportedEditingAgentMention && hasActiveSession) &&
+    !(isSupportedEditingAgentMention && hasActiveSourceSession) &&
+    !(isSupportedEditingAgentMention && workingCopyBlocked) &&
     !(isSupportedEditingAgentMention && hasProject && runtimeMode === "team" && !hasMatchingAgentWorker);
   const editHelperText = isSupportedEditingAgentMention
     ? projectAttachFeedback === "edit" && hasProject
       ? t("issueDetail.composer.projectAttachedEditPreserved")
-      : hasActiveSession
+      : hasActiveSourceSession
         ? t("issueDetail.composer.agentAlreadyWorking", { name: editingMentionedAgentConfig?.name })
         : editingNeedsProjectForAgent
           ? t("issueDetail.composer.attachProjectBeforeAgentWithAnalysis")
+          : workingCopyBlocked
+            ? workerUnavailableText
           : !hasMatchingAgentWorker
             ? workerUnavailableText
+            : workingCopyDirty
+              ? t("issueDetail.composer.willContinueWorkingCopy", { name: editingMentionedAgentConfig?.name, runtime: runtimeLabel })
             : t("issueDetail.composer.willRunAfterSave", { name: editingMentionedAgentConfig?.name, runtime: runtimeLabel })
     : isUnsupportedEditingAgentMention
       ? t("issueDetail.composer.agentUnavailable", { mention: editingMentionedAgent })
       : t("issueDetail.composer.editLatest");
   const editSaveLabel = isSupportedEditingAgentMention
-    ? hasActiveSession
+    ? hasActiveSourceSession || runtimeAvailabilityReason === "working_copy_busy"
       ? t("issueDetail.composer.agentWorking")
       : editingNeedsProjectForAgent
         ? t("issueDetail.composer.attachProject")
+        : runtimeAvailabilityReason === "working_copy_recovery_required"
+          ? t("issueDetail.composer.recoveryRequired")
+        : runtimeAvailabilityReason === "working_copy_storage_unavailable"
+          ? t("issueDetail.composer.workingCopyUnavailable")
         : !hasMatchingAgentWorker
           ? runtimeMode === "personal"
             ? t("issueDetail.composer.startPersonalWorker")
@@ -5355,12 +5383,16 @@ export function IssueDetailPage() {
         : t("issueDetail.composer.saveAndStart")
     : t("issueDetail.composer.saveEdit");
   const composerHelperText = isSupportedAgentMention
-    ? hasActiveSession
+    ? hasActiveSourceSession
       ? t("issueDetail.composer.agentAlreadyWorking", { name: mentionedAgentConfig?.name })
       : composerNeedsProjectForAgent
         ? t("issueDetail.composer.attachProjectBeforeAgentWithAnalysis")
+        : workingCopyBlocked
+          ? workerUnavailableText
         : !hasMatchingAgentWorker
           ? workerUnavailableText
+        : workingCopyDirty
+          ? t("issueDetail.composer.willContinueWorkingCopy", { name: mentionedAgentConfig?.name, runtime: runtimeLabel })
         : t("issueDetail.composer.willRunOnRuntime", { name: mentionedAgentConfig?.name, runtime: runtimeLabel })
     : isUnsupportedAgentMention
       ? t("issueDetail.composer.agentUnavailable", { mention: mentionedAgent })
@@ -5372,12 +5404,28 @@ export function IssueDetailPage() {
       queryClient,
       runtimeMode,
       requiredCapabilities: requiredCapabilitiesForAgent(agent),
-      unavailableMessage: workerUnavailableText,
+      issueId,
+      unavailableMessage: workerUnavailableFallback,
       startingMessage: workerStartingText,
-      formatUnavailableMessage: (availability) => formatRuntimeAvailabilityReason(availability, workerUnavailableText, t),
+      formatUnavailableMessage: (availability) => formatRuntimeAvailabilityReason(availability, workerUnavailableFallback, t),
       ensurePersonalWorker: window.mspaceDesktop?.ensurePersonalWorker,
     });
-  }, [auth.token, queryClient, runtimeMode, t, workerStartingText, workerUnavailableText, workspaceId]);
+  }, [auth.token, issueId, queryClient, runtimeMode, t, workerStartingText, workerUnavailableFallback, workspaceId]);
+  const normalizeAgentSessionError = useCallback(async (error: unknown, agent: AgentEngineCatalogItem) => {
+    if (!isAgentSessionReadinessError(error)) {
+      return error instanceof Error ? error : new Error(String(error));
+    }
+    try {
+      const availability = await controlPlaneApi.getRuntimeAvailability(auth.token, workspaceId, {
+        runtimeMode,
+        requiredCapabilities: requiredCapabilitiesForAgent(agent),
+        issueId,
+      });
+      return new Error(formatRuntimeAvailabilityReason(availability, workerUnavailableFallback, t));
+    } catch {
+      return new Error(workerUnavailableFallback);
+    }
+  }, [auth.token, issueId, runtimeMode, t, workerUnavailableFallback, workspaceId]);
   const syncEditingCommentEditorSnapshot = useCallback((editor: Editor) => {
     const match = mentionMatchInEditor(editor);
     const skillMatch = skillCommandMatchInEditor(editor);
@@ -5550,14 +5598,13 @@ export function IssueDetailPage() {
         try {
           await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
             agentEngine: agentConfig.id,
-            runtimeMode,
             command: trimmedBody,
             triggerCommentId: comment.commentId,
             skillSlugs: skillSlugs.length > 0 ? skillSlugs : undefined,
           });
         } catch (error) {
-          if (isNoActiveAgentWorkerError(error)) {
-            throw new Error(workerUnavailableText);
+          if (isAgentSessionReadinessError(error)) {
+            throw await normalizeAgentSessionError(error, agentConfig);
           }
           throw error;
         }
@@ -5583,18 +5630,25 @@ export function IssueDetailPage() {
     Boolean(composerBody.trim()) &&
     !sendComposer.isPending &&
     !isUnsupportedAgentMention &&
-    !(isSupportedAgentMention && hasActiveSession) &&
+    !(isSupportedAgentMention && hasActiveSourceSession) &&
+    !(isSupportedAgentMention && workingCopyBlocked) &&
     !(isSupportedAgentMention && hasProject && runtimeMode === "team" && !hasMatchingAgentWorker);
   const sendAgentLabel = sendComposer.isPending
     ? t("issueDetail.composer.sending")
     : composerNeedsProjectForAgent
       ? t("issueDetail.composer.attachProject")
+      : isSupportedAgentMention && runtimeAvailabilityReason === "working_copy_busy"
+        ? t("issueDetail.composer.agentWorking")
+      : isSupportedAgentMention && runtimeAvailabilityReason === "working_copy_recovery_required"
+        ? t("issueDetail.composer.recoveryRequired")
+      : isSupportedAgentMention && runtimeAvailabilityReason === "working_copy_storage_unavailable"
+        ? t("issueDetail.composer.workingCopyUnavailable")
       : isSupportedAgentMention && !hasMatchingAgentWorker
         ? runtimeMode === "personal"
           ? t("issueDetail.composer.startPersonalWorker")
           : t("issueDetail.composer.connectWorker")
         : isSupportedAgentMention
-          ? hasActiveSession
+          ? hasActiveSourceSession
             ? t("issueDetail.composer.agentWorking")
             : t("issueDetail.composer.sendTo", { name: mentionedAgentConfig?.name })
           : t("issueDetail.composer.comment");
@@ -5621,14 +5675,13 @@ export function IssueDetailPage() {
         try {
           await controlPlaneApi.createAgentSession(auth.token, workspaceId, issueId, {
             agentEngine: input.agentConfig.id,
-            runtimeMode,
             command: trimmedBody,
             triggerCommentId: input.commentId,
             skillSlugs: skillSlugs.length > 0 ? skillSlugs : undefined,
           });
         } catch (error) {
-          if (isNoActiveAgentWorkerError(error)) {
-            throw new Error(workerUnavailableText);
+          if (isAgentSessionReadinessError(error)) {
+            throw await normalizeAgentSessionError(error, input.agentConfig);
           }
           throw error;
         }
@@ -6181,7 +6234,7 @@ export function IssueDetailPage() {
   }
 
   function continueFromFailure(failure: SessionFailure) {
-    if (hasActiveSession) return;
+    if (hasActiveSourceSession || detail?.workingCopy?.contentState === "recovery_required") return;
     const agentEngine = agentEngineForLinkedSession(failure.sessionId, listOrEmpty(detail?.sessions));
     const agent = findAgent(agents, agentEngine) || fallbackAgent(agentEngine);
     const draft = failureContinueDraft(failure, agent);
@@ -6552,7 +6605,7 @@ export function IssueDetailPage() {
                           key={`failure-${item.failure.id}`}
                           failure={item.failure}
                           session={session}
-                          canContinue={!hasActiveSession}
+                          canContinue={!hasActiveSourceSession && detail.workingCopy?.contentState !== "recovery_required"}
                           onContinue={() => continueFromFailure(item.failure)}
                           canRetry={canRetryFailure}
                           isRetrying={startTestDeploy.isPending}
@@ -6637,7 +6690,15 @@ export function IssueDetailPage() {
                       {isSupportedAgentMention ? (
                         <span className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[color:var(--line)] bg-[color:var(--surface)] px-2 text-[11px] font-medium text-[color:var(--ink)]">
                           <Bot className="size-3.5" />
-                          {hasMatchingAgentWorker ? runtimeLabel : t("issueDetail.composer.noActiveWorker")}
+                          {hasMatchingAgentWorker
+                            ? runtimeLabel
+                            : runtimeAvailabilityReason === "working_copy_busy"
+                              ? t("issueDetail.composer.agentWorking")
+                              : runtimeAvailabilityReason === "working_copy_recovery_required"
+                                ? t("issueDetail.composer.recoveryRequired")
+                                : runtimeAvailabilityReason === "working_copy_storage_unavailable"
+                                  ? t("issueDetail.composer.workingCopyUnavailable")
+                                  : t("issueDetail.composer.noActiveWorker")}
                         </span>
                       ) : null}
                       <span className="min-w-[180px] flex-1">{composerHelperText}</span>
@@ -6787,10 +6848,10 @@ export function IssueDetailPage() {
               />
             </SidebarSection>
 
-            {latestSession ? (
+            {detail.workingCopy?.branch || latestSession?.branch ? (
               <SidebarSection title={t("issueDetail.sidebar.branch")}>
                 <div className="break-words font-mono text-[12px] leading-5 text-[color:var(--muted-strong)]">
-                  {latestSession.branch || t("issueDetail.sidebar.notReported")}
+                  {detail.workingCopy?.branch || latestSession?.branch || t("issueDetail.sidebar.notReported")}
                 </div>
               </SidebarSection>
             ) : null}

@@ -1508,7 +1508,7 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 	}
 
 	noWorkerSessionRecorder := httptest.NewRecorder()
-	noWorkerSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/sessions", strings.NewReader(`{"provider":"codex","agentProfile":"codex","runtimeMode":"personal","command":"@codex update the docs","triggerCommentId":"`+commentResult.CommentID+`"}`))
+	noWorkerSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/sessions", strings.NewReader(`{"agentEngine":"codex","command":"@codex update the docs","triggerCommentId":"`+commentResult.CommentID+`"}`))
 	noWorkerSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(noWorkerSessionRecorder, noWorkerSessionReq)
 	if noWorkerSessionRecorder.Code != http.StatusConflict || !strings.Contains(noWorkerSessionRecorder.Body.String(), "no active agent worker") {
@@ -1527,7 +1527,7 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 		t.Fatalf("parse personal runtime token: %v", err)
 	}
 	personalWorkerRecorder := httptest.NewRecorder()
-	personalWorkerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"personal-worker-1","mode":"personal","version":"0.1.0","capabilities":{"codex":true},"labels":{"host":"local"}}`))
+	personalWorkerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"personal-worker-1","storageId":"msws_personal_worker_1","mode":"personal","version":"0.1.0","capabilities":{"codex":true,"issueWorkingCopyV1":true},"labels":{"host":"local"}}`))
 	personalWorkerReq.Header.Set("Authorization", "Bearer "+personalTokenResult.Token)
 	router.ServeHTTP(personalWorkerRecorder, personalWorkerReq)
 	if personalWorkerRecorder.Code != http.StatusCreated {
@@ -1535,7 +1535,7 @@ func TestWorkspaceCollaborationIssueIsolation(t *testing.T) {
 	}
 
 	createSessionRecorder := httptest.NewRecorder()
-	createSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/sessions", strings.NewReader(`{"agentEngine":"codex","runtimeMode":"personal","command":"@codex update the docs","triggerCommentId":"`+commentResult.CommentID+`"}`))
+	createSessionReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+personalWorkspaceID+"/issues/"+createIssueResult.IssueID+"/sessions", strings.NewReader(`{"agentEngine":"codex","command":"@codex update the docs","triggerCommentId":"`+commentResult.CommentID+`"}`))
 	createSessionReq.Header.Set("Authorization", "Bearer "+sessionToken)
 	router.ServeHTTP(createSessionRecorder, createSessionReq)
 	if createSessionRecorder.Code != http.StatusCreated {
@@ -1598,7 +1598,7 @@ func TestCreateWorkspaceIssueWithoutProject(t *testing.T) {
 	workspaceID := workspaces[0].ID
 	server := NewServer(Config{}, store, fakeGitHubClient{})
 	router := server.Routes()
-	registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true}`)
+	registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true,"issueWorkingCopyV1":true}`)
 
 	createRecorder := httptest.NewRecorder()
 	createReq := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues", strings.NewReader(`{"body":"Capture a workspace-level issue before the repo is known"}`))
@@ -3665,12 +3665,11 @@ func TestCreateAgentSessionAcceptsBuiltInSkillSlugs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create issue: %v", err)
 	}
-	registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true}`)
+	registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true,"issueWorkingCopyV1":true}`)
 
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
 		"agentEngine":"codex",
-		"runtimeMode":"personal",
 		"command":"@codex #think produce a plan",
 		"skillSlugs":["think","think"]
 	}`))
@@ -3753,13 +3752,12 @@ func TestCreateAgentSessionAcceptsWorkspaceCustomSkillSlugs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create issue: %v", err)
 	}
-	registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true}`)
+	registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true,"issueWorkingCopyV1":true}`)
 
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
 		"agentEngine":"codex",
-		"runtimeMode":"personal",
-		"command":"@codex #repo-map inspect first",
+			"command":"@codex #repo-map inspect first",
 		"skillSlugs":["repo-map"]
 	}`))
 	req.Header.Set("Authorization", "Bearer "+sessionToken)
@@ -3828,8 +3826,7 @@ func TestCreateAgentSessionRejectsUnknownSkillSlug(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
 		"agentEngine":"codex",
-		"runtimeMode":"personal",
-		"command":"@codex #missing-skill try this",
+			"command":"@codex #missing-skill try this",
 		"skillSlugs":["missing-skill"]
 	}`))
 	req.Header.Set("Authorization", "Bearer "+sessionToken)
@@ -3884,8 +3881,7 @@ func TestCreateAgentSessionRejectsDisabledWorkspaceSkillSlug(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/sessions", strings.NewReader(`{
 		"agentEngine":"codex",
-		"runtimeMode":"personal",
-		"command":"@codex #disabled-skill try this",
+			"command":"@codex #disabled-skill try this",
 		"skillSlugs":["disabled-skill"]
 	}`))
 	req.Header.Set("Authorization", "Bearer "+sessionToken)
@@ -4255,7 +4251,12 @@ func TestCreateAgentSessionRejectsServerOwnedControlFields(t *testing.T) {
 		t.Fatalf("create auth session: %v", err)
 	}
 	server := NewServer(Config{}, store, fakeGitHubClient{})
-	for _, field := range []string{"automation", "Automation", "testRunId", "sourceSessionId", "SourceSessionID", "env", "workdir", "sandbox"} {
+	for _, field := range []string{
+		"runtimeMode", "provider", "agentProfile", "branch", "automation", "Automation",
+		"testRunId", "sourceSessionId", "SourceSessionID", "sourceCommitSha", "executionMode",
+		"workingCopy", "workingCopyGeneration", "expectedHeadSha", "initialize", "storageId",
+		"storageAffinityId", "env", "workdir", "repository", "sourceCapture", "sandbox",
+	} {
 		t.Run(field, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			body := fmt.Sprintf(`{"agentEngine":"pi","command":"@pi inspect","%s":"attacker-controlled"}`, field)
@@ -4605,6 +4606,17 @@ func TestRuntimeAvailabilityFlow(t *testing.T) {
 	}
 	if availability.ClaimableWorkerCount != 1 {
 		t.Fatalf("expected one claimable worker, got %+v", availability)
+	}
+	project := createTestProjectViaHTTP(t, router, sessionToken, workspaceID, "availability-source-project")
+	issueID, err := store.CreateIssue(context.Background(), user, workspaceID, CreateIssueInput{
+		ProjectID: project.ID, Title: "Check source availability", Body: "A source session needs V1.",
+	})
+	if err != nil {
+		t.Fatalf("create availability issue: %v", err)
+	}
+	sourceAvailability := getAvailability("/api/workspaces/" + workspaceID + "/runtime/availability?runtimeMode=personal&capabilities=codex&issueId=" + issueID)
+	if sourceAvailability.State == "ready" || sourceAvailability.ClaimableWorkerCount != 0 || !strings.Contains(string(sourceAvailability.RequiredCapabilities), `"issueWorkingCopyV1":true`) {
+		t.Fatalf("legacy worker must not satisfy issue source availability: %+v", sourceAvailability)
 	}
 	if !strings.Contains(string(availability.MatchedWorker.AgentEngineDiagnostics), `"codex":{"status":"ready"`) {
 		t.Fatalf("matched worker should include engine diagnostics, got %+v", availability.MatchedWorker)
@@ -5326,7 +5338,7 @@ func TestAutoDeployTestEnvironmentQueuesAfterSourceSession(t *testing.T) {
 	}
 
 	registerRecorder := httptest.NewRecorder()
-	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"auto-deploy-worker","mode":"personal","version":"0.1.0","capabilities":{"codex":true,"docker":true,"kubectl":true},"labels":{"host":"local"}}`))
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"auto-deploy-worker","storageId":"msws_auto_deploy_worker","mode":"personal","version":"0.1.0","capabilities":{"codex":true,"docker":true,"kubectl":true,"issueWorkingCopyV1":true},"labels":{"host":"local"}}`))
 	registerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
 	router.ServeHTTP(registerRecorder, registerReq)
 	if registerRecorder.Code != http.StatusCreated {
@@ -5365,7 +5377,8 @@ func TestAutoDeployTestEnvironmentQueuesAfterSourceSession(t *testing.T) {
 	}
 
 	completeSourceRecorder := httptest.NewRecorder()
-	completeSourceReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+sourceTask.ID+"/status", strings.NewReader(`{"status":"completed","result":{"exitCode":0,"source":{"commitSha":"1111111111111111111111111111111111111111","shortCommitSha":"111111111111","branch":"fix/auto-deploy","subject":"fix auto deploy","filesChanged":1,"changes":[],"diffPreview":"diff --git a/app.go b/app.go"}}}`))
+	completeSourceBody := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"source":{"commitSha":"1111111111111111111111111111111111111111","shortCommitSha":"111111111111","branch":%q,"subject":"fix auto deploy","filesChanged":1,"changes":[],"diffPreview":"diff --git a/app.go b/app.go"},"workingCopy":{"storageId":"msws_auto_deploy_worker","branch":%q,"baseCommitSha":"0000000000000000000000000000000000000000","headCommitSha":"1111111111111111111111111111111111111111","contentState":"clean","recoveryReason":"","generation":0}}}`, sourceSession.Branch, sourceSession.Branch)
+	completeSourceReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/"+worker.ID+"/tasks/"+sourceTask.ID+"/status", strings.NewReader(completeSourceBody))
 	completeSourceReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
 	router.ServeHTTP(completeSourceRecorder, completeSourceReq)
 	if completeSourceRecorder.Code != http.StatusOK {
@@ -5519,7 +5532,8 @@ func TestManualTestDeploySessionDoesNotTriggerAutomaticDeploy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	sourceTask, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, `{"status":"completed","result":{"exitCode":0,"source":{"commitSha":"3333333333333333333333333333333333333333","shortCommitSha":"333333333333","branch":"fix/manual-source","subject":"fix manual source","filesChanged":1}}}`)
+	sourceResult := fmt.Sprintf(`{"status":"completed","result":{"exitCode":0,"source":{"commitSha":"3333333333333333333333333333333333333333","shortCommitSha":"333333333333","branch":%q,"subject":"fix manual source","filesChanged":1},"workingCopy":{"storageId":%q,"branch":%q,"baseCommitSha":"0000000000000000000000000000000000000000","headCommitSha":"3333333333333333333333333333333333333333","contentState":"clean","recoveryReason":"","generation":0}}}`, sourceSession.Branch, worker.StorageID, sourceSession.Branch)
+	sourceTask, err := claimAndCompleteTask(t, router, tokenResult.Token, worker.ID, sourceResult)
 	if err != nil {
 		t.Fatalf("complete source task: %v", err)
 	}
@@ -5571,7 +5585,7 @@ func TestManualTestDeploySessionDoesNotTriggerAutomaticDeploy(t *testing.T) {
 }
 
 func registerTestRuntimeWorker(t *testing.T, router http.Handler, sessionToken, workspaceID string) (RuntimeRegistrationTokenResult, RuntimeWorker) {
-	return registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true,"docker":true,"kubectl":true}`)
+	return registerTestRuntimeWorkerWithCapabilities(t, router, sessionToken, workspaceID, `{"codex":true,"docker":true,"kubectl":true,"issueWorkingCopyV1":true}`)
 }
 
 func registerTestRuntimeWorkerWithCapabilities(t *testing.T, router http.Handler, sessionToken, workspaceID, capabilities string) (RuntimeRegistrationTokenResult, RuntimeWorker) {
@@ -5589,7 +5603,7 @@ func registerTestRuntimeWorkerWithCapabilities(t *testing.T, router http.Handler
 	}
 
 	registerRecorder := httptest.NewRecorder()
-	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"test-worker","mode":"personal","version":"0.1.0","capabilities":`+capabilities+`,"labels":{"host":"local"},"agentEngineDiagnostics":{"codex":{"status":"ready"}}}`))
+	registerReq := httptest.NewRequest(http.MethodPost, "/api/runtime/workers/register", strings.NewReader(`{"name":"test-worker","storageId":"msws_test_worker_storage","mode":"personal","version":"0.1.0","capabilities":`+capabilities+`,"labels":{"host":"local"},"agentEngineDiagnostics":{"codex":{"status":"ready"}}}`))
 	registerReq.Header.Set("Authorization", "Bearer "+tokenResult.Token)
 	router.ServeHTTP(registerRecorder, registerReq)
 	if registerRecorder.Code != http.StatusCreated {

@@ -34,6 +34,9 @@ func TestRunOnceCompletesProtocolSmokeTask(t *testing.T) {
 			if input.Name != "worker-test" || input.Mode != "team" || !strings.Contains(string(input.Capabilities), "protocolSmoke") {
 				t.Fatalf("unexpected register input: %+v capabilities=%s", input, input.Capabilities)
 			}
+			if !validWorkerStorageID(input.StorageID) || !capabilityEnabled(input.Capabilities, issueWorkingCopyCapability) {
+				t.Fatalf("register must advertise stable storage and working-copy capability: storage=%q capabilities=%s", input.StorageID, input.Capabilities)
+			}
 			writeJSON(t, w, http.StatusCreated, runtimeWorker{ID: "worker-1", WorkspaceID: "workspace-1", Name: input.Name, Mode: input.Mode, Status: "online"})
 		case "/api/runtime/workers/worker-1/heartbeat":
 			assertMethod(t, r, http.MethodPost)
@@ -1204,7 +1207,7 @@ func TestRunOnceStopsAgentSessionWhenTaskCancelled(t *testing.T) {
 			mu.Lock()
 			taskPolls++
 			mu.Unlock()
-			writeJSON(t, w, http.StatusOK, runtimeTask{ID: "task-cancel", WorkspaceID: "workspace-1", Kind: "agent_session", Status: "cancelled", Error: "user stopped session"})
+			writeJSON(t, w, http.StatusOK, runtimeTask{ID: "task-cancel", WorkspaceID: "workspace-1", Kind: "agent_session", Status: "running", CancelRequested: true, Error: "user stopped session"})
 		case "/api/runtime/workers/worker-1/tasks/task-cancel/logs":
 			assertMethod(t, r, http.MethodPost)
 			var input appendTaskLogInput

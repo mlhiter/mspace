@@ -22,6 +22,8 @@ Skills and Workflows are separate. Skills are server-managed, versioned instruct
 
 The Agents route answers two operational questions without turning into a settings marketplace: whether This Mac can run each fixed Agent, and how many connected Workers in the current workspace can claim that Agent's work. A second matrix shows each Worker's liveness and per-engine installation/configuration state; Skills stay in their own tab.
 
+Each Issue has one mutable source line rather than one branch per Agent Session. Human-triggered Codex, Claude Code, and Pi Sessions serialize on one stable Issue branch and continue the same Worker-owned working copy; the Session remains the audit record for inputs, logs, engine references, commits, evidence, failures, and cancellation. Analysis, deploy, Tests, and other server-owned Workflows run outside the mutable Issue working copy, pinned to an explicit source Commit when the Workflow has one, so they cannot move or contaminate the Issue branch. Until Git object transfer exists, the source working copy stays bound to the Worker storage that owns it and the product reports that constraint instead of silently restarting elsewhere.
+
 ## Brand Personality
 
 Calm, operational, and exact. The interface should feel like a serious document workspace for real engineering work: quiet enough for daily use, explicit about runtime and namespace scope, and direct about what agents are doing.
@@ -40,6 +42,7 @@ The public website can use a sharper brand surface, but it should still be speci
 ## Design Principles
 
 - Issues are durable working documents, not transient job cards.
+- An Issue owns one stable mutable source branch and current head. Agent Sessions are serialized attempts on that source line, not independent branch identities.
 - Inbox is for messages and state changes that need human review, not the full issue database.
 - Fixed Agents should appear as collaborators with their own engine identity, Sessions, blockers, and progress updates; Claude Code and Pi must never be presented as Codex.
 - Server-managed workflow skills should reduce issue handoff friction for mspace-owned flows and user-invoked issue comments. Workspaces can inspect pinned skill revisions, manage basic custom skills, and enable or disable built-ins, but mspace should not become a generic skill marketplace or remote installer.

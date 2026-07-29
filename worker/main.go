@@ -60,6 +60,7 @@ type config struct {
 	Capabilities      json.RawMessage
 	Labels            json.RawMessage
 	WorkRoot          string
+	StorageID         string
 	PollInterval      time.Duration
 	HeartbeatInterval time.Duration
 	Once              bool
@@ -76,6 +77,7 @@ type runtimeWorkerInput struct {
 	Capabilities           json.RawMessage        `json:"capabilities,omitempty"`
 	Labels                 json.RawMessage        `json:"labels,omitempty"`
 	AgentEngineDiagnostics agentEngineDiagnostics `json:"agentEngineDiagnostics,omitempty"`
+	StorageID              string                 `json:"storageId,omitempty"`
 }
 
 type runtimeWorker struct {
@@ -112,6 +114,8 @@ type runtimeTask struct {
 	StartedAt            string          `json:"startedAt"`
 	FinishedAt           string          `json:"finishedAt"`
 	Error                string          `json:"error"`
+	CancelRequested      bool            `json:"cancelRequested"`
+	CancelRequestedAt    string          `json:"cancelRequestedAt"`
 	CreatedAt            string          `json:"createdAt"`
 	UpdatedAt            string          `json:"updatedAt"`
 }
@@ -145,28 +149,36 @@ type apiError struct {
 }
 
 type agentSessionPayload struct {
-	AgentEngine           string            `json:"agentEngine"`
-	LegacyProvider        string            `json:"provider"`
-	LegacyAgentProfile    string            `json:"agentProfile"`
-	Workdir               string            `json:"workdir"`
-	Prompt                string            `json:"prompt"`
-	DeveloperInstructions string            `json:"developerInstructions"`
-	ApprovalPolicy        string            `json:"approvalPolicy"`
-	Sandbox               string            `json:"sandbox"`
-	Env                   map[string]string `json:"env"`
-	IssueID               string            `json:"issueId"`
-	SessionID             string            `json:"sessionId"`
-	ProjectID             string            `json:"projectId"`
-	Automation            string            `json:"automation"`
-	SourceCapture         *bool             `json:"sourceCapture,omitempty"`
-	TestRunID             string            `json:"testRunId"`
-	Branch                string            `json:"branch"`
-	SourceCommitSHA       string            `json:"sourceCommitSha"`
-	ContextMarkdown       string            `json:"contextMarkdown"`
-	ArtifactDir           string            `json:"artifactDir"`
-	Repository            repositorySpec    `json:"repository"`
-	RequiredSkills        []skillBundle     `json:"requiredSkills"`
-	Skills                []skillBundle     `json:"skills"`
+	AgentEngine              string            `json:"agentEngine"`
+	LegacyProvider           string            `json:"provider"`
+	LegacyAgentProfile       string            `json:"agentProfile"`
+	Workdir                  string            `json:"workdir"`
+	Prompt                   string            `json:"prompt"`
+	DeveloperInstructions    string            `json:"developerInstructions"`
+	ApprovalPolicy           string            `json:"approvalPolicy"`
+	Sandbox                  string            `json:"sandbox"`
+	Env                      map[string]string `json:"env"`
+	IssueID                  string            `json:"issueId"`
+	SessionID                string            `json:"sessionId"`
+	ProjectID                string            `json:"projectId"`
+	Automation               string            `json:"automation"`
+	SourceCapture            *bool             `json:"sourceCapture,omitempty"`
+	TestRunID                string            `json:"testRunId"`
+	Branch                   string            `json:"branch"`
+	SourceCommitSHA          string            `json:"sourceCommitSha"`
+	ExecutionMode            string            `json:"executionMode"`
+	WorkingCopyGeneration    int64             `json:"workingCopyGeneration"`
+	ExpectedHeadSHA          string            `json:"expectedHeadSha"`
+	Initialize               bool              `json:"initialize"`
+	ContextMarkdown          string            `json:"contextMarkdown"`
+	ArtifactDir              string            `json:"artifactDir"`
+	Repository               repositorySpec    `json:"repository"`
+	RequiredSkills           []skillBundle     `json:"requiredSkills"`
+	Skills                   []skillBundle     `json:"skills"`
+	WorkerStorageID          string            `json:"-"`
+	WorkingCopyRoot          string            `json:"-"`
+	WorkingCopyBaseCommitSHA string            `json:"-"`
+	WorkerArtifactRoot       string            `json:"-"`
 }
 
 type skillBundle struct {
@@ -273,6 +285,7 @@ type agentSessionResult struct {
 	TestCaseProposals *testCaseProposalsArtifact   `json:"testCaseProposals,omitempty"`
 	TestSetup         *testSetupResultArtifact     `json:"testSetup,omitempty"`
 	TestResult        *testResultArtifact          `json:"testResult,omitempty"`
+	WorkingCopy       *issueWorkingCopyResult      `json:"workingCopy,omitempty"`
 }
 
 type agentSessionSource struct {
@@ -636,10 +649,25 @@ func normalizeConfig(cfg config) (config, error) {
 	if cfg.HeartbeatInterval <= 0 {
 		return config{}, errors.New("heartbeat interval must be positive")
 	}
+	capabilities, err := requireIssueWorkingCopyCapability(cfg.Capabilities)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.Capabilities = capabilities
 	return cfg, nil
 }
 
 func run(ctx context.Context, cfg config, logger *slog.Logger) error {
+	capabilities, err := requireIssueWorkingCopyCapability(cfg.Capabilities)
+	if err != nil {
+		return err
+	}
+	cfg.Capabilities = capabilities
+	storageID, err := ensureWorkerStorageID(cfg.WorkRoot)
+	if err != nil {
+		return err
+	}
+	cfg.StorageID = storageID
 	engineDiagnostics := newAgentEngineDiagnosticState(cfg.Capabilities, cfg.engineDiagnoser)
 	engineDiagnostics.refresh(ctx)
 	cfg.engineDiagnostics = engineDiagnostics
@@ -1115,14 +1143,19 @@ func executeAgentSessionTask(ctx context.Context, client *runtimeClient, cfg con
 	if err != nil {
 		return nil, err
 	}
+	payload = assignIssueWorkingCopyPaths(cfg, payload)
+	payload, err = prepareAgentSessionWorkspace(ctx, client, cfg, workerID, task.ID, payload)
+	if err != nil {
+		return marshalAgentSessionFailureResult(payload, err)
+	}
 	if capabilityEnabled(cfg.effectiveCapabilities(), "dryRun") {
 		if err := client.appendTaskLog(ctx, workerID, task.ID, appendTaskLogInput{Stream: "system", Message: "Running dry-run agent session in worker-managed workspace."}); err != nil {
 			return nil, err
 		}
-		result, err := runDryRunAgentSession(ctx, client, cfg, workerID, task.ID, payload)
+		result, err := runPreparedDryRunAgentSession(ctx, client, workerID, task.ID, payload)
 		if err != nil {
 			_ = client.appendTaskLog(context.WithoutCancel(ctx), workerID, task.ID, appendTaskLogInput{Stream: "dry-run-error", Message: err.Error()})
-			return nil, err
+			return marshalAgentSessionFailureResult(payload, err)
 		}
 		body, err := json.Marshal(result)
 		return body, err
@@ -1139,9 +1172,19 @@ func executeAgentSessionTask(ctx context.Context, client *runtimeClient, cfg con
 	if err := client.appendTaskLog(ctx, workerID, task.ID, appendTaskLogInput{Stream: "system", Message: "Starting " + payload.AgentEngine + " agent engine."}); err != nil {
 		return nil, err
 	}
-	result, err := runAgentSession(runCtx, client, cfg, workerID, task.ID, payload)
+	result, err := runPreparedAgentSession(runCtx, client, cfg, workerID, task.ID, payload)
 	if err != nil {
 		_ = client.appendTaskLog(context.WithoutCancel(ctx), workerID, task.ID, appendTaskLogInput{Stream: "agent-error", Message: err.Error()})
+		if payload.usesIssueWorkingCopy() {
+			if result.WorkingCopy == nil {
+				result.WorkingCopy = inspectIssueWorkingCopy(context.WithoutCancel(ctx), payload, issueWorkingCopyRecoveryReason(err))
+			}
+			body, marshalErr := json.Marshal(result)
+			if marshalErr != nil {
+				return nil, marshalErr
+			}
+			return body, err
+		}
 		return nil, err
 	}
 	body, err := json.Marshal(result)
@@ -1153,7 +1196,10 @@ func runDryRunAgentSession(ctx context.Context, runtimeClient *runtimeClient, cf
 	if err != nil {
 		return agentSessionResult{}, err
 	}
-	payload = prepared
+	return runPreparedDryRunAgentSession(ctx, runtimeClient, workerID, taskID, prepared)
+}
+
+func runPreparedDryRunAgentSession(ctx context.Context, runtimeClient *runtimeClient, workerID, taskID string, payload agentSessionPayload) (agentSessionResult, error) {
 	if err := writeDryRunAgentSessionFiles(payload, taskID); err != nil {
 		return agentSessionResult{}, err
 	}
@@ -1183,7 +1229,31 @@ func runDryRunAgentSession(ctx context.Context, runtimeClient *runtimeClient, cf
 		result.TurnID = "dry-run-turn-" + shortTaskID(taskID)
 	}
 	result.attachArtifacts(payload)
+	result.WorkingCopy = inspectIssueWorkingCopy(context.WithoutCancel(ctx), payload, "")
 	return result, nil
+}
+
+func marshalAgentSessionFailureResult(payload agentSessionPayload, taskErr error) (json.RawMessage, error) {
+	if !payload.usesIssueWorkingCopy() {
+		return nil, taskErr
+	}
+	status := "failed"
+	if errors.Is(taskErr, context.Canceled) {
+		status = "cancelled"
+	}
+	result := agentSessionResult{
+		AgentEngine: payload.AgentEngine,
+		Status:      status,
+		CompletedAt: time.Now().UTC().Format(time.RFC3339),
+		Workdir:     payload.Workdir,
+		ArtifactDir: payload.ArtifactDir,
+		WorkingCopy: inspectIssueWorkingCopy(context.Background(), payload, issueWorkingCopyRecoveryReason(taskErr)),
+	}
+	body, err := json.Marshal(result)
+	if err != nil {
+		return nil, err
+	}
+	return body, taskErr
 }
 
 func writeDryRunAgentSessionFiles(payload agentSessionPayload, taskID string) error {
@@ -1276,6 +1346,8 @@ func parseAgentSessionPayload(raw json.RawMessage) (agentSessionPayload, error) 
 	payload.TestRunID = strings.TrimSpace(payload.TestRunID)
 	payload.Branch = strings.TrimSpace(payload.Branch)
 	payload.SourceCommitSHA = strings.TrimSpace(payload.SourceCommitSHA)
+	payload.ExecutionMode = strings.ToLower(strings.TrimSpace(payload.ExecutionMode))
+	payload.ExpectedHeadSHA = strings.TrimSpace(payload.ExpectedHeadSHA)
 	payload.ArtifactDir = strings.TrimSpace(payload.ArtifactDir)
 	payload.Repository.URL = strings.TrimSpace(payload.Repository.URL)
 	payload.Repository.DefaultBranch = strings.TrimSpace(payload.Repository.DefaultBranch)
@@ -1285,10 +1357,36 @@ func parseAgentSessionPayload(raw json.RawMessage) (agentSessionPayload, error) 
 	payload.Repository.Repo = strings.TrimSpace(payload.Repository.Repo)
 	payload.Repository.OriginalURL = strings.TrimSpace(payload.Repository.OriginalURL)
 	payload.Repository.Subdir = normalizeRepositorySubdir(payload.Repository.Subdir)
+	if payload.ExecutionMode == "" {
+		payload.ExecutionMode = agentSessionExecutionDetached
+	}
+	if payload.ExecutionMode != agentSessionExecutionDetached && payload.ExecutionMode != agentSessionExecutionIssueWorkingCopy {
+		return agentSessionPayload{}, fmt.Errorf("unsupported agent_session executionMode %q", payload.ExecutionMode)
+	}
+	if payload.usesIssueWorkingCopy() {
+		if payload.Workdir != "" {
+			return agentSessionPayload{}, errors.New("issue_working_copy payload must use a worker-managed workdir")
+		}
+		if payload.Automation != "" {
+			return agentSessionPayload{}, errors.New("issue_working_copy payload must not be used for automation")
+		}
+		if payload.SourceCommitSHA != "" {
+			return agentSessionPayload{}, errors.New("issue_working_copy payload must not set sourceCommitSha")
+		}
+		if payload.SourceCapture != nil && !*payload.SourceCapture {
+			return agentSessionPayload{}, errors.New("issue_working_copy payload must enable source capture")
+		}
+		if payload.IssueID == "" || payload.SessionID == "" || payload.ProjectID == "" || payload.Branch == "" {
+			return agentSessionPayload{}, errors.New("issue_working_copy payload requires issueId, sessionId, projectId, and branch")
+		}
+		if !payload.Initialize && payload.ExpectedHeadSHA == "" {
+			return agentSessionPayload{}, errors.New("existing issue_working_copy payload requires expectedHeadSha")
+		}
+	}
 	if payload.Prompt == "" {
 		return agentSessionPayload{}, errors.New("agent_session payload requires prompt")
 	}
-	if payload.Workdir != "" {
+	if payload.Workdir != "" && !payload.usesIssueWorkingCopy() {
 		info, err := os.Stat(payload.Workdir)
 		if err != nil {
 			return agentSessionPayload{}, fmt.Errorf("stat workdir: %w", err)
@@ -1900,7 +1998,7 @@ func captureCodexDiagnosticStream(ctx context.Context, runtimeClient *runtimeCli
 }
 
 func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeClient, cfg config, workerID, taskID string, payload agentSessionPayload) (agentSessionPayload, error) {
-	if payload.Workdir != "" {
+	if payload.Workdir != "" && !payload.usesIssueWorkingCopy() {
 		if payload.ArtifactDir == "" {
 			payload.ArtifactDir = filepath.Join(payload.Workdir, ".mspace", "session")
 		}
@@ -1939,6 +2037,38 @@ func prepareAgentSessionWorkspace(ctx context.Context, runtimeClient *runtimeCli
 	repoDir := filepath.Join(cfg.WorkRoot, "repos", repositoryCacheKey(payload.Repository))
 	if err := ensureWorkerRepository(ctx, gitPath, payload.Repository.URL, repoDir); err != nil {
 		return payload, err
+	}
+	if payload.usesIssueWorkingCopy() {
+		payload, err = prepareIssueWorkingCopy(ctx, gitPath, repoDir, cfg, payload)
+		if err != nil {
+			return payload, err
+		}
+		if info, err := os.Stat(payload.Workdir); err != nil {
+			return payload, newIssueWorkingCopyError("workspace_probe_failed", "project subdirectory is not present in issue working copy: %v", err)
+		} else if !info.IsDir() {
+			return payload, newIssueWorkingCopyError("workspace_probe_failed", "project subdirectory in issue working copy is not a directory")
+		}
+		if err := os.MkdirAll(payload.ArtifactDir, 0o755); err != nil {
+			return payload, fmt.Errorf("create session artifact dir: %w", err)
+		}
+		if err := ensurePayloadArtifactPath(payload, payload.ArtifactDir); err != nil {
+			return payload, err
+		}
+		var skillRefs []string
+		payload, skillRefs, err = materializePayloadSkillBundles(payload)
+		if err != nil {
+			return payload, err
+		}
+		payload.ContextMarkdown = appendWorkerRepositoryContext(payload.ContextMarkdown, payload.Repository)
+		if strings.TrimSpace(payload.ContextMarkdown) != "" {
+			if err := os.WriteFile(filepath.Join(payload.ArtifactDir, "context.md"), []byte(payload.ContextMarkdown), 0o600); err != nil {
+				return payload, fmt.Errorf("write session context: %w", err)
+			}
+		}
+		payload.Env = withPayloadRuntimeEnv(payload)
+		appendMaterializedSkillLog(ctx, runtimeClient, workerID, taskID, skillRefs)
+		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Prepared reusable issue working copy."})
+		return payload, nil
 	}
 	worktreeDir := filepath.Join(cfg.WorkRoot, "workdirs", safePathPart(firstNonEmpty(payload.ProjectID, "project")), safePathPart(firstNonEmpty(payload.SessionID, taskID)))
 	agentWorkdir := worktreeDir
@@ -2144,7 +2274,9 @@ func captureAgentSessionSource(ctx context.Context, runtimeClient *runtimeClient
 	if err := runGitCommand(ctx, gitPath, payload.Workdir, "rev-parse", "--is-inside-work-tree"); err != nil {
 		return agentSessionSource{}, err
 	}
-	payload = applySemanticWorkerBranchName(ctx, runtimeClient, workerID, taskID, gitPath, payload)
+	if !payload.usesIssueWorkingCopy() {
+		payload = applySemanticWorkerBranchName(ctx, runtimeClient, workerID, taskID, gitPath, payload)
+	}
 	if err := runGitCommand(ctx, gitPath, payload.Workdir, "add", "-A", "--", "."); err != nil {
 		return agentSessionSource{}, fmt.Errorf("stage source changes: %w", err)
 	}
@@ -2993,7 +3125,7 @@ func materializePayloadSkillBundles(payload agentSessionPayload) (agentSessionPa
 	if strings.TrimSpace(payload.ArtifactDir) == "" {
 		return payload, nil, errors.New("agent_session skill bundles require artifactDir")
 	}
-	if err := ensureSessionArtifactPath(payload.Workdir, payload.ArtifactDir); err != nil {
+	if err := ensurePayloadArtifactPath(payload, payload.ArtifactDir); err != nil {
 		return payload, nil, err
 	}
 
@@ -3004,7 +3136,7 @@ func materializePayloadSkillBundles(payload agentSessionPayload) (agentSessionPa
 	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
 		return payload, nil, fmt.Errorf("create session skills dir: %w", err)
 	}
-	if err := ensureSessionArtifactPath(payload.Workdir, skillsRoot); err != nil {
+	if err := ensurePayloadArtifactPath(payload, skillsRoot); err != nil {
 		return payload, nil, err
 	}
 
@@ -3735,6 +3867,7 @@ func (cfg config) workerInput(status string, currentLoad int, includeCapabilitie
 		Status:      status,
 		Version:     workerVersion,
 		CurrentLoad: currentLoad,
+		StorageID:   cfg.StorageID,
 	}
 	capabilities, diagnostics := cfg.engineDiagnostics.snapshot()
 	if len(capabilities) == 0 {
@@ -3753,7 +3886,13 @@ func (cfg config) workerInput(status string, currentLoad int, includeCapabilitie
 func (cfg config) effectiveCapabilities() json.RawMessage {
 	capabilities, _ := cfg.engineDiagnostics.snapshot()
 	if len(capabilities) > 0 {
+		if required, err := requireIssueWorkingCopyCapability(capabilities); err == nil {
+			return required
+		}
 		return capabilities
+	}
+	if required, err := requireIssueWorkingCopyCapability(cfg.Capabilities); err == nil {
+		return required
 	}
 	return cfg.Capabilities
 }
@@ -3855,7 +3994,7 @@ func (c *runtimeClient) watchTaskCancellation(parent context.Context, workerID, 
 				if err != nil {
 					continue
 				}
-				if task.Status == "cancelled" {
+				if task.Status == "cancelled" || task.CancelRequested {
 					_ = c.appendTaskLog(context.WithoutCancel(parent), workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Cancellation requested by control plane."})
 					cancel()
 					return

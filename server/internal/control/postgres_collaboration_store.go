@@ -536,6 +536,10 @@ func (s *PostgresStore) GetIssue(ctx Context, userID, workspaceID, issueID strin
 	if err != nil {
 		return IssueDetail{}, err
 	}
+	detail.WorkingCopy, err = s.loadIssueWorkingCopyOptional(dbctx, workspaceID, issueID)
+	if err != nil {
+		return IssueDetail{}, err
+	}
 	return detail, nil
 }
 
@@ -571,13 +575,6 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 	if err != nil {
 		return AgentSession{}, err
 	}
-	hasActiveWorker, err := s.hasActiveWorkerWithCapabilities(dbctx, workspaceID, normalized.RuntimeMode, requiredCapabilities)
-	if err != nil {
-		return AgentSession{}, err
-	}
-	if !hasActiveWorker {
-		return AgentSession{}, ErrNoActiveAgentWorker
-	}
 	issue, err := loadIssue(dbctx, s.pool, workspaceID, issueID)
 	if err != nil {
 		return AgentSession{}, err
@@ -593,9 +590,6 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 	if err != nil {
 		return AgentSession{}, err
 	}
-	if normalized.Branch == "" {
-		normalized.Branch = defaultAgentSessionBranch(issueID, sessionID)
-	}
 	runbook, _ := loadProjectRunbookSnapshot(dbctx, s.pool, workspaceID, project.ID)
 	comments, err := s.listIssueComments(dbctx, workspaceID, issueID, userID)
 	if err != nil {
@@ -609,11 +603,60 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 	if err != nil {
 		return AgentSession{}, err
 	}
-	payload, err := json.Marshal(buildAgentSessionPayload(sessionID, issue, project, runbook, comments, labels, childIssues, normalized))
+	executionMode := agentSessionExecutionMode(normalized)
+	if executionMode == agentSessionExecutionModeDetached {
+		hasActiveWorker, err := s.hasActiveWorkerWithCapabilities(dbctx, workspaceID, normalized.RuntimeMode, requiredCapabilities)
+		if err != nil {
+			return AgentSession{}, err
+		}
+		if !hasActiveWorker {
+			return AgentSession{}, ErrNoActiveAgentWorker
+		}
+		if normalized.Branch == "" {
+			normalized.Branch = defaultAgentSessionBranch(issueID, sessionID)
+		}
+		payload, err := json.Marshal(buildAgentSessionPayload(sessionID, issue, project, runbook, comments, labels, childIssues, normalized))
+		if err != nil {
+			return AgentSession{}, err
+		}
+		task, err := s.CreateRuntimeTask(ctx, userID, workspaceID, CreateRuntimeTaskInput{
+			IssueID: issue.ID, SessionID: sessionID, ProjectID: project.ID, Kind: "agent_session",
+			Priority: agentSessionPriority(normalized), RuntimeMode: normalized.RuntimeMode,
+			RequiredCapabilities: requiredCapabilities, Payload: payload, ServerManaged: true,
+		})
+		if err != nil {
+			return AgentSession{}, err
+		}
+		return runtimeTaskToAgentSession(task)
+	}
+
+	tx, err := s.pool.Begin(dbctx)
 	if err != nil {
 		return AgentSession{}, err
 	}
-	task, err := s.CreateRuntimeTask(ctx, userID, workspaceID, CreateRuntimeTaskInput{
+	defer tx.Rollback(dbctx)
+	workingCopy, err := lockOrCreateIssueWorkingCopy(dbctx, tx, workspaceID, issue.ID, project.ID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if workingCopy.ProjectID != project.ID || workingCopy.ActiveSessionID != "" || workingCopy.ContentState == workingCopyStateRecoveryRequired {
+		return AgentSession{}, ErrConflict
+	}
+	hasActiveWorker, err := hasActiveWorkerForWorkingCopyRecord(dbctx, tx, workspaceID, normalized.RuntimeMode, requiredCapabilities, workingCopy.StorageID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if !hasActiveWorker {
+		return AgentSession{}, ErrNoActiveAgentWorker
+	}
+	normalized.Branch = workingCopy.Branch
+	payloadObject := buildAgentSessionPayload(sessionID, issue, project, runbook, comments, labels, childIssues, normalized)
+	applyIssueWorkingCopyTaskPayload(payloadObject, workingCopy)
+	payload, err := json.Marshal(payloadObject)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	task, err := insertRuntimeTaskRecord(dbctx, tx, workspaceID, userID, CreateRuntimeTaskInput{
 		IssueID:              issue.ID,
 		SessionID:            sessionID,
 		ProjectID:            project.ID,
@@ -622,9 +665,24 @@ func (s *PostgresStore) CreateAgentSession(ctx Context, userID, workspaceID, iss
 		RuntimeMode:          normalized.RuntimeMode,
 		RequiredCapabilities: requiredCapabilities,
 		Payload:              payload,
+		StorageAffinityID:    workingCopy.StorageID,
 		ServerManaged:        true,
 	})
 	if err != nil {
+		return AgentSession{}, err
+	}
+	commandTag, err := tx.Exec(dbctx, `
+		UPDATE issue_working_copies
+		SET active_session_id = $1, updated_at = now()
+		WHERE workspace_id = $2 AND issue_id = $3 AND generation = $4 AND active_session_id = ''
+	`, sessionID, workspaceID, issue.ID, workingCopy.Generation)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if commandTag.RowsAffected() != 1 {
+		return AgentSession{}, ErrConflict
+	}
+	if err := tx.Commit(dbctx); err != nil {
 		return AgentSession{}, err
 	}
 	return runtimeTaskToAgentSession(task)
@@ -716,10 +774,12 @@ func (s *PostgresStore) getAgentSessionRuntimeTask(ctx context.Context, workspac
 			required_capabilities,
 			payload,
 			result,
+			storage_affinity_id,
 			COALESCE(claimed_by_worker_id::text, ''),
 			claimed_at,
 			started_at,
 			finished_at,
+			cancel_requested_at,
 			error,
 			created_at,
 			updated_at
@@ -827,6 +887,11 @@ func (s *PostgresStore) UpdateIssue(ctx Context, userID, workspaceID, issueID st
 		return Issue{}, err
 	}
 	defer tx.Rollback(dbctx)
+	if input.ProjectID != nil {
+		if err := lockIssueWorkingCopyProjectChange(dbctx, tx, workspaceID, issueID, projectID); err != nil {
+			return Issue{}, err
+		}
+	}
 	row := tx.QueryRow(dbctx, `
 		UPDATE issues
 		SET project_id = CASE WHEN $3::boolean THEN $4::uuid ELSE project_id END,
@@ -1733,12 +1798,15 @@ func runtimeTaskSessionStatus(status, errorText, runtimeMode string) (string, st
 
 func buildAgentSessionPayload(sessionID string, issue Issue, project Project, runbook ProjectRunbook, comments []Comment, labels []IssueLabel, childIssues []IssueListItem, input CreateAgentSessionInput) map[string]any {
 	payload := map[string]any{
-		"workdir":               "",
-		"agentEngine":           input.AgentEngine,
-		"prompt":                input.Command,
-		"developerInstructions": defaultAgentSessionDeveloperInstructions(input.RuntimeMode),
-		"approvalPolicy":        "never",
-		"sandbox":               agentSessionSandbox(input),
+		"workdir":     "",
+		"agentEngine": input.AgentEngine,
+		"prompt":      input.Command,
+		"developerInstructions": defaultAgentSessionDeveloperInstructions(
+			input.RuntimeMode,
+			agentSessionExecutionMode(input) == agentSessionExecutionModeDetached && agentSessionSourceCaptureEnabled(input),
+		),
+		"approvalPolicy": "never",
+		"sandbox":        agentSessionSandbox(input),
 		"env": map[string]string{
 			"MSPACE_API_BASE_URL":      "",
 			"MSPACE_ISSUE_ID":          issue.ID,
@@ -1756,6 +1824,7 @@ func buildAgentSessionPayload(sessionID string, issue Issue, project Project, ru
 		"sourceCommitSha":  input.SourceCommitSHA,
 		"triggerCommentId": input.TriggerCommentID,
 		"automation":       input.Automation,
+		"executionMode":    agentSessionExecutionMode(input),
 		"sourceCapture":    agentSessionSourceCaptureEnabled(input),
 		"testRunId":        input.TestRunID,
 		"testRunBatchSize": input.TestRunBatchSize,
@@ -1787,14 +1856,14 @@ func agentSessionSandbox(input CreateAgentSessionInput) string {
 	return "danger-full-access"
 }
 
-func defaultAgentSessionDeveloperInstructions(runtimeMode string) string {
+func defaultAgentSessionDeveloperInstructions(runtimeMode string, includeBranchProposal bool) string {
 	mode := "runtime worker"
 	if strings.TrimSpace(runtimeMode) == "team" {
 		mode = "team runtime worker"
 	} else if strings.TrimSpace(runtimeMode) == "personal" {
 		mode = "personal runtime worker"
 	}
-	return strings.TrimSpace(`
+	instructions := strings.TrimSpace(`
 You are running as a coding agent inside an mspace ` + mode + `.
 
 Follow these mspace rules:
@@ -1810,9 +1879,13 @@ Follow these mspace rules:
 - If a temporary server is required for validation, stop it before finishing and report it only as an internal validation step.
 - Do not present container-local localhost or 127.0.0.1 URLs as user-accessible preview URLs. Only report a URL when mspace provides an explicit preview/test-environment URL or the user asked for a local preview and the host mapping is known.
 - Answer directly. Do not introduce yourself.
-- If you make source-code changes, write ${MSPACE_SESSION_ARTIFACT_DIR}/branch-name.json before finishing. Use JSON like { "branch": "fix/short-semantic-name" }. The branch must use a Conventional Commit type prefix such as feat/, fix/, chore/, docs/, refactor/, test/, perf/, build/, or ci/, and the slug should summarize the actual diff in lowercase words separated by hyphens.
 - Finish with a concise summary of changes, validation, and remaining risks.
 		`)
+	if !includeBranchProposal {
+		return instructions
+	}
+	branchInstruction := `- If you make source-code changes, write ${MSPACE_SESSION_ARTIFACT_DIR}/branch-name.json before finishing. Use JSON like { "branch": "fix/short-semantic-name" }. The branch must use a Conventional Commit type prefix such as feat/, fix/, chore/, docs/, refactor/, test/, perf/, build/, or ci/, and the slug should summarize the actual diff in lowercase words separated by hyphens.`
+	return strings.Replace(instructions, "- Finish with a concise summary", branchInstruction+"\n- Finish with a concise summary", 1)
 }
 
 func buildAgentSessionContext(issue Issue, project Project, runbook ProjectRunbook, comments []Comment, labels []IssueLabel, childIssues []IssueListItem, input CreateAgentSessionInput) string {

@@ -194,9 +194,10 @@ func TestAgentSessionCapabilitiesAndPayloadUseExactEngine(t *testing.T) {
 	}
 	if _, err := store.RegisterRuntimeWorker(context.Background(), registration, RuntimeWorkerInput{
 		Name:         "all-engine-worker",
+		StorageID:    "msws_engine_test_storage",
 		Mode:         "personal",
 		Version:      "test",
-		Capabilities: json.RawMessage(`{"codex":true,"claudeCode":true,"pi":true}`),
+		Capabilities: json.RawMessage(`{"codex":true,"claudeCode":true,"pi":true,"issueWorkingCopyV1":true}`),
 	}); err != nil {
 		t.Fatalf("register worker: %v", err)
 	}
@@ -234,8 +235,8 @@ func TestAgentSessionCapabilitiesAndPayloadUseExactEngine(t *testing.T) {
 			if err := json.Unmarshal(task.RequiredCapabilities, &capabilities); err != nil {
 				t.Fatalf("decode capabilities: %v", err)
 			}
-			if len(capabilities) != 1 || !capabilities[test.capability] {
-				t.Fatalf("engine %s should require only %s, got %s", test.engine, test.capability, task.RequiredCapabilities)
+			if len(capabilities) != 2 || !capabilities[test.capability] || !capabilities["issueWorkingCopyV1"] {
+				t.Fatalf("engine %s should require %s and issueWorkingCopyV1, got %s", test.engine, test.capability, task.RequiredCapabilities)
 			}
 			var payload map[string]any
 			if err := json.Unmarshal(task.Payload, &payload); err != nil {

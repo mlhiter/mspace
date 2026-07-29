@@ -26,7 +26,7 @@ The control plane owns:
 
 Workers own:
 
-- repository cache and per-session workdir preparation;
+- repository cache, reusable Issue source worktrees, and detached per-Session automation workdirs;
 - Agent CLI lifecycle and protocol adaptation;
 - command execution and source capture;
 - session artifacts while running;
@@ -42,32 +42,36 @@ The server owns the Workflow Skill catalog. Built-ins are embedded from `mlhiter
 Desktop Issue Detail
   -> resolve attached project before agent turns
   -> map @codex / @claude / @pi to one exact engine capability
-  -> verify matching active Worker
+  -> verify a matching active Worker for the Issue, including source storage affinity
   -> POST server comment
   -> POST server Agent Session with agentEngine and optional Skill slugs
 Server
-  -> validate workspace membership, project attachment, engine, and runtime mode
+  -> validate workspace membership, project attachment, engine, runtime mode, and Issue working-copy state
   -> resolve enabled built-in or workspace skill slugs to server-owned bundles
   -> snapshot issue/project/runbook context
-  -> enqueue provider-neutral runtime_tasks(kind=agent_session) with exact capability
+  -> reserve the Issue writer and enqueue a provider-neutral source task, or enqueue detached automation
 Worker
   -> claim matching task
-  -> prepare repo cache and session workdir
+  -> reuse the Issue branch/worktree for a human source turn, or prepare a detached automation workdir
   -> resolve local git subdirectory projects to repo root plus agent cwd
   -> start Codex app-server, Claude Code stream JSON, or Pi RPC adapter
   -> require engine-specific terminal evidence
   -> stream logs to runtime_task_logs
-  -> capture source metadata and artifacts
+  -> capture source metadata and isolated Session artifacts
   -> complete with agentEngine and opaque engineSessionRef / engineRunRef
 Server
-  -> derives Session Detail and Issue change nodes from task records
+  -> reconcile the Issue working-copy head/state with generation CAS and derive Session Detail/change nodes
 Desktop
   -> refreshes Issue Detail, Commits, Sessions, Resources, and Evidence
 ```
 
 Personal and team workspaces use the same server API and runtime task protocol. `runtimeMode` controls which workers can claim the task, not which product model is used.
 
-For personal local projects, the selected project path may be the repository root or a directory inside a git repository. The worker resolves the git root for clone/cache and worktree creation, then points the agent working directory at the selected subdirectory inside that session worktree. Team projects still use GitHub URLs so remote team workers do not depend on a user's Mac-local folder path.
+For personal local projects, the selected project path may be the repository root or a directory inside a git repository. The Worker resolves the Git root for clone/cache and worktree creation, then points the Agent working directory at the selected subdirectory inside the reusable Issue worktree or detached automation worktree. Team projects still use GitHub URLs so remote team Workers do not depend on a user's Mac-local folder path.
+
+Human-triggered source Sessions are `issue_working_copy` executions. The Server owns one `issue_working_copies` row per Issue, assigns the stable `mspace/<safe-full-issue-id>` branch, serializes writers with `activeSessionId`, and reconciles the canonical head through a generation check. The first claim binds the working copy to the opaque `msws_...` identity persisted under one Worker root; later source Sessions can be claimed only by that same storage. After a V1 copy has initialized, a missing worktree, branch/HEAD mismatch, failed probe, or untrusted terminal result moves the copy into an explicit recovery state rather than recreating it from the project default branch. This fail-closed recovery rule does not import legacy source state: existing pre-V1 test Issues have no V1 row and initialize a fresh copy from the project default ref on their next human source Session.
+
+System Agent Sessions and Sessions pinned to an explicit source Commit are `detached` executions. Issue analysis, deploy, Tests, and cleanup keep per-Session workdir and artifact isolation and never acquire or advance the Issue source branch. Non-Agent tasks such as type triage and import mapping run independently outside the Issue working copy. Session logs, artifacts, engine references, evidence, failures, and captured Commit records remain Session-scoped in both Agent Session execution modes.
 
 In desktop personal mode, Electron manages one generic local Worker and its short-lived registration credential. It discovers installed `codex`, `claude`, and `pi` executables without launching them, passes exact engine capabilities as an immutable execution allowlist, and persists an anonymous stable host id. Personal Worker names include a host suffix, and labels distinguish `primary` from `browser_companion`; the renderer calls trusted Electron IPC for the current host id instead of guessing This Mac from a Worker name. Ordinary startup never prepares CDP. Browser-backed Codex Workflows use the companion Worker with an isolated repo/workdir root.
 
@@ -77,7 +81,7 @@ Capabilities remain the execution contract. Worker and server diagnostic reconci
 
 In customer Helm deployments, the fixed-worker path can bootstrap the team workspace and runtime token in one install. When `bootstrap.teamWorkspace.enabled=true`, the chart stores one `msw_...` token in the release Secret, passes it to the server as `MSPACE_BOOTSTRAP_RUNTIME_TOKEN`, and injects only that Secret key into the Worker as `MSPACE_RUNTIME_TOKEN`; the Worker does not receive database, GitHub, OAuth, or bootstrap-admin values from the Server Secret. Server startup ensures the bootstrap admin, creates or finds the named team workspace owned by that admin, and registers the token against that workspace. Codex auth/config still stays out of the server: the Worker mounts `mspace-codex-home` with `auth.json` and `config.toml`, while the server only sees the mspace runtime registration token. Agent subprocesses strip the Worker registration and control-plane environment before adding server-owned Session metadata.
 
-Agent Session creation is guarded rather than left to wait in the queue. Issue Detail uses `GET /runtime/availability` with the selected engine capability, and personal mode asks Electron main to ensure the local Worker before trusting heartbeat state. The server repeats the same check and returns HTTP `409` with `no active agent worker` when no matching online Worker exists. Availability also returns `claimableWorkerCount`, calculated by the server from workspace mode, status, heartbeat TTL, load, and exact capabilities; clients must not recalculate this count. Public raw debug task creation is owner/admin-only, supports only unbound `noop` and `protocol_smoke`, and rejects Agent, Skill, automation, repository, workdir, environment, and other server-owned fields case-insensitively.
+Agent Session creation is guarded rather than left to wait in the queue. Issue Detail uses `GET /runtime/availability` with `issueId` and the selected engine capability, and personal mode asks Electron main to ensure the local Worker before trusting heartbeat state. The Server repeats engine, V1 capability, writer, recovery, liveness, and storage-affinity checks and returns HTTP `409` when the turn cannot be claimed. Availability returns structured Worker and working-copy reason codes plus `claimableWorkerCount`, calculated with the same scheduler rules; clients must not recalculate this count. Public raw debug task creation is owner/admin-only, supports only unbound `noop` and `protocol_smoke`, and rejects Agent, Skill, automation, repository, workdir, environment, and other server-owned fields case-insensitively.
 
 Environment filtering protects against accidental Worker-token inheritance, not all same-user filesystem access. A personal Agent with broad filesystem permissions could still scan predictable Electron user-data paths for the Worker's token file. Full separation requires another OS identity, a container, brokered credentials, or filesystem deny-path enforcement.
 

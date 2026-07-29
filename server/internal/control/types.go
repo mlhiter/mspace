@@ -893,6 +893,7 @@ type IssueLabelDefinition struct {
 type IssueDetail struct {
 	Issue           Issue                   `json:"issue"`
 	Project         Project                 `json:"project"`
+	WorkingCopy     *IssueWorkingCopy       `json:"workingCopy,omitempty"`
 	TestEnvironment *IssueTestEnvironment   `json:"testEnvironment"`
 	ChildIssues     []IssueListItem         `json:"childIssues"`
 	Labels          []IssueLabel            `json:"labels"`
@@ -903,6 +904,22 @@ type IssueDetail struct {
 	ChangeNodes     []IssueChangeNode       `json:"changeNodes"`
 	ReviewEvidence  []SessionReviewEvidence `json:"reviewEvidence"`
 	Handoffs        []IssueHandoff          `json:"handoffs"`
+}
+
+type IssueWorkingCopy struct {
+	IssueID         string `json:"issueId"`
+	ProjectID       string `json:"projectId"`
+	Branch          string `json:"branch"`
+	BaseCommitSHA   string `json:"baseCommitSha"`
+	HeadCommitSHA   string `json:"headCommitSha"`
+	StorageID       string `json:"storageId"`
+	LastWorkerID    string `json:"lastWorkerId"`
+	ContentState    string `json:"contentState"`
+	RecoveryReason  string `json:"recoveryReason"`
+	ActiveSessionID string `json:"activeSessionId"`
+	Generation      int64  `json:"generation"`
+	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt"`
 }
 
 type AgentSession struct {
@@ -1721,6 +1738,7 @@ type RuntimeWorker struct {
 	ID                     string          `json:"id"`
 	WorkspaceID            string          `json:"workspaceId"`
 	Name                   string          `json:"name"`
+	StorageID              string          `json:"storageId"`
 	Mode                   string          `json:"mode"`
 	Status                 string          `json:"status"`
 	Version                string          `json:"version"`
@@ -1751,6 +1769,7 @@ type RuntimeAvailability struct {
 
 type RuntimeWorkerInput struct {
 	Name                   string          `json:"name"`
+	StorageID              string          `json:"storageId"`
 	Mode                   string          `json:"mode"`
 	Status                 string          `json:"status"`
 	Version                string          `json:"version"`
@@ -1773,10 +1792,13 @@ type RuntimeTask struct {
 	RequiredCapabilities json.RawMessage `json:"requiredCapabilities"`
 	Payload              json.RawMessage `json:"payload"`
 	Result               json.RawMessage `json:"result"`
+	StorageAffinityID    string          `json:"storageAffinityId"`
 	ClaimedByWorkerID    string          `json:"claimedByWorkerId"`
 	ClaimedAt            string          `json:"claimedAt"`
 	StartedAt            string          `json:"startedAt"`
 	FinishedAt           string          `json:"finishedAt"`
+	CancelRequestedAt    string          `json:"cancelRequestedAt"`
+	CancelRequested      bool            `json:"cancelRequested"`
 	Error                string          `json:"error"`
 	CreatedAt            string          `json:"createdAt"`
 	UpdatedAt            string          `json:"updatedAt"`
@@ -1825,6 +1847,7 @@ type CreateRuntimeTaskInput struct {
 	RuntimeMode          string          `json:"runtimeMode"`
 	RequiredCapabilities json.RawMessage `json:"requiredCapabilities"`
 	Payload              json.RawMessage `json:"payload"`
+	StorageAffinityID    string          `json:"-"`
 	ServerManaged        bool            `json:"-"`
 }
 

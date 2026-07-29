@@ -7,6 +7,18 @@ export type ChangelogEntry = {
 
 export const changelog: ChangelogEntry[] = [
   {
+    date: "2026-07-29",
+    title: "One working branch per Issue",
+    summary:
+      "mspace now keeps repeated Agent Sessions on one Issue source line instead of creating a disconnected branch and worktree for every turn.",
+    items: [
+      "Serializes human-triggered source Sessions on one stable Issue branch and reusable Worker worktree, so Codex, Claude Code, and Pi can continue the previous turn's captured source.",
+      "Keeps logs, artifacts, engine references, commits, evidence, failures, and cancellation records scoped to each Session without making the Session a new source identity.",
+      "Pins the mutable working copy to the Worker storage that owns its Git objects and reports busy, unavailable, dirty, or recovery-required states instead of silently restarting on another Worker.",
+      "Runs issue analysis, deploy, Tests, and other server-owned automation in detached per-Session worktrees so pinned validation cannot move the Issue branch.",
+    ],
+  },
+  {
     date: "2026-07-21",
     title: "Responsive Agent readiness and real engine identities",
     summary:
