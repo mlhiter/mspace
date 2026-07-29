@@ -8,11 +8,11 @@ import {
   type OpenDialogOptions,
 } from "electron";
 import { execFile, spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   ensureServerStarted,
@@ -44,6 +44,7 @@ let inviteHandlersRegistered = false;
 let dockerWorkerHandlersRegistered = false;
 let serverConfigHandlersRegistered = false;
 let personalWorkerHandlersRegistered = false;
+let localPullRequestHandlersRegistered = false;
 let dockerWorkerProcess: ChildProcessWithoutNullStreams | null = null;
 let dockerWorkerContainer = "";
 let personalWorkerProcess: ChildProcessWithoutNullStreams | null = null;
@@ -101,6 +102,28 @@ type EnsurePersonalWorkerResult = {
   status: string;
   workerName: string;
   capabilities?: PersonalWorkerCapabilities;
+};
+
+type CreateLocalPullRequestInput = {
+  workspaceId?: string;
+  cwd?: string;
+  branch?: string;
+  baseBranch?: string;
+  title?: string;
+  body?: string;
+  sourceCommitSha?: string;
+  repository?: string;
+  draft?: boolean;
+};
+
+type LocalPullRequestResult = {
+  url: string;
+  number: number;
+  state: string;
+  title: string;
+  headCommitSha: string;
+  repository: string;
+  branch: string;
 };
 
 type PersonalWorkerRuntime = {
@@ -304,6 +327,333 @@ function registerOpenHandlers(): void {
     const candidate = stripLineSuffix(trimmed);
     const target = existsSync(trimmed) ? trimmed : candidate;
     return shell.openPath(target);
+  });
+}
+
+type CommandOutput = {
+  stdout: string;
+  stderr: string;
+};
+
+type GitHubRepositoryView = {
+  nameWithOwner?: string;
+  defaultBranchRef?: {
+    name?: string;
+  };
+};
+
+type GitHubPullRequestView = {
+  url?: string;
+  number?: number;
+  state?: string;
+  title?: string;
+  headRefOid?: string;
+};
+
+function localPullRequestEnvironment(): NodeJS.ProcessEnv {
+  const path = buildAgentExecutableSearchPath({
+    env: process.env,
+    homeDir: homedir(),
+    platform: process.platform,
+  });
+  const env: NodeJS.ProcessEnv = {
+    HOME: process.env.HOME || homedir(),
+    USER: process.env.USER,
+    LOGNAME: process.env.LOGNAME,
+    SHELL: process.env.SHELL,
+    TMPDIR: process.env.TMPDIR,
+    SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK,
+    LANG: process.env.LANG,
+    LC_ALL: process.env.LC_ALL,
+    LC_CTYPE: process.env.LC_CTYPE,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    PATH: path,
+  };
+  return Object.fromEntries(Object.entries(env).filter(([, value]) => String(value || "").trim() !== ""));
+}
+
+function truncateCommandOutput(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= 2_000) return trimmed;
+  return `${trimmed.slice(0, 2_000)}...`;
+}
+
+function commandError(command: string, error: NodeJS.ErrnoException | null, output: CommandOutput): Error {
+  if (error?.code === "ENOENT") {
+    if (command === "gh") return new Error("GitHub CLI was not found. Install gh and run gh auth login before creating a PR from mspace.");
+    if (command === "git") return new Error("git was not found on PATH.");
+  }
+  const message = truncateCommandOutput([output.stderr, output.stdout].filter(Boolean).join("\n"));
+  return new Error(message ? `${command} failed:\n${message}` : `${command} failed.`);
+}
+
+function execFileCaptured(command: string, args: string[], cwd: string, timeout = 120_000): Promise<CommandOutput> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, {
+      cwd,
+      env: localPullRequestEnvironment(),
+      maxBuffer: 5 * 1024 * 1024,
+      timeout,
+    }, (error, stdout, stderr) => {
+      const output = {
+        stdout: String(stdout || ""),
+        stderr: String(stderr || ""),
+      };
+      if (error) {
+        reject(commandError(command, error as NodeJS.ErrnoException, output));
+        return;
+      }
+      resolve(output);
+    });
+  });
+}
+
+async function gitOutput(cwd: string, args: string[], timeout?: number): Promise<string> {
+  const output = await execFileCaptured("git", args, cwd, timeout);
+  return output.stdout.trim();
+}
+
+async function ghOutput(cwd: string, args: string[], timeout?: number): Promise<string> {
+  const output = await execFileCaptured("gh", args, cwd, timeout);
+  return output.stdout.trim();
+}
+
+async function ghJSON<T>(cwd: string, args: string[], timeout?: number): Promise<T> {
+  const output = await ghOutput(cwd, args, timeout);
+  return JSON.parse(output || "{}") as T;
+}
+
+function pullRequestURLFromText(value: string): string {
+  const match = value.match(/https?:\/\/\S+\/pull\/\d+\b/);
+  return match ? match[0] : "";
+}
+
+function pullRequestNumberFromURL(value: string): number {
+  const match = value.match(/\/pull\/(\d+)(?:$|[/?#])/);
+  const number = Number(match?.[1] || 0);
+  return Number.isInteger(number) && number > 0 ? number : 0;
+}
+
+function normalizedPullRequestState(value: string | undefined): string {
+  const state = String(value || "").trim().replace(/[_\s-]+/g, "_").toLowerCase();
+  return state || "open";
+}
+
+function pullRequestResultFromView(input: {
+  view: GitHubPullRequestView;
+  repository: string;
+  branch: string;
+  fallbackURL?: string;
+  fallbackTitle?: string;
+  fallbackHead?: string;
+}): LocalPullRequestResult {
+  const url = String(input.view.url || input.fallbackURL || "").trim();
+  return {
+    url,
+    number: Number(input.view.number || pullRequestNumberFromURL(url) || 0),
+    state: normalizedPullRequestState(input.view.state),
+    title: String(input.view.title || input.fallbackTitle || "").trim(),
+    headCommitSha: String(input.view.headRefOid || input.fallbackHead || "").trim(),
+    repository: input.repository,
+    branch: input.branch,
+  };
+}
+
+function parseGitHubRepositoryName(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const sshMatch = raw.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i);
+  if (sshMatch) return `${sshMatch[1]}/${sshMatch[2].replace(/\.git$/i, "")}`;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.hostname.toLowerCase() !== "github.com") return "";
+    const [owner, repo] = parsed.pathname.replace(/^\/+/, "").replace(/\.git$/i, "").split("/");
+    return owner && repo ? `${owner}/${repo}` : "";
+  } catch {
+    return "";
+  }
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const relation = relative(parent, child);
+  return relation === "" || (relation !== "" && !relation.startsWith("..") && !isAbsolute(relation));
+}
+
+function assertCapturedWorktreePathAllowed(cwd: string): string {
+  const realCwd = realpathSync(cwd);
+  const workerRoot = join(app.getPath("userData"), "worker");
+  const realWorkerRoot = existsSync(workerRoot) ? realpathSync(workerRoot) : "";
+  if (!realWorkerRoot || !isPathInside(realWorkerRoot, realCwd)) {
+    throw new Error("The captured worktree is outside the mspace personal worker directory.");
+  }
+  return realCwd;
+}
+
+function assertSafeGitBranch(branch: string): void {
+  if (
+    branch.startsWith("-") ||
+    branch.includes(":") ||
+    branch.includes("\\") ||
+    branch.includes("..") ||
+    branch.includes("@{") ||
+    branch.endsWith("/") ||
+    /[\s~^?*[\\]/.test(branch)
+  ) {
+    throw new Error("The captured branch name is not safe to push.");
+  }
+}
+
+async function readGitHubRepository(cwd: string, repository: string): Promise<GitHubRepositoryView> {
+  const args = ["repo", "view"];
+  if (repository) args.push(repository);
+  args.push("--json", "nameWithOwner,defaultBranchRef");
+  const view = await ghJSON<GitHubRepositoryView>(cwd, args, 30_000);
+  if (!view.nameWithOwner) {
+    throw new Error("Unable to resolve the GitHub repository for this worktree.");
+  }
+  return view;
+}
+
+async function readPullRequestView(cwd: string, repository: string, selector: string): Promise<GitHubPullRequestView> {
+  return ghJSON<GitHubPullRequestView>(cwd, [
+    "pr",
+    "view",
+    selector,
+    "--repo",
+    repository,
+    "--json",
+    "url,number,state,title,headRefOid",
+  ], 30_000);
+}
+
+async function findExistingPullRequest(cwd: string, repository: string, branch: string): Promise<GitHubPullRequestView | null> {
+  const pulls = await ghJSON<GitHubPullRequestView[]>(cwd, [
+    "pr",
+    "list",
+    "--repo",
+    repository,
+    "--head",
+    branch,
+    "--state",
+    "open",
+    "--json",
+    "url,number,state,title,headRefOid",
+    "--limit",
+    "1",
+  ], 30_000);
+  return Array.isArray(pulls) && pulls.length > 0 ? pulls[0] : null;
+}
+
+async function createLocalPullRequest(input: CreateLocalPullRequestInput): Promise<LocalPullRequestResult> {
+  const workspaceId = String(input.workspaceId || "").trim();
+  const cwd = String(input.cwd || "").trim();
+  const branch = String(input.branch || "").trim();
+  const sourceCommitSha = String(input.sourceCommitSha || "").trim();
+  if (!workspaceId || workspaceId !== personalWorkerWorkspaceId) {
+    throw new Error("Start the personal worker for this workspace before creating a PR.");
+  }
+  if (!cwd || !existsSync(cwd)) {
+    throw new Error("The captured worktree is not available on this Mac.");
+  }
+  if (!branch) {
+    throw new Error("A captured source branch is required before creating a PR.");
+  }
+  assertSafeGitBranch(branch);
+  if (!branch.startsWith("mspace/")) {
+    throw new Error("Only mspace captured source branches can be published as PRs.");
+  }
+  const worktreeCwd = assertCapturedWorktreePathAllowed(cwd);
+
+  const insideWorktree = await gitOutput(worktreeCwd, ["rev-parse", "--is-inside-work-tree"], 10_000);
+  if (insideWorktree !== "true") {
+    throw new Error("The captured worktree is not a git repository.");
+  }
+  const currentBranch = await gitOutput(worktreeCwd, ["rev-parse", "--abbrev-ref", "HEAD"], 10_000);
+  if (currentBranch !== branch) {
+    const currentBranchLabel = currentBranch === "HEAD" ? "detached HEAD" : currentBranch || "unknown";
+    throw new Error(`The captured worktree is on ${currentBranchLabel}, not ${branch}.`);
+  }
+  const headCommitSha = await gitOutput(worktreeCwd, ["rev-parse", "HEAD"], 10_000);
+  if (sourceCommitSha && headCommitSha !== sourceCommitSha && !headCommitSha.startsWith(sourceCommitSha) && !sourceCommitSha.startsWith(headCommitSha)) {
+    throw new Error(`The captured worktree is at ${headCommitSha.slice(0, 12)}, not the selected source commit ${sourceCommitSha.slice(0, 12)}.`);
+  }
+  const status = await gitOutput(worktreeCwd, ["status", "--porcelain"], 10_000);
+  if (status) {
+    throw new Error("The captured worktree has uncommitted changes. Finish or recover the source session before creating a PR.");
+  }
+
+  const repository = await readGitHubRepository(worktreeCwd, String(input.repository || "").trim());
+  const repositoryName = repository.nameWithOwner || "";
+  const baseBranch = String(input.baseBranch || repository.defaultBranchRef?.name || "main").trim();
+  const remoteNames = (await gitOutput(worktreeCwd, ["remote"], 10_000)).split(/\s+/).filter(Boolean);
+  const remote = remoteNames.includes("origin") ? "origin" : remoteNames[0];
+  if (!remote) {
+    throw new Error("This worktree has no git remote to push the PR branch to.");
+  }
+  const remoteRepositoryName = parseGitHubRepositoryName(await gitOutput(worktreeCwd, ["remote", "get-url", remote], 10_000));
+  const targetOwner = repositoryName.split("/")[0] || "";
+  const remoteOwner = remoteRepositoryName.split("/")[0] || "";
+  const head = remoteOwner && targetOwner && remoteOwner !== targetOwner ? `${remoteOwner}:${branch}` : branch;
+
+  await execFileCaptured("git", ["push", remote, `HEAD:${branch}`], worktreeCwd, 120_000);
+
+  const existing = await findExistingPullRequest(worktreeCwd, repositoryName, head);
+  if (existing?.url) {
+    return pullRequestResultFromView({
+      view: existing,
+      repository: repositoryName,
+      branch,
+      fallbackHead: headCommitSha,
+      fallbackTitle: input.title,
+    });
+  }
+
+  const title = String(input.title || "").trim() || await gitOutput(worktreeCwd, ["log", "-1", "--pretty=%s", "HEAD"], 10_000) || `Update ${branch}`;
+  const body = String(input.body || "").trim() || `Created from mspace.\n\nSource branch: \`${branch}\`\nSource commit: \`${headCommitSha}\``;
+  const createArgs = [
+    "pr",
+    "create",
+    "--repo",
+    repositoryName,
+    "--base",
+    baseBranch,
+    "--head",
+    head,
+    "--title",
+    title,
+    "--body",
+    body,
+  ];
+  if (input.draft) createArgs.push("--draft");
+  const createOutput = await execFileCaptured("gh", createArgs, worktreeCwd, 120_000);
+  const url = pullRequestURLFromText(`${createOutput.stdout}\n${createOutput.stderr}`);
+  if (!url) {
+    throw new Error("gh created the PR but did not return a PR URL.");
+  }
+  const view = await readPullRequestView(worktreeCwd, repositoryName, url);
+  return pullRequestResultFromView({
+    view,
+    repository: repositoryName,
+    branch,
+    fallbackURL: url,
+    fallbackHead: headCommitSha,
+    fallbackTitle: title,
+  });
+}
+
+function registerLocalPullRequestHandlers(): void {
+  if (localPullRequestHandlersRegistered) return;
+  localPullRequestHandlersRegistered = true;
+
+  ipcMain.handle("mspace:create-pull-request", async (_event, input: unknown): Promise<LocalPullRequestResult> => {
+    if (!isObjectRecord(input)) {
+      throw new Error("Invalid PR creation request.");
+    }
+    return createLocalPullRequest(input as CreateLocalPullRequestInput);
   });
 }
 
@@ -1150,6 +1500,7 @@ if (!gotSingleInstanceLock) {
     registerKubeconfigFilePicker();
     registerOpenHandlers();
     registerInviteHandlers();
+    registerLocalPullRequestHandlers();
     registerDockerWorkerHandlers();
     registerPersonalWorkerHandlers();
     try {

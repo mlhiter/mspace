@@ -73,11 +73,11 @@ Production deployment uses the root `vercel.json`:
 - Opt-in workspace automation that queues the same test deployment flow after a successful source session captures a commit, when the issue and runtime are ready.
 - Issue Resources tab for the current test namespace, showing Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events without accepting cross-namespace input.
 - Issue Evidence tab for the current review packet, with full-width pages for previous attempts and Kubernetes snapshot history.
-- Issue-level source handoff records that keep one current branch/PR delivery artifact with source branch, source commit, head commit, commit list, preview URL, evidence summary, server-owned executor errors, and refreshable PR state when a future GitHub App executor is configured.
+- Issue-level PR records that keep one current branch/PR delivery artifact with source branch, source commit, head commit, commit list, preview URL, evidence summary, and PR URL/state. Personal desktop mode can temporarily create the PR with the signed-in Mac user's local `gh`; durable team automation still waits for the server-owned GitHub App executor.
 - Structured failure evidence for failed sessions, deploy reconciliation, preview checks, interruption, and cleanup failures.
 
 > [!IMPORTANT]
-> Generated scoped kubeconfigs, ServiceAccounts, server-owned GitHub App branch publishing/PR execution, VM deploy providers, and Kubernetes-hosted agent runtime are future work. The current MVP records workspace GitHub App installation state but does not mint installation tokens, push branches, or create PRs.
+> Generated scoped kubeconfigs, ServiceAccounts, server-owned GitHub App branch publishing/PR execution, VM deploy providers, and Kubernetes-hosted agent runtime are future work. The current MVP records workspace GitHub App installation state but does not mint installation tokens. Personal desktop PR creation is a temporary local `gh` bridge, not the shared/team automation model.
 
 ## Architecture
 

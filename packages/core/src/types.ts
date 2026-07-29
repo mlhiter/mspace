@@ -1453,8 +1453,13 @@ export interface StartTestDeployInput {
 export interface CreatePullRequestInput {
   sourceSessionId?: string;
   sourceCommitSha?: string;
+  headCommitSha?: string;
   title?: string;
   draft?: boolean;
+  prUrl?: string;
+  prNumber?: number;
+  prState?: string;
+  createdVia?: string;
 }
 
 export interface MspaceUser {
@@ -1627,6 +1632,25 @@ export interface MspaceDesktopAPI {
   selectKubeconfigFiles?: () => Promise<string[]>;
   openExternal?: (url: string) => Promise<void>;
   openPath?: (path: string) => Promise<string>;
+  createPullRequest?: (input: {
+    workspaceId: string;
+    cwd: string;
+    branch: string;
+    baseBranch?: string;
+    title?: string;
+    body?: string;
+    sourceCommitSha?: string;
+    repository?: string;
+    draft?: boolean;
+  }) => Promise<{
+    url: string;
+    number: number;
+    state: string;
+    title: string;
+    headCommitSha: string;
+    repository: string;
+    branch: string;
+  }>;
   getPendingInviteToken?: () => Promise<string>;
   setPendingInviteToken?: (token: string) => Promise<string>;
   onInviteToken?: (callback: (token: string) => void) => () => void;

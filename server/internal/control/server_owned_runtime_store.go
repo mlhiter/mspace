@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1286,7 +1287,8 @@ func (s *PostgresStore) CreateIssuePullRequestHandoff(ctx Context, userID, works
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
 	issueID = strings.TrimSpace(issueID)
-	if err := ensureWorkspaceMember(dbctx, s.pool, workspaceID, strings.TrimSpace(userID)); err != nil {
+	workspace, err := loadWorkspaceForUser(dbctx, s.pool, workspaceID, strings.TrimSpace(userID))
+	if err != nil {
 		return IssueHandoff{}, err
 	}
 	detail, err := s.GetIssue(ctx, userID, workspaceID, issueID)
@@ -1300,22 +1302,33 @@ func (s *PostgresStore) CreateIssuePullRequestHandoff(ctx Context, userID, works
 	if err != nil {
 		return IssueHandoff{}, err
 	}
+	input, err = normalizeCreatePullRequestInput(input, workspace, detail.Project, sourceNode)
+	if err != nil {
+		return IssueHandoff{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
 	handoff := IssueHandoff{
 		IssueID:         issueID,
 		SourceSessionID: sourceNode.SessionID,
 		SourceCommitSHA: sourceNode.CommitSHA,
 		Branch:          sourceNode.Branch,
-		HeadCommitSHA:   sourceNode.CommitSHA,
+		HeadCommitSHA:   firstNonEmpty(input.HeadCommitSHA, sourceNode.CommitSHA),
 		Commits: []IssueHandoffCommit{{
 			SHA:      sourceNode.CommitSHA,
 			ShortSHA: shortCommitSHA(sourceNode.CommitSHA),
 			Subject:  sourceNode.Subject,
 		}},
 		Kind:            "pr",
+		PRURL:           strings.TrimSpace(input.PRURL),
+		PRNumber:        normalizedPullRequestNumber(input.PRNumber),
+		PRState:         normalizePullRequestState(input.PRState, strings.TrimSpace(input.PRURL) != ""),
 		PRTitle:         strings.TrimSpace(input.Title),
 		PreviewURL:      issueHandoffPreviewURL(detail, sourceNode.SessionID, sourceNode.CommitSHA),
 		EvidenceSummary: issueHandoffEvidenceSummary(detail, sourceNode.SessionID, sourceNode.CommitSHA),
-		CreatedVia:      "server",
+		CreatedVia:      firstNonEmpty(input.CreatedVia, "server"),
+	}
+	if strings.TrimSpace(handoff.PRURL) != "" {
+		handoff.LastCheckedAt = now
 	}
 	if handoff.PRTitle == "" {
 		handoff.PRTitle = firstNonEmpty(sourceNode.Subject, detail.Issue.Title)
@@ -1341,7 +1354,7 @@ func (s *PostgresStore) RefreshIssueHandoff(ctx Context, userID, workspaceID, is
 		return IssueHandoff{}, err
 	}
 	handoff.LastCheckedAt = time.Now().UTC().Format(time.RFC3339)
-	handoff.Error = "GitHub PR sync is server-owned but no GitHub App PR executor is configured yet."
+	handoff.Error = "GitHub PR refresh requires the server-owned GitHub App PR executor."
 	return s.storeIssueHandoff(dbctx, workspaceID, handoff)
 }
 
@@ -2084,6 +2097,108 @@ func (s *PostgresStore) storeIssueHandoff(ctx context.Context, workspaceID strin
 		RETURNING id::text, issue_id::text, source_session_id, source_commit_sha, branch, head_commit_sha, commits_json, kind, pr_url, pr_number, pr_state, pr_title, preview_url, evidence_summary, created_via, last_checked_at, error, created_at, updated_at
 	`, handoff.ID, workspaceID, handoff.IssueID, handoff.SourceSessionID, handoff.SourceCommitSHA, handoff.Branch, handoff.HeadCommitSHA, commits, kind, handoff.PRURL, handoff.PRNumber, handoff.PRState, handoff.PRTitle, handoff.PreviewURL, handoff.EvidenceSummary, firstNonEmpty(handoff.CreatedVia, "server"), lastChecked, handoff.Error)
 	return scanIssueHandoff(row)
+}
+
+func normalizedPullRequestNumber(value int) int {
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
+func normalizeCreatePullRequestInput(input CreatePullRequestInput, workspace Workspace, project Project, sourceNode IssueChangeNode) (CreatePullRequestInput, error) {
+	input.SourceSessionID = strings.TrimSpace(input.SourceSessionID)
+	input.SourceCommitSHA = strings.TrimSpace(input.SourceCommitSHA)
+	input.HeadCommitSHA = strings.TrimSpace(input.HeadCommitSHA)
+	input.Title = strings.TrimSpace(input.Title)
+	input.PRURL = strings.TrimSpace(input.PRURL)
+	input.PRState = strings.TrimSpace(input.PRState)
+	input.CreatedVia = strings.TrimSpace(input.CreatedVia)
+	if input.HeadCommitSHA != "" && !commitSHAReferencesMatch(input.HeadCommitSHA, sourceNode.CommitSHA) {
+		return CreatePullRequestInput{}, errors.New("PR head commit must match the selected source commit")
+	}
+	if input.PRURL == "" {
+		input.CreatedVia = "server"
+		input.PRNumber = 0
+		input.PRState = ""
+		return input, nil
+	}
+	if workspace.Kind != "personal" {
+		return CreatePullRequestInput{}, errors.New("local gh PR metadata is accepted only for personal workspaces")
+	}
+	if input.CreatedVia != "" && input.CreatedVia != "desktop-gh" {
+		return CreatePullRequestInput{}, errors.New("unsupported PR metadata source")
+	}
+	prRef, err := gitOwnerRepoFromPullRequestURL(input.PRURL)
+	if err != nil {
+		return CreatePullRequestInput{}, err
+	}
+	expected := projectGitOwnerRepo(project)
+	if expected.owner != "" && (!strings.EqualFold(expected.owner, prRef.owner) || !strings.EqualFold(expected.repo, prRef.repo)) {
+		return CreatePullRequestInput{}, errors.New("PR URL must belong to the issue project repository")
+	}
+	if input.PRNumber > 0 && input.PRNumber != prRef.number {
+		return CreatePullRequestInput{}, errors.New("PR number does not match PR URL")
+	}
+	input.PRNumber = prRef.number
+	input.PRState = normalizePullRequestState(input.PRState, true)
+	input.CreatedVia = "desktop-gh"
+	return input, nil
+}
+
+func commitSHAReferencesMatch(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	return left != "" && right != "" && (left == right || strings.HasPrefix(left, right) || strings.HasPrefix(right, left))
+}
+
+type gitPullRequestRef struct {
+	owner  string
+	repo   string
+	number int
+}
+
+func gitOwnerRepoFromPullRequestURL(value string) (gitPullRequestRef, error) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return gitPullRequestRef{}, errors.New("PR URL must be a GitHub pull request URL")
+	}
+	if parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") {
+		return gitPullRequestRef{}, errors.New("PR URL must be a GitHub pull request URL")
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) != 4 || parts[2] != "pull" {
+		return gitPullRequestRef{}, errors.New("PR URL must be a GitHub pull request URL")
+	}
+	number, err := parsePositiveInt(parts[3])
+	if err != nil {
+		return gitPullRequestRef{}, errors.New("PR URL must include a pull request number")
+	}
+	return gitPullRequestRef{owner: parts[0], repo: strings.TrimSuffix(parts[1], ".git"), number: number}, nil
+}
+
+func parsePositiveInt(value string) (int, error) {
+	number, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || number <= 0 {
+		return 0, errors.New("not a positive integer")
+	}
+	return number, nil
+}
+
+func projectGitOwnerRepo(project Project) gitOwnerRepo {
+	if strings.TrimSpace(project.GitOwner) != "" && strings.TrimSpace(project.GitRepo) != "" {
+		return gitOwnerRepo{owner: strings.TrimSpace(project.GitOwner), repo: strings.TrimSpace(project.GitRepo)}
+	}
+	return gitOwnerRepoFromURL(project.RemoteURL)
+}
+
+func normalizePullRequestState(value string, hasPullRequestURL bool) string {
+	state := strings.ToLower(strings.TrimSpace(value))
+	state = strings.NewReplacer(" ", "_", "-", "_").Replace(state)
+	if state == "" && hasPullRequestURL {
+		return "open"
+	}
+	return state
 }
 
 func (s *PostgresStore) loadIssueHandoff(ctx context.Context, workspaceID, issueID, handoffID string) (IssueHandoff, error) {

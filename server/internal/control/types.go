@@ -1682,8 +1682,13 @@ type TestEnvironmentSessionResult struct {
 type CreatePullRequestInput struct {
 	SourceSessionID string `json:"sourceSessionId"`
 	SourceCommitSHA string `json:"sourceCommitSha"`
+	HeadCommitSHA   string `json:"headCommitSha"`
 	Title           string `json:"title"`
 	Draft           bool   `json:"draft"`
+	PRURL           string `json:"prUrl"`
+	PRNumber        int    `json:"prNumber"`
+	PRState         string `json:"prState"`
+	CreatedVia      string `json:"createdVia"`
 }
 
 type RuntimeRegistrationToken struct {

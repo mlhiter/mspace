@@ -267,7 +267,7 @@ Only the latest human-authored issue comment may be edited, and only before an a
 Source changes, delivery handoff, live namespace resources, review evidence, and failure evidence are deliberately separate:
 
 - Commits tab: source commits, changed files, and diff previews.
-- Source handoff: one current issue-level branch/PR delivery artifact, keyed by source branch.
+- PR handoff: one current issue-level branch/PR delivery artifact, keyed by source branch. Personal desktop mode can temporarily run the user's local `gh` from the captured worktree to push that branch and create the PR, then records the PR URL back to the Server. This local bridge is not used for team workspaces or remote workers.
 - Resources tab: live Kubernetes objects from the issue's fixed namespace.
 - Evidence tab: current review packet, compact command evidence, agent summary, risks, source facts, and links to history pages.
 - Failures: continueable failure records that store phase, command, summary, excerpt, and namespace/resource hints internally, while default Issue Detail UI shows only the error summary and retry/continue affordances.
@@ -334,7 +334,7 @@ The desktop visual language is a quiet Notion-like workspace: narrow left sideba
 ## Future Work
 
 - Server-owned image attachment upload/storage.
-- GitHub App installation token minting, branch publishing, and server-owned PR executor.
+- GitHub App installation token minting, branch publishing, and server-owned team PR executor.
 - Stronger remote credential policy for fixed workers.
 - Lower-latency cancellation guarantees.
 - Kubernetes Runtime Provider that starts isolated per-session Pods or Jobs behind the same runtime task protocol.

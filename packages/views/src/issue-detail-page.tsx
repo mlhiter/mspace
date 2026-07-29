@@ -4615,6 +4615,38 @@ function projectRepositoryLabel(project: Project | null | undefined) {
   return project.sourceType === "github" ? project.remoteUrl || project.repoPath : project.repoPath || project.remoteUrl;
 }
 
+function projectGitHubRepositoryName(project: Project | null | undefined) {
+  if (!project) return "";
+  if (project.gitOwner && project.gitRepo) return `${project.gitOwner}/${project.gitRepo}`;
+  const remote = (project.remoteUrl || "").trim();
+  if (!remote) return "";
+  const sshMatch = remote.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/);
+  if (sshMatch) return `${sshMatch[1]}/${sshMatch[2].replace(/\.git$/, "")}`;
+  try {
+    const parsed = new URL(remote);
+    if (parsed.hostname.toLowerCase() !== "github.com") return "";
+    const [owner, repo] = parsed.pathname.replace(/^\/+/, "").replace(/\.git$/, "").split("/");
+    return owner && repo ? `${owner}/${repo}` : "";
+  } catch {
+    return "";
+  }
+}
+
+function buildPullRequestBody(issueId: string, detail: IssueDetail | null | undefined, node: IssueChangeNode) {
+  const lines = [
+    "Created from mspace.",
+    "",
+    `mspace issue: ${issueId}`,
+    `Source branch: \`${node.branch}\``,
+    `Source commit: \`${node.commitSha}\``,
+  ];
+  const previewURL = detail?.testEnvironment?.previewUrl;
+  if (previewURL) {
+    lines.push(`Preview: ${previewURL}`);
+  }
+  return lines.join("\n");
+}
+
 function projectNameFromPath(path: string): string {
   return path.trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
 }
@@ -5286,6 +5318,13 @@ export function IssueDetailPage() {
   const hasProject = Boolean(detail?.project?.id);
   const projectName = projectDisplayName(detail?.project);
   const projectRepository = projectRepositoryLabel(detail?.project);
+  const pullRequestDisabledReason = !hasProject
+    ? t("issueDetail.handoff.requiresProject")
+    : runtimeMode !== "personal"
+      ? t("issueDetail.handoff.teamPrNotReady")
+      : !window.mspaceDesktop?.createPullRequest
+        ? t("issueDetail.handoff.desktopPrRequired")
+        : undefined;
   const childIssues = listOrEmpty(detail?.childIssues);
   const changeNodes = listOrEmpty(detail?.changeNodes);
   const handoffs = listOrEmpty(detail?.handoffs);
@@ -6145,14 +6184,44 @@ export function IssueDetailPage() {
     [auth.token, issueId, serverWorkspaceReady, t, workspaceId],
   );
   const createPullRequest = useMutation({
-    mutationFn: (node: IssueChangeNode) => {
+    mutationFn: async (node: IssueChangeNode) => {
       if (!hasProject) {
         throw new Error(t("issueDetail.handoff.requiresProject"));
       }
+      const title = node.subject || detail?.issue.title || "";
+      const desktopCreatePullRequest = window.mspaceDesktop?.createPullRequest;
+      if (runtimeMode !== "personal") {
+        throw new Error(t("issueDetail.handoff.teamPrNotReady"));
+      }
+      if (!desktopCreatePullRequest) {
+        throw new Error(t("issueDetail.handoff.desktopPrRequired"));
+      }
+      if (!node.remoteWorkdir) {
+        throw new Error(t("issueDetail.handoff.localWorkdirRequired"));
+      }
+      const result = await desktopCreatePullRequest({
+        workspaceId,
+        cwd: node.remoteWorkdir,
+        branch: node.branch,
+        baseBranch: detail?.project?.defaultBranch || "",
+        title,
+        body: buildPullRequestBody(issueId, detail, node),
+        sourceCommitSha: node.commitSha,
+        repository: projectGitHubRepositoryName(detail?.project),
+      });
       return controlPlaneApi.createPullRequest(auth.token, workspaceId, issueId, {
         sourceSessionId: node.sessionId,
         sourceCommitSha: node.commitSha,
+        headCommitSha: result.headCommitSha || node.commitSha,
+        title: result.title || title,
+        prUrl: result.url,
+        prNumber: result.number,
+        prState: result.state,
+        createdVia: "desktop-gh",
       });
+    },
+    onSuccess: (handoff) => {
+      if (handoff.prUrl) void openRichLink(handoff.prUrl);
     },
     onSettled: async () => {
       await invalidateIssueHandoffSurfaces();
@@ -6733,8 +6802,8 @@ export function IssueDetailPage() {
               sessions={listOrEmpty(detail.sessions)}
               agents={agents}
               handoffs={handoffs}
-              actionsDisabled={!serverWorkspaceReady || !hasProject}
-              actionsDisabledReason={!hasProject ? t("issueDetail.handoff.requiresProject") : undefined}
+              actionsDisabled={!serverWorkspaceReady || Boolean(pullRequestDisabledReason)}
+              actionsDisabledReason={pullRequestDisabledReason}
               isCreatingPr={createPullRequest.isPending}
               refreshingHandoffId={refreshIssueHandoff.isPending ? refreshIssueHandoff.variables?.id || "" : ""}
               createPrError={createPullRequest.error}

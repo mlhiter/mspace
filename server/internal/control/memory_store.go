@@ -4106,7 +4106,15 @@ func (s *MemoryStore) CreateIssuePullRequestHandoff(_ Context, userID, workspace
 	if err != nil {
 		return IssueHandoff{}, err
 	}
+	workspace, ok := s.workspaceLocked(workspaceID)
+	if !ok {
+		return IssueHandoff{}, ErrNotFound
+	}
 	sourceNode, err := selectIssueChangeNodeForDeploy(detail.ChangeNodes, input.SourceCommitSHA, input.SourceSessionID)
+	if err != nil {
+		return IssueHandoff{}, err
+	}
+	input, err = normalizeCreatePullRequestInput(input, workspace, detail.Project, sourceNode)
 	if err != nil {
 		return IssueHandoff{}, err
 	}
@@ -4117,18 +4125,24 @@ func (s *MemoryStore) CreateIssuePullRequestHandoff(_ Context, userID, workspace
 		SourceSessionID: sourceNode.SessionID,
 		SourceCommitSHA: sourceNode.CommitSHA,
 		Branch:          sourceNode.Branch,
-		HeadCommitSHA:   sourceNode.CommitSHA,
+		HeadCommitSHA:   firstNonEmpty(input.HeadCommitSHA, sourceNode.CommitSHA),
 		Commits: []IssueHandoffCommit{{
 			SHA:      sourceNode.CommitSHA,
 			ShortSHA: shortCommitSHA(sourceNode.CommitSHA),
 			Subject:  sourceNode.Subject,
 		}},
 		Kind:            "pr",
+		PRURL:           strings.TrimSpace(input.PRURL),
+		PRNumber:        normalizedPullRequestNumber(input.PRNumber),
+		PRState:         normalizePullRequestState(input.PRState, strings.TrimSpace(input.PRURL) != ""),
 		PRTitle:         firstNonEmpty(input.Title, sourceNode.Subject, detail.Issue.Title),
 		EvidenceSummary: issueHandoffEvidenceSummary(detail, sourceNode.SessionID, sourceNode.CommitSHA),
-		CreatedVia:      "server",
+		CreatedVia:      firstNonEmpty(input.CreatedVia, "server"),
 		CreatedAt:       now,
 		UpdatedAt:       now,
+	}
+	if strings.TrimSpace(handoff.PRURL) != "" {
+		handoff.LastCheckedAt = now
 	}
 	s.handoffs[handoff.ID] = handoff
 	return handoff, nil
@@ -4145,7 +4159,7 @@ func (s *MemoryStore) RefreshIssueHandoff(_ Context, userID, workspaceID, issueI
 		return IssueHandoff{}, ErrNotFound
 	}
 	handoff.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	handoff.Error = "GitHub PR sync is server-owned but no GitHub App PR executor is configured yet."
+	handoff.Error = "GitHub PR refresh requires the server-owned GitHub App PR executor."
 	handoff.UpdatedAt = handoff.LastCheckedAt
 	s.handoffs[handoff.ID] = handoff
 	return handoff, nil

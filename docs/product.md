@@ -243,6 +243,7 @@ MVP features:
 - reusable Environments route for Kubernetes kubeconfig discovery/import, registry/exposure defaults, and virtual machine SSH metadata;
 - project default Environment selection, currently backed by the Kubernetes compatibility default for issue deploys;
 - opt-in automatic test deploy after captured source commits;
+- personal desktop PR creation from the captured local worktree through the signed-in Mac user's local `gh`, with the resulting PR URL recorded back into the issue handoff;
 - read-only workspace GitHub App installation status for team branch/PR automation readiness;
 - terminal/progress stream;
 - Issue working-copy inspection and Session evidence review;
@@ -256,7 +257,7 @@ Still outside the current implemented MVP:
 - ServiceAccount and RoleBinding lifecycle;
 - namespace per session;
 - full Kubernetes resource browser;
-- server-owned GitHub App token minting, branch publishing, and PR automation;
+- server-owned GitHub App token minting, branch publishing, and team PR automation;
 - automated namespace cleanup policy beyond the current manual cleanup/retain decision.
 
 The product architecture uses the Server control plane as the product and runtime truth for every signed-in workspace. Users, local password credentials, workspaces, membership, optional GitHub identity, auth sessions, projects, runbooks, issues, Issue working-copy state, comments, reactions, labels, Inbox receipts, Skills, Environments, Kubernetes cluster compatibility records, issue test environments, handoffs, audit, runtime tasks, Worker logs, and GitHub App installation state live in the Server. The physical Git worktree and objects stay Worker-owned. The fixed Agent catalog lives in code and is returned read-only; it is not workspace data.

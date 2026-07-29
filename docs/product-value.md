@@ -181,12 +181,12 @@ This view is what turns a session from terminal output into review material. It 
 
 The workflow should not end at a preview URL. Engineering teams usually need a branch or PR.
 
-The MVP should keep PR delivery state as a server-owned handoff record, while the product direction moves toward GitHub App integration:
+The MVP should keep PR delivery state as a server-owned handoff record. Personal desktop mode can bridge through the signed-in Mac user's local `gh` for now, while the product direction still moves toward GitHub App integration:
 
 - PR handoff is branch-based: the selected source branch is the issue delivery identity, while captured commits are supporting review evidence for that branch.
 - workspace installs the GitHub App;
 - the server stores installation state;
-- sessions use scoped installation tokens for push and PR actions;
+- personal desktop sessions can temporarily use local `gh`, while team sessions should eventually use scoped installation tokens for push and PR actions;
 - PRs link back to the issue;
 - PR descriptions include preview URL and evidence summary.
 
@@ -244,7 +244,7 @@ If the answer is yes, mspace has independent value. If the answer is no, it rema
 
 ## Near-Term Product Priorities
 
-The next work should favor dogfooding and hardening the first complete loop over broader platform features. The local MVP now has first versions of commit-backed deploy selection, branch / PR handoff records, structured review evidence, and continueable failure records; the remaining priority is proving those surfaces with real project runs and improving the quality of the captured Kubernetes evidence.
+The next work should favor dogfooding and hardening the first complete loop over broader platform features. The local MVP now has first versions of commit-backed deploy selection, personal desktop PR creation/branch handoff records, structured review evidence, and continueable failure records; the remaining priority is proving those surfaces with real project runs and improving the quality of the captured Kubernetes evidence.
 
 1. Run a real dogfood issue through the full flow.
 2. Add or refine the agent-discovered project runbook.
