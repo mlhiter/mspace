@@ -52,25 +52,6 @@ const desktopAPI = {
   selectKubeconfigFiles: () => ipcRenderer.invoke("mspace:select-kubeconfig-files") as Promise<string[]>,
   openExternal: (url: string) => ipcRenderer.invoke("mspace:open-external", url) as Promise<void>,
   openPath: (path: string) => ipcRenderer.invoke("mspace:open-path", path) as Promise<string>,
-  createPullRequest: (input: {
-    workspaceId: string;
-    cwd: string;
-    branch: string;
-    baseBranch?: string;
-    title?: string;
-    body?: string;
-    sourceCommitSha?: string;
-    repository?: string;
-    draft?: boolean;
-  }) => ipcRenderer.invoke("mspace:create-pull-request", input) as Promise<{
-    url: string;
-    number: number;
-    state: string;
-    title: string;
-    headCommitSha: string;
-    repository: string;
-    branch: string;
-  }>,
   getPendingInviteToken: () => ipcRenderer.invoke("mspace:get-pending-invite-token") as Promise<string>,
   setPendingInviteToken: (token: string) => ipcRenderer.invoke("mspace:set-pending-invite-token", token) as Promise<string>,
   onInviteToken: (callback: (token: string) => void) => {

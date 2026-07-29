@@ -30,6 +30,7 @@ const (
 	testDeployAutomation                = "test_deploy"
 	autoDeployTestEnvironmentAutomation = "auto_test_deploy"
 	testEnvironmentCleanupAutomation    = "test_environment_cleanup"
+	pullRequestHandoffAutomation        = "pull_request_handoff"
 )
 
 func (s *PostgresStore) GetWorkspaceSettings(ctx Context, userID, workspaceID string) (WorkspaceSettings, error) {
@@ -1283,6 +1284,58 @@ func (s *PostgresStore) ProbeIssueTestEnvironment(ctx Context, userID, workspace
 	return environment, nil
 }
 
+func (s *PostgresStore) CreateIssuePullRequestSession(ctx Context, userID, workspaceID, issueID string, input CreatePullRequestInput) (AgentSession, error) {
+	dbctx := asContext(ctx)
+	workspaceID = strings.TrimSpace(workspaceID)
+	issueID = strings.TrimSpace(issueID)
+	workspace, err := loadWorkspaceForUser(dbctx, s.pool, workspaceID, strings.TrimSpace(userID))
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if workspace.Kind != "personal" {
+		return AgentSession{}, errors.New("Codex PR creation is available for personal workspaces until GitHub App automation is ready")
+	}
+	detail, err := s.GetIssue(ctx, userID, workspaceID, issueID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if detail.Project.ID == "" {
+		return AgentSession{}, errors.New("attach a project before creating a PR")
+	}
+	sourceNode, err := selectIssueChangeNodeForDeploy(detail.ChangeNodes, input.SourceCommitSHA, input.SourceSessionID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if strings.TrimSpace(sourceNode.Branch) == "" {
+		return AgentSession{}, errors.New("selected source commit has no captured branch to publish")
+	}
+	if hasActivePullRequestSession(detail.Sessions) {
+		return AgentSession{}, ErrConflict
+	}
+	session, err := s.CreateAgentSession(ctx, userID, workspaceID, issueID, CreateAgentSessionInput{
+		AgentEngine:     "codex",
+		RuntimeMode:     workspace.Kind,
+		Command:         buildIssuePullRequestPrompt(detail, sourceNode, input.Draft),
+		Branch:          sourceNode.Branch,
+		SourceSessionID: sourceNode.SessionID,
+		SourceCommitSHA: sourceNode.CommitSHA,
+		Automation:      pullRequestHandoffAutomation,
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			return AgentSession{}, ErrConflict
+		}
+		return AgentSession{}, err
+	}
+	_, _ = s.storeIssuePullRequestHandoffForSource(dbctx, s.pool, workspace, workspaceID, issueID, CreatePullRequestInput{
+		SourceSessionID: sourceNode.SessionID,
+		SourceCommitSHA: sourceNode.CommitSHA,
+		Title:           firstNonEmpty(sourceNode.Subject, detail.Issue.Title),
+		CreatedVia:      "codex",
+	}, detail, sourceNode)
+	return session, nil
+}
+
 func (s *PostgresStore) CreateIssuePullRequestHandoff(ctx Context, userID, workspaceID, issueID string, input CreatePullRequestInput) (IssueHandoff, error) {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
@@ -1302,7 +1355,16 @@ func (s *PostgresStore) CreateIssuePullRequestHandoff(ctx Context, userID, works
 	if err != nil {
 		return IssueHandoff{}, err
 	}
-	input, err = normalizeCreatePullRequestInput(input, workspace, detail.Project, sourceNode)
+	stored, err := s.storeIssuePullRequestHandoffForSource(dbctx, s.pool, workspace, workspaceID, issueID, input, detail, sourceNode)
+	if err != nil {
+		return IssueHandoff{}, err
+	}
+	_ = s.addSystemComment(dbctx, workspaceID, issueID, issueHandoffComment(stored))
+	return stored, nil
+}
+
+func (s *PostgresStore) storeIssuePullRequestHandoffForSource(ctx context.Context, q queryer, workspace Workspace, workspaceID, issueID string, input CreatePullRequestInput, detail IssueDetail, sourceNode IssueChangeNode) (IssueHandoff, error) {
+	input, err := normalizeCreatePullRequestInput(input, workspace, detail.Project, sourceNode)
 	if err != nil {
 		return IssueHandoff{}, err
 	}
@@ -1333,12 +1395,7 @@ func (s *PostgresStore) CreateIssuePullRequestHandoff(ctx Context, userID, works
 	if handoff.PRTitle == "" {
 		handoff.PRTitle = firstNonEmpty(sourceNode.Subject, detail.Issue.Title)
 	}
-	stored, err := s.storeIssueHandoff(dbctx, workspaceID, handoff)
-	if err != nil {
-		return IssueHandoff{}, err
-	}
-	_ = s.addSystemComment(dbctx, workspaceID, issueID, issueHandoffComment(stored))
-	return stored, nil
+	return s.storeIssueHandoff(ctx, q, workspaceID, handoff)
 }
 
 func (s *PostgresStore) RefreshIssueHandoff(ctx Context, userID, workspaceID, issueID, handoffID string) (IssueHandoff, error) {
@@ -1355,7 +1412,7 @@ func (s *PostgresStore) RefreshIssueHandoff(ctx Context, userID, workspaceID, is
 	}
 	handoff.LastCheckedAt = time.Now().UTC().Format(time.RFC3339)
 	handoff.Error = "GitHub PR refresh requires the server-owned GitHub App PR executor."
-	return s.storeIssueHandoff(dbctx, workspaceID, handoff)
+	return s.storeIssueHandoff(dbctx, s.pool, workspaceID, handoff)
 }
 
 func hasActiveAgentSession(sessions []AgentSession) bool {
@@ -1365,6 +1422,94 @@ func hasActiveAgentSession(sessions []AgentSession) bool {
 		}
 	}
 	return false
+}
+
+func hasActivePullRequestSession(sessions []AgentSession) bool {
+	for _, session := range sessions {
+		if session.Automation != pullRequestHandoffAutomation {
+			continue
+		}
+		if session.Status == "queued" || session.Status == "running" {
+			return true
+		}
+	}
+	return false
+}
+
+func buildIssuePullRequestPrompt(detail IssueDetail, sourceNode IssueChangeNode, draft bool) string {
+	repository := firstNonEmpty(detail.Project.RemoteURL, detail.Project.RepoPath, "not configured")
+	repositoryName := ""
+	if ownerRepo := projectGitOwnerRepo(detail.Project); ownerRepo.owner != "" && ownerRepo.repo != "" {
+		repositoryName = ownerRepo.owner + "/" + ownerRepo.repo
+	}
+	var builder strings.Builder
+	builder.WriteString("Create a GitHub pull request for this mspace issue.\n\n")
+	builder.WriteString("Use the authenticated git and GitHub CLI identity available in this Codex runtime. Inspect the repository and remotes before pushing or creating the PR.\n\n")
+	builder.WriteString("Source to publish:\n")
+	builder.WriteString(fmt.Sprintf("- Branch: %s\n", sourceNode.Branch))
+	builder.WriteString(fmt.Sprintf("- Commit: %s\n", sourceNode.CommitSHA))
+	builder.WriteString(fmt.Sprintf("- Commit subject: %s\n", firstNonEmpty(sourceNode.Subject, detail.Issue.Title)))
+	builder.WriteString(fmt.Sprintf("- Repository: %s\n", repository))
+	if repositoryName != "" {
+		builder.WriteString(fmt.Sprintf("- GitHub repository: %s\n", repositoryName))
+	}
+	builder.WriteString(fmt.Sprintf("- Base branch: %s\n", firstNonEmpty(detail.Project.DefaultBranch, "main")))
+	builder.WriteString(fmt.Sprintf("- Issue: %s\n", detail.Issue.Title))
+	if detail.Issue.Body != "" {
+		builder.WriteString("\nIssue body:\n")
+		builder.WriteString(detail.Issue.Body)
+		builder.WriteString("\n")
+	}
+	if previewURL := strings.TrimSpace(detail.TestEnvironmentPreviewURL()); previewURL != "" {
+		builder.WriteString(fmt.Sprintf("\nPreview URL: %s\n", previewURL))
+	}
+	builder.WriteString("\nRequired workflow:\n")
+	builder.WriteString("- Check out the source branch at the exact source commit before pushing. A safe command shape is `git checkout -B \"$MSPACE_SESSION_BRANCH\" \"$MSPACE_SOURCE_COMMIT_SHA\"`.\n")
+	builder.WriteString("- Resolve the PR base and head explicitly from git remotes and `gh repo view`; do not rely on ambiguous CLI defaults.\n")
+	builder.WriteString("- Push the source branch to the appropriate GitHub remote.\n")
+	builder.WriteString("- If a PR already exists for this head branch, reuse it and update the artifact with the existing PR metadata instead of opening a duplicate.\n")
+	builder.WriteString("- Write a clear PR title and body based on the actual commit diff, issue context, and validation evidence. Prefer a Conventional Commit style title when it fits.\n")
+	if draft {
+		builder.WriteString("- Create the PR as a draft.\n")
+	} else {
+		builder.WriteString("- Create the PR as ready for review unless repository policy forces a draft.\n")
+	}
+	builder.WriteString("- After creating or finding the PR, verify its URL, number, state, title, and head commit.\n")
+	builder.WriteString("\nRequired artifact:\n")
+	builder.WriteString("Write `${MSPACE_SESSION_ARTIFACT_DIR}/pull-request.json` before finishing. Use this JSON shape:\n")
+	builder.WriteString("{\"url\":\"https://github.com/OWNER/REPO/pull/123\",\"number\":123,\"state\":\"open\",\"title\":\"fix: concise title\",\"headCommitSha\":\"")
+	builder.WriteString(sourceNode.CommitSHA)
+	builder.WriteString("\",\"repository\":\"")
+	builder.WriteString(repositoryName)
+	builder.WriteString("\",\"branch\":\"")
+	builder.WriteString(sourceNode.Branch)
+	builder.WriteString("\"}\n")
+	builder.WriteString("The artifact `headCommitSha` must match the selected source commit. If creating the PR is blocked, do not invent PR metadata; explain the blocker in the final answer.\n")
+	return builder.String()
+}
+
+func (detail IssueDetail) TestEnvironmentPreviewURL() string {
+	if detail.TestEnvironment == nil {
+		return ""
+	}
+	return detail.TestEnvironment.PreviewURL
+}
+
+func createPullRequestInputFromArtifact(session AgentSession, artifact PullRequestArtifact) CreatePullRequestInput {
+	number := artifact.PRNumber
+	if number == 0 {
+		number = artifact.Number
+	}
+	return CreatePullRequestInput{
+		SourceSessionID: session.SourceSessionID,
+		SourceCommitSHA: session.SourceCommitSHA,
+		HeadCommitSHA:   strings.TrimSpace(artifact.HeadCommitSHA),
+		Title:           strings.TrimSpace(artifact.Title),
+		PRURL:           firstNonEmpty(artifact.PRURL, artifact.URL),
+		PRNumber:        number,
+		PRState:         firstNonEmpty(artifact.PRState, artifact.State),
+		CreatedVia:      "codex",
+	}
 }
 
 func (s *PostgresStore) buildIssueTestEnvironment(ctx context.Context, detail IssueDetail, input StartTestDeployInput) (IssueTestEnvironment, error) {
@@ -2043,7 +2188,7 @@ func kubernetesEventTimeString(value time.Time) string {
 	return value.UTC().Format(time.RFC3339)
 }
 
-func (s *PostgresStore) storeIssueHandoff(ctx context.Context, workspaceID string, handoff IssueHandoff) (IssueHandoff, error) {
+func (s *PostgresStore) storeIssueHandoff(ctx context.Context, q queryer, workspaceID string, handoff IssueHandoff) (IssueHandoff, error) {
 	kind := strings.ToLower(strings.TrimSpace(handoff.Kind))
 	if kind == "" {
 		kind = "branch"
@@ -2067,14 +2212,14 @@ func (s *PostgresStore) storeIssueHandoff(ctx context.Context, workspaceID strin
 		lastChecked = parsed
 	}
 	if kind == "pr" {
-		existing, err := s.loadCurrentIssuePullRequestHandoff(ctx, workspaceID, handoff.IssueID)
+		existing, err := loadCurrentIssuePullRequestHandoff(ctx, q, workspaceID, handoff.IssueID)
 		if err == nil && existing.ID != handoff.ID {
 			handoff.ID = existing.ID
 		} else if err != nil && !errors.Is(err, ErrNotFound) {
 			return IssueHandoff{}, err
 		}
 	}
-	row := s.pool.QueryRow(ctx, `
+	row := q.QueryRow(ctx, `
 		INSERT INTO issue_handoffs (id, workspace_id, issue_id, source_session_id, source_commit_sha, branch, head_commit_sha, commits_json, kind, pr_url, pr_number, pr_state, pr_title, preview_url, evidence_summary, created_via, last_checked_at, error)
 		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		ON CONFLICT (id) DO UPDATE SET
@@ -2114,19 +2259,25 @@ func normalizeCreatePullRequestInput(input CreatePullRequestInput, workspace Wor
 	input.PRURL = strings.TrimSpace(input.PRURL)
 	input.PRState = strings.TrimSpace(input.PRState)
 	input.CreatedVia = strings.TrimSpace(input.CreatedVia)
-	if input.HeadCommitSHA != "" && !commitSHAReferencesMatch(input.HeadCommitSHA, sourceNode.CommitSHA) {
-		return CreatePullRequestInput{}, errors.New("PR head commit must match the selected source commit")
-	}
 	if input.PRURL == "" {
-		input.CreatedVia = "server"
+		if input.HeadCommitSHA != "" && !commitSHAReferencesMatch(input.HeadCommitSHA, sourceNode.CommitSHA) {
+			return CreatePullRequestInput{}, errors.New("PR head commit must match the selected source commit")
+		}
+		input.CreatedVia = firstNonEmpty(input.CreatedVia, "server")
 		input.PRNumber = 0
 		input.PRState = ""
 		return input, nil
 	}
-	if workspace.Kind != "personal" {
-		return CreatePullRequestInput{}, errors.New("local gh PR metadata is accepted only for personal workspaces")
+	if input.HeadCommitSHA == "" {
+		return CreatePullRequestInput{}, errors.New("PR head commit is required")
 	}
-	if input.CreatedVia != "" && input.CreatedVia != "desktop-gh" {
+	if !commitSHAReferencesMatch(input.HeadCommitSHA, sourceNode.CommitSHA) {
+		return CreatePullRequestInput{}, errors.New("PR head commit must match the selected source commit")
+	}
+	if workspace.Kind != "personal" {
+		return CreatePullRequestInput{}, errors.New("Codex PR metadata is accepted only for personal workspaces until GitHub App automation is ready")
+	}
+	if input.CreatedVia != "" && input.CreatedVia != "codex" {
 		return CreatePullRequestInput{}, errors.New("unsupported PR metadata source")
 	}
 	prRef, err := gitOwnerRepoFromPullRequestURL(input.PRURL)
@@ -2142,7 +2293,7 @@ func normalizeCreatePullRequestInput(input CreatePullRequestInput, workspace Wor
 	}
 	input.PRNumber = prRef.number
 	input.PRState = normalizePullRequestState(input.PRState, true)
-	input.CreatedVia = "desktop-gh"
+	input.CreatedVia = "codex"
 	return input, nil
 }
 
@@ -2215,7 +2366,11 @@ func (s *PostgresStore) loadIssueHandoff(ctx context.Context, workspaceID, issue
 }
 
 func (s *PostgresStore) loadCurrentIssuePullRequestHandoff(ctx context.Context, workspaceID, issueID string) (IssueHandoff, error) {
-	row := s.pool.QueryRow(ctx, `
+	return loadCurrentIssuePullRequestHandoff(ctx, s.pool, workspaceID, issueID)
+}
+
+func loadCurrentIssuePullRequestHandoff(ctx context.Context, q queryer, workspaceID, issueID string) (IssueHandoff, error) {
+	row := q.QueryRow(ctx, `
 		SELECT id::text, issue_id::text, source_session_id, source_commit_sha, branch, head_commit_sha, commits_json, kind, pr_url, pr_number, pr_state, pr_title, preview_url, evidence_summary, created_via, last_checked_at, error, created_at, updated_at
 		FROM issue_handoffs
 		WHERE workspace_id = $1 AND issue_id = $2 AND kind = 'pr'
@@ -2374,6 +2529,15 @@ func (s *PostgresStore) reconcileAgentSessionRuntimeResult(ctx context.Context, 
 			return err
 		}
 	}
+	if task.Status == "completed" && runtimeTaskAutomation(task) == pullRequestHandoffAutomation {
+		if artifacts.PullRequest == nil {
+			if err := s.recordPullRequestHandoffError(ctx, q, task, session, "Codex PR handoff completed without pull-request.json."); err != nil {
+				return err
+			}
+		} else if err := s.reconcilePullRequestHandoff(ctx, q, task, session, *artifacts.PullRequest); err != nil {
+			return err
+		}
+	}
 	if task.Status == "completed" && artifacts.TestCaseProposals != nil {
 		if err := s.storeTestCaseProposalArtifacts(ctx, q, task, *artifacts.TestCaseProposals); err != nil {
 			return err
@@ -2402,8 +2566,102 @@ func (s *PostgresStore) reconcileAgentSessionRuntimeResult(ctx context.Context, 
 	return nil
 }
 
+func (s *PostgresStore) reconcilePullRequestHandoff(ctx context.Context, q queryer, task RuntimeTask, session AgentSession, artifact PullRequestArtifact) error {
+	issue, err := loadIssue(ctx, q, task.WorkspaceID, task.IssueID)
+	if err != nil {
+		return err
+	}
+	if issue.ProjectID == "" {
+		return errors.New("attach a project before recording a PR handoff")
+	}
+	project, err := resolveIssueProject(ctx, q, task.WorkspaceID, issue.ProjectID, "")
+	if err != nil {
+		return err
+	}
+	nodes, err := listIssueChangeNodesForQueryer(ctx, q, task.WorkspaceID, task.IssueID)
+	if err != nil {
+		return err
+	}
+	input := createPullRequestInputFromArtifact(session, artifact)
+	sourceNode, err := selectIssueChangeNodeForDeploy(nodes, input.SourceCommitSHA, input.SourceSessionID)
+	if err != nil {
+		return err
+	}
+	workspace := Workspace{ID: task.WorkspaceID}
+	if err := q.QueryRow(ctx, `SELECT kind FROM workspaces WHERE id = $1`, task.WorkspaceID).Scan(&workspace.Kind); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	input, err = normalizeCreatePullRequestInput(input, workspace, project, sourceNode)
+	if err != nil {
+		return err
+	}
+	detail := IssueDetail{Issue: issue, Project: project, ChangeNodes: nodes}
+	if environment, err := loadIssueTestEnvironmentRecord(ctx, q, task.WorkspaceID, task.IssueID); err == nil {
+		detail.TestEnvironment = &environment
+	} else if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	handoff := IssueHandoff{
+		IssueID:         task.IssueID,
+		SourceSessionID: sourceNode.SessionID,
+		SourceCommitSHA: sourceNode.CommitSHA,
+		Branch:          firstNonEmpty(strings.TrimSpace(artifact.Branch), sourceNode.Branch),
+		HeadCommitSHA:   firstNonEmpty(input.HeadCommitSHA, sourceNode.CommitSHA),
+		Commits: []IssueHandoffCommit{{
+			SHA:      sourceNode.CommitSHA,
+			ShortSHA: shortCommitSHA(sourceNode.CommitSHA),
+			Subject:  sourceNode.Subject,
+		}},
+		Kind:            "pr",
+		PRURL:           strings.TrimSpace(input.PRURL),
+		PRNumber:        normalizedPullRequestNumber(input.PRNumber),
+		PRState:         normalizePullRequestState(input.PRState, strings.TrimSpace(input.PRURL) != ""),
+		PRTitle:         firstNonEmpty(input.Title, sourceNode.Subject, issue.Title),
+		PreviewURL:      issueHandoffPreviewURL(detail, sourceNode.SessionID, sourceNode.CommitSHA),
+		EvidenceSummary: issueHandoffEvidenceSummary(detail, sourceNode.SessionID, sourceNode.CommitSHA),
+		CreatedVia:      "codex",
+	}
+	if strings.TrimSpace(handoff.PRURL) != "" {
+		handoff.LastCheckedAt = now
+	}
+	stored, err := s.storeIssueHandoff(ctx, q, task.WorkspaceID, handoff)
+	if err != nil {
+		return err
+	}
+	return addSystemCommentRecord(ctx, q, task.WorkspaceID, task.IssueID, issueHandoffComment(stored))
+}
+
+func (s *PostgresStore) recordPullRequestHandoffError(ctx context.Context, q queryer, task RuntimeTask, session AgentSession, message string) error {
+	handoff, err := loadCurrentIssuePullRequestHandoff(ctx, q, task.WorkspaceID, task.IssueID)
+	if errors.Is(err, ErrNotFound) {
+		handoff = IssueHandoff{
+			IssueID:         task.IssueID,
+			SourceSessionID: session.SourceSessionID,
+			SourceCommitSHA: session.SourceCommitSHA,
+			Branch:          session.Branch,
+			HeadCommitSHA:   session.SourceCommitSHA,
+			Kind:            "pr",
+			PRTitle:         "Pull request handoff",
+			CreatedVia:      "codex",
+		}
+	} else if err != nil {
+		return err
+	}
+	handoff.Error = strings.TrimSpace(message)
+	handoff.LastCheckedAt = time.Now().UTC().Format(time.RFC3339)
+	stored, err := s.storeIssueHandoff(ctx, q, task.WorkspaceID, handoff)
+	if err != nil {
+		return err
+	}
+	return addSystemCommentRecord(ctx, q, task.WorkspaceID, task.IssueID, "PR handoff did not record a pull request: "+stored.Error)
+}
+
 func (s *PostgresStore) queueAutomaticTestDeployIfEnabled(ctx context.Context, q queryer, task RuntimeTask) error {
-	if strings.TrimSpace(task.IssueID) == "" || isIssueTestDeployTask(task) || runtimeTaskAutomation(task) == issueAnalysisAutomation || runtimeTaskIsDryRun(task) {
+	if strings.TrimSpace(task.IssueID) == "" || isIssueTestDeployTask(task) || runtimeTaskAutomation(task) != "" || runtimeTaskIsDryRun(task) {
 		return nil
 	}
 	source := runtimeTaskSource(task)

@@ -267,7 +267,7 @@ Only the latest human-authored issue comment may be edited, and only before an a
 Source changes, delivery handoff, live namespace resources, review evidence, and failure evidence are deliberately separate:
 
 - Commits tab: source commits, changed files, and diff previews.
-- PR handoff: one current issue-level branch/PR delivery artifact, keyed by source branch. Personal desktop mode can temporarily run the user's local `gh` from the captured worktree to push that branch and create the PR, then records the PR URL back to the Server. This local bridge is not used for team workspaces or remote workers.
+- PR handoff: one current issue-level branch/PR delivery artifact, keyed by source branch. Personal mode queues at most one active Codex `pull_request_handoff` session for an issue; that detached session publishes or reuses the captured source branch, creates or finds the PR with the personal runtime's authenticated git/GitHub CLI identity, and writes `pull-request.json` so the Server can record the PR URL. This personal Codex path is not used for team workspaces or server-owned GitHub App automation.
 - Resources tab: live Kubernetes objects from the issue's fixed namespace.
 - Evidence tab: current review packet, compact command evidence, agent summary, risks, source facts, and links to history pages.
 - Failures: continueable failure records that store phase, command, summary, excerpt, and namespace/resource hints internally, while default Issue Detail UI shows only the error summary and retry/continue affordances.

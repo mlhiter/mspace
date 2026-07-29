@@ -2292,12 +2292,12 @@ func (s *Server) handleCreateIssuePullRequestHandoff(w http.ResponseWriter, r *h
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	handoff, err := s.store.CreateIssuePullRequestHandoff(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
+	session, err := s.store.CreateIssuePullRequestSession(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), input)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, handoff)
+	writeJSON(w, http.StatusCreated, session)
 }
 
 func (s *Server) handleRefreshIssueHandoff(w http.ResponseWriter, r *http.Request) {

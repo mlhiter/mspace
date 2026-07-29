@@ -939,7 +939,7 @@ export const controlPlaneApi = {
       headers: authHeaders(token),
     }),
   createPullRequest: (token: string, workspaceId: string, issueId: string, input: CreatePullRequestInput) =>
-    requestControlPlane<IssueHandoff>(`/api/workspaces/${workspaceId}/issues/${issueId}/handoffs/create-pr`, {
+    requestControlPlane<AgentSession>(`/api/workspaces/${workspaceId}/issues/${issueId}/handoffs/create-pr`, {
       method: "POST",
       headers: authHeaders(token),
       body: JSON.stringify(input),

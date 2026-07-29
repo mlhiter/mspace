@@ -251,6 +251,9 @@ func completeAgentSession(ctx context.Context, runtimeClient *runtimeClient, wor
 		_ = runtimeClient.appendTaskLog(ctx, workerID, taskID, appendTaskLogInput{Stream: "system", Message: "Source capture disabled for this agent session."})
 	}
 	result.attachArtifacts(payload)
+	if pullRequestHandoffArtifactRequired(payload) && result.PullRequest == nil {
+		return result, missingPullRequestHandoffArtifactError(payload)
+	}
 	result.WorkingCopy = inspectIssueWorkingCopy(context.WithoutCancel(ctx), payload, "")
 	if result.WorkingCopy != nil && result.WorkingCopy.ContentState == "recovery_required" {
 		return result, errors.New("issue working copy could not be verified after source capture")

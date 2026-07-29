@@ -1525,7 +1525,11 @@ func (s *PostgresStore) listIssueAgentSessions(ctx context.Context, workspaceID,
 }
 
 func (s *PostgresStore) listIssueChangeNodes(ctx context.Context, workspaceID, issueID string) ([]IssueChangeNode, error) {
-	rows, err := s.pool.Query(ctx, `
+	return listIssueChangeNodesForQueryer(ctx, s.pool, workspaceID, issueID)
+}
+
+func listIssueChangeNodesForQueryer(ctx context.Context, q queryer, workspaceID, issueID string) ([]IssueChangeNode, error) {
+	rows, err := q.Query(ctx, `
 		SELECT
 			id::text,
 			issue_id,
@@ -1846,7 +1850,12 @@ func buildAgentSessionPayload(sessionID string, issue Issue, project Project, ru
 }
 
 func agentSessionSourceCaptureEnabled(input CreateAgentSessionInput) bool {
-	return strings.TrimSpace(input.Automation) != issueAnalysisAutomation
+	switch strings.TrimSpace(input.Automation) {
+	case issueAnalysisAutomation, pullRequestHandoffAutomation:
+		return false
+	default:
+		return true
+	}
 }
 
 func agentSessionSandbox(input CreateAgentSessionInput) string {

@@ -439,6 +439,11 @@ function isIssueAnalysisSession(session: AgentSession) {
   return sessionUsesSkill(session, "think") && [session.command, ...markers].some(markerIndicatesIssueAnalysis);
 }
 
+function isPullRequestHandoffSession(session: AgentSession) {
+  const payload = session.payload || {};
+  return normalizedMarker(session.automation || objectValue(payload, "automation")) === "pull_request_handoff";
+}
+
 function formatMentionPlaceholder(agents: AgentEngineCatalogItem[]) {
   if (agents.length === 0) return translate("issueDetail.composer.noAgentsPlaceholder");
   const mentions = agents.slice(0, 3).map((agent) => agent.mention).join(", ");
@@ -1546,6 +1551,7 @@ function HandoffMeta(props: { label: string; value: string; mono?: boolean; titl
 
 function IssueHandoffPanel(props: {
   changeNodes: IssueChangeNode[];
+  sessions: AgentSession[];
   handoffs: IssueHandoff[];
   disabled?: boolean;
   disabledReason?: string;
@@ -1571,7 +1577,8 @@ function IssueHandoffPanel(props: {
   const selectedNode = nodes.find((node) => node.branch === sourceBranch) || nodes[0];
   const syncedPR = issuePullRequestHandoff(props.handoffs);
   const primaryHandoff = syncedPR || props.handoffs[0];
-  const canCreate = Boolean(selectedNode?.branch) && !syncedPR?.prUrl && !props.isCreatingPr && !props.disabled;
+  const activePullRequestSession = props.sessions.find((session) => isPullRequestHandoffSession(session) && ["queued", "running"].includes(session.status));
+  const canCreate = Boolean(selectedNode?.branch) && !syncedPR?.prUrl && !activePullRequestSession && !props.isCreatingPr && !props.disabled;
   const displayBranch = primaryHandoff?.branch || selectedNode?.branch || translate("issueDetail.handoff.noBranchCaptured");
   const sourceCommitValue =
     primaryHandoff?.headCommitSha ||
@@ -1617,7 +1624,7 @@ function IssueHandoffPanel(props: {
             onClick={() => selectedNode && props.onCreatePr(selectedNode)}
           >
             <GitPullRequest data-icon />
-            {props.isCreatingPr ? t("issueDetail.handoff.syncing") : t("issueDetail.handoff.createOrSyncPr")}
+            {props.isCreatingPr || activePullRequestSession ? t("issueDetail.handoff.syncing") : t("issueDetail.handoff.createOrSyncPr")}
           </Button>
         )}
       </div>
@@ -1670,8 +1677,20 @@ function IssueHandoffPanel(props: {
           <div className="grid gap-3 sm:grid-cols-3">
             <HandoffMeta label={t("issueDetail.handoff.sourceBranch")} value={displayBranch} mono />
             <HandoffMeta label={t("issueDetail.handoff.sourceCommit")} value={sourceCommitValue ? sourceCommitValue.slice(0, 12) : ""} mono title={sourceCommitValue} />
-            <HandoffMeta label={t("issueDetail.handoff.status")} value={selectedNode?.branch ? t("issueDetail.handoff.readyToSync") : t("issueDetail.handoff.waitingForBranch")} />
+            <HandoffMeta
+              label={t("issueDetail.handoff.status")}
+              value={
+                activePullRequestSession
+                  ? t(activePullRequestSession.status === "queued" ? "issueDetail.handoff.prQueued" : "issueDetail.handoff.prRunning")
+                  : selectedNode?.branch
+                    ? t("issueDetail.handoff.readyToSync")
+                    : t("issueDetail.handoff.waitingForBranch")
+              }
+            />
           </div>
+          {activePullRequestSession ? (
+            <Notice>{t("issueDetail.handoff.prSessionActive")}</Notice>
+          ) : null}
           {primaryHandoff?.error ? <Notice tone="danger">{primaryHandoff.error}</Notice> : null}
           <div className="text-[12px] leading-5 text-[color:var(--muted)]">{t("issueDetail.handoff.githubLookupHint")}</div>
         </div>
@@ -1716,6 +1735,7 @@ function IssueCommitsTab(props: {
         </div>
         <IssueHandoffPanel
           changeNodes={nodes}
+          sessions={props.sessions}
           handoffs={props.handoffs}
           disabled={props.actionsDisabled}
           disabledReason={props.actionsDisabledReason}
@@ -1746,6 +1766,7 @@ function IssueCommitsTab(props: {
 
       <IssueHandoffPanel
         changeNodes={nodes}
+        sessions={props.sessions}
         handoffs={props.handoffs}
         disabled={props.actionsDisabled}
         disabledReason={props.actionsDisabledReason}
@@ -1982,8 +2003,13 @@ function IssueSessionsTab(props: { sessions: AgentSession[]; agents: AgentEngine
       {sessions.map((session) => {
         const agent = sessionAgent(session, props.agents);
         const isAnalysisSession = isIssueAnalysisSession(session);
-        const title = isAnalysisSession ? t("issueDetail.sessions.analysisTitle") : agent.name;
-        const sessionDetail = isAnalysisSession ? t("issueDetail.sessions.analysisDescription") : session.branch || session.workdir;
+        const isPrSession = isPullRequestHandoffSession(session);
+        const title = isAnalysisSession ? t("issueDetail.sessions.analysisTitle") : isPrSession ? t("issueDetail.sessions.prTitle") : agent.name;
+        const sessionDetail = isAnalysisSession
+          ? t("issueDetail.sessions.analysisDescription")
+          : isPrSession
+            ? t("issueDetail.sessions.prDescription", { branch: session.branch || t("issueDetail.handoff.noBranchCaptured") })
+            : session.branch || session.workdir;
         return (
           <div id={issueSessionDomId(session.id)} key={session.id} className="scroll-mt-8 grid gap-1 rounded-[9px] bg-[color:var(--paper)] px-3 py-3 shadow-[inset_0_0_0_1px_var(--line)]">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -1995,7 +2021,12 @@ function IssueSessionsTab(props: { sessions: AgentSession[]; agents: AgentEngine
                   {t("issueDetail.sessions.thinkSkill")}
                 </span>
               ) : null}
-              {session.sourceCommitSha ? <span className="font-mono text-[11px] text-[color:var(--faint)]">deploy {session.sourceCommitSha.slice(0, 12)}</span> : null}
+              {isPrSession ? (
+                <span className="rounded-full bg-[color:var(--block)] px-2 py-0.5 text-[11px] font-medium leading-4 text-[color:var(--muted-strong)]">
+                  {t("issueDetail.sessions.prBadge")}
+                </span>
+              ) : null}
+              {session.sourceCommitSha ? <span className="font-mono text-[11px] text-[color:var(--faint)]">{isPrSession ? "pr" : "deploy"} {session.sourceCommitSha.slice(0, 12)}</span> : null}
             </div>
             <div className={cn("min-w-0 text-[12px] leading-5 text-[color:var(--muted)]", isAnalysisSession ? "" : "break-all font-mono")}>
               {sessionDetail}
@@ -4615,38 +4646,6 @@ function projectRepositoryLabel(project: Project | null | undefined) {
   return project.sourceType === "github" ? project.remoteUrl || project.repoPath : project.repoPath || project.remoteUrl;
 }
 
-function projectGitHubRepositoryName(project: Project | null | undefined) {
-  if (!project) return "";
-  if (project.gitOwner && project.gitRepo) return `${project.gitOwner}/${project.gitRepo}`;
-  const remote = (project.remoteUrl || "").trim();
-  if (!remote) return "";
-  const sshMatch = remote.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/);
-  if (sshMatch) return `${sshMatch[1]}/${sshMatch[2].replace(/\.git$/, "")}`;
-  try {
-    const parsed = new URL(remote);
-    if (parsed.hostname.toLowerCase() !== "github.com") return "";
-    const [owner, repo] = parsed.pathname.replace(/^\/+/, "").replace(/\.git$/, "").split("/");
-    return owner && repo ? `${owner}/${repo}` : "";
-  } catch {
-    return "";
-  }
-}
-
-function buildPullRequestBody(issueId: string, detail: IssueDetail | null | undefined, node: IssueChangeNode) {
-  const lines = [
-    "Created from mspace.",
-    "",
-    `mspace issue: ${issueId}`,
-    `Source branch: \`${node.branch}\``,
-    `Source commit: \`${node.commitSha}\``,
-  ];
-  const previewURL = detail?.testEnvironment?.previewUrl;
-  if (previewURL) {
-    lines.push(`Preview: ${previewURL}`);
-  }
-  return lines.join("\n");
-}
-
 function projectNameFromPath(path: string): string {
   return path.trim().replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
 }
@@ -5314,6 +5313,7 @@ export function IssueDetailPage() {
   const projects = listOrEmpty(projectsQuery.data);
   const labelOptions = issueLabelOptionsForUI(labelDefinitionsQuery.data);
   const enabledAgents = agents;
+  const codexAgentConfig = agents.find((agent) => mentionKey(agent.mention) === "codex") || fallbackAgent("codex");
   const defaultSkillAgent = enabledAgents.find((agent) => mentionKey(agent.mention) === "codex") || enabledAgents[0];
   const hasProject = Boolean(detail?.project?.id);
   const projectName = projectDisplayName(detail?.project);
@@ -5322,9 +5322,7 @@ export function IssueDetailPage() {
     ? t("issueDetail.handoff.requiresProject")
     : runtimeMode !== "personal"
       ? t("issueDetail.handoff.teamPrNotReady")
-      : !window.mspaceDesktop?.createPullRequest
-        ? t("issueDetail.handoff.desktopPrRequired")
-        : undefined;
+      : undefined;
   const childIssues = listOrEmpty(detail?.childIssues);
   const changeNodes = listOrEmpty(detail?.changeNodes);
   const handoffs = listOrEmpty(detail?.handoffs);
@@ -6188,40 +6186,21 @@ export function IssueDetailPage() {
       if (!hasProject) {
         throw new Error(t("issueDetail.handoff.requiresProject"));
       }
-      const title = node.subject || detail?.issue.title || "";
-      const desktopCreatePullRequest = window.mspaceDesktop?.createPullRequest;
       if (runtimeMode !== "personal") {
         throw new Error(t("issueDetail.handoff.teamPrNotReady"));
       }
-      if (!desktopCreatePullRequest) {
-        throw new Error(t("issueDetail.handoff.desktopPrRequired"));
+      await ensureAgentWorkerReady(codexAgentConfig);
+      try {
+        return await controlPlaneApi.createPullRequest(auth.token, workspaceId, issueId, {
+          sourceSessionId: node.sessionId,
+          sourceCommitSha: node.commitSha,
+        });
+      } catch (error) {
+        if (isAgentSessionReadinessError(error)) {
+          throw await normalizeAgentSessionError(error, codexAgentConfig);
+        }
+        throw error;
       }
-      if (!node.remoteWorkdir) {
-        throw new Error(t("issueDetail.handoff.localWorkdirRequired"));
-      }
-      const result = await desktopCreatePullRequest({
-        workspaceId,
-        cwd: node.remoteWorkdir,
-        branch: node.branch,
-        baseBranch: detail?.project?.defaultBranch || "",
-        title,
-        body: buildPullRequestBody(issueId, detail, node),
-        sourceCommitSha: node.commitSha,
-        repository: projectGitHubRepositoryName(detail?.project),
-      });
-      return controlPlaneApi.createPullRequest(auth.token, workspaceId, issueId, {
-        sourceSessionId: node.sessionId,
-        sourceCommitSha: node.commitSha,
-        headCommitSha: result.headCommitSha || node.commitSha,
-        title: result.title || title,
-        prUrl: result.url,
-        prNumber: result.number,
-        prState: result.state,
-        createdVia: "desktop-gh",
-      });
-    },
-    onSuccess: (handoff) => {
-      if (handoff.prUrl) void openRichLink(handoff.prUrl);
     },
     onSettled: async () => {
       await invalidateIssueHandoffSurfaces();

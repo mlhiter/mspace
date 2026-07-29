@@ -118,6 +118,49 @@ func TestReadTestResultArtifactAcceptsArrayShape(t *testing.T) {
 	}
 }
 
+func TestReadPullRequestArtifact(t *testing.T) {
+	artifactDir := t.TempDir()
+	data := `{
+		"prUrl":"https://github.com/mlhiter/mspace/pull/42",
+		"prNumber":42,
+		"prState":"OPEN",
+		"title":"fix: create PRs through Codex",
+		"headCommitSha":"1111111111111111111111111111111111111111",
+		"repository":"mlhiter/mspace",
+		"branch":"mspace/issue-pr"
+	}`
+	if err := os.WriteFile(filepath.Join(artifactDir, pullRequestArtifactName), []byte(data), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+
+	artifact, ok := readPullRequestArtifact(agentSessionPayload{ArtifactDir: artifactDir})
+	if !ok {
+		t.Fatal("expected pull-request artifact to be accepted")
+	}
+	if artifact.URL != "https://github.com/mlhiter/mspace/pull/42" || artifact.Number != 42 || artifact.State != "OPEN" {
+		t.Fatalf("unexpected artifact metadata: %+v", artifact)
+	}
+	if artifact.HeadCommitSHA != "1111111111111111111111111111111111111111" || artifact.Repository != "mlhiter/mspace" || artifact.Branch != "mspace/issue-pr" {
+		t.Fatalf("unexpected artifact source: %+v", artifact)
+	}
+}
+
+func TestCompletePullRequestHandoffRequiresArtifact(t *testing.T) {
+	sourceCapture := false
+	artifactDir := t.TempDir()
+	_, err := completeAgentSession(context.Background(), &runtimeClient{baseURL: "http://127.0.0.1:1"}, "worker-1", "task-1", agentSessionPayload{
+		AgentEngine:    agentEngineCodex,
+		Automation:     pullRequestHandoffAutomation,
+		ArtifactDir:    artifactDir,
+		SourceCapture:  &sourceCapture,
+		ApprovalPolicy: "never",
+		Sandbox:        "danger-full-access",
+	}, agentEngineExecution{AgentEngine: agentEngineCodex})
+	if err == nil || !strings.Contains(err.Error(), pullRequestArtifactName) {
+		t.Fatalf("expected missing pull request artifact error, got %v", err)
+	}
+}
+
 func TestArtifactCompletionRequiresMatchingRun(t *testing.T) {
 	artifactDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(artifactDir, testResultArtifactName), []byte(`{"runId":"other-run","items":[{"caseId":"case-1","status":"passed"}]}`), 0o644); err != nil {

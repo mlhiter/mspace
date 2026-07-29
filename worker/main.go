@@ -33,9 +33,11 @@ const codexProtocolLineLimit = 16 * 1024 * 1024
 const branchNameArtifactName = "branch-name.json"
 const testEnvironmentArtifactName = "test-environment.json"
 const reviewEvidenceArtifactName = "review-evidence.json"
+const pullRequestArtifactName = "pull-request.json"
 const testCaseProposalsArtifactName = "test-case-proposals.json"
 const testSetupResultArtifactName = "test-setup-result.json"
 const testResultArtifactName = "test-result.json"
+const pullRequestHandoffAutomation = "pull_request_handoff"
 const maxTestResultScreenshotBytes = 2 * 1024 * 1024
 const testArtifactCompletionSettleTimeout = 10 * time.Second
 
@@ -282,6 +284,7 @@ type agentSessionResult struct {
 	Source            agentSessionSource           `json:"source"`
 	TestEnvironment   *agentSessionTestEnvironment `json:"testEnvironment,omitempty"`
 	ReviewEvidence    *reviewEvidenceArtifact      `json:"reviewEvidence,omitempty"`
+	PullRequest       *pullRequestArtifact         `json:"pullRequest,omitempty"`
 	TestCaseProposals *testCaseProposalsArtifact   `json:"testCaseProposals,omitempty"`
 	TestSetup         *testSetupResultArtifact     `json:"testSetup,omitempty"`
 	TestResult        *testResultArtifact          `json:"testResult,omitempty"`
@@ -325,6 +328,19 @@ type reviewEvidenceArtifact struct {
 	DeploymentResult reviewEvidenceResult    `json:"deploymentResult"`
 	Risks            []string                `json:"risks"`
 	FollowUps        []string                `json:"followUps"`
+}
+
+type pullRequestArtifact struct {
+	URL           string `json:"url"`
+	PRURL         string `json:"prUrl,omitempty"`
+	Number        int    `json:"number"`
+	PRNumber      int    `json:"prNumber,omitempty"`
+	State         string `json:"state"`
+	PRState       string `json:"prState,omitempty"`
+	Title         string `json:"title"`
+	HeadCommitSHA string `json:"headCommitSha"`
+	Repository    string `json:"repository"`
+	Branch        string `json:"branch"`
 }
 
 type reviewEvidenceCommand struct {
@@ -1573,6 +1589,18 @@ func missingTestCompletionArtifactError(payload agentSessionPayload) error {
 	return fmt.Errorf("test automation completed without matching %s for run %s at %s", name, payload.TestRunID, path)
 }
 
+func pullRequestHandoffArtifactRequired(payload agentSessionPayload) bool {
+	return strings.TrimSpace(payload.Automation) == pullRequestHandoffAutomation
+}
+
+func missingPullRequestHandoffArtifactError(payload agentSessionPayload) error {
+	path := artifactPath(payload, pullRequestArtifactName)
+	if strings.TrimSpace(path) == "" {
+		return errors.New("pull request handoff completed without pull-request.json")
+	}
+	return fmt.Errorf("pull request handoff completed without a valid %s at %s", pullRequestArtifactName, path)
+}
+
 func expectedTestCompletionArtifactName(payload agentSessionPayload) string {
 	switch strings.TrimSpace(payload.Automation) {
 	case "test_run_execution":
@@ -1626,6 +1654,9 @@ func (result *agentSessionResult) attachArtifacts(payload agentSessionPayload) {
 	}
 	if artifact, ok := readReviewEvidenceArtifact(payload); ok {
 		result.ReviewEvidence = &artifact
+	}
+	if artifact, ok := readPullRequestArtifact(payload); ok {
+		result.PullRequest = &artifact
 	}
 	if artifact, ok := readTestCaseProposalsArtifact(payload); ok {
 		result.TestCaseProposals = &artifact
@@ -2439,6 +2470,31 @@ func readReviewEvidenceArtifact(payload agentSessionPayload) (reviewEvidenceArti
 		Risks:            parseReviewStringListValue(raw.Risks),
 		FollowUps:        parseReviewStringListValue(raw.FollowUps),
 	}, true
+}
+
+func readPullRequestArtifact(payload agentSessionPayload) (pullRequestArtifact, bool) {
+	path := artifactPath(payload, pullRequestArtifactName)
+	if path == "" {
+		return pullRequestArtifact{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return pullRequestArtifact{}, false
+	}
+	var artifact pullRequestArtifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		return pullRequestArtifact{}, false
+	}
+	artifact.URL = strings.TrimSpace(firstNonEmpty(artifact.URL, artifact.PRURL))
+	artifact.State = strings.TrimSpace(firstNonEmpty(artifact.State, artifact.PRState))
+	artifact.Title = strings.TrimSpace(artifact.Title)
+	artifact.HeadCommitSHA = strings.TrimSpace(artifact.HeadCommitSHA)
+	artifact.Repository = strings.TrimSpace(artifact.Repository)
+	artifact.Branch = strings.TrimSpace(artifact.Branch)
+	if artifact.Number == 0 {
+		artifact.Number = artifact.PRNumber
+	}
+	return artifact, artifact.URL != ""
 }
 
 func readTestCaseProposalsArtifact(payload agentSessionPayload) (testCaseProposalsArtifact, bool) {

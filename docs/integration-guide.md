@@ -476,7 +476,7 @@ Use `status:"failed"` plus `failureSummary` when setup cannot safely complete. T
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/retain` | Retain the namespace for debugging. |
 | `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/resources` | List Pods, Services, Deployments, Ingresses, and Events from the fixed issue namespace. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/probe` | Refresh preview reachability state without creating new evidence rows. |
-| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Store or update the issue PR handoff from selected source evidence. Personal desktop mode may also supply a PR URL from local `gh`. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Queue a personal Codex PR handoff session for selected source evidence. The session must write `pull-request.json`; the Server records the PR from that artifact. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the issue handoff record. |
 | `GET` | `/api/workspaces/{workspaceID}/github-app` | Read server-owned GitHub App installation status for this workspace. |
 
@@ -733,6 +733,7 @@ Workers may improve the session result by writing JSON or Markdown files under `
 
 - `branch-name.json`: optional branch proposal only for a detached Agent Session whose server-owned payload enables source capture. Issue working-copy Sessions and detached automation without source capture ignore it.
 - `review-evidence.json`: command evidence, tests, build/deploy result, summary, risks, and follow-ups.
+- `pull-request.json`: PR handoff metadata after a Codex PR session creates or finds a GitHub pull request.
 - `test-environment.json`: deploy/test result, including `previewUrl` when available.
 - `project-runbook.md`: learned project runbook update after a successful session.
 

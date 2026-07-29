@@ -1101,6 +1101,7 @@ type SessionReviewEvidence struct {
 type RuntimeTaskArtifactResult struct {
 	TestEnvironment   *RuntimeTaskTestEnvironmentArtifact `json:"testEnvironment,omitempty"`
 	ReviewEvidence    *SessionReviewEvidenceArtifact      `json:"reviewEvidence,omitempty"`
+	PullRequest       *PullRequestArtifact                `json:"pullRequest,omitempty"`
 	TestCaseProposals *TestCaseProposalArtifact           `json:"testCaseProposals,omitempty"`
 	TestSetup         *TestSetupResultArtifact            `json:"testSetup,omitempty"`
 	TestResult        *TestResultArtifact                 `json:"testResult,omitempty"`
@@ -1120,6 +1121,19 @@ type SessionReviewEvidenceArtifact struct {
 	DeploymentResult ReviewEvidenceResult    `json:"deploymentResult"`
 	Risks            []string                `json:"risks"`
 	FollowUps        []string                `json:"followUps"`
+}
+
+type PullRequestArtifact struct {
+	URL           string `json:"url"`
+	PRURL         string `json:"prUrl"`
+	Number        int    `json:"number"`
+	PRNumber      int    `json:"prNumber"`
+	State         string `json:"state"`
+	PRState       string `json:"prState"`
+	Title         string `json:"title"`
+	HeadCommitSHA string `json:"headCommitSha"`
+	Repository    string `json:"repository"`
+	Branch        string `json:"branch"`
 }
 
 type TestCaseProposalArtifact struct {
@@ -2024,6 +2038,7 @@ type Store interface {
 	RetainIssueTestEnvironment(ctx Context, userID, workspaceID, issueID string) (IssueTestEnvironment, error)
 	GetIssueTestEnvironmentResources(ctx Context, userID, workspaceID, issueID string) (IssueTestEnvironmentResources, error)
 	ProbeIssueTestEnvironment(ctx Context, userID, workspaceID, issueID string) (IssueTestEnvironment, error)
+	CreateIssuePullRequestSession(ctx Context, userID, workspaceID, issueID string, input CreatePullRequestInput) (AgentSession, error)
 	CreateIssuePullRequestHandoff(ctx Context, userID, workspaceID, issueID string, input CreatePullRequestInput) (IssueHandoff, error)
 	RefreshIssueHandoff(ctx Context, userID, workspaceID, issueID, handoffID string) (IssueHandoff, error)
 	UpdateIssue(ctx Context, userID, workspaceID, issueID string, input UpdateIssueInput) (Issue, error)

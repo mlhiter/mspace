@@ -73,11 +73,11 @@ Production deployment uses the root `vercel.json`:
 - Opt-in workspace automation that queues the same test deployment flow after a successful source session captures a commit, when the issue and runtime are ready.
 - Issue Resources tab for the current test namespace, showing Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events without accepting cross-namespace input.
 - Issue Evidence tab for the current review packet, with full-width pages for previous attempts and Kubernetes snapshot history.
-- Issue-level PR records that keep one current branch/PR delivery artifact with source branch, source commit, head commit, commit list, preview URL, evidence summary, and PR URL/state. Personal desktop mode can temporarily create the PR with the signed-in Mac user's local `gh`; durable team automation still waits for the server-owned GitHub App executor.
+- Issue-level PR records that keep one current branch/PR delivery artifact with source branch, source commit, head commit, commit list, preview URL, evidence summary, and PR URL/state. Personal mode can queue one active detached Codex PR session per issue that publishes the selected source branch, creates or finds the PR, writes `pull-request.json`, and lets the Server reconcile the result; missing PR artifacts are surfaced as handoff errors. Durable team automation still waits for the server-owned GitHub App executor.
 - Structured failure evidence for failed sessions, deploy reconciliation, preview checks, interruption, and cleanup failures.
 
 > [!IMPORTANT]
-> Generated scoped kubeconfigs, ServiceAccounts, server-owned GitHub App branch publishing/PR execution, VM deploy providers, and Kubernetes-hosted agent runtime are future work. The current MVP records workspace GitHub App installation state but does not mint installation tokens. Personal desktop PR creation is a temporary local `gh` bridge, not the shared/team automation model.
+> Generated scoped kubeconfigs, ServiceAccounts, server-owned GitHub App branch publishing/PR execution, VM deploy providers, and Kubernetes-hosted agent runtime are future work. The current MVP records workspace GitHub App installation state but does not mint installation tokens. Personal PR creation is a Codex handoff session, not the shared/team automation model.
 
 ## Architecture
 
@@ -243,6 +243,7 @@ Local data paths:
 | `<artifact-dir>/skills/manifest.json` | Per-session manifest of materialized skill names, revisions, directories, bundle hashes, and file hashes. |
 | `<artifact-dir>/test-environment.json` | Optional agent-written deployment result. |
 | `<artifact-dir>/review-evidence.json` | Optional agent-written review snapshot. |
+| `<artifact-dir>/pull-request.json` | Required completion artifact for Codex PR handoff sessions after a PR is created or found. |
 | `<artifact-dir>/test-case-proposals.json` | Optional Codex-written test case suggestion artifact reconciled into Case suggestions. |
 | `<artifact-dir>/test-setup-result.json` | Required completion checkpoint for Tests setup automation. Passing setup stores `setupResult`, passes `outputs` into the run context, and starts case execution; failed/cancelled/missing setup marks the run `setup_failed`. |
 | `<artifact-dir>/test-result.json` | Required completion checkpoint for Tests execution automation, reconciled into run items and review state. Supported screenshot evidence is transferred from the worker artifact directory, persisted as server-owned test artifacts, and shown from Case Detail / Run Detail. |

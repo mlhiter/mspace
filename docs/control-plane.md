@@ -107,7 +107,7 @@ The server module provides:
 - fixed Agent catalog reads (`codex`, `claude_code`, `pi`); no Agent write APIs;
 - Environment APIs plus Kubernetes cluster compatibility APIs and kubeconfig discovery/import;
 - issue test deployment, cleanup, retain, preview probe, and namespace resources;
-- issue PR handoff create/refresh records, with personal desktop mode able to bridge through local `gh` while team automation still waits for the server-owned GitHub App executor;
+- issue PR handoff create/refresh records, with personal mode able to queue a detached Codex PR handoff session while team automation still waits for the server-owned GitHub App executor;
 - session creation/cancellation/detail derived from server runtime tasks;
 - runtime registration tokens, workers, runtime availability, tasks, events, logs, cancellation, worker register/heartbeat/claim/status/log endpoints;
 - deterministic fallback issue-title suggestion and worker-backed `issue_type_triage` title/type refinement;
@@ -180,7 +180,7 @@ Manual deploy/test remains available from Issue Detail. Workspace owners/admins 
 
 The Resources tab reads live namespace state through `GET /api/workspaces/{workspaceID}/issues/{issueID}/test-environment/resources`. The server uses Kubernetes client APIs and fixes the namespace from the issue environment record; the frontend must not pass arbitrary namespace input.
 
-PR handoff records live in server `issue_handoffs`. The current implementation records the selected source branch/commit, preview URL, evidence summary, PR URL/state, and handoff state. Personal desktop mode may temporarily run the signed-in Mac user's local `gh` from the captured worker worktree to push the source branch and create the PR, then posts the resulting PR metadata back to the Server. Workspace GitHub App installation metadata lives in `workspace_github_app_installations` and is exposed as read-only status for Workspace Settings. GitHub App-backed token minting, durable team branch publishing, team PR creation, and real PR refresh are still future work, but the records themselves remain server-owned.
+PR handoff records live in server `issue_handoffs`. The current implementation records the selected source branch/commit, preview URL, evidence summary, PR URL/state, and handoff state. Personal mode queues a detached Codex `pull_request_handoff` session pinned to the selected source commit; Codex publishes or reuses the source branch, creates or finds the PR with the authenticated git/GitHub CLI identity available in that personal runtime, writes `${MSPACE_SESSION_ARTIFACT_DIR}/pull-request.json`, and the Server reconciles that artifact into `issue_handoffs`. Only one active PR handoff session may run for an issue at a time, and a completed PR handoff without a valid `pull-request.json` is recorded as a handoff error instead of silently succeeding. Workspace GitHub App installation metadata lives in `workspace_github_app_installations` and is exposed as read-only status for Workspace Settings. GitHub App-backed token minting, durable team branch publishing, team PR creation, and real PR refresh are still future work, but the records themselves remain server-owned.
 
 ## Migration Rule
 

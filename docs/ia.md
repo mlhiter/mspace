@@ -345,7 +345,7 @@ Current implementation:
 - automatically checks preview status in the background when Issue Detail opens or refreshes an existing test environment, updating only the Test environment sidebar state and `Checked` time instead of exposing a separate Probe button or adding timeline evidence;
 - exposes a Resources tab for the issue's current Kubernetes test namespace, refreshed on tab entry or manual refresh, with Environment/context/lifecycle/exposure/cleanup/preview metadata plus Pods, Services, Deployments, Ingresses, and Events;
 - separates source review, live resources, and review evidence: Commits shows code changes and diffs, Resources shows live namespace objects, and Evidence shows the current review packet with command evidence, agent summary, risks/follow-ups, source facts, plus links to full-width previous-attempt and Kubernetes-snapshot history pages;
-- shows issue-level branch / PR handoff state on the Commits tab and sidebar, with personal desktop action to create a PR through the user's local `gh` from the captured source branch and record the PR URL; team/web PR creation and real refresh remain GitHub App-backed later executor steps;
+- shows issue-level branch / PR handoff state on the Commits tab and sidebar, with personal mode queuing one active Codex PR handoff session to publish the captured source branch, create or find the PR, and record the PR URL from `pull-request.json`; team/web PR creation and real refresh remain GitHub App-backed later executor steps;
 - keeps raw command trails collapsed in session logs, with exploratory commands excluded from persisted review evidence;
 - shows a compact Project runbook entry in the Workflow sidebar; clicking it opens a read-only TipTap runbook modal;
 - renders the Issue creator, human comments, system comments, Codex/Claude Code/Pi turns, and actor-authored status changes with distinct engine identities;
@@ -587,7 +587,7 @@ Implemented as of 2026-06-03:
 12. Server-backed mspace sign-in: default local personal mode starts on account creation and hides GitHub, while explicitly configured team servers can offer login plus optional GitHub OAuth when `/health` reports `capabilities.githubAuth: true`.
 13. Sidebar global search and Command+K palette for issues and projects.
 14. Commits/Evidence split on Issue Detail, with structured `session_review_evidence` snapshots and compact evidence-command persistence.
-15. Issue-level PR handoff records, including selected source branch/commit, optional personal-desktop local `gh` PR URL, future team GitHub App PR executor status, source commits, preview URL, and evidence summary.
+15. Issue-level PR handoff records, including selected source branch/commit, personal Codex PR handoff status, future team GitHub App PR executor status, source commits, preview URL, PR URL, and evidence summary.
 16. Structured `session_failures` records that surface failed sessions, deploy-time preview verification failures, agent interruption, and cleanup failures as concise continueable Issue Detail timeline events, while raw failure metadata stays internal.
 17. Preview status refreshes that update Test environment state and `Checked` time without adding healthy snapshot cards to the Overview timeline.
 18. Issue Resources tab for the fixed test namespace, using live Kubernetes resource reads without exposing cross-namespace browsing.

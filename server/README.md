@@ -74,7 +74,7 @@ GitHub OAuth is optional. The server advertises OAuth availability through `/hea
 6. Desktop polls `GET /api/auth/github/result?state=...` and stores the returned `msp_...` token.
 7. Desktop clients call mspace APIs with `Authorization: Bearer <msp_...>`.
 
-GitHub tokens are not the product session. They are used only to prove GitHub identity. Local password registration does not verify email ownership, so it must not merge identities by email. Repository automation should later use GitHub App installation tokens minted by this service from workspace installation state; workers should not depend on local `gh` identity.
+GitHub tokens are not the product session. They are used only to prove GitHub identity. Local password registration does not verify email ownership, so it must not merge identities by email. Durable team repository automation should later use GitHub App installation tokens minted by this service from workspace installation state; outside the explicitly personal Codex PR handoff path, workers should not depend on local `gh` identity.
 
 Password and GitHub auth responses, plus `GET /api/auth/me`, include `identity.provider` and `identity.login`. UI clients should display account type from that explicit provider. Do not treat an empty `user.email` as a GitHub connection fallback; password accounts intentionally keep canonical email blank. `PUT /api/auth/me` may update the current user's display `name` and `avatarUrl`, but it must not update the auth provider, auth login, password credential, or GitHub identity link.
 
@@ -191,7 +191,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/retain` | Retain the issue test namespace for debugging. |
 | `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/resources` | List namespace-scoped Kubernetes resources for the issue test environment. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/probe` | Refresh preview reachability state for the issue test environment. |
-| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Store or update the issue PR handoff from captured source evidence. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Queue a personal Codex PR handoff session for captured source evidence. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the server-owned issue handoff record. |
 | `POST` | `/api/workspaces/{workspaceID}/worker-installations` | Create a short-lived worker host install command. Owner/admin only. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived worker registration credential. Owner/admin only. |

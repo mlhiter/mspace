@@ -4114,35 +4114,100 @@ func (s *MemoryStore) CreateIssuePullRequestHandoff(_ Context, userID, workspace
 	if err != nil {
 		return IssueHandoff{}, err
 	}
-	input, err = normalizeCreatePullRequestInput(input, workspace, detail.Project, sourceNode)
+	return s.createIssuePullRequestHandoffFromSourceLocked(workspaceID, issueID, input, workspace, detail, sourceNode)
+}
+
+func (s *MemoryStore) CreateIssuePullRequestSession(_ Context, userID, workspaceID, issueID string, input CreatePullRequestInput) (AgentSession, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	detail, err := s.getIssueLocked(userID, workspaceID, issueID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	workspace, ok := s.workspaceLocked(workspaceID)
+	if !ok {
+		return AgentSession{}, ErrNotFound
+	}
+	if workspace.Kind != "personal" {
+		return AgentSession{}, errors.New("Codex PR creation is available for personal workspaces until GitHub App automation is ready")
+	}
+	if detail.Project.ID == "" {
+		return AgentSession{}, errors.New("attach a project before creating a PR")
+	}
+	sourceNode, err := selectIssueChangeNodeForDeploy(detail.ChangeNodes, input.SourceCommitSHA, input.SourceSessionID)
+	if err != nil {
+		return AgentSession{}, err
+	}
+	if strings.TrimSpace(sourceNode.Branch) == "" {
+		return AgentSession{}, errors.New("selected source commit has no captured branch to publish")
+	}
+	if hasActivePullRequestSession(detail.Sessions) {
+		return AgentSession{}, ErrConflict
+	}
+	session, err := s.createAgentSessionLocked(userID, workspaceID, issueID, CreateAgentSessionInput{
+		AgentEngine:     "codex",
+		RuntimeMode:     workspace.Kind,
+		Command:         buildIssuePullRequestPrompt(detail, sourceNode, input.Draft),
+		Branch:          sourceNode.Branch,
+		SourceSessionID: sourceNode.SessionID,
+		SourceCommitSHA: sourceNode.CommitSHA,
+		Automation:      pullRequestHandoffAutomation,
+	})
+	if err != nil {
+		return AgentSession{}, err
+	}
+	_, _ = s.createIssuePullRequestHandoffFromSourceLocked(workspaceID, issueID, CreatePullRequestInput{
+		SourceSessionID: sourceNode.SessionID,
+		SourceCommitSHA: sourceNode.CommitSHA,
+		Title:           firstNonEmpty(sourceNode.Subject, detail.Issue.Title),
+		CreatedVia:      "codex",
+	}, workspace, detail, sourceNode)
+	return session, nil
+}
+
+func (s *MemoryStore) createIssuePullRequestHandoffFromSourceLocked(workspaceID, issueID string, input CreatePullRequestInput, workspace Workspace, detail IssueDetail, sourceNode IssueChangeNode) (IssueHandoff, error) {
+	normalized, err := normalizeCreatePullRequestInput(input, workspace, detail.Project, sourceNode)
 	if err != nil {
 		return IssueHandoff{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	handoffID := ""
+	for _, existing := range s.handoffs {
+		if existing.IssueID == strings.TrimSpace(issueID) && existing.Kind == "pr" {
+			handoffID = existing.ID
+			break
+		}
+	}
+	if handoffID == "" {
+		handoffID = fmt.Sprintf("handoff-%04d", s.nextMemoryIDLocked())
+	}
 	handoff := IssueHandoff{
-		ID:              fmt.Sprintf("handoff-%04d", s.nextMemoryIDLocked()),
+		ID:              handoffID,
 		IssueID:         strings.TrimSpace(issueID),
 		SourceSessionID: sourceNode.SessionID,
 		SourceCommitSHA: sourceNode.CommitSHA,
 		Branch:          sourceNode.Branch,
-		HeadCommitSHA:   firstNonEmpty(input.HeadCommitSHA, sourceNode.CommitSHA),
+		HeadCommitSHA:   firstNonEmpty(normalized.HeadCommitSHA, sourceNode.CommitSHA),
 		Commits: []IssueHandoffCommit{{
 			SHA:      sourceNode.CommitSHA,
 			ShortSHA: shortCommitSHA(sourceNode.CommitSHA),
 			Subject:  sourceNode.Subject,
 		}},
 		Kind:            "pr",
-		PRURL:           strings.TrimSpace(input.PRURL),
-		PRNumber:        normalizedPullRequestNumber(input.PRNumber),
-		PRState:         normalizePullRequestState(input.PRState, strings.TrimSpace(input.PRURL) != ""),
-		PRTitle:         firstNonEmpty(input.Title, sourceNode.Subject, detail.Issue.Title),
+		PRURL:           strings.TrimSpace(normalized.PRURL),
+		PRNumber:        normalizedPullRequestNumber(normalized.PRNumber),
+		PRState:         normalizePullRequestState(normalized.PRState, strings.TrimSpace(normalized.PRURL) != ""),
+		PRTitle:         firstNonEmpty(normalized.Title, sourceNode.Subject, detail.Issue.Title),
 		EvidenceSummary: issueHandoffEvidenceSummary(detail, sourceNode.SessionID, sourceNode.CommitSHA),
-		CreatedVia:      firstNonEmpty(input.CreatedVia, "server"),
+		CreatedVia:      firstNonEmpty(normalized.CreatedVia, "server"),
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
 	if strings.TrimSpace(handoff.PRURL) != "" {
 		handoff.LastCheckedAt = now
+	}
+	if handoff.PRTitle == "" {
+		handoff.PRTitle = firstNonEmpty(sourceNode.Subject, detail.Issue.Title)
 	}
 	s.handoffs[handoff.ID] = handoff
 	return handoff, nil
@@ -4380,6 +4445,13 @@ func (s *MemoryStore) reconcileAgentSessionRuntimeResultLocked(task RuntimeTask)
 	if artifacts.ReviewEvidence != nil {
 		s.storeRuntimeReviewEvidenceLocked(task, session, *artifacts.ReviewEvidence)
 	}
+	if task.Status == "completed" && runtimeTaskAutomation(task) == pullRequestHandoffAutomation {
+		if artifacts.PullRequest == nil {
+			s.recordPullRequestHandoffErrorLocked(task, session, "Codex PR handoff completed without pull-request.json.")
+		} else {
+			s.reconcilePullRequestHandoffLocked(task, session, *artifacts.PullRequest)
+		}
+	}
 	if task.Status == "completed" && artifacts.TestCaseProposals != nil {
 		s.storeTestCaseProposalArtifactsLocked(task, *artifacts.TestCaseProposals)
 	}
@@ -4398,7 +4470,7 @@ func (s *MemoryStore) reconcileAgentSessionRuntimeResultLocked(task RuntimeTask)
 }
 
 func (s *MemoryStore) queueAutomaticTestDeployIfEnabledLocked(task RuntimeTask) {
-	if strings.TrimSpace(task.IssueID) == "" || isIssueTestDeployTask(task) || runtimeTaskIsDryRun(task) {
+	if strings.TrimSpace(task.IssueID) == "" || isIssueTestDeployTask(task) || runtimeTaskAutomation(task) != "" || runtimeTaskIsDryRun(task) {
 		return
 	}
 	source := runtimeTaskSource(task)
@@ -4460,6 +4532,66 @@ func (s *MemoryStore) queueAutomaticTestDeployIfEnabledLocked(task RuntimeTask) 
 		ChangeNodes:     []IssueChangeNode{runtimeTaskChangeNode(task)},
 	}
 	_, _ = s.queueIssueTestDeployLocked(userID, task.WorkspaceID, task.IssueID, detail, StartTestDeployInput{}, true)
+}
+
+func (s *MemoryStore) reconcilePullRequestHandoffLocked(task RuntimeTask, session AgentSession, artifact PullRequestArtifact) {
+	issue, ok := s.issues[task.IssueID]
+	if !ok || issue.WorkspaceID != task.WorkspaceID || issue.ProjectID == "" {
+		return
+	}
+	project, ok := s.projects[issue.ProjectID]
+	if !ok || project.WorkspaceID != task.WorkspaceID {
+		return
+	}
+	workspace, ok := s.workspaceLocked(task.WorkspaceID)
+	if !ok {
+		return
+	}
+	nodes := s.issueChangeNodesLocked(task.WorkspaceID, task.IssueID)
+	input := createPullRequestInputFromArtifact(session, artifact)
+	sourceNode, err := selectIssueChangeNodeForDeploy(nodes, input.SourceCommitSHA, input.SourceSessionID)
+	if err != nil {
+		return
+	}
+	detail := IssueDetail{
+		Issue:           issue,
+		Project:         project,
+		TestEnvironment: s.testEnvironmentPointerLocked(task.IssueID),
+		ChangeNodes:     nodes,
+		ReviewEvidence:  s.issueReviewEvidenceLocked(task.WorkspaceID, task.IssueID),
+	}
+	_, _ = s.createIssuePullRequestHandoffFromSourceLocked(task.WorkspaceID, task.IssueID, input, workspace, detail, sourceNode)
+}
+
+func (s *MemoryStore) recordPullRequestHandoffErrorLocked(task RuntimeTask, session AgentSession, message string) {
+	handoffID := ""
+	for _, existing := range s.handoffs {
+		if existing.IssueID == task.IssueID && existing.Kind == "pr" {
+			handoffID = existing.ID
+			break
+		}
+	}
+	if handoffID == "" {
+		handoffID = fmt.Sprintf("handoff-%04d", s.nextMemoryIDLocked())
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	handoff := s.handoffs[handoffID]
+	handoff.ID = handoffID
+	handoff.IssueID = task.IssueID
+	handoff.SourceSessionID = firstNonEmpty(handoff.SourceSessionID, session.SourceSessionID)
+	handoff.SourceCommitSHA = firstNonEmpty(handoff.SourceCommitSHA, session.SourceCommitSHA)
+	handoff.Branch = firstNonEmpty(handoff.Branch, session.Branch)
+	handoff.HeadCommitSHA = firstNonEmpty(handoff.HeadCommitSHA, session.SourceCommitSHA)
+	handoff.Kind = "pr"
+	handoff.PRTitle = firstNonEmpty(handoff.PRTitle, "Pull request handoff")
+	handoff.CreatedVia = firstNonEmpty(handoff.CreatedVia, "codex")
+	handoff.Error = strings.TrimSpace(message)
+	handoff.LastCheckedAt = now
+	if handoff.CreatedAt == "" {
+		handoff.CreatedAt = now
+	}
+	handoff.UpdatedAt = now
+	s.handoffs[handoff.ID] = handoff
 }
 
 func (s *MemoryStore) reconcileSuccessfulIssueTestEnvironmentLocked(task RuntimeTask, session AgentSession, artifacts RuntimeTaskArtifactResult) {
