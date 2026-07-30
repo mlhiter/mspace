@@ -1506,7 +1506,7 @@ function HandoffStatusPill(props: { handoff: IssueHandoff }) {
     state === "open" || state === "draft"
       ? "bg-[color:var(--blue-soft)] text-[color:var(--accent-blue)]"
       : state === "merged"
-        ? "bg-[color:var(--success-soft)] text-[color:var(--success)]"
+        ? "bg-[color:var(--done-soft)] text-[color:var(--done)]"
         : state === "closed" || state === "error"
           ? "bg-[color:var(--danger-soft)] text-[color:var(--danger)]"
           : "bg-[color:var(--block)] text-[color:var(--muted-strong)]";
