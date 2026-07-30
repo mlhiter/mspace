@@ -5327,7 +5327,7 @@ export function IssueDetailPage() {
   const childIssues = listOrEmpty(detail?.childIssues);
   const changeNodes = listOrEmpty(detail?.changeNodes);
   const handoffs = listOrEmpty(detail?.handoffs);
-  const latestHandoff = handoffs[0];
+  const latestHandoff = issuePullRequestHandoff(handoffs) || handoffs[0];
   const completedChildIssueCount = childIssues.filter((task) => isClosedIssueStatus(task.status)).length;
   const latestSession = detail?.sessions[0];
   const hasActiveSession = listOrEmpty(detail?.sessions).some((session) => ["queued", "running"].includes(session.status));
@@ -6221,7 +6221,6 @@ export function IssueDetailPage() {
   useEffect(() => {
     if (!serverWorkspaceReady || !detail || !latestHandoff || !latestHandoff.prUrl) return;
     if (refreshIssueHandoff.isPending) return;
-    if (latestHandoff.error) return;
     const prState = (latestHandoff.prState || "open").toLowerCase();
     if (!["open", "draft"].includes(prState)) return;
     if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
