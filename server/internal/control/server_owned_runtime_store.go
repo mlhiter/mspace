@@ -31,6 +31,7 @@ const (
 	autoDeployTestEnvironmentAutomation = "auto_test_deploy"
 	testEnvironmentCleanupAutomation    = "test_environment_cleanup"
 	pullRequestHandoffAutomation        = "pull_request_handoff"
+	pullRequestCreatorSkillSlug         = "pr-creator"
 )
 
 func (s *PostgresStore) GetWorkspaceSettings(ctx Context, userID, workspaceID string) (WorkspaceSettings, error) {
@@ -1320,6 +1321,7 @@ func (s *PostgresStore) CreateIssuePullRequestSession(ctx Context, userID, works
 		SourceSessionID: sourceNode.SessionID,
 		SourceCommitSHA: sourceNode.CommitSHA,
 		Automation:      pullRequestHandoffAutomation,
+		SkillSlugs:      []string{pullRequestCreatorSkillSlug},
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -1464,9 +1466,11 @@ func buildIssuePullRequestPrompt(detail IssueDetail, sourceNode IssueChangeNode,
 		builder.WriteString(fmt.Sprintf("\nPreview URL: %s\n", previewURL))
 	}
 	builder.WriteString("\nRequired workflow:\n")
+	builder.WriteString("- Use the server-provided `pr-creator` skill for this turn. Read `${MSPACE_SESSION_SKILLS_DIR}/pr-creator/SKILL.md` before planning, pushing, or creating the PR.\n")
 	builder.WriteString("- Check out the source branch at the exact source commit before pushing. A safe command shape is `git checkout -B \"$MSPACE_SESSION_BRANCH\" \"$MSPACE_SOURCE_COMMIT_SHA\"`.\n")
-	builder.WriteString("- Resolve the PR base and head explicitly from git remotes and `gh repo view`; do not rely on ambiguous CLI defaults.\n")
+	builder.WriteString("- Follow the skill's repository-template, preflight, explicit base/head resolution, owner-qualified `gh pr create --repo ... --head OWNER:branch --base ...`, and PR head/base verification rules.\n")
 	builder.WriteString("- Push the source branch to the appropriate GitHub remote.\n")
+	builder.WriteString("- Never silently fall back to pushing a same-name branch to upstream if a fork head fails; stop and report the resolved target, head, base branch, command, and error.\n")
 	builder.WriteString("- If a PR already exists for this head branch, reuse it and update the artifact with the existing PR metadata instead of opening a duplicate.\n")
 	builder.WriteString("- Write a clear PR title and body based on the actual commit diff, issue context, and validation evidence. Prefer a Conventional Commit style title when it fits.\n")
 	if draft {

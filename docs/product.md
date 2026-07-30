@@ -243,7 +243,7 @@ MVP features:
 - reusable Environments route for Kubernetes kubeconfig discovery/import, registry/exposure defaults, and virtual machine SSH metadata;
 - project default Environment selection, currently backed by the Kubernetes compatibility default for issue deploys;
 - opt-in automatic test deploy after captured source commits;
-- personal Codex PR handoff sessions that publish the captured source branch, create or find the PR, write `pull-request.json`, and let the Server record the PR URL back into the issue handoff;
+- personal Codex PR handoff sessions that receive the server-provided `pr-creator` skill, publish the captured source branch, create or find the PR, write `pull-request.json`, and let the Server record the PR URL back into the issue handoff;
 - read-only workspace GitHub App installation status for team branch/PR automation readiness;
 - terminal/progress stream;
 - Issue working-copy inspection and Session evidence review;

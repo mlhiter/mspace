@@ -4152,6 +4152,7 @@ func (s *MemoryStore) CreateIssuePullRequestSession(_ Context, userID, workspace
 		SourceSessionID: sourceNode.SessionID,
 		SourceCommitSHA: sourceNode.CommitSHA,
 		Automation:      pullRequestHandoffAutomation,
+		SkillSlugs:      []string{pullRequestCreatorSkillSlug},
 	})
 	if err != nil {
 		return AgentSession{}, err

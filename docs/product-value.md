@@ -181,12 +181,12 @@ This view is what turns a session from terminal output into review material. It 
 
 The workflow should not end at a preview URL. Engineering teams usually need a branch or PR.
 
-The MVP should keep PR delivery state as a server-owned handoff record. Personal mode can queue a Codex PR handoff session that uses the personal runtime's authenticated git/GitHub CLI identity, while the product direction still moves toward server-owned GitHub App integration:
+The MVP should keep PR delivery state as a server-owned handoff record. Personal mode can queue a Codex PR handoff session with the server-provided `pr-creator` skill and the personal runtime's authenticated git/GitHub CLI identity, while the product direction still moves toward server-owned GitHub App integration:
 
 - PR handoff is branch-based: the selected source branch is the issue delivery identity, while captured commits are supporting review evidence for that branch.
 - workspace installs the GitHub App;
 - the server stores installation state;
-- personal Codex PR handoff sessions can publish and create PRs for now, while team sessions should eventually use scoped installation tokens for push and PR actions;
+- personal Codex PR handoff sessions can use the server-provided `pr-creator` skill to publish and create PRs for now, while team sessions should eventually use scoped installation tokens for push and PR actions;
 - PRs link back to the issue;
 - PR descriptions include preview URL and evidence summary.
 
