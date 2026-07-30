@@ -199,6 +199,11 @@ func (c GitHubHTTPClient) FetchPullRequest(ctx context.Context, ref gitPullReque
 	if owner == "" || repo == "" || ref.number <= 0 {
 		return GitHubPullRequest{}, errors.New("github pull request reference is incomplete")
 	}
+	normalizedRef := gitPullRequestRef{owner: owner, repo: repo, number: ref.number}
+	if strings.TrimSpace(accessToken) == "" {
+		return c.fetchPullRequestWithCLI(ctx, normalizedRef)
+	}
+
 	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), ref.number)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -206,9 +211,7 @@ func (c GitHubHTTPClient) FetchPullRequest(ctx context.Context, ref gitPullReque
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if token := strings.TrimSpace(accessToken); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(accessToken))
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
@@ -225,19 +228,11 @@ func (c GitHubHTTPClient) FetchPullRequest(ctx context.Context, ref gitPullReque
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(payload, &parsed)
-		apiErr := GitHubAPIError{
+		return GitHubPullRequest{}, GitHubAPIError{
 			Operation:  "fetch github pull request",
 			StatusCode: resp.StatusCode,
 			Message:    parsed.Message,
 		}
-		if strings.TrimSpace(accessToken) == "" {
-			if pr, err := c.fetchPullRequestWithCLI(ctx, ref); err == nil {
-				return pr, nil
-			} else if !isGitHubCLINotFound(err) {
-				return GitHubPullRequest{}, err
-			}
-		}
-		return GitHubPullRequest{}, apiErr
 	}
 
 	return parseGitHubPullRequest(payload)
@@ -323,14 +318,6 @@ func githubCLIPathCandidates(configured string) []string {
 		unique = append(unique, candidate)
 	}
 	return unique
-}
-
-func isGitHubCLINotFound(err error) bool {
-	var cliErr GitHubCLIError
-	if errors.As(err, &cliErr) {
-		return errors.Is(cliErr.Err, exec.ErrNotFound)
-	}
-	return false
 }
 
 func githubCLIErrorMessage(err error) string {

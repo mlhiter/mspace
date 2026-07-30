@@ -20,8 +20,9 @@ import (
 )
 
 type fakeGitHubClient struct {
-	pullRequests   map[string]GitHubPullRequest
-	pullRequestErr error
+	pullRequests     map[string]GitHubPullRequest
+	pullRequestErr   error
+	fetchPullRequest func(ref gitPullRequestRef, accessToken string) (GitHubPullRequest, error)
 }
 
 func (fakeGitHubClient) ExchangeCode(_ context.Context, code, _ string) (string, error) {
@@ -46,7 +47,10 @@ func (fakeGitHubClient) FetchUser(_ context.Context, accessToken string) (Identi
 	}, nil
 }
 
-func (c fakeGitHubClient) FetchPullRequest(_ context.Context, ref gitPullRequestRef, _ string) (GitHubPullRequest, error) {
+func (c fakeGitHubClient) FetchPullRequest(_ context.Context, ref gitPullRequestRef, accessToken string) (GitHubPullRequest, error) {
+	if c.fetchPullRequest != nil {
+		return c.fetchPullRequest(ref, accessToken)
+	}
 	if c.pullRequestErr != nil {
 		return GitHubPullRequest{}, c.pullRequestErr
 	}
@@ -355,6 +359,76 @@ func TestRefreshIssueHandoffReadsGitHubPullRequestState(t *testing.T) {
 	}
 	if refreshed.LastCheckedAt == "" {
 		t.Fatalf("expected refresh to update last checked timestamp")
+	}
+}
+
+func TestRefreshIssueHandoffRejectsTeamWorkspaceWithoutGitHubClient(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	user, _, err := store.CreatePasswordIdentity(ctx, PasswordAuthInput{
+		Login:    "pr-refresh-team-user",
+		Password: "password-123456",
+		Name:     "PR Refresh Team User",
+	})
+	if err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+	workspace, _, err := store.CreateWorkspace(ctx, user.ID, CreateWorkspaceInput{
+		Name: "Team PR Refresh",
+		Kind: "team",
+	})
+	if err != nil {
+		t.Fatalf("create team workspace: %v", err)
+	}
+	token, _, err := store.CreateAuthSession(ctx, user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	project, issueID := seedPullRequestIssue(t, ctx, store, user, workspace.ID, "Refresh team PR")
+	seedIssueSourceTask(t, store, workspace.ID, issueID, project.ID, "session-source-team-refresh", "team", pullRequestHandoffSourceCommitSHA, "mspace/team-pr-refresh")
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	handoff := IssueHandoff{
+		ID:              "handoff-team-refresh",
+		IssueID:         issueID,
+		SourceSessionID: "session-source-team-refresh",
+		SourceCommitSHA: pullRequestHandoffSourceCommitSHA,
+		Branch:          "mspace/team-pr-refresh",
+		HeadCommitSHA:   pullRequestHandoffSourceCommitSHA,
+		Kind:            "pr",
+		PRURL:           "https://github.com/mlhiter/mspace/pull/43",
+		PRNumber:        43,
+		PRState:         "open",
+		PRTitle:         "team PR",
+		CreatedVia:      "github_app",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	store.mu.Lock()
+	store.handoffs[handoff.ID] = handoff
+	store.mu.Unlock()
+
+	server := NewServer(Config{}, store, fakeGitHubClient{
+		fetchPullRequest: func(_ gitPullRequestRef, _ string) (GitHubPullRequest, error) {
+			t.Fatalf("team PR refresh must not use the server process gh login")
+			return GitHubPullRequest{}, nil
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspace.ID+"/issues/"+issueID+"/handoffs/"+handoff.ID+"/refresh", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	server.Routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("refresh handoff status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var refreshed IssueHandoff
+	if err := json.Unmarshal(recorder.Body.Bytes(), &refreshed); err != nil {
+		t.Fatalf("parse refreshed handoff: %v", err)
+	}
+	if refreshed.PRState != "open" || refreshed.HeadCommitSHA != pullRequestHandoffSourceCommitSHA {
+		t.Fatalf("team refresh should preserve existing PR metadata, got %+v", refreshed)
+	}
+	if !strings.Contains(refreshed.Error, "personal workspaces") {
+		t.Fatalf("expected team refresh to report personal-only gh path, got %+v", refreshed)
 	}
 }
 
