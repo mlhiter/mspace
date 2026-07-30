@@ -1211,6 +1211,17 @@ type IssueHandoff struct {
 	UpdatedAt       string               `json:"updatedAt"`
 }
 
+type IssueHandoffRefreshInput struct {
+	LastCheckedAt string
+	PRURL         string
+	PRNumber      int
+	PRState       string
+	PRTitle       string
+	HeadCommitSHA string
+	Error         string
+	ErrorSet      bool
+}
+
 type IssueTestEnvironment struct {
 	IssueID              string          `json:"issueId"`
 	ClusterID            string          `json:"clusterId"`
@@ -2040,7 +2051,7 @@ type Store interface {
 	ProbeIssueTestEnvironment(ctx Context, userID, workspaceID, issueID string) (IssueTestEnvironment, error)
 	CreateIssuePullRequestSession(ctx Context, userID, workspaceID, issueID string, input CreatePullRequestInput) (AgentSession, error)
 	CreateIssuePullRequestHandoff(ctx Context, userID, workspaceID, issueID string, input CreatePullRequestInput) (IssueHandoff, error)
-	RefreshIssueHandoff(ctx Context, userID, workspaceID, issueID, handoffID string) (IssueHandoff, error)
+	RefreshIssueHandoff(ctx Context, userID, workspaceID, issueID, handoffID string, input IssueHandoffRefreshInput) (IssueHandoff, error)
 	UpdateIssue(ctx Context, userID, workspaceID, issueID string, input UpdateIssueInput) (Issue, error)
 	CreateIssueTask(ctx Context, userID, workspaceID, issueID string, input IssueTaskInput) (IssueListItem, error)
 	DeleteIssueTask(ctx Context, userID, workspaceID, issueID, taskID string) error

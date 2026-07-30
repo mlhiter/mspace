@@ -164,7 +164,7 @@ func TestMemoryStoreReconcilesCodexPullRequestArtifact(t *testing.T) {
 		t.Fatalf("unexpected handoff provenance: %+v", handoff)
 	}
 
-	refreshed, err := store.RefreshIssueHandoff(ctx, user.ID, workspaceID, issueID, handoff.ID)
+	refreshed, err := store.RefreshIssueHandoff(ctx, user.ID, workspaceID, issueID, handoff.ID, IssueHandoffRefreshInput{})
 	if err != nil {
 		t.Fatalf("refresh PR handoff: %v", err)
 	}
@@ -173,6 +173,42 @@ func TestMemoryStoreReconcilesCodexPullRequestArtifact(t *testing.T) {
 	}
 	if refreshed.LastCheckedAt == "" {
 		t.Fatalf("refresh should update last checked time: %+v", refreshed)
+	}
+}
+
+func TestNormalizeGitHubPullRequestState(t *testing.T) {
+	tests := []struct {
+		name string
+		pr   GitHubPullRequest
+		want string
+	}{
+		{
+			name: "merged flag wins over closed state",
+			pr:   GitHubPullRequest{State: "closed", Merged: true},
+			want: "merged",
+		},
+		{
+			name: "merged timestamp wins over closed state",
+			pr:   GitHubPullRequest{State: "closed", MergedAt: "2026-07-30T03:00:00Z"},
+			want: "merged",
+		},
+		{
+			name: "closed without merged stays closed",
+			pr:   GitHubPullRequest{State: "closed"},
+			want: "closed",
+		},
+		{
+			name: "open draft stays draft",
+			pr:   GitHubPullRequest{State: "open", Draft: true},
+			want: "draft",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeGitHubPullRequestState(tt.pr); got != tt.want {
+				t.Fatalf("normalizeGitHubPullRequestState() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

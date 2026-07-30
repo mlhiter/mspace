@@ -19,7 +19,10 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-type fakeGitHubClient struct{}
+type fakeGitHubClient struct {
+	pullRequests   map[string]GitHubPullRequest
+	pullRequestErr error
+}
 
 func (fakeGitHubClient) ExchangeCode(_ context.Context, code, _ string) (string, error) {
 	if code != "ok-code" {
@@ -41,6 +44,24 @@ func (fakeGitHubClient) FetchUser(_ context.Context, accessToken string) (Identi
 		AvatarURL:      "https://avatars.githubusercontent.com/u/123?v=4",
 		RawProfile:     json.RawMessage(`{"id":123,"login":"mlhiter"}`),
 	}, nil
+}
+
+func (c fakeGitHubClient) FetchPullRequest(_ context.Context, ref gitPullRequestRef, _ string) (GitHubPullRequest, error) {
+	if c.pullRequestErr != nil {
+		return GitHubPullRequest{}, c.pullRequestErr
+	}
+	if c.pullRequests == nil {
+		return GitHubPullRequest{}, GitHubAPIError{Operation: "fetch github pull request", StatusCode: http.StatusNotFound}
+	}
+	pr, ok := c.pullRequests[fakeGitHubPullRequestKey(ref)]
+	if !ok {
+		return GitHubPullRequest{}, GitHubAPIError{Operation: "fetch github pull request", StatusCode: http.StatusNotFound}
+	}
+	return pr, nil
+}
+
+func fakeGitHubPullRequestKey(ref gitPullRequestRef) string {
+	return strings.ToLower(strings.TrimSpace(ref.owner)) + "/" + strings.ToLower(strings.TrimSpace(ref.repo)) + "#" + fmt.Sprint(ref.number)
 }
 
 func TestHealthAdvertisesServerProtocol(t *testing.T) {
@@ -268,6 +289,72 @@ func TestWorkspaceGitHubAppInstallationStatus(t *testing.T) {
 	needsAttention := getInstallation(t, configuredServer)
 	if needsAttention.Status != WorkspaceGitHubAppStatusNeedsAction || len(needsAttention.MissingPermissions) != 1 || needsAttention.MissingPermissions[0] != "pull_requests:write" {
 		t.Fatalf("expected missing pull request write permission, got %+v", needsAttention)
+	}
+}
+
+func TestRefreshIssueHandoffReadsGitHubPullRequestState(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryStore()
+	user, workspaces, err := store.CreatePasswordIdentity(ctx, PasswordAuthInput{
+		Login:    "pr-refresh-user",
+		Password: "password-123456",
+		Name:     "PR Refresh User",
+	})
+	if err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+	workspaceID := workspaces[0].ID
+	token, _, err := store.CreateAuthSession(ctx, user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create auth session: %v", err)
+	}
+	project, issueID := seedPullRequestIssue(t, ctx, store, user, workspaceID, "Refresh merged PR")
+	seedIssueSourceTask(t, store, workspaceID, issueID, project.ID, "session-source-refresh", "personal", pullRequestHandoffSourceCommitSHA, "mspace/pr-refresh")
+	handoff, err := store.CreateIssuePullRequestHandoff(ctx, user.ID, workspaceID, issueID, CreatePullRequestInput{
+		SourceSessionID: "session-source-refresh",
+		SourceCommitSHA: pullRequestHandoffSourceCommitSHA,
+		HeadCommitSHA:   pullRequestHandoffSourceCommitSHA,
+		PRURL:           "https://github.com/mlhiter/mspace/pull/42",
+		PRNumber:        42,
+		PRState:         "open",
+		CreatedVia:      "codex",
+	})
+	if err != nil {
+		t.Fatalf("create PR handoff: %v", err)
+	}
+
+	server := NewServer(Config{}, store, fakeGitHubClient{
+		pullRequests: map[string]GitHubPullRequest{
+			"mlhiter/mspace#42": {
+				URL:           "https://github.com/mlhiter/mspace/pull/42",
+				Number:        42,
+				State:         "closed",
+				Merged:        true,
+				MergedAt:      "2026-07-30T03:00:00Z",
+				Title:         "fix(issue): refresh merged PR state",
+				HeadCommitSHA: "2222222222222222222222222222222222222222",
+			},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/workspaces/"+workspaceID+"/issues/"+issueID+"/handoffs/"+handoff.ID+"/refresh", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+	server.Routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("refresh handoff status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var refreshed IssueHandoff
+	if err := json.Unmarshal(recorder.Body.Bytes(), &refreshed); err != nil {
+		t.Fatalf("parse refreshed handoff: %v", err)
+	}
+	if refreshed.PRState != "merged" || refreshed.Error != "" {
+		t.Fatalf("expected merged PR state without error, got %+v", refreshed)
+	}
+	if refreshed.PRTitle != "fix(issue): refresh merged PR state" || refreshed.HeadCommitSHA != "2222222222222222222222222222222222222222" {
+		t.Fatalf("expected refreshed PR metadata, got %+v", refreshed)
+	}
+	if refreshed.LastCheckedAt == "" {
+		t.Fatalf("expected refresh to update last checked timestamp")
 	}
 }
 

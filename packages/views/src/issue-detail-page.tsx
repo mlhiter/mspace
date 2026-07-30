@@ -175,6 +175,7 @@ type ProjectAttachIntent = "sidebar" | "composer" | "edit";
 
 const AUTO_PREVIEW_CHECK_INTERVAL_MS = 60_000;
 const autoPreviewCheckAtByIssue = new Map<string, number>();
+const AUTO_PR_HANDOFF_REFRESH_INTERVAL_MS = 60_000;
 
 type EvidenceResource = {
   kind: string;
@@ -6217,6 +6218,32 @@ export function IssueDetailPage() {
       await invalidateIssueHandoffSurfaces();
     },
   });
+  useEffect(() => {
+    if (!serverWorkspaceReady || !detail || !latestHandoff || !latestHandoff.prUrl) return;
+    if (refreshIssueHandoff.isPending) return;
+    if (latestHandoff.error) return;
+    const prState = (latestHandoff.prState || "open").toLowerCase();
+    if (!["open", "draft"].includes(prState)) return;
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+
+    const checkKey = ["pr", issueId, latestHandoff.id, latestHandoff.prUrl, prState].join(":");
+    const now = Date.now();
+    const lastCheckedAt = autoPreviewCheckAtByIssue.get(checkKey) || 0;
+    if (now - lastCheckedAt < AUTO_PR_HANDOFF_REFRESH_INTERVAL_MS) return;
+    autoPreviewCheckAtByIssue.set(checkKey, now);
+    refreshIssueHandoff.reset();
+    refreshIssueHandoff.mutate(latestHandoff);
+  }, [
+    detail,
+    issueId,
+    latestHandoff?.error,
+    latestHandoff?.id,
+    latestHandoff?.kind,
+    latestHandoff?.prState,
+    latestHandoff?.prUrl,
+    refreshIssueHandoff,
+    serverWorkspaceReady,
+  ]);
   const checkPreviewStatus = probeTestEnvironment.mutate;
   const previewStatusCheckPending = probeTestEnvironment.isPending;
   useEffect(() => {

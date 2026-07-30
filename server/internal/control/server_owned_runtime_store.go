@@ -1401,7 +1401,7 @@ func (s *PostgresStore) storeIssuePullRequestHandoffForSource(ctx context.Contex
 	return s.storeIssueHandoff(ctx, q, workspaceID, handoff)
 }
 
-func (s *PostgresStore) RefreshIssueHandoff(ctx Context, userID, workspaceID, issueID, handoffID string) (IssueHandoff, error) {
+func (s *PostgresStore) RefreshIssueHandoff(ctx Context, userID, workspaceID, issueID, handoffID string, input IssueHandoffRefreshInput) (IssueHandoff, error) {
 	dbctx := asContext(ctx)
 	workspaceID = strings.TrimSpace(workspaceID)
 	issueID = strings.TrimSpace(issueID)
@@ -1413,19 +1413,43 @@ func (s *PostgresStore) RefreshIssueHandoff(ctx Context, userID, workspaceID, is
 	if err != nil {
 		return IssueHandoff{}, err
 	}
-	handoff = refreshIssueHandoffRecord(handoff, time.Now().UTC().Format(time.RFC3339))
+	if strings.TrimSpace(input.LastCheckedAt) == "" {
+		input.LastCheckedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	handoff = refreshIssueHandoffRecord(handoff, input)
 	return s.storeIssueHandoff(dbctx, s.pool, workspaceID, handoff)
 }
 
-func refreshIssueHandoffRecord(handoff IssueHandoff, checkedAt string) IssueHandoff {
-	handoff.LastCheckedAt = checkedAt
-	if strings.EqualFold(strings.TrimSpace(handoff.CreatedVia), "codex") {
-		if strings.TrimSpace(handoff.PRURL) != "" || strings.TrimSpace(handoff.Error) == githubAppPullRequestRefreshError {
-			handoff.Error = ""
-		}
+func refreshIssueHandoffRecord(handoff IssueHandoff, input IssueHandoffRefreshInput) IssueHandoff {
+	handoff.LastCheckedAt = strings.TrimSpace(input.LastCheckedAt)
+	if handoff.LastCheckedAt == "" {
+		handoff.LastCheckedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if strings.TrimSpace(input.PRURL) != "" {
+		handoff.PRURL = strings.TrimSpace(input.PRURL)
+	}
+	if input.PRNumber > 0 {
+		handoff.PRNumber = normalizedPullRequestNumber(input.PRNumber)
+	}
+	if strings.TrimSpace(input.PRState) != "" {
+		handoff.PRState = normalizePullRequestState(input.PRState, strings.TrimSpace(handoff.PRURL) != "")
+	}
+	if strings.TrimSpace(input.PRTitle) != "" {
+		handoff.PRTitle = strings.TrimSpace(input.PRTitle)
+	}
+	if strings.TrimSpace(input.HeadCommitSHA) != "" {
+		handoff.HeadCommitSHA = strings.TrimSpace(input.HeadCommitSHA)
+	}
+	if input.ErrorSet {
+		handoff.Error = strings.TrimSpace(input.Error)
 		return handoff
 	}
-	handoff.Error = githubAppPullRequestRefreshError
+	if strings.TrimSpace(handoff.PRURL) == "" {
+		return handoff
+	}
+	if strings.TrimSpace(handoff.Error) == githubAppPullRequestRefreshError {
+		handoff.Error = ""
+	}
 	return handoff
 }
 
