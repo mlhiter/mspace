@@ -73,7 +73,7 @@ Production deployment uses the root `vercel.json`:
 - Opt-in workspace automation that queues the same test deployment flow after a successful source session captures a commit, when the issue and runtime are ready.
 - Issue Resources tab for the current test namespace, showing Pods, Services and NodePort mappings, Deployments, Ingresses, and recent Events without accepting cross-namespace input.
 - Issue Evidence tab for the current review packet, with full-width pages for previous attempts and Kubernetes snapshot history.
-- Issue-level PR records that keep one current branch/PR delivery artifact with source branch, source commit, head commit, commit list, preview URL, evidence summary, and PR URL/state. Personal mode can queue one active detached Codex PR session per issue that publishes the selected source branch, creates or finds the PR, writes `pull-request.json`, and lets the Server reconcile the result; missing PR artifacts are surfaced as handoff errors. Durable team automation still waits for the server-owned GitHub App executor.
+- Issue-level PR records that keep one current branch/PR delivery artifact with source branch, source commit, head commit, commit list, preview URL, evidence summary, and PR URL/state. Personal mode can queue one active detached Codex PR session per issue that receives the server-provided `pr-creator` skill, publishes the selected source branch, creates or finds the PR, writes `pull-request.json`, and lets the Server reconcile the result; missing PR artifacts are surfaced as handoff errors. Durable team automation still waits for the server-owned GitHub App executor.
 - Structured failure evidence for failed sessions, deploy reconciliation, preview checks, interruption, and cleanup failures.
 
 > [!IMPORTANT]

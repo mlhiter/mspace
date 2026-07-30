@@ -38,8 +38,32 @@ func TestMemoryStoreCreatePullRequestSessionQueuesCodexAutomation(t *testing.T) 
 	if session.SourceSessionID != "session-source-personal" || session.SourceCommitSHA != pullRequestHandoffSourceCommitSHA || session.Branch != "mspace/issue-pr" {
 		t.Fatalf("unexpected source binding: %+v", session)
 	}
-	if !strings.Contains(session.Command, "pull-request.json") || !strings.Contains(session.Command, "GitHub CLI") {
+	if !strings.Contains(session.Command, "pull-request.json") || !strings.Contains(session.Command, "pr-creator") {
 		t.Fatalf("PR prompt should instruct Codex to create the PR and write the artifact, got:\n%s", session.Command)
+	}
+	if len(session.RequiredSkills) != 1 || session.RequiredSkills[0].Slug != pullRequestCreatorSkillSlug {
+		t.Fatalf("PR session should require the PR creator skill, got %+v", session.RequiredSkills)
+	}
+	store.mu.Lock()
+	var taskPayload json.RawMessage
+	for _, candidate := range store.runtimeTasks {
+		if candidate.SessionID == session.ID {
+			taskPayload = append(json.RawMessage(nil), candidate.Payload...)
+			break
+		}
+	}
+	store.mu.Unlock()
+	if len(taskPayload) == 0 {
+		t.Fatalf("expected runtime task payload for session %s", session.ID)
+	}
+	var payload struct {
+		RequiredSkills []RuntimeSkillBundle `json:"requiredSkills"`
+	}
+	if err := json.Unmarshal(taskPayload, &payload); err != nil {
+		t.Fatalf("parse runtime payload: %v", err)
+	}
+	if len(payload.RequiredSkills) != 1 || payload.RequiredSkills[0].Slug != pullRequestCreatorSkillSlug || len(payload.RequiredSkills[0].Files) == 0 {
+		t.Fatalf("expected full PR creator skill bundle in runtime payload, got %+v", payload.RequiredSkills)
 	}
 
 	detail, err := store.GetIssue(ctx, user.ID, workspaceID, issueID)
@@ -138,6 +162,53 @@ func TestMemoryStoreReconcilesCodexPullRequestArtifact(t *testing.T) {
 	}
 	if handoff.CreatedVia != "codex" || handoff.HeadCommitSHA != pullRequestHandoffSourceCommitSHA || handoff.LastCheckedAt == "" {
 		t.Fatalf("unexpected handoff provenance: %+v", handoff)
+	}
+
+	refreshed, err := store.RefreshIssueHandoff(ctx, user.ID, workspaceID, issueID, handoff.ID, IssueHandoffRefreshInput{})
+	if err != nil {
+		t.Fatalf("refresh PR handoff: %v", err)
+	}
+	if refreshed.Error != "" || refreshed.PRURL != handoff.PRURL || refreshed.PRNumber != handoff.PRNumber {
+		t.Fatalf("personal Codex PR refresh should keep the recorded PR without GitHub App errors, got %+v", refreshed)
+	}
+	if refreshed.LastCheckedAt == "" {
+		t.Fatalf("refresh should update last checked time: %+v", refreshed)
+	}
+}
+
+func TestNormalizeGitHubPullRequestState(t *testing.T) {
+	tests := []struct {
+		name string
+		pr   GitHubPullRequest
+		want string
+	}{
+		{
+			name: "merged flag wins over closed state",
+			pr:   GitHubPullRequest{State: "closed", Merged: true},
+			want: "merged",
+		},
+		{
+			name: "merged timestamp wins over closed state",
+			pr:   GitHubPullRequest{State: "closed", MergedAt: "2026-07-30T03:00:00Z"},
+			want: "merged",
+		},
+		{
+			name: "closed without merged stays closed",
+			pr:   GitHubPullRequest{State: "closed"},
+			want: "closed",
+		},
+		{
+			name: "open draft stays draft",
+			pr:   GitHubPullRequest{State: "open", Draft: true},
+			want: "draft",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeGitHubPullRequestState(tt.pr); got != tt.want {
+				t.Fatalf("normalizeGitHubPullRequestState() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

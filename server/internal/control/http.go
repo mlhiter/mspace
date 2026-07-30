@@ -2301,16 +2301,129 @@ func (s *Server) handleCreateIssuePullRequestHandoff(w http.ResponseWriter, r *h
 }
 
 func (s *Server) handleRefreshIssueHandoff(w http.ResponseWriter, r *http.Request) {
-	user, _, ok := s.authenticate(w, r)
+	user, workspaces, ok := s.authenticate(w, r)
 	if !ok {
 		return
 	}
-	handoff, err := s.store.RefreshIssueHandoff(r.Context(), user.ID, strings.TrimSpace(chi.URLParam(r, "workspaceID")), strings.TrimSpace(chi.URLParam(r, "issueID")), strings.TrimSpace(chi.URLParam(r, "handoffID")))
+	workspaceID := strings.TrimSpace(chi.URLParam(r, "workspaceID"))
+	issueID := strings.TrimSpace(chi.URLParam(r, "issueID"))
+	handoffID := strings.TrimSpace(chi.URLParam(r, "handoffID"))
+	workspace, ok := workspaceByID(workspaces, workspaceID)
+	if !ok {
+		writeStoreError(w, ErrNotFound)
+		return
+	}
+	detail, err := s.store.GetIssue(r.Context(), user.ID, workspaceID, issueID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	recorded, ok := issueDetailHandoff(detail, handoffID)
+	if !ok {
+		writeStoreError(w, ErrNotFound)
+		return
+	}
+	input := s.issueHandoffRefreshInput(r.Context(), workspace, detail.Project, recorded)
+	handoff, err := s.store.RefreshIssueHandoff(r.Context(), user.ID, workspaceID, issueID, handoffID, input)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, handoff)
+}
+
+func issueDetailHandoff(detail IssueDetail, handoffID string) (IssueHandoff, bool) {
+	handoffID = strings.TrimSpace(handoffID)
+	for _, handoff := range detail.Handoffs {
+		if handoff.ID == handoffID {
+			return handoff, true
+		}
+	}
+	return IssueHandoff{}, false
+}
+
+func (s *Server) issueHandoffRefreshInput(ctx context.Context, workspace Workspace, project Project, handoff IssueHandoff) IssueHandoffRefreshInput {
+	input := IssueHandoffRefreshInput{
+		LastCheckedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	prURL := strings.TrimSpace(handoff.PRURL)
+	if prURL == "" {
+		return input
+	}
+	prRef, err := gitOwnerRepoFromPullRequestURL(prURL)
+	if err != nil {
+		input.ErrorSet = true
+		input.Error = "Recorded PR URL is not a canonical GitHub pull request URL."
+		return input
+	}
+	expected := projectGitOwnerRepo(project)
+	if expected.owner != "" && (!strings.EqualFold(expected.owner, prRef.owner) || !strings.EqualFold(expected.repo, prRef.repo)) {
+		input.ErrorSet = true
+		input.Error = "Recorded PR URL does not belong to the issue project repository."
+		return input
+	}
+	if workspace.Kind != "personal" {
+		input.ErrorSet = true
+		input.Error = "GitHub PR state refresh through the current user's gh login is available only for personal workspaces until GitHub App automation is ready."
+		return input
+	}
+	if s.github == nil {
+		input.ErrorSet = true
+		input.Error = "GitHub PR state refresh is not configured on this server."
+		return input
+	}
+	pr, err := s.github.FetchPullRequest(ctx, prRef, "")
+	if err != nil {
+		input.ErrorSet = true
+		input.Error = githubPullRequestRefreshError(err)
+		return input
+	}
+	number := pr.Number
+	if number <= 0 {
+		number = prRef.number
+	}
+	input.PRURL = firstNonEmpty(pr.URL, prURL)
+	input.PRNumber = number
+	input.PRState = normalizeGitHubPullRequestState(pr)
+	input.PRTitle = pr.Title
+	input.HeadCommitSHA = pr.HeadCommitSHA
+	input.ErrorSet = true
+	input.Error = ""
+	return input
+}
+
+func normalizeGitHubPullRequestState(pr GitHubPullRequest) string {
+	if pr.Merged || strings.TrimSpace(pr.MergedAt) != "" {
+		return "merged"
+	}
+	state := normalizePullRequestState(pr.State, true)
+	if state == "open" && pr.Draft {
+		return "draft"
+	}
+	return state
+}
+
+func githubPullRequestRefreshError(err error) string {
+	var cliErr GitHubCLIError
+	if errors.As(err, &cliErr) {
+		return "GitHub PR state is unavailable through the current user's gh login. Run gh auth status or gh auth login, then refresh again."
+	}
+	var apiErr GitHubAPIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return "GitHub PR state is unavailable with the current server permissions. Private repositories need a configured GitHub App installation."
+		case http.StatusNotFound:
+			return "GitHub PR state is unavailable. The pull request may be private, deleted, or outside this workspace's GitHub App installation."
+		default:
+			return fmt.Sprintf("GitHub PR state refresh failed with status %d.", apiErr.StatusCode)
+		}
+	}
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return "GitHub PR state refresh failed."
+	}
+	return "GitHub PR state refresh failed: " + message
 }
 
 func (s *Server) handleUpdateIssue(w http.ResponseWriter, r *http.Request) {

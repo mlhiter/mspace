@@ -4152,6 +4152,7 @@ func (s *MemoryStore) CreateIssuePullRequestSession(_ Context, userID, workspace
 		SourceSessionID: sourceNode.SessionID,
 		SourceCommitSHA: sourceNode.CommitSHA,
 		Automation:      pullRequestHandoffAutomation,
+		SkillSlugs:      []string{pullRequestCreatorSkillSlug},
 	})
 	if err != nil {
 		return AgentSession{}, err
@@ -4213,7 +4214,7 @@ func (s *MemoryStore) createIssuePullRequestHandoffFromSourceLocked(workspaceID,
 	return handoff, nil
 }
 
-func (s *MemoryStore) RefreshIssueHandoff(_ Context, userID, workspaceID, issueID, handoffID string) (IssueHandoff, error) {
+func (s *MemoryStore) RefreshIssueHandoff(_ Context, userID, workspaceID, issueID, handoffID string, input IssueHandoffRefreshInput) (IssueHandoff, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.isWorkspaceMember(strings.TrimSpace(workspaceID), userID) {
@@ -4223,8 +4224,10 @@ func (s *MemoryStore) RefreshIssueHandoff(_ Context, userID, workspaceID, issueI
 	if !ok || handoff.IssueID != strings.TrimSpace(issueID) {
 		return IssueHandoff{}, ErrNotFound
 	}
-	handoff.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	handoff.Error = "GitHub PR refresh requires the server-owned GitHub App PR executor."
+	if strings.TrimSpace(input.LastCheckedAt) == "" {
+		input.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	handoff = refreshIssueHandoffRecord(handoff, input)
 	handoff.UpdatedAt = handoff.LastCheckedAt
 	s.handoffs[handoff.ID] = handoff
 	return handoff, nil
