@@ -477,7 +477,7 @@ Use `status:"failed"` plus `failureSummary` when setup cannot safely complete. T
 | `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/resources` | List Pods, Services, Deployments, Ingresses, and Events from the fixed issue namespace. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/probe` | Refresh preview reachability state without creating new evidence rows. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Queue a personal Codex PR handoff session with the server-provided `pr-creator` skill for selected source evidence. The session must write `pull-request.json`; the Server records the PR from that artifact. |
-| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the issue handoff record. The server reads GitHub PR state when the recorded PR URL is reachable and normalizes merged PRs to `merged`; personal Codex handoffs still use the session-based PR creation path. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the issue handoff record. The server reads GitHub PR state with anonymous REST, falls back to the current user's `gh api` authentication when needed, and normalizes merged PRs to `merged`; personal Codex handoffs still use the session-based PR creation path. |
 | `GET` | `/api/workspaces/{workspaceID}/github-app` | Read server-owned GitHub App installation status for this workspace. |
 
 `GET /agents` always returns this code-owned shape; write methods on `/agents` are not available:

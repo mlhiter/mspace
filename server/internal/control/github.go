@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -23,6 +25,8 @@ type GitHubHTTPClient struct {
 	ClientID     string
 	ClientSecret string
 	HTTPClient   *http.Client
+	CLIPath      string
+	DisableCLI   bool
 }
 
 type GitHubPullRequest struct {
@@ -42,6 +46,12 @@ type GitHubAPIError struct {
 	Message    string
 }
 
+type GitHubCLIError struct {
+	Operation string
+	Message   string
+	Err       error
+}
+
 func (e GitHubAPIError) Error() string {
 	message := strings.TrimSpace(e.Message)
 	if message == "" {
@@ -55,6 +65,18 @@ func (e GitHubAPIError) Error() string {
 		return fmt.Sprintf("github api status %d: %s", e.StatusCode, message)
 	}
 	return fmt.Sprintf("%s: github api status %d: %s", operation, e.StatusCode, message)
+}
+
+func (e GitHubCLIError) Error() string {
+	message := strings.TrimSpace(e.Message)
+	if message == "" {
+		message = "request failed"
+	}
+	operation := strings.TrimSpace(e.Operation)
+	if operation == "" {
+		return "github cli: " + message
+	}
+	return operation + ": " + message
 }
 
 func (c GitHubHTTPClient) httpClient() *http.Client {
@@ -203,13 +225,25 @@ func (c GitHubHTTPClient) FetchPullRequest(ctx context.Context, ref gitPullReque
 			Message string `json:"message"`
 		}
 		_ = json.Unmarshal(payload, &parsed)
-		return GitHubPullRequest{}, GitHubAPIError{
+		apiErr := GitHubAPIError{
 			Operation:  "fetch github pull request",
 			StatusCode: resp.StatusCode,
 			Message:    parsed.Message,
 		}
+		if strings.TrimSpace(accessToken) == "" {
+			if pr, err := c.fetchPullRequestWithCLI(ctx, ref); err == nil {
+				return pr, nil
+			} else if !isGitHubCLINotFound(err) {
+				return GitHubPullRequest{}, err
+			}
+		}
+		return GitHubPullRequest{}, apiErr
 	}
 
+	return parseGitHubPullRequest(payload)
+}
+
+func parseGitHubPullRequest(payload []byte) (GitHubPullRequest, error) {
 	var parsed struct {
 		HTMLURL  string  `json:"html_url"`
 		Number   int     `json:"number"`
@@ -239,4 +273,85 @@ func (c GitHubHTTPClient) FetchPullRequest(ctx context.Context, ref gitPullReque
 		MergedAt:      mergedAt,
 		HeadCommitSHA: strings.TrimSpace(parsed.Head.SHA),
 	}, nil
+}
+
+func (c GitHubHTTPClient) fetchPullRequestWithCLI(ctx context.Context, ref gitPullRequestRef) (GitHubPullRequest, error) {
+	if c.DisableCLI {
+		return GitHubPullRequest{}, GitHubCLIError{Operation: "fetch github pull request with gh", Message: "disabled"}
+	}
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d", ref.owner, ref.repo, ref.number)
+	var lastErr error
+	for _, cli := range githubCLIPathCandidates(c.CLIPath) {
+		cmd := exec.CommandContext(ctx, cli, "api", endpoint)
+		output, err := cmd.Output()
+		if err == nil {
+			return parseGitHubPullRequest(output)
+		}
+		lastErr = err
+		if !errors.Is(err, exec.ErrNotFound) {
+			break
+		}
+	}
+	return GitHubPullRequest{}, GitHubCLIError{
+		Operation: "fetch github pull request with gh",
+		Message:   githubCLIErrorMessage(lastErr),
+		Err:       lastErr,
+	}
+}
+
+func githubCLIPathCandidates(configured string) []string {
+	configured = strings.TrimSpace(configured)
+	if configured != "" {
+		return []string{configured}
+	}
+	candidates := []string{"gh"}
+	if path, err := exec.LookPath("gh"); err == nil && strings.TrimSpace(path) != "" && path != "gh" {
+		candidates = append([]string{path}, candidates...)
+	}
+	for _, path := range []string{"/opt/homebrew/bin/gh", "/usr/local/bin/gh"} {
+		if _, err := os.Stat(path); err == nil {
+			candidates = append(candidates, path)
+		}
+	}
+	seen := map[string]bool{}
+	unique := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate = strings.TrimSpace(candidate); candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		unique = append(unique, candidate)
+	}
+	return unique
+}
+
+func isGitHubCLINotFound(err error) bool {
+	var cliErr GitHubCLIError
+	if errors.As(err, &cliErr) {
+		return errors.Is(cliErr.Err, exec.ErrNotFound)
+	}
+	return false
+}
+
+func githubCLIErrorMessage(err error) string {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		message := strings.TrimSpace(string(exitErr.Stderr))
+		if message != "" {
+			return truncateGitHubCLIError(message)
+		}
+		return fmt.Sprintf("gh exited with status %d", exitErr.ExitCode())
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return "gh executable was not found"
+	}
+	return truncateGitHubCLIError(err.Error())
+}
+
+func truncateGitHubCLIError(message string) string {
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) > 240 {
+		return message[:240] + "..."
+	}
+	return message
 }

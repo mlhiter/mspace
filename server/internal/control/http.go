@@ -2394,6 +2394,10 @@ func normalizeGitHubPullRequestState(pr GitHubPullRequest) string {
 }
 
 func githubPullRequestRefreshError(err error) string {
+	var cliErr GitHubCLIError
+	if errors.As(err, &cliErr) {
+		return "GitHub PR state is unavailable through the current user's gh login. Run gh auth status or gh auth login, then refresh again."
+	}
 	var apiErr GitHubAPIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.StatusCode {
