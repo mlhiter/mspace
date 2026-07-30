@@ -163,6 +163,17 @@ func TestMemoryStoreReconcilesCodexPullRequestArtifact(t *testing.T) {
 	if handoff.CreatedVia != "codex" || handoff.HeadCommitSHA != pullRequestHandoffSourceCommitSHA || handoff.LastCheckedAt == "" {
 		t.Fatalf("unexpected handoff provenance: %+v", handoff)
 	}
+
+	refreshed, err := store.RefreshIssueHandoff(ctx, user.ID, workspaceID, issueID, handoff.ID)
+	if err != nil {
+		t.Fatalf("refresh PR handoff: %v", err)
+	}
+	if refreshed.Error != "" || refreshed.PRURL != handoff.PRURL || refreshed.PRNumber != handoff.PRNumber {
+		t.Fatalf("personal Codex PR refresh should keep the recorded PR without GitHub App errors, got %+v", refreshed)
+	}
+	if refreshed.LastCheckedAt == "" {
+		t.Fatalf("refresh should update last checked time: %+v", refreshed)
+	}
 }
 
 func TestMemoryStoreRecordsPullRequestHandoffErrorWhenArtifactMissing(t *testing.T) {

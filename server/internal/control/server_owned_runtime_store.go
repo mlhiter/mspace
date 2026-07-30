@@ -32,6 +32,7 @@ const (
 	testEnvironmentCleanupAutomation    = "test_environment_cleanup"
 	pullRequestHandoffAutomation        = "pull_request_handoff"
 	pullRequestCreatorSkillSlug         = "pr-creator"
+	githubAppPullRequestRefreshError    = "GitHub PR refresh requires the server-owned GitHub App PR executor."
 )
 
 func (s *PostgresStore) GetWorkspaceSettings(ctx Context, userID, workspaceID string) (WorkspaceSettings, error) {
@@ -1412,9 +1413,20 @@ func (s *PostgresStore) RefreshIssueHandoff(ctx Context, userID, workspaceID, is
 	if err != nil {
 		return IssueHandoff{}, err
 	}
-	handoff.LastCheckedAt = time.Now().UTC().Format(time.RFC3339)
-	handoff.Error = "GitHub PR refresh requires the server-owned GitHub App PR executor."
+	handoff = refreshIssueHandoffRecord(handoff, time.Now().UTC().Format(time.RFC3339))
 	return s.storeIssueHandoff(dbctx, s.pool, workspaceID, handoff)
+}
+
+func refreshIssueHandoffRecord(handoff IssueHandoff, checkedAt string) IssueHandoff {
+	handoff.LastCheckedAt = checkedAt
+	if strings.EqualFold(strings.TrimSpace(handoff.CreatedVia), "codex") {
+		if strings.TrimSpace(handoff.PRURL) != "" || strings.TrimSpace(handoff.Error) == githubAppPullRequestRefreshError {
+			handoff.Error = ""
+		}
+		return handoff
+	}
+	handoff.Error = githubAppPullRequestRefreshError
+	return handoff
 }
 
 func hasActiveAgentSession(sessions []AgentSession) bool {

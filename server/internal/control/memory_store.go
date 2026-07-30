@@ -4224,8 +4224,7 @@ func (s *MemoryStore) RefreshIssueHandoff(_ Context, userID, workspaceID, issueI
 	if !ok || handoff.IssueID != strings.TrimSpace(issueID) {
 		return IssueHandoff{}, ErrNotFound
 	}
-	handoff.LastCheckedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	handoff.Error = "GitHub PR refresh requires the server-owned GitHub App PR executor."
+	handoff = refreshIssueHandoffRecord(handoff, time.Now().UTC().Format(time.RFC3339Nano))
 	handoff.UpdatedAt = handoff.LastCheckedAt
 	s.handoffs[handoff.ID] = handoff
 	return handoff, nil

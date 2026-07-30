@@ -192,7 +192,7 @@ Only server admins can create team workspaces. `MSPACE_SERVER_ADMIN_LOGINS` list
 | `GET` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/resources` | List namespace-scoped Kubernetes resources for the issue test environment. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/test-environment/probe` | Refresh preview reachability state for the issue test environment. |
 | `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/create-pr` | Queue a personal Codex PR handoff session with the server-provided `pr-creator` skill for captured source evidence. |
-| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the server-owned issue handoff record. |
+| `POST` | `/api/workspaces/{workspaceID}/issues/{issueID}/handoffs/{handoffID}/refresh` | Refresh the server-owned issue handoff record. Personal Codex handoffs refresh only local checked/error state until the GitHub App PR executor exists. |
 | `POST` | `/api/workspaces/{workspaceID}/worker-installations` | Create a short-lived worker host install command. Owner/admin only. |
 | `POST` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | Create a short-lived worker registration credential. Owner/admin only. |
 | `GET` | `/api/workspaces/{workspaceID}/runtime-registration-tokens` | List worker registration credential metadata without raw token values. Owner/admin only. |
